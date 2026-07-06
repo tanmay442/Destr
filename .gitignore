@@ -60,4 +60,8 @@ skills-lock.json
 
 # Proposed plans (never commit)
 proposedplans.md
+proposedplan.md
 OUTSTANDING_ISSUES.md
+
+# Execution plan handoff context (transient agent artifacts)
+docs/execution-plan/context/
