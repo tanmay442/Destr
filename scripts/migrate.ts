@@ -2,8 +2,8 @@ import 'dotenv/config';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
-  console.error('DATABASE_URL is not set. Cannot run migrations.');
-  process.exit(1);
+  console.warn('DATABASE_URL is not set. Skipping migrations.');
+  process.exit(0);
 }
 
 // Uses the idempotent migrator in apply-migration.mjs, which enables the
