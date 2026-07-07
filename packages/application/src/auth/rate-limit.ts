@@ -13,7 +13,7 @@ export async function enforceRateLimit(
   input: RateLimitInput,
   deps: { limiter: RateLimiter },
 ): Promise<Result<{ remaining: number; resetMs: number }>> {
-  const r = deps.limiter.check(input.key, { limit: input.limit, windowMs: input.windowMs });
+  const r = await deps.limiter.check(input.key, { limit: input.limit, windowMs: input.windowMs });
   if (r.ok) return ok({ remaining: r.remaining, resetMs: r.resetMs });
   return err(new RateLimitedError('Rate limit exceeded', r.retryAfterMs));
 }

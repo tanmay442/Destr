@@ -138,7 +138,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
   // Body size is enforced by next.config.ts experimental.bodySizeLimit
   // at the framework level (not via a spoofable Content-Length header).
   const comp = getComposition();
-  const limit = comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
+  const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {
     return new Response('Too Many Requests', {
       status: 429,
@@ -164,7 +164,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
     : '';
 
   if (lastUserText) {
-    comp.recordQuery(userId, lastUserText);
+    void comp.recordQuery(userId, lastUserText).catch(() => {});
   }
 
   const capturedCitations: Array<{ similarity: number; snippet: string }> = [];

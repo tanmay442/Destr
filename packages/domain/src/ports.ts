@@ -179,12 +179,12 @@ export interface RateLimiter {
   check(
     key: string,
     opts: { limit: number; windowMs: number },
-  ): { ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number };
+  ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 
 export interface QueryStats {
-  record(userId: string, query: string): void;
-  top(limit: number): Array<{ q: string; count: number }>;
+  record(userId: string, query: string): Promise<void>;
+  top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
 // ---- LLM / Embedding / Chat ----

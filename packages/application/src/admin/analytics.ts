@@ -28,13 +28,14 @@ export async function getAnalyticsSummary(
       deps.tickets.countOpen(),
       deps.users.countAll(),
     ]);
+    const topQueries = await deps.stats.top(10);
     return ok({
       documentCount: docCount,
       chunkCount,
       ticketCount,
       openTicketCount,
       usersCount,
-      topQueries: deps.stats.top(10),
+      topQueries,
       coldStart: docCount === 0,
     });
   } catch (e) {

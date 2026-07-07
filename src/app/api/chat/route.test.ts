@@ -53,7 +53,7 @@ const { compositionMock } = vi.hoisted(() => ({
     rateLimit: () => rateLimitResult,
     searchChunks: vi.fn(async () => ok(searchValue) as never),
     createTicket: createTicketMock,
-    recordQuery: vi.fn(),
+    recordQuery: vi.fn(() => Promise.resolve()),
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     logTicketEvent: vi.fn(),

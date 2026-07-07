@@ -23,7 +23,7 @@ function evictStale(now: number, windowMs: number) {
 }
 
 export const lruRateLimiter: RateLimiter = {
-  check(key, opts) {
+  async check(key, opts) {
     const now = Date.now();
     const cutoff = now - opts.windowMs;
     let bucket = buckets.get(key);

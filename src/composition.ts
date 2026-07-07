@@ -14,7 +14,7 @@ import {
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Storage, Queue } from '@app/infrastructure';
 import { requireAdmin, requireSession, getAppSession } from '@app/infrastructure/auth';
-import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats } from '@app/domain';
 import { type MyUIMessage } from '@app/application/chat';
 import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
@@ -55,7 +55,17 @@ const ingestDeps: IngestDeps = {
   pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter,
 };
 const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
-const rateLimitDeps: RateLimitDeps = { limiter: Auth.lruRateLimiter };
+function createRateLimiter(): RateLimiter {
+  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();
+  return Auth.lruRateLimiter;
+}
+
+function createQueryStats(): QueryStats {
+  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashQueryStats();
+  return Auth.inMemoryQueryStats;
+}
+
+const rateLimitDeps: RateLimitDeps = { limiter: createRateLimiter() };
 
 function createComposition() {
   const auditDeps = { audit: Db.auditRepo };
@@ -71,8 +81,8 @@ function createComposition() {
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: Auth.inMemoryQueryStats }),
-    getTopQueries: (limit: number) => getTopQueries(limit, { stats: Auth.inMemoryQueryStats }),
+    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: createQueryStats() }),
+    getTopQueries: (limit: number) => getTopQueries(limit, { stats: createQueryStats() }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
@@ -137,7 +147,7 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     getAnalyticsSummary: () =>
-      bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: Auth.inMemoryQueryStats }),
+      bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, auditDeps),
     db: Db.db,
     schema: Db.schema,
@@ -145,8 +155,8 @@ function createComposition() {
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
     session: Auth.clerkSessionStore,
-    rateLimit: (key: string, opts: { limit: number; windowMs: number }) =>
-      Auth.lruRateLimiter.check(key, opts),
+    rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
+      createRateLimiter().check(key, opts),
   };
 }
 
