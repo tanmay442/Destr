@@ -9,9 +9,7 @@
 //   node scripts/apply-migration.mjs
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import pg from 'pg';
-
-const { Pool } = pg;
+import { Pool as NeonPool } from '@neondatabase/serverless';
 
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 
@@ -72,15 +70,8 @@ async function safeQuery(pool, sql, logger) {
 export async function applyMigrations({
   dir = './drizzle',
   poolFactory = () => {
-    const cs = process.env.DATABASE_URL ?? '';
-    // Enforce TLS verification. If the connection string already
-    // specifies an sslmode, respect it; otherwise append verify-full
-    // to match the main app pool (see packages/infrastructure/src/db/pool.ts).
-    const connectionString =
-      /sslmode=/.test(cs) || /uselibpqcompat=true/i.test(cs)
-        ? cs
-        : `${cs}${cs.includes('?') ? '&' : '?'}sslmode=verify-full`;
-    return new Pool({ connectionString });
+    const connectionString = process.env.DATABASE_URL ?? '';
+    return new NeonPool({ connectionString });
   },
   logger = console,
 } = {}) {

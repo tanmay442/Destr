@@ -23,11 +23,11 @@
 
     "ai": "^6.0.208",
     "pdf-parse": "1.1.1",
-    "pg": "^8.21.0"
+    "@neondatabase/serverless": "^0.10.4"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.5",
-    "@types/pg": "^8.20.0",
+
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10"
   }
