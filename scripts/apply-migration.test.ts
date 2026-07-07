@@ -3,16 +3,16 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Mock @neondatabase/serverless so no real socket is opened; we inject a
-// fake pool via poolFactory instead. The mock just needs the named export
-// shape the script uses.
-vi.mock('@neondatabase/serverless', () => {
+// Mock `pg` so no real socket is opened; we inject a fake pool via
+// poolFactory instead. The mock just needs the default-export shape the
+// script uses (`pg.Pool`).
+vi.mock('pg', () => {
   class FakePool {
     query = vi.fn().mockResolvedValue({ rows: [] });
     end = vi.fn().mockResolvedValue(undefined);
   }
   return {
-    Pool: FakePool,
+    default: { Pool: FakePool },
   };
 });
 

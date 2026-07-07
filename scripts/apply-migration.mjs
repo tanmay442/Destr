@@ -9,7 +9,7 @@
 //   node scripts/apply-migration.mjs
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Pool as NeonPool } from '@neondatabase/serverless';
+import pg from 'pg';
 
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 
@@ -71,7 +71,7 @@ export async function applyMigrations({
   dir = './drizzle',
   poolFactory = () => {
     const connectionString = process.env.DATABASE_URL ?? '';
-    return new NeonPool({ connectionString });
+    return new pg.Pool({ connectionString });
   },
   logger = console,
 } = {}) {

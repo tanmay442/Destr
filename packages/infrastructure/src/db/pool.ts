@@ -1,19 +1,42 @@
 import 'dotenv/config';
 import { Pool as NeonPool } from '@neondatabase/serverless';
+import pg from 'pg';
 
-export function buildPool(): NeonPool {
-  const connectionString = process.env.DATABASE_URL ?? '';
-  if (!connectionString) {
-    return makeMissingDatabasePool();
+const POOL_OPTS = {
+  max: 20,
+  idleTimeoutMillis: 20,
+  connectionTimeoutMillis: 10_000,
+} as const;
+
+// Neon's serverless driver speaks Neon's HTTP/WebSocket protocol and
+// cannot reach a plain TCP Postgres (e.g. the local Docker container).
+// Route Neon URLs to the serverless driver; everything else (local
+// Docker, any plain TCP Postgres) goes through `pg` over TCP.
+export function isNeonUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
+  } catch {
+    return false;
   }
+}
+
+export function buildNeonPool(): NeonPool {
   return new NeonPool({
-    connectionString,
-    max: 20,
-    idleTimeoutMillis: 20,
-    connectionTimeoutMillis: 10_000,
+    connectionString: process.env.DATABASE_URL ?? '',
+    ...POOL_OPTS,
   });
 }
 
+export function buildPgPool(): pg.Pool {
+  return new pg.Pool({
+    connectionString: process.env.DATABASE_URL ?? '',
+    ...POOL_OPTS,
+  });
+}
+
+// Graceful stub for when DATABASE_URL is missing; queries reject with a
+// clear message instead of the app throwing at import time.
 function makeMissingDatabasePool(): NeonPool {
   const message = 'DATABASE_URL is not set.';
   const stub = {
@@ -30,4 +53,8 @@ function makeMissingDatabasePool(): NeonPool {
     prependListener: () => stub, prependOnceListener: () => stub,
   };
   return stub as unknown as NeonPool;
+}
+
+export function buildMissingPool(): NeonPool {
+  return makeMissingDatabasePool();
 }

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   poweredByHeader: false,
   experimental: {
     // Limit request body size for server actions (replaces the spoofable
