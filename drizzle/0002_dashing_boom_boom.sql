@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "ingest_status" text DEFAULT 'done' NOT NULL;

@@ -15,6 +15,13 @@
       "when": 1783401833911,
       "tag": "0001_loose_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783404243769,
+      "tag": "0002_dashing_boom_boom",
+      "breakpoints": true
     }
   ]
 }

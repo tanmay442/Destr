@@ -78,6 +78,7 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
             findByName: (n: string) => Db.findDocumentByName(n),
             findById: (id: number) => Db.findDocumentById(id),
             setStorageKey: (id: number, key: string) => Db.setDocumentStorageKey(id, key),
+            updateIngestStatus: (id: number, status: 'queued' | 'ingesting' | 'done' | 'failed') => Db.updateDocumentIngestStatus(id, status),
             insert: (i: { fileName: string; fileHash: string; uploadedBy: string }) => Db.insertDocument(i),
             deleteById: (id: number) => Db.deleteDocumentById(id),
             softDelete: (id: number, at: Date) => Db.softDeleteDocument(id, at),

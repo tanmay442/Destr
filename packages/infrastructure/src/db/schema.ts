@@ -13,6 +13,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { vector } from './schema-vector';
 import { byteaBlob } from '../storage/bytea-blob';
+import type { IngestStatus } from '@app/domain';
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
@@ -22,6 +23,7 @@ export const documents = pgTable('documents', {
   uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
   blob: byteaBlob('blob'),
   storageKey: text('storage_key'),
+  ingestStatus: text('ingest_status').notNull().default('done').$type<IngestStatus>(),
   deletedAt: timestamp('deleted_at'),
 }, (table) => [
   index('documents_deleted_at_idx').on(table.deletedAt),

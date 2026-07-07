@@ -22,6 +22,7 @@
     "@clerk/nextjs": "^7.5.6",
     "@langchain/textsplitters": "^1.0.1",
     "@neondatabase/serverless": "^0.10.4",
+    "@upstash/qstash": "^2.11.1",
     "ai": "^6.0.208",
     "drizzle-orm": "^0.45.2",
     "pdf-parse": "1.1.1"

@@ -49,6 +49,14 @@ export async function setDocumentStorageKey(id: number, key: string, client: Cli
   await client.update(documents).set({ storageKey: key }).where(eq(documents.id, id));
 }
 
+export async function updateDocumentIngestStatus(
+  id: number,
+  status: 'queued' | 'ingesting' | 'done' | 'failed',
+  client: Client = db,
+): Promise<void> {
+  await client.update(documents).set({ ingestStatus: status }).where(eq(documents.id, id));
+}
+
 export async function softDeleteDocument(id: number, at: Date, client: Client = db): Promise<Document | null> {
   const [row] = await client.update(documents).set({ deletedAt: at }).where(eq(documents.id, id)).returning();
   return (row as Document | null) ?? null;
@@ -146,6 +154,7 @@ export async function listDocuments(
       uploadedBy: documents.uploadedBy,
       uploadedAt: documents.uploadedAt,
       storageKey: documents.storageKey,
+      ingestStatus: documents.ingestStatus,
       hasBlob: sql<boolean>`${documents.storageKey} IS NOT NULL`.as('hasBlob'),
       deletedAt: documents.deletedAt,
       total: sql<number>`count(*) over()`.as('total'),
@@ -402,6 +411,7 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     findByName: (name) => findDocumentByName(name, client),
     findById: (id) => findDocumentById(id, client),
     setStorageKey: (id, key) => setDocumentStorageKey(id, key, client),
+    updateIngestStatus: (id, status) => updateDocumentIngestStatus(id, status, client),
     insert: (input) => insertDocument(input, client),
     deleteById: (id) => deleteDocumentById(id, client),
     softDelete: (id, at) => softDeleteDocument(id, at, client),

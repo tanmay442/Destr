@@ -5,6 +5,14 @@
 // Infrastructure can depend on domain (to implement these ports)
 // without creating a circular dependency on application.
 
+/** Lifecycle status of a document's ingest pipeline.
+ *  - `queued`: large PDF uploaded, awaiting the async ingest worker.
+ *  - `ingesting`: the worker is currently parsing/embedding.
+ *  - `done`: chunks are inserted and the document is searchable.
+ *  - `failed`: the worker ran but ingest threw (QStash will still
+ *    retry up to its retry budget; this marks a terminal failure). */
+export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
+
 export interface DocumentRow {
   id: number;
   fileName: string;
@@ -12,6 +20,7 @@ export interface DocumentRow {
   uploadedBy: string;
   uploadedAt: Date;
   storageKey: string | null;
+  ingestStatus: IngestStatus;
   deletedAt: Date | null;
 }
 
@@ -44,6 +53,7 @@ export interface DocumentRepository {
   findByName(fileName: string): Promise<DocumentRow | null>;
   findById(id: number): Promise<DocumentRow | null>;
   setStorageKey(id: number, key: string): Promise<void>;
+  updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
   insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
@@ -192,6 +202,12 @@ export interface BlobStorage {
   stream(key: string): Promise<ReadableStream<Uint8Array>>;
   delete(key: string): Promise<void>;
   signedUrl?(key: string, ttlSec: number): Promise<string>;
+}
+
+// ---- Async ingest queue (QStash-backed; no-op in sync mode) ----
+
+export interface IngestQueue {
+  enqueue(payload: { documentId: number }): Promise<void>;
 }
 
 // ---- PDF parsing & text splitting ----

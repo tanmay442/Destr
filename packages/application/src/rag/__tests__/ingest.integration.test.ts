@@ -10,7 +10,8 @@ function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
       findByName: vi.fn().mockResolvedValue(null),
       findById: vi.fn(),
       setStorageKey: vi.fn(),
-      insert: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, deletedAt: null }),
+      updateIngestStatus: vi.fn(),
+      insert: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
       deleteById: vi.fn(),
       softDelete: vi.fn(),
       restore: vi.fn(),
@@ -56,12 +57,13 @@ describe('ingestFile', () => {
 
   it('deletes old document only after new insert succeeds', async () => {
     const deleteById = vi.fn().mockResolvedValue(undefined);
-    const insert = vi.fn().mockResolvedValue({ id: 2, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, deletedAt: null });
+    const insert = vi.fn().mockResolvedValue({ id: 2, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null });
     const deps = makeDeps({
       documents: {
-        findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'oldhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, deletedAt: null }),
+        findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'oldhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
         findById: vi.fn(),
         setStorageKey: vi.fn(),
+        updateIngestStatus: vi.fn(),
         insert,
         deleteById,
         softDelete: vi.fn(),
@@ -83,7 +85,7 @@ describe('ingestFile', () => {
     const deps = makeDeps({
       documents: {
         ...makeDeps().documents,
-        findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc123', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, deletedAt: null }),
+        findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc123', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
       },
     });
     const result = await ingestFile(

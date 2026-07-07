@@ -2,11 +2,27 @@ import Link from 'next/link';
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { DocumentRowActions } from './document-row-actions';
 import { RecountAllButton } from './recount-all-button';
+import { IngestStatusPoller } from './ingest-status-poller';
 import { Pagination } from '@/components/admin/Pagination';
+import type { IngestStatus } from '@app/domain';
 
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 25;
+
+function ingestBadgeClass(status: IngestStatus): string {
+  switch (status) {
+    case 'queued':
+      return 'rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--warning)]';
+    case 'ingesting':
+      return 'rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2 py-0.5 text-xs text-[var(--accent)]';
+    case 'failed':
+      return 'rounded-full border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--danger)]';
+    case 'done':
+    default:
+      return 'rounded-full border border-[var(--foreground-muted)]/30 px-2 py-0.5 text-xs text-[var(--foreground-muted)]';
+  }
+}
 
 export default async function DocumentsPage({
   searchParams,
@@ -46,6 +62,9 @@ export default async function DocumentsPage({
     offset,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const hasPendingIngest = result.documents.some(
+    (d) => d.ingestStatus === 'queued' || d.ingestStatus === 'ingesting',
+  );
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-medium">Documents</h2>
@@ -90,6 +109,7 @@ export default async function DocumentsPage({
               <th className="px-3 py-2 text-right">At</th>
               <th className="px-3 py-2 text-right">Chunks</th>
               <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Ingest</th>
               <th className="px-3 py-2">Actions</th>
             </tr>
           </thead>
@@ -97,7 +117,7 @@ export default async function DocumentsPage({
             {result.documents.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="px-3 py-4 text-center text-[var(--foreground-muted)]"
                 >
                   No documents.
@@ -134,6 +154,14 @@ export default async function DocumentsPage({
                     )}
                   </td>
                   <td className="px-3 py-2">
+                    <span
+                      className={ingestBadgeClass(d.ingestStatus)}
+                      data-testid={`documents-ingest-status-${d.id}`}
+                    >
+                      {d.ingestStatus}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
                     <DocumentRowActions
                       id={d.id}
                       fileName={d.fileName}
@@ -154,6 +182,7 @@ export default async function DocumentsPage({
         pathname="/admin/documents"
         query={{ search }}
       />
+      <IngestStatusPoller hasPending={hasPendingIngest} />
     </section>
   );
 }

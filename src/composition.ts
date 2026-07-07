@@ -9,11 +9,12 @@ import {
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, listAudit,
+  prepareIngest,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf, Storage } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Storage, Queue } from '@app/infrastructure';
 import { requireAdmin, requireSession, getAppSession } from '@app/infrastructure/auth';
-import { ForbiddenError, UnauthorizedError, unwrap, type Result, type BlobStorage } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue } from '@app/domain';
 import { type MyUIMessage } from '@app/application/chat';
 import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
@@ -43,6 +44,11 @@ const embeddingService = Llm.getEmbeddingService();
 // BLOB_STORAGE_PROVIDER (filesystem | r2 | s3). Default: filesystem.
 const blobStorage: BlobStorage = Storage.createBlobStorage();
 
+// Async ingest queue. QStash-backed when QSTASH_TOKEN is set; a no-op
+// (sync mode) otherwise. The upload use-cases enqueue large PDFs here
+// and the /api/admin/ingest-worker route drains them.
+const ingestQueue: IngestQueue = Queue.createIngestQueue();
+
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
@@ -71,7 +77,7 @@ function createComposition() {
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage }),
+      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
     restoreDocument: (id: number, actorId: string) =>
@@ -85,7 +91,49 @@ function createComposition() {
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage }),
+      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
+    /** Drain a queued ingest: called by the /api/admin/ingest-worker
+     *  route on a QStash callback. Loads the doc, marks `ingesting`,
+     *  reads the PDF from the blob store, parses+embeds it, and
+     *  inserts chunks + flips to `done` in one transaction (so a
+     *  retry that sees `done` is a no-op). Idempotent: a `done` doc
+     *  returns `already-done`; an `ingesting` doc returns `busy`
+     *  (the route maps that to 409 so QStash retries later). */
+    ingestQueuedDocument: async (documentId: number): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> => {
+      const doc = await documentRepo.findById(documentId);
+      if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
+      if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
+      if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
+      if (!doc.storageKey) {
+        return err(new NotFoundError(`Document ${documentId} has no stored blob`));
+      }
+      await documentRepo.updateIngestStatus(documentId, 'ingesting');
+      let buffer: Buffer;
+      try {
+        buffer = await blobStorage.get(doc.storageKey);
+      } catch (e) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return err(new ExternalServiceError('Blob read failed', e));
+      }
+      const prepared = await prepareIngest(
+        { documentId, fileName: doc.fileName, buffer },
+        { embeddings: embeddingService, pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter },
+      );
+      if (!prepared.ok) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return prepared;
+      }
+      try {
+        await Db.transactionRunner.run(async (tx) => {
+          await tx.chunks.insertMany(prepared.value.rows);
+          await tx.documents.updateIngestStatus(documentId, 'done');
+        });
+      } catch (e) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return err(new ExternalServiceError('Chunk insert failed', e));
+      }
+      return ok({ status: 'done', chunks: prepared.value.chunks });
+    },
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     getAnalyticsSummary: () =>
