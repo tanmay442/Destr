@@ -13,21 +13,21 @@
     "./pdf": "./src/pdf/index.ts"
   },
   "dependencies": {
-    "@app/domain": "workspace:*",
-    "drizzle-orm": "^0.45.2",
     "@ai-sdk/google": "^3.0.83",
     "@ai-sdk/openai": "^3.0.73",
     "@ai-sdk/provider": "^3.0.10",
+    "@app/domain": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1080.0",
+    "@aws-sdk/s3-request-presigner": "^3.1080.0",
     "@clerk/nextjs": "^7.5.6",
     "@langchain/textsplitters": "^1.0.1",
-
+    "@neondatabase/serverless": "^0.10.4",
     "ai": "^6.0.208",
-    "pdf-parse": "1.1.1",
-    "@neondatabase/serverless": "^0.10.4"
+    "drizzle-orm": "^0.45.2",
+    "pdf-parse": "1.1.1"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.5",
-
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10"
   }

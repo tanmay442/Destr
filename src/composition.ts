@@ -11,9 +11,9 @@ import {
   getAnalyticsSummary, listAudit,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Storage } from '@app/infrastructure';
 import { requireAdmin, requireSession, getAppSession } from '@app/infrastructure/auth';
-import { ForbiddenError, UnauthorizedError, unwrap, type Result } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, unwrap, type Result, type BlobStorage } from '@app/domain';
 import { type MyUIMessage } from '@app/application/chat';
 import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
@@ -38,6 +38,10 @@ const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
+
+// Object storage for PDF binaries. Provider is env-swappable via
+// BLOB_STORAGE_PROVIDER (filesystem | r2 | s3). Default: filesystem.
+const blobStorage: BlobStorage = Storage.createBlobStorage();
 
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
@@ -67,7 +71,7 @@ function createComposition() {
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner }),
+      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
     restoreDocument: (id: number, actorId: string) =>
@@ -79,9 +83,9 @@ function createComposition() {
       bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number) => getDocumentById(id, { documents: documentRepo }),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
-      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
+      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner }),
+      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage }),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     getAnalyticsSummary: () =>
@@ -89,6 +93,7 @@ function createComposition() {
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, auditDeps),
     db: Db.db,
     schema: Db.schema,
+    blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
     session: Auth.clerkSessionStore,
@@ -181,6 +186,6 @@ export async function requireAdminDocument(
   const doc = r.value.document;
   if (!doc) return { ok: false, response: new Response('Not found', { status: 404 }) };
   if (!opts.allowDeleted && doc.deletedAt) return { ok: false, response: new Response('Gone', { status: 410 }) };
-  if (!doc.blob) return { ok: false, response: new Response('File unavailable', { status: 404 }) };
+  if (!doc.storageKey) return { ok: false, response: new Response('File unavailable', { status: 404 }) };
   return { ok: true, session: auth.session, comp: auth.comp, document: doc };
 }

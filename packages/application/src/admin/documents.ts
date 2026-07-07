@@ -17,11 +17,21 @@ import type {
   Clock,
   UserRepository,
   TransactionRunner,
+  BlobStorage,
 } from '@app/domain';
 import { ingestFile } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
+
+/** Build the object-storage key for a document's PDF binary. The key
+ *  is namespaced under `docs/` and prefixed by the document id so that
+ *  renaming a file (or two different docs sharing a sanitized name)
+ *  can never collide. */
+function blobKey(documentId: number, fileName: string): string {
+  const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+  return `docs/${documentId}/${safe}`;
+}
 
 async function ensureDocument(
   documentId: number,
@@ -54,7 +64,7 @@ export async function listDocuments(
       fileHash: string;
       uploadedBy: string;
       uploadedAt: Date;
-      blob: Buffer | null;
+      storageKey: string | null;
       deletedAt: Date | null;
       uploaderName: string | null;
       chunkCount: number;
@@ -95,7 +105,7 @@ export async function listDocuments(
 
 export async function uploadPdf(
   input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
   return wrapServiceCall(async () => {
     return await deps.runner.run(async (tx) => {
@@ -104,7 +114,9 @@ export async function uploadPdf(
         { ...deps, documents: tx.documents, chunks: tx.chunks },
       );
       if (!r.ok) return r;
-      await tx.documents.updateBlob(r.value.documentId, input.buffer);
+      const key = blobKey(r.value.documentId, input.fileName);
+      await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+      await tx.documents.setStorageKey(r.value.documentId, key);
       await tx.audit.logDocumentEvent({
         action: r.value.status === 'inserted' ? 'upload' : 'replace',
         documentId: r.value.documentId,
@@ -171,11 +183,14 @@ export async function getDocumentById(
 
 export async function hardDeleteDocument(
   input: { documentId: number; actorId: string },
-  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner },
+  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<void>> {
   return wrapServiceCall(async () => {
-    const check = await ensureDocument(input.documentId, deps.documents);
-    if (!check.ok) return check;
+    const existing = await deps.documents.findById(input.documentId);
+    if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
+    // Clean up the stored blob before the DB row disappears — once the
+    // row is gone we no longer know which key to delete.
+    const storageKey = existing.storageKey;
     await deps.runner.run(async (tx) => {
       await tx.audit.logDocumentEvent({
         action: 'delete',
@@ -184,13 +199,19 @@ export async function hardDeleteDocument(
       });
       await tx.documents.deleteById(input.documentId);
     });
+    if (storageKey) {
+      await deps.blobStorage.delete(storageKey).catch(() => {
+        // Best-effort: an orphaned blob is preferable to failing the
+        // hard-delete. Logged by the caller if needed.
+      });
+    }
     return ok(undefined);
   }, 'Failed to hard-delete document');
 }
 
 export async function replacePdf(
   input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
   return wrapServiceCall(async () => {
     const check = await ensureDocument(input.documentId, deps.documents);
@@ -202,7 +223,9 @@ export async function replacePdf(
         { ...deps, documents: tx.documents, chunks: tx.chunks },
       );
       if (!r.ok) return r;
-      await tx.documents.updateBlob(r.value.documentId, input.buffer);
+      const key = blobKey(r.value.documentId, input.fileName);
+      await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+      await tx.documents.setStorageKey(r.value.documentId, key);
       if (r.value.status !== 'unchanged') {
         await tx.audit.logDocumentEvent({
           action: 'replace',

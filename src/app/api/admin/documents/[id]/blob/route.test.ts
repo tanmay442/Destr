@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { requireAdminMock, getDocumentByIdMock, requireAdminDocumentMock } = vi.hoisted(() => {
+const { requireAdminMock, getDocumentByIdMock, requireAdminDocumentMock, blobStorageMock } = vi.hoisted(() => {
   const requireAdminMock = vi.fn();
   const getDocumentByIdMock = vi.fn();
+  const blobStorageMock = {
+    put: vi.fn(),
+    get: vi.fn(),
+    stream: vi.fn(),
+    delete: vi.fn(),
+    signedUrl: undefined as ((key: string, ttlSec: number) => Promise<string>) | undefined,
+  };
   const requireAdminDocumentMock = vi.fn(
     async (context: { params: Promise<{ id: string }> }, opts: { allowDeleted?: boolean } = {}) => {
       try {
@@ -23,13 +30,13 @@ const { requireAdminMock, getDocumentByIdMock, requireAdminDocumentMock } = vi.h
       if (!opts.allowDeleted && doc.deletedAt) {
         return { ok: false, response: new Response('Gone', { status: 410 }) };
       }
-      if (!doc.blob) {
+      if (!doc.storageKey) {
         return { ok: false, response: new Response('File unavailable', { status: 404 }) };
       }
-      return { ok: true, document: doc };
+      return { ok: true, document: doc, comp: { blobStorage: blobStorageMock } };
     },
   );
-  return { requireAdminMock, getDocumentByIdMock, requireAdminDocumentMock };
+  return { requireAdminMock, getDocumentByIdMock, requireAdminDocumentMock, blobStorageMock };
 });
 
 vi.mock('@/composition', async () => {
@@ -40,7 +47,7 @@ vi.mock('@/composition', async () => {
     requireSession: requireAdminMock,
     getAppSession: vi.fn(),
     ForbiddenError,
-    getComposition: () => ({ getDocumentById: getDocumentByIdMock }),
+    getComposition: () => ({ getDocumentById: getDocumentByIdMock, blobStorage: blobStorageMock }),
   };
 });
 
@@ -50,6 +57,8 @@ import * as route from './route';
 beforeEach(() => {
   requireAdminMock.mockReset();
   getDocumentByIdMock.mockReset();
+  blobStorageMock.stream.mockReset();
+  blobStorageMock.signedUrl = undefined;
 });
 
 function makeParams(id: string) {
@@ -90,7 +99,7 @@ describe('GET /api/admin/documents/[id]/blob', () => {
     getDocumentByIdMock.mockResolvedValue({
       id: 1,
       fileName: 'a.pdf',
-      blob: Buffer.from('PDF'),
+      storageKey: 'docs/1/a.pdf',
       deletedAt: new Date(),
     });
     const res = await route.GET(
@@ -100,12 +109,12 @@ describe('GET /api/admin/documents/[id]/blob', () => {
     expect(res.status).toBe(410);
   });
 
-  it('returns 404 when the blob column is null', async () => {
+  it('returns 404 when storageKey is null', async () => {
     requireAdminMock.mockResolvedValue({});
     getDocumentByIdMock.mockResolvedValue({
       id: 1,
       fileName: 'a.pdf',
-      blob: null,
+      storageKey: null,
       deletedAt: null,
     });
     const res = await route.GET(
@@ -115,20 +124,41 @@ describe('GET /api/admin/documents/[id]/blob', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 200 with PDF bytes for a live document', async () => {
+  it('streams the PDF from blobStorage when no signedUrl', async () => {
     requireAdminMock.mockResolvedValue({});
     getDocumentByIdMock.mockResolvedValue({
       id: 1,
       fileName: 'a.pdf',
-      blob: Buffer.from('%PDF-1.4 hello'),
+      storageKey: 'docs/1/a.pdf',
       deletedAt: null,
     });
+    const pdf = Buffer.from('%PDF-1.4 hello');
+    blobStorageMock.stream.mockResolvedValue(new Response(pdf).body);
     const res = await route.GET(
       new Request('http://x/api/admin/documents/1/blob'),
       makeParams('1'),
     );
     expect(res.status).toBe(200);
+    expect(blobStorageMock.stream).toHaveBeenCalledWith('docs/1/a.pdf');
     expect(res.headers.get('Content-Type')).toBe('application/pdf');
     expect(res.headers.get('Content-Disposition')).toContain('inline');
+  });
+
+  it('redirects to a signed URL when the adapter supports it', async () => {
+    requireAdminMock.mockResolvedValue({});
+    getDocumentByIdMock.mockResolvedValue({
+      id: 1,
+      fileName: 'a.pdf',
+      storageKey: 'docs/1/a.pdf',
+      deletedAt: null,
+    });
+    blobStorageMock.signedUrl = vi.fn().mockResolvedValue('https://r2.example/signed') as (key: string, ttlSec: number) => Promise<string>;
+    const res = await route.GET(
+      new Request('http://x/api/admin/documents/1/blob'),
+      makeParams('1'),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('https://r2.example/signed');
+    expect(blobStorageMock.signedUrl).toHaveBeenCalledWith('docs/1/a.pdf', 300);
   });
 });

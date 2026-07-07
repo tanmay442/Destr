@@ -45,8 +45,8 @@ export async function deleteDocumentById(id: number, client: Client = db): Promi
   await client.delete(documents).where(eq(documents.id, id));
 }
 
-export async function updateDocumentBlob(id: number, blob: Buffer, client: Client = db): Promise<void> {
-  await client.update(documents).set({ blob }).where(eq(documents.id, id));
+export async function setDocumentStorageKey(id: number, key: string, client: Client = db): Promise<void> {
+  await client.update(documents).set({ storageKey: key }).where(eq(documents.id, id));
 }
 
 export async function softDeleteDocument(id: number, at: Date, client: Client = db): Promise<Document | null> {
@@ -145,8 +145,8 @@ export async function listDocuments(
       fileHash: documents.fileHash,
       uploadedBy: documents.uploadedBy,
       uploadedAt: documents.uploadedAt,
-      blob: sql<Buffer | null>`null::bytea`.as('blob'),
-      hasBlob: sql<boolean>`${documents.blob} IS NOT NULL`.as('hasBlob'),
+      storageKey: documents.storageKey,
+      hasBlob: sql<boolean>`${documents.storageKey} IS NOT NULL`.as('hasBlob'),
       deletedAt: documents.deletedAt,
       total: sql<number>`count(*) over()`.as('total'),
     })
@@ -401,12 +401,11 @@ export function createDocumentRepo(client: Client): DocumentRepository {
   return {
     findByName: (name) => findDocumentByName(name, client),
     findById: (id) => findDocumentById(id, client),
-    saveBlob: (id, blob) => updateDocumentBlob(id, blob, client),
+    setStorageKey: (id, key) => setDocumentStorageKey(id, key, client),
     insert: (input) => insertDocument(input, client),
     deleteById: (id) => deleteDocumentById(id, client),
     softDelete: (id, at) => softDeleteDocument(id, at, client),
     restore: (id) => restoreDocument(id, client),
-    updateBlob: (id, blob) => updateDocumentBlob(id, blob, client),
     list: (opts) => listDocuments(opts, client),
     countChunksForDocuments: (ids) => countChunksForDocuments(ids, client),
     countChunksForAll: () => countChunksForAll(client),

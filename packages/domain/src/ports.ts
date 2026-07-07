@@ -11,7 +11,7 @@ export interface DocumentRow {
   fileHash: string;
   uploadedBy: string;
   uploadedAt: Date;
-  blob: Buffer | null;
+  storageKey: string | null;
   deletedAt: Date | null;
 }
 
@@ -43,12 +43,11 @@ export interface UserRow {
 export interface DocumentRepository {
   findByName(fileName: string): Promise<DocumentRow | null>;
   findById(id: number): Promise<DocumentRow | null>;
-  saveBlob(id: number, blob: Buffer): Promise<void>;
+  setStorageKey(id: number, key: string): Promise<void>;
   insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
   restore(id: number): Promise<DocumentRow | null>;
-  updateBlob(id: number, blob: Buffer): Promise<void>;
   list(opts: {
     search?: string;
     includeDeleted?: boolean;
@@ -183,6 +182,16 @@ export interface QueryStats {
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;
   embedBatch(values: string[]): Promise<number[][]>;
+}
+
+// ---- Blob storage (object storage for PDF binaries) ----
+
+export interface BlobStorage {
+  put(key: string, body: Buffer, contentType: string): Promise<void>;
+  get(key: string): Promise<Buffer>;
+  stream(key: string): Promise<ReadableStream<Uint8Array>>;
+  delete(key: string): Promise<void>;
+  signedUrl?(key: string, ttlSec: number): Promise<string>;
 }
 
 // ---- PDF parsing & text splitting ----

@@ -8,6 +8,13 @@
       "when": 1781839787956,
       "tag": "0000_magenta_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783401833911,
+      "tag": "0001_loose_cannonball",
+      "breakpoints": true
     }
   ]
 }
