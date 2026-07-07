@@ -112,7 +112,7 @@ async function validateDbUrl(url: string): Promise<string | null> {
 async function testEmbedding(): Promise<string | null> {
   if (!process.env.AI_STUDIO_KEY) return 'AI_STUDIO_KEY is not set in environment';
   try {
-    const result = await Llm.googleEmbeddingService.embed('validation-test-vector');
+    const result = await Llm.getEmbeddingService().embed('validation-test-vector');
     if (!result || result.length === 0) return 'Embedding returned empty vector';
     return null;
   } catch (err: unknown) {

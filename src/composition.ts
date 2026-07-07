@@ -37,12 +37,14 @@ const bind = <Args extends unknown[], T>(
 const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 
+const embeddingService = Llm.getEmbeddingService();
+
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
-  embeddings: Llm.googleEmbeddingService, hasher: systemHasher,
+  embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter,
 };
-const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: Llm.googleEmbeddingService };
+const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
 const rateLimitDeps: RateLimitDeps = { limiter: Auth.lruRateLimiter };
 
 function createComposition() {
