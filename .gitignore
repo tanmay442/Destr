@@ -63,5 +63,5 @@ proposedplans.md
 proposedplan.md
 OUTSTANDING_ISSUES.md
 
-# Execution plan handoff context (transient agent artifacts)
-docs/execution-plan/context/
+# Execution plan (transient agent planning artifacts — never commit)
+docs/execution-plan/
