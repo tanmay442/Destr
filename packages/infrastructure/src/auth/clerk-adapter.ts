@@ -1,11 +1,31 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
-import { eq, sql, and, or, isNull } from 'drizzle-orm';
+// Clerk-specific auth adapter. Implements the AuthAdapter interface
+// by wrapping Clerk's middleware, auth()/currentUser(), and backend SDK.
+import {
+  auth,
+  clerkClient,
+  clerkMiddleware,
+  createRouteMatcher,
+  currentUser,
+} from '@clerk/nextjs/server';
+import { NextResponse } from 'next/server';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { ForbiddenError, UnauthorizedError } from '@app/domain';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
-import { ForbiddenError, UnauthorizedError } from '@app/domain';
+import type { AuthAdapter } from './auth-factory';
 
 export type AppRole = 'admin' | 'user';
+
+export interface AppSessionFull {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    imageUrl: string | null;
+    role: AppRole;
+  };
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -39,14 +59,9 @@ async function touchLastSeen(clerkUserId: string): Promise<void> {
   );
 }
 
-export interface AppSessionFull {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    imageUrl: string | null;
-    role: AppRole;
-  };
+function parseClerkRole(value: unknown): AppRole | null {
+  if (value === 'admin' || value === 'user') return value;
+  return null;
 }
 
 export async function getAppSession(): Promise<AppSessionFull | null> {
@@ -76,7 +91,6 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       role: 'admin',
     });
     // Sync the promoted role back to Clerk so the JWT carries the correct role.
-    const { clerkClient } = await import('./clerk-session');
     const client = await clerkClient();
     client.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } }).catch(() => {});
   }
@@ -92,11 +106,6 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
   };
 }
 
-function parseClerkRole(value: unknown): AppRole | null {
-  if (value === 'admin' || value === 'user') return value;
-  return null;
-}
-
 export async function requireAdmin(): Promise<AppSessionFull> {
   const session = await getAppSession();
   if (!session) throw new UnauthorizedError('Not signed in');
@@ -108,4 +117,84 @@ export async function requireSession(): Promise<AppSessionFull> {
   const session = await getAppSession();
   if (!session) throw new UnauthorizedError('Not signed in');
   return session;
+}
+
+// Public routes: landing, sign-in / sign-up, Next internals.
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/icon',
+  '/apple-icon',
+  '/opengraph-image',
+]);
+
+// Require signed-in user. Clerk's `auth.protect()` redirects to sign-in.
+const isProtectedRoute = createRouteMatcher([
+  '/chat(.*)',
+  '/admin(.*)',
+  '/api/chat(.*)',
+  '/api/admin(.*)',
+]);
+
+// Admin-only routes. Reads role from Clerk JWT (publicMetadata -> metadata).
+const isAdminRoute = createRouteMatcher([
+  '/admin(.*)',
+  '/api/admin(.*)',
+]);
+
+async function resolveRole(
+  userId: string,
+  sessionClaims: unknown,
+): Promise<'admin' | 'user'> {
+  if (sessionClaims && typeof sessionClaims === 'object') {
+    // Fast path: read role from JWT session token template.
+    const claims = sessionClaims as
+      | { metadata?: { role?: unknown } }
+      | undefined;
+    const fromClaims = claims?.metadata?.role;
+    if (fromClaims === 'admin' || fromClaims === 'user') {
+      return fromClaims;
+    }
+  }
+  // Fallback: read role from Clerk Backend SDK (Edge-compatible).
+  try {
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    const role = (user.publicMetadata as { role?: unknown } | null)?.role;
+    if (role === 'admin' || role === 'user') return role;
+  } catch (err) {
+    console.error('proxy: failed to read user from Clerk', err);
+  }
+  return 'user';
+}
+
+function createMiddleware(): AuthAdapter['middleware'] {
+  return clerkMiddleware(async (auth, req) => {
+    if (isPublicRoute(req)) return NextResponse.next();
+    if (isProtectedRoute(req)) {
+      const { userId, sessionClaims } = await auth.protect();
+      if (isAdminRoute(req)) {
+        const role = await resolveRole(userId, sessionClaims);
+        if (role !== 'admin') {
+          return NextResponse.redirect(new URL('/chat', req.url));
+        }
+      }
+      return NextResponse.next();
+    }
+    if (req.nextUrl.pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    return NextResponse.next();
+  }) as unknown as AuthAdapter['middleware'];
+}
+
+export function createClerkAdapter(): AuthAdapter {
+  return {
+    middleware: createMiddleware() as unknown as AuthAdapter['middleware'],
+    getAppSession,
+    requireAdmin,
+    requireSession,
+    clerkClient: async () => clerkClient(),
+  };
 }

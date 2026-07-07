@@ -1,6 +1,6 @@
 // Read-only session resolution for SSR. Reads the role from the DB
 // users table but does NOT upsert or perform admin-email promotion
-// (that is handled by getAppSession() in session.ts). Use
+// (that is handled by getAppSession() in clerk-adapter.ts). Use
 // getAppSession() when you need the full promotion/upsert path;
 // use this store for lightweight SSR where the user is already
 // known to exist in the DB.

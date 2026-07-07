@@ -314,7 +314,7 @@ export const userRepo = {
     return row?.count ?? 0;
   },
   async syncClerkRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void> {
-    const { clerkClient } = await import('../auth/clerk-session');
+    const { clerkClient } = await import('../auth');
     const client = await clerkClient();
     await client.users.updateUserMetadata(clerkUserId, {
       publicMetadata: { role },
