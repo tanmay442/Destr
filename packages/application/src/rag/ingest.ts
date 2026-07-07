@@ -14,7 +14,7 @@ interface IngestFileInput {
 export interface IngestResult {
   documentId: number;
   chunks: number;
-  status: 'inserted' | 'updated' | 'unchanged';
+  status: 'inserted' | 'updated' | 'unchanged' | 'queued';
 }
 
 /** Dependencies required by the ingest pipeline. Each property
@@ -86,4 +86,49 @@ export async function ingestFile(
     chunks: texts.length,
     status: existing ? 'updated' : 'inserted',
   });
+}
+
+export interface PreparedChunk {
+  documentId: number;
+  content: string;
+  embedding: number[];
+}
+
+/** Parse, split, and embed a PDF buffer for a document row that
+ *  already exists (created by the async queued-upload path with
+ *  `ingest_status = 'queued'`). Unlike `ingestFile`, this does NOT
+ *  look up or delete rows by name, and does NOT insert a document
+ *  row — the row is already there. Returns the prepared chunk rows;
+ *  the caller inserts them, typically inside a transaction together
+ *  with the `done` status flip so the chunk insert and status update
+ *  are atomic (and a QStash retry that sees `done` is a no-op). */
+export async function prepareIngest(
+  input: { documentId: number; fileName: string; buffer: Buffer },
+  deps: { embeddings: EmbeddingService; pdfParser: PdfParser; textSplitter: TextSplitter },
+): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
+  let text: string;
+  try {
+    text = await deps.pdfParser.extractText(input.buffer);
+  } catch (cause) {
+    return err(new ExternalServiceError('PDF parsing failed', cause));
+  }
+  const texts = await deps.textSplitter.splitText(text);
+  if (texts.length === 0) {
+    return err(new ValidationError(`No extractable text in ${input.fileName}`));
+  }
+  let embeddings: number[][];
+  try {
+    embeddings = await deps.embeddings.embedBatch(texts);
+  } catch (cause) {
+    return err(new ExternalServiceError('Embedding API failed', cause));
+  }
+  if (embeddings.length !== texts.length) {
+    return err(new ExternalServiceError('Embedding count mismatch'));
+  }
+  const rows = texts.map((t, i) => ({
+    documentId: input.documentId,
+    content: t,
+    embedding: embeddings[i],
+  }));
+  return ok({ chunks: texts.length, rows });
 }

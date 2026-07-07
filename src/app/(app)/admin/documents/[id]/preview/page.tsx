@@ -39,9 +39,9 @@ export default async function PreviewPage({
         <div>
           <h2 className="text-xl font-medium">{doc.fileName}</h2>
           <p className="text-xs text-zinc-500">
-            {doc.blob && doc.blob.length > 0
-              ? `${(doc.blob.length / 1024).toFixed(1)} KB`
-              : 'Preview unavailable (no stored bytes)'}
+            {doc.storageKey
+              ? 'PDF stored in object storage'
+              : 'Preview unavailable (no stored file)'}
           </p>
         </div>
         <Link
@@ -51,7 +51,7 @@ export default async function PreviewPage({
           Back
         </Link>
       </div>
-      {doc.blob && doc.blob.length > 0 ? (
+      {doc.storageKey ? (
         <iframe
           src={`/api/admin/documents/${docId}/blob#toolbar=0`}
           className="h-[80vh] w-full rounded border border-zinc-200 dark:border-zinc-800"

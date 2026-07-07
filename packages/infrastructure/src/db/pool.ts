@@ -1,44 +1,49 @@
-// Pool construction + env loading for the drizzle client.
-// Owns the DATABASE_URL read, the sslmode injection, and the
-// missing-DB stub. Importing this module also triggers
-// `dotenv/config` so `.env` is loaded before the Pool is built.
 import 'dotenv/config';
-import type { Pool } from 'pg';
-import { Pool as PgPool } from 'pg';
+import { Pool as NeonPool } from '@neondatabase/serverless';
+import pg from 'pg';
 
-export function buildPool(): Pool {
-  let connectionString = process.env.DATABASE_URL ?? '';
-  if (!connectionString) {
-    return makeMissingDatabasePool();
+const POOL_OPTS = {
+  max: 20,
+  idleTimeoutMillis: 20,
+  connectionTimeoutMillis: 10_000,
+} as const;
+
+// Neon's serverless driver speaks Neon's HTTP/WebSocket protocol and
+// cannot reach a plain TCP Postgres (e.g. the local Docker container).
+// Route Neon URLs to the serverless driver; everything else (local
+// Docker, any plain TCP Postgres) goes through `pg` over TCP.
+export function isNeonUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
+  } catch {
+    return false;
   }
-  if (
-    !connectionString.includes('sslmode=') &&
-    !connectionString.includes('uselibpqcompat=')
-  ) {
-    connectionString += connectionString.includes('?')
-      ? '&sslmode=verify-full'
-      : '?sslmode=verify-full';
-  }
-  return new PgPool({
-    connectionString,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 10_000,
+}
+
+export function buildNeonPool(): NeonPool {
+  return new NeonPool({
+    connectionString: process.env.DATABASE_URL ?? '',
+    ...POOL_OPTS,
   });
 }
 
-interface QueryResult<T = Record<string, unknown>> { rows: T[]; }
-interface PoolClient {
-  query: (textOrConfig: unknown, valuesOrCallback?: unknown) => Promise<QueryResult>;
-  release: () => void;
+export function buildPgPool(): pg.Pool {
+  return new pg.Pool({
+    connectionString: process.env.DATABASE_URL ?? '',
+    ...POOL_OPTS,
+  });
 }
 
-function makeMissingDatabasePool(): Pool {
+// Graceful stub for when DATABASE_URL is missing; queries reject with a
+// clear message instead of the app throwing at import time.
+function makeMissingDatabasePool(): NeonPool {
   const message = 'DATABASE_URL is not set.';
   const stub = {
-    query: <T extends Record<string, unknown> = Record<string, unknown>>(): Promise<QueryResult<T>> =>
+    query: <T extends Record<string, unknown> = Record<string, unknown>>(): Promise<{ rows: T[] }> =>
       Promise.reject(new Error(message)),
-    connect: (): Promise<PoolClient> => Promise.reject(new Error(message)),
+    connect: (): Promise<{ query: () => Promise<unknown>; release: () => void }> =>
+      Promise.reject(new Error(message)),
     end: (): Promise<void> => Promise.reject(new Error(message)),
     on: () => stub, once: () => stub, emit: () => false,
     removeListener: () => stub, removeAllListeners: () => stub,
@@ -47,5 +52,9 @@ function makeMissingDatabasePool(): Pool {
     listenerCount: () => 0, addListener: () => stub, off: () => stub,
     prependListener: () => stub, prependOnceListener: () => stub,
   };
-  return stub as unknown as Pool;
+  return stub as unknown as NeonPool;
+}
+
+export function buildMissingPool(): NeonPool {
+  return makeMissingDatabasePool();
 }

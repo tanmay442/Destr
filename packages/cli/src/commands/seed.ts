@@ -41,7 +41,11 @@ export interface SeedOptions {
     chunks: number;
     status: 'inserted' | 'updated' | 'unchanged';
   }>;
-  saveBlob?: (documentId: number, buffer: Buffer) => Promise<void>;
+  storeBlob?: (documentId: number, buffer: Buffer, fileName: string) => Promise<void>;
+}
+
+function safeSeedName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
 
 export async function runSeed(opts: SeedOptions = {}): Promise<void> {
@@ -73,13 +77,12 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
           documents: {
             findByName: (n: string) => Db.findDocumentByName(n),
             findById: (id: number) => Db.findDocumentById(id),
-            saveBlob: (id: number, b: Buffer) => Db.updateDocumentBlob(id, b),
+            setStorageKey: (id: number, key: string) => Db.setDocumentStorageKey(id, key),
+            updateIngestStatus: (id: number, status: 'queued' | 'ingesting' | 'done' | 'failed') => Db.updateDocumentIngestStatus(id, status),
             insert: (i: { fileName: string; fileHash: string; uploadedBy: string }) => Db.insertDocument(i),
             deleteById: (id: number) => Db.deleteDocumentById(id),
             softDelete: (id: number, at: Date) => Db.softDeleteDocument(id, at),
             restore: (id: number) => Db.restoreDocument(id),
-            listDeletedSince: () => Promise.resolve([]),
-            updateBlob: (id: number, b: Buffer) => Db.updateDocumentBlob(id, b),
             list: Db.listDocuments,
             countChunksForDocuments: Db.countChunksForDocuments,
             countChunksForAll: Db.countChunksForAll,
@@ -92,7 +95,7 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
             recountAll: () => Db.recountChunksForAll(),
             searchByVector: (embedding: number[], opts: { threshold: number; limit: number }) => Db.searchChunksByVector(embedding, opts),
           },
-          embeddings: Llm.googleEmbeddingService,
+          embeddings: Llm.getEmbeddingService(),
           hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
           pdfParser: Pdf.pdfParseParser,
           textSplitter: Pdf.langchainSplitter,
@@ -105,17 +108,17 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
             }),
         };
       })();
-  const saveBlob = opts.saveBlob ?? (async (documentId: number, buffer: Buffer) => {
-    const { Db } = await import('@app/infrastructure');
-    const { db } = Db;
-    const { documents } = Db.schema;
-    const { eq } = await import('drizzle-orm');
-    await db.update(documents).set({ blob: buffer }).where(eq(documents.id, documentId));
+  const storeBlob = opts.storeBlob ?? (async (documentId: number, buffer: Buffer, fileName: string) => {
+    const { Db, Storage } = await import('@app/infrastructure');
+    const blobStorage = Storage.createBlobStorage();
+    const key = `docs/${documentId}/${safeSeedName(fileName)}`;
+    await blobStorage.put(key, buffer, 'application/pdf');
+    await Db.setDocumentStorageKey(documentId, key);
   });
   for (const name of files) {
     const buffer = readFileSync(join(fixturesDir, name));
     const result = await ingestFile({ fileName: name, buffer, uploadedBy: userId });
-    await saveBlob(result.documentId, buffer);
+    await storeBlob(result.documentId, buffer, name);
     console.log(
       `${name}: status=${result.status} documentId=${result.documentId} chunks=${result.chunks}`,
     );

@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { ingestFileMock, saveBlobMock } = vi.hoisted(() => ({
+const { ingestFileMock } = vi.hoisted(() => ({
   ingestFileMock: vi.fn(),
-  saveBlobMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@app/application/rag/ingest', () => ({
@@ -17,6 +16,7 @@ vi.mock('@app/infrastructure', () => ({
   Llm: {},
   Pdf: {},
   Auth: {},
+  Storage: { createBlobStorage: () => ({ put: vi.fn() }) },
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -40,8 +40,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 beforeEach(() => {
   ingestFileMock.mockReset();
-  saveBlobMock.mockReset();
-  saveBlobMock.mockResolvedValue(undefined);
 });
 
 describe('seed-docs', () => {

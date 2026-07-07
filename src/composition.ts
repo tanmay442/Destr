@@ -9,11 +9,16 @@ import {
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, listAudit,
+  prepareIngest,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf } from '@app/infrastructure';
-import { requireAdmin, requireSession, getAppSession } from '@app/infrastructure/auth';
-import { ForbiddenError, UnauthorizedError, unwrap, type Result } from '@app/domain';
+import { Db, Llm, Auth, Pdf, Storage, Queue } from '@app/infrastructure';
+const authAdapter = Auth.createAuthAdapter();
+
+const requireAdmin = authAdapter.requireAdmin;
+const requireSession = authAdapter.requireSession;
+const getAppSession = authAdapter.getAppSession;
+import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats } from '@app/domain';
 import { type MyUIMessage } from '@app/application/chat';
 import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
@@ -37,13 +42,34 @@ const bind = <Args extends unknown[], T>(
 const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 
+const embeddingService = Llm.getEmbeddingService();
+
+// Object storage for PDF binaries. Provider is env-swappable via
+// BLOB_STORAGE_PROVIDER (filesystem | r2 | s3). Default: filesystem.
+const blobStorage: BlobStorage = Storage.createBlobStorage();
+
+// Async ingest queue. QStash-backed when QSTASH_TOKEN is set; a no-op
+// (sync mode) otherwise. The upload use-cases enqueue large PDFs here
+// and the /api/admin/ingest-worker route drains them.
+const ingestQueue: IngestQueue = Queue.createIngestQueue();
+
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
-  embeddings: Llm.googleEmbeddingService, hasher: systemHasher,
+  embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter,
 };
-const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: Llm.googleEmbeddingService };
-const rateLimitDeps: RateLimitDeps = { limiter: Auth.lruRateLimiter };
+const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
+function createRateLimiter(): RateLimiter {
+  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();
+  return Auth.lruRateLimiter;
+}
+
+function createQueryStats(): QueryStats {
+  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashQueryStats();
+  return Auth.inMemoryQueryStats;
+}
+
+const rateLimitDeps: RateLimitDeps = { limiter: createRateLimiter() };
 
 function createComposition() {
   const auditDeps = { audit: Db.auditRepo };
@@ -59,13 +85,13 @@ function createComposition() {
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: Auth.inMemoryQueryStats }),
-    getTopQueries: (limit: number) => getTopQueries(limit, { stats: Auth.inMemoryQueryStats }),
+    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: createQueryStats() }),
+    getTopQueries: (limit: number) => getTopQueries(limit, { stats: createQueryStats() }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner }),
+      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
     restoreDocument: (id: number, actorId: string) =>
@@ -77,21 +103,64 @@ function createComposition() {
       bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number) => getDocumentById(id, { documents: documentRepo }),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
-      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
+      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner }),
+      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
+    /** Drain a queued ingest: called by the /api/admin/ingest-worker
+     *  route on a QStash callback. Loads the doc, marks `ingesting`,
+     *  reads the PDF from the blob store, parses+embeds it, and
+     *  inserts chunks + flips to `done` in one transaction (so a
+     *  retry that sees `done` is a no-op). Idempotent: a `done` doc
+     *  returns `already-done`; an `ingesting` doc returns `busy`
+     *  (the route maps that to 409 so QStash retries later). */
+    ingestQueuedDocument: async (documentId: number): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> => {
+      const doc = await documentRepo.findById(documentId);
+      if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
+      if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
+      if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
+      if (!doc.storageKey) {
+        return err(new NotFoundError(`Document ${documentId} has no stored blob`));
+      }
+      await documentRepo.updateIngestStatus(documentId, 'ingesting');
+      let buffer: Buffer;
+      try {
+        buffer = await blobStorage.get(doc.storageKey);
+      } catch (e) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return err(new ExternalServiceError('Blob read failed', e));
+      }
+      const prepared = await prepareIngest(
+        { documentId, fileName: doc.fileName, buffer },
+        { embeddings: embeddingService, pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter },
+      );
+      if (!prepared.ok) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return prepared;
+      }
+      try {
+        await Db.transactionRunner.run(async (tx) => {
+          await tx.chunks.insertMany(prepared.value.rows);
+          await tx.documents.updateIngestStatus(documentId, 'done');
+        });
+      } catch (e) {
+        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+        return err(new ExternalServiceError('Chunk insert failed', e));
+      }
+      return ok({ status: 'done', chunks: prepared.value.chunks });
+    },
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     getAnalyticsSummary: () =>
-      bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: Auth.inMemoryQueryStats }),
+      bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, auditDeps),
     db: Db.db,
     schema: Db.schema,
+    blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
     session: Auth.clerkSessionStore,
-    rateLimit: (key: string, opts: { limit: number; windowMs: number }) =>
-      Auth.lruRateLimiter.check(key, opts),
+    rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
+      createRateLimiter().check(key, opts),
   };
 }
 
@@ -179,6 +248,6 @@ export async function requireAdminDocument(
   const doc = r.value.document;
   if (!doc) return { ok: false, response: new Response('Not found', { status: 404 }) };
   if (!opts.allowDeleted && doc.deletedAt) return { ok: false, response: new Response('Gone', { status: 410 }) };
-  if (!doc.blob) return { ok: false, response: new Response('File unavailable', { status: 404 }) };
+  if (!doc.storageKey) return { ok: false, response: new Response('File unavailable', { status: 404 }) };
   return { ok: true, session: auth.session, comp: auth.comp, document: doc };
 }

@@ -3,9 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Mock pg so no real socket is opened; we inject a fake pool via
-// poolFactory instead. The mock just needs the named export shape
-// the script uses.
+// Mock `pg` so no real socket is opened; we inject a fake pool via
+// poolFactory instead. The mock just needs the default-export shape the
+// script uses (`pg.Pool`).
 vi.mock('pg', () => {
   class FakePool {
     query = vi.fn().mockResolvedValue({ rows: [] });
@@ -13,7 +13,6 @@ vi.mock('pg', () => {
   }
   return {
     default: { Pool: FakePool },
-    Pool: FakePool,
   };
 });
 

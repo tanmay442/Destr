@@ -5,13 +5,22 @@
 // Infrastructure can depend on domain (to implement these ports)
 // without creating a circular dependency on application.
 
+/** Lifecycle status of a document's ingest pipeline.
+ *  - `queued`: large PDF uploaded, awaiting the async ingest worker.
+ *  - `ingesting`: the worker is currently parsing/embedding.
+ *  - `done`: chunks are inserted and the document is searchable.
+ *  - `failed`: the worker ran but ingest threw (QStash will still
+ *    retry up to its retry budget; this marks a terminal failure). */
+export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
+
 export interface DocumentRow {
   id: number;
   fileName: string;
   fileHash: string;
   uploadedBy: string;
   uploadedAt: Date;
-  blob: Buffer | null;
+  storageKey: string | null;
+  ingestStatus: IngestStatus;
   deletedAt: Date | null;
 }
 
@@ -43,12 +52,12 @@ export interface UserRow {
 export interface DocumentRepository {
   findByName(fileName: string): Promise<DocumentRow | null>;
   findById(id: number): Promise<DocumentRow | null>;
-  saveBlob(id: number, blob: Buffer): Promise<void>;
+  setStorageKey(id: number, key: string): Promise<void>;
+  updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
   insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
   restore(id: number): Promise<DocumentRow | null>;
-  updateBlob(id: number, blob: Buffer): Promise<void>;
   list(opts: {
     search?: string;
     includeDeleted?: boolean;
@@ -170,12 +179,12 @@ export interface RateLimiter {
   check(
     key: string,
     opts: { limit: number; windowMs: number },
-  ): { ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number };
+  ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 
 export interface QueryStats {
-  record(userId: string, query: string): void;
-  top(limit: number): Array<{ q: string; count: number }>;
+  record(userId: string, query: string): Promise<void>;
+  top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
 // ---- LLM / Embedding / Chat ----
@@ -183,6 +192,22 @@ export interface QueryStats {
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;
   embedBatch(values: string[]): Promise<number[][]>;
+}
+
+// ---- Blob storage (object storage for PDF binaries) ----
+
+export interface BlobStorage {
+  put(key: string, body: Buffer, contentType: string): Promise<void>;
+  get(key: string): Promise<Buffer>;
+  stream(key: string): Promise<ReadableStream<Uint8Array>>;
+  delete(key: string): Promise<void>;
+  signedUrl?(key: string, ttlSec: number): Promise<string>;
+}
+
+// ---- Async ingest queue (QStash-backed; no-op in sync mode) ----
+
+export interface IngestQueue {
+  enqueue(payload: { documentId: number }): Promise<void>;
 }
 
 // ---- PDF parsing & text splitting ----

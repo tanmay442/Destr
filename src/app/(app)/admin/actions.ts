@@ -35,7 +35,7 @@ async function requireAdminOrError(): Promise<
 
 export interface UploadState {
   error?: string;
-  status?: 'inserted' | 'updated' | 'unchanged';
+  status?: 'inserted' | 'updated' | 'unchanged' | 'queued';
   chunks?: number;
   fileName?: string;
   documentId?: number;

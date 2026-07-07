@@ -1,4 +1,11 @@
-// Drizzle table definitions. bytea customType lives in storage/bytea-blob.ts.
+// Drizzle table definitions. The `blob` bytea column is KEPT for now:
+// PDF binaries are migrating to object storage (`storage_key`), but the
+// `blob` column is not dropped until a later session, after the
+// backfill script has moved every existing blob into the store. Keeping
+// it in the schema means `drizzle-kit generate` emits only the additive
+// `ADD COLUMN storage_key` migration here; removing `blob` from the
+// schema in a later session will generate the `DROP COLUMN` migration.
+// The bytea customType lives in storage/bytea-blob.ts.
 import {
   pgTable, serial, text, timestamp, integer,
   index, check,
@@ -6,6 +13,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { vector } from './schema-vector';
 import { byteaBlob } from '../storage/bytea-blob';
+import type { IngestStatus } from '@app/domain';
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
@@ -14,6 +22,8 @@ export const documents = pgTable('documents', {
   uploadedBy: text('uploaded_by').notNull(),
   uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
   blob: byteaBlob('blob'),
+  storageKey: text('storage_key'),
+  ingestStatus: text('ingest_status').notNull().default('done').$type<IngestStatus>(),
   deletedAt: timestamp('deleted_at'),
 }, (table) => [
   index('documents_deleted_at_idx').on(table.deletedAt),

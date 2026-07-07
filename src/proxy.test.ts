@@ -56,6 +56,81 @@ vi.mock('next/server', () => ({
   },
 }));
 
+vi.mock('@app/infrastructure/auth', async () => {
+  const { clerkMiddleware, createRouteMatcher, clerkClient } = await import('@clerk/nextjs/server');
+  const { NextResponse } = await import('next/server');
+
+  const isPublicRoute = createRouteMatcher([
+    '/',
+    '/sign-in(.*)',
+    '/sign-up(.*)',
+    '/icon',
+    '/apple-icon',
+    '/opengraph-image',
+  ]);
+
+  const isProtectedRoute = createRouteMatcher([
+    '/chat(.*)',
+    '/admin(.*)',
+    '/api/chat(.*)',
+    '/api/admin(.*)',
+  ]);
+
+  const isAdminRoute = createRouteMatcher([
+    '/admin(.*)',
+    '/api/admin(.*)',
+  ]);
+
+  async function resolveRole(
+    userId: string,
+    sessionClaims: unknown,
+  ): Promise<'admin' | 'user'> {
+    if (sessionClaims && typeof sessionClaims === 'object') {
+      const claims = sessionClaims as
+        | { metadata?: { role?: unknown } }
+        | undefined;
+      const fromClaims = claims?.metadata?.role;
+      if (fromClaims === 'admin' || fromClaims === 'user') {
+        return fromClaims;
+      }
+    }
+    try {
+      const client = await clerkClient();
+      const user = await client.users.getUser(userId);
+      const role = (user.publicMetadata as { role?: unknown } | null)?.role;
+      if (role === 'admin' || role === 'user') return role;
+    } catch (err) {
+      console.error('proxy: failed to read user from Clerk', err);
+    }
+    return 'user';
+  }
+
+  return {
+    createAuthAdapter: () => ({
+      middleware: clerkMiddleware(async (auth, req) => {
+        if (isPublicRoute(req)) return NextResponse.next();
+        if (isProtectedRoute(req)) {
+          const { userId, sessionClaims } = await auth.protect();
+          if (isAdminRoute(req)) {
+            const role = await resolveRole(userId, sessionClaims);
+            if (role !== 'admin') {
+              return NextResponse.redirect(new URL('/chat', (req as { url: string }).url));
+            }
+          }
+          return NextResponse.next();
+        }
+        if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+        return NextResponse.next();
+      }),
+      getAppSession: vi.fn(),
+      requireAdmin: vi.fn(),
+      requireSession: vi.fn(),
+    }),
+  };
+});
+
 import * as proxy from './proxy';
 const proxyHandler = proxy.default as unknown as (req: { nextUrl: { pathname: string; href: string }; url: string }) => Promise<{ type: string; url?: string }> | { type: string; url?: string };
 
@@ -82,7 +157,7 @@ function makeAuth(userId: string | null, role: string | null) {
   };
 }
 
-describe('proxy.ts (clerkMiddleware)', () => {
+describe('proxy.ts (auth adapter)', () => {
   it('passes public routes through', () => {
     proxyHandler(makeReq('/'));
     expect(protectMock).not.toHaveBeenCalled();

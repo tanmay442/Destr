@@ -3,18 +3,18 @@
 import { ok, type Result } from '@app/domain';
 import type { QueryStats } from '@app/domain';
 
-export function recordQuery(
+export async function recordQuery(
   userId: string,
   query: string,
   deps: { stats: QueryStats },
-): Result<void> {
-  deps.stats.record(userId, query);
+): Promise<Result<void>> {
+  await deps.stats.record(userId, query);
   return ok(undefined);
 }
 
-export function getTopQueries(
+export async function getTopQueries(
   limit: number,
   deps: { stats: QueryStats },
-): Result<Array<{ q: string; count: number }>> {
-  return ok(deps.stats.top(limit));
+): Promise<Result<Array<{ q: string; count: number }>>> {
+  return ok(await deps.stats.top(limit));
 }

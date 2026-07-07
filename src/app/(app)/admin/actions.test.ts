@@ -143,6 +143,24 @@ describe('admin actions', () => {
     expect(result.documentId).toBe(7);
   });
 
+  it('uploadPdfAction surfaces a queued status for large async uploads', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    uploadPdfMock.mockResolvedValue(ok({
+      documentId: 42,
+      status: 'queued',
+      chunks: 0,
+    }));
+    const fd = new FormData();
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x20, 0x74, 0x65, 0x73, 0x74]);
+    fd.append('file', new File([pdfBytes], 'big.pdf', { type: 'application/pdf' }));
+    const result = await uploadPdfAction({}, fd);
+    expect(result.status).toBe('queued');
+    expect(result.chunks).toBe(0);
+    expect(result.documentId).toBe(42);
+  });
+
   it('deleteDocumentAction delegates to softDeleteDocument', async () => {
     requireAdminMock.mockResolvedValue({
       user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },

@@ -1,22 +1,64 @@
 # RAG Support Agent
 
-Serverless AI customer support agent built on Next.js 16, the Vercel AI SDK
-v6, and Drizzle ORM on Neon Serverless Postgres. Users sign in with
-**Clerk** (Vercel Marketplace), ask questions in a chat UI, and receive
-cited answers drawn from uploaded PDF documentation; when the agent
-cannot find a match through documentation, it opens a support ticket so
-a human reviewer can follow up. A separate
-**admin console** lets staff upload, list, preview, replace, and
-delete documents, manage users, and triage tickets. Retrieval is
-tool-driven: the chat model calls a `searchDocumentation` tool when
-it needs context (and may ask a clarifying question first). When
-`prefetchFirstTurn` is enabled in `config/app.config.ts`, on the
-first user turn the server pre-fetches chunks server-side and
-injects them into the system prompt, so the model has grounded
-context even when it does not call the tool itself; the LLM may
-still call `searchDocumentation` for reformulations. Tickets are
-opened when the agent cannot resolve the issue through documentation
-or when the user explicitly asks for one.
+Serverless AI customer support agent built on Next.js 16, the Vercel AI
+SDK v6, and Drizzle ORM on Neon Serverless Postgres with pgvector.
+Users sign in with Clerk, ask questions in a chat UI, and receive
+cited answers drawn from uploaded PDF documentation.
+
+## Quick start
+
+```bash
+git clone <repo-url> && cd rag_agent
+docker compose up -d db          # Postgres + pgvector
+pnpm install && pnpm dev         # http://localhost:3000
+```
+
+That's it. The defaults in `.env.example` boot against the Docker
+Postgres with Ollama for embeddings and chat — no external API keys
+needed for local development.
+
+> **Note:** You still need Clerk keys for auth (`CLERK_SECRET_KEY` and
+> `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`). Copy `.env.example` to
+> `.env.local` and add them. Without Clerk, the app boots but you
+> can't sign in.
+
+### Zero-key local (with Ollama)
+
+```bash
+docker compose --profile ollama up -d   # Postgres + Ollama
+# Pull the models (first time only):
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull llama3.1
+pnpm install && pnpm dev
+```
+
+### Deploy to Vercel
+
+1. Push to GitHub.
+2. Import the repo in Vercel.
+3. Add environment variables from `.env.example` — see the
+   "Getting your API keys" section below for where to get each one.
+4. Deploy. Migrations run automatically during `pnpm build`.
+
+### Getting your API keys
+
+Every service the app needs is listed below, with where to sign up,
+what to copy, and free-tier notes. For local-only development you can
+skip every service except **Clerk** — Docker provides Postgres and
+Ollama replaces the LLM providers.
+
+| Service | Required for | Where to sign up | Free tier |
+|---------|-------------|------------------|-----------|
+| Clerk | Auth (always) | https://dashboard.clerk.com | Yes — generous free tier |
+| Neon | Prod DB | https://neon.tech | Yes — 0.5 GB, auto-suspend |
+| Google AI Studio | Prod embeddings | https://aistudio.google.com/apikey | Yes — free embeddings |
+| OpenAI-compatible chat | Prod chat | Your provider (OpenAI, OpenRouter, Groq, etc.) | Varies |
+| Cloudflare R2 | Prod blob storage | https://dash.cloudflare.com → R2 | Yes — 10 GB, zero egress |
+| Upstash Redis | Prod rate limiting | https://console.upstash.com | Yes — 10k commands/day |
+| Upstash QStash | Async ingest (optional) | https://console.upstash.com → QStash | Yes — 500 msgs/day |
+
+See [docs/GETTING_YOUR_API_KEYS.md](docs/GETTING_YOUR_API_KEYS.md)
+for detailed sign-up links and per-service walkthroughs.
 
 ## Stack
 
@@ -32,43 +74,9 @@ or when the user explicitly asks for one.
 - **Tooling:** Vitest, Testing Library, `drizzle-kit`
 - **UI:** Dark "obsidian slate" theme via CSS custom properties in `src/app/globals.css` (no light variant). Route groups split the app: `(marketing)` for the public landing, `(app)` for the unified sidebar + mobile-drawer shell that wraps `/chat` and `/admin/*`.
 
-## Quick start (recommended)
+## Reference
 
-```bash
-# 1. Install
-pnpm install
-
-# 2. One-command interactive setup — prompts for every env var,
-#    validates connectivity, migrates the database, and optionally
-#    seeds documents from a local folder.
-pnpm configure
-
-# 3. Run the app
-pnpm dev
-```
-
-The app boots on <http://localhost:3000>.
-
-## Manual setup
-
-```bash
-# 1. Install
-pnpm install
-
-# 2. Copy env template then fill in real values
-cp .env.example .env.local
-
-# 3. Apply schema + enable pgvector + run migrations
-pnpm cli db-migrate --force
-
-# 4. Seed sample docs (optional)
-pnpm cli seed
-
-# 5. Run the app
-pnpm dev
-```
-
-## Identity, auth, and roles
+### Identity, auth, and roles
 
 - **Provider:** Clerk (Vercel Marketplace). The integration auto-provisions
   `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.
@@ -103,7 +111,7 @@ pnpm dev
   `Content-Security-Policy` header, and disables the `X-Powered-By`
   header. Server actions have a 4 MB `bodySizeLimit`.
 
-## Admin console
+### Admin console
 
 - **`/admin` (Overview)** — Counts of docs, chunks, tickets, open
   tickets, and users, plus the latest 10 audit events.
@@ -135,7 +143,7 @@ pnpm dev
   Ticket audit events: create, assign, status_change, note,
   role_change.
 
-## Rate limit
+### Rate limit
 
 `packages/infrastructure/src/auth/lru-rate-limiter.ts` is a single-instance,
 in-memory sliding-window limiter keyed by `chat:${userId}`. Default budget:
@@ -144,7 +152,7 @@ in batches to avoid O(n) scans. The 31st request returns HTTP 429 with a
 `Retry-After` header. When the app moves to a multi-region deployment, swap
 this for an Upstash hash; the call sites do not need to change.
 
-## Shared utilities
+### Shared utilities
 
 | File | Purpose |
 | --- | --- |
@@ -153,13 +161,13 @@ this for an Upstash hash; the call sites do not need to change.
 | `src/lib/logger.ts` | Lightweight structured JSON logger with `LOG_LEVEL` env gate (replace with pino for richer features) |
 | `src/lib/http.ts` | `respond()`, `respondResult()`, `toSafeError()`, `toActionResult()`, and `isActionError()` for consistent error mapping |
 
-## Scripts
+### Scripts
 
 | Script | What it does |
 | --- | --- |
 | `pnpm configure` | One-command interactive setup wizard (prompts for env vars, migrates DB, seeds docs, runs smoke test) |
 | `pnpm dev` | Run Next.js in dev mode |
-| `pnpm build` | Production build |
+| `pnpm build` | Run migrations then production build |
 | `pnpm start` | Run the production build |
 | `pnpm lint` | ESLint |
 | `pnpm typecheck` | `tsc --noEmit` |
@@ -169,15 +177,18 @@ this for an Upstash hash; the call sites do not need to change.
 | `pnpm db:push` | Apply the Drizzle schema to the configured DB (interactive) |
 | `pnpm db:generate` | Generate SQL migrations from `packages/infrastructure/src/db/schema.ts` |
 | `pnpm db:studio` | Drizzle Studio |
+| `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
+| `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
+| `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
 | `pnpm cli init` | Interactive first-time setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts` and re-seeds. |
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
 | `pnpm cli db-migrate` | Apply the Drizzle schema + enable pgvector + add-column migrations |
 | `pnpm arch` | Architecture boundary check via dependency-cruiser |
 
-## Tests
+### Tests
 
-### Unit + integration (Vitest)
+#### Unit + integration (Vitest)
 
 192 tests across 21 files. Run with `pnpm test` (single run) or
 `pnpm test:ui` (interactive). Highlights:
@@ -227,15 +238,6 @@ this for an Upstash hash; the call sites do not need to change.
   cases (empty string, Infinity, negative offset, zero offset),
   `parsePageParam`
 
-## Architecture
-
-<p align="center">
-  <a href="public/SysArch.png">
-    <img src="public/SysArch.png" alt="RAG Support Agent — System Architecture" width="100%" />
-  </a>
-</p>
-
-> End-to-end view: the four lanes (Client → Edge/Proxy → Next.js Server → Neon Postgres) and the cross-lane flows (request, data/SQL, UI message stream, auth/JWT) that connect them. See the full breakdown below.
 
 ```
 src/
@@ -270,7 +272,7 @@ config/
 scripts/                    # setup, seed, migration scripts
 ```
 
-### CI
+#### CI
 
 `pnpm test:ci` provisions a Neon test branch, runs the full Vitest
 suite, and tears the branch down. Requires `NEON_API_KEY` and
@@ -278,7 +280,7 @@ suite, and tears the branch down. Requires `NEON_API_KEY` and
 branching step is skipped and the suite runs against whatever
 database `DATABASE_URL` points to.
 
-## Workspace layout
+### Workspace layout
 
 The business logic has been split into a 4-layer Clean Architecture
 inside `packages/`:
@@ -301,7 +303,7 @@ packages/
 place where adapters are instantiated; routes import from
 `@/composition` and call the use-cases.
 
-### Layer rules (enforced by `pnpm arch`)
+#### Layer rules (enforced by `pnpm arch`)
 
 | Layer            | May import                                | May NOT import                |
 |------------------|-------------------------------------------|-------------------------------|
@@ -313,7 +315,7 @@ place where adapters are instantiated; routes import from
 
 Run `pnpm arch` after any change that touches the import graph.
 
-### Boundary validation
+#### Boundary validation
 
 Every route handler and server action parses its external input
 through a Zod schema before it reaches a use-case:

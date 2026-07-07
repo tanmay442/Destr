@@ -53,7 +53,7 @@ function evictIfNeeded() {
 }
 
 export const inMemoryQueryStats: QueryStats = {
-  record(userId, query) {
+  async record(userId, query) {
     const text = query.trim().toLowerCase();
     if (!text) return;
     let bucket = users.get(userId);
@@ -68,7 +68,7 @@ export const inMemoryQueryStats: QueryStats = {
     trimBucket(bucket);
     evictIfNeeded();
   },
-  top(limit) {
+  async top(limit) {
     if (cachedTop && cachedLimit === limit) return cachedTop;
     cachedTop = Array.from(globalCounts.entries())
       .map(([q, count]) => ({ q, count }))

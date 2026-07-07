@@ -11,8 +11,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import pg from 'pg';
 
-const { Pool } = pg;
-
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 
 // SQL the migrator plays in addition to the Drizzle files. These
@@ -72,15 +70,8 @@ async function safeQuery(pool, sql, logger) {
 export async function applyMigrations({
   dir = './drizzle',
   poolFactory = () => {
-    const cs = process.env.DATABASE_URL ?? '';
-    // Enforce TLS verification. If the connection string already
-    // specifies an sslmode, respect it; otherwise append verify-full
-    // to match the main app pool (see packages/infrastructure/src/db/pool.ts).
-    const connectionString =
-      /sslmode=/.test(cs) || /uselibpqcompat=true/i.test(cs)
-        ? cs
-        : `${cs}${cs.includes('?') ? '&' : '?'}sslmode=verify-full`;
-    return new Pool({ connectionString });
+    const connectionString = process.env.DATABASE_URL ?? '';
+    return new pg.Pool({ connectionString });
   },
   logger = console,
 } = {}) {

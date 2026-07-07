@@ -17,11 +17,23 @@ import type {
   Clock,
   UserRepository,
   TransactionRunner,
+  BlobStorage,
+  IngestQueue,
+  IngestStatus,
 } from '@app/domain';
 import { ingestFile } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
+
+/** Build the object-storage key for a document's PDF binary. The key
+ *  is namespaced under `docs/` and prefixed by the document id so that
+ *  renaming a file (or two different docs sharing a sanitized name)
+ *  can never collide. */
+function blobKey(documentId: number, fileName: string): string {
+  const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+  return `docs/${documentId}/${safe}`;
+}
 
 async function ensureDocument(
   documentId: number,
@@ -54,7 +66,8 @@ export async function listDocuments(
       fileHash: string;
       uploadedBy: string;
       uploadedAt: Date;
-      blob: Buffer | null;
+      storageKey: string | null;
+      ingestStatus: IngestStatus;
       deletedAt: Date | null;
       uploaderName: string | null;
       chunkCount: number;
@@ -93,26 +106,111 @@ export async function listDocuments(
   }, 'Failed to list documents');
 }
 
+/** Files at or above this size go through the async QStash ingest path
+ *  (when `QSTASH_TOKEN` is set). Smaller files ingest synchronously.
+ *  4 MB matches Vercel's server-action request body limit. */
+const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
+
+/** Whether the async ingest path is enabled: only when a QStash token
+ *  is configured. Without it, the queue is a no-op and every upload
+ *  ingests synchronously regardless of size. */
+function asyncIngestEnabled(): boolean {
+  return Boolean(process.env.QSTASH_TOKEN);
+}
+
 export async function uploadPdf(
   input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
 ): Promise<Result<IngestResult>> {
   return wrapServiceCall(async () => {
-    return await deps.runner.run(async (tx) => {
-      const r = await ingestFile(
-        { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
-        { ...deps, documents: tx.documents, chunks: tx.chunks },
-      );
-      if (!r.ok) return r;
-      await tx.documents.updateBlob(r.value.documentId, input.buffer);
-      await tx.audit.logDocumentEvent({
-        action: r.value.status === 'inserted' ? 'upload' : 'replace',
-        documentId: r.value.documentId,
-        actorId: input.actorId,
-      });
-      return r;
-    });
+    if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled()) {
+      return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
+    }
+    return uploadPdfSync(input, deps);
   }, 'Failed to upload PDF');
+}
+
+/** Synchronous ingest: parse, embed, insert chunks, put blob, set
+ *  storage key — all in a transaction. Used for small PDFs (<4 MB)
+ *  or always when `QSTASH_TOKEN` is unset. Sets `ingest_status='done'`
+ *  (the column default, applied at insert). */
+async function uploadPdfSync(
+  input: { fileName: string; buffer: Buffer; actorId: string },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
+): Promise<Result<IngestResult>> {
+  return await deps.runner.run(async (tx) => {
+    const r = await ingestFile(
+      { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
+      { ...deps, documents: tx.documents, chunks: tx.chunks },
+    );
+    if (!r.ok) return r;
+    const key = blobKey(r.value.documentId, input.fileName);
+    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+    await tx.documents.setStorageKey(r.value.documentId, key);
+    await tx.audit.logDocumentEvent({
+      action: r.value.status === 'inserted' ? 'upload' : 'replace',
+      documentId: r.value.documentId,
+      actorId: input.actorId,
+    });
+    return r;
+  });
+}
+
+/** Asynchronous ingest core: store the blob, insert a `documents` row
+ *  with `ingest_status='queued'`, and enqueue a QStash message. No
+ *  parsing/embedding happens here — the worker does that on callback.
+ *  Handles name dedup the same way `ingestFile` does (same hash →
+ *  unchanged; different hash → delete the old row and its blob first)
+ *  because `documents.file_name` is unique. `auditFor` receives the
+ *  new row's id so the caller can choose the audit action/documentId
+ *  (upload logs the new id; replace logs the original documentId). */
+async function queuePdfForIngest(
+  input: { fileName: string; buffer: Buffer; actorId: string },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
+  auditFor: (newDocumentId: number) => { action: 'upload' | 'replace'; documentId: number },
+): Promise<Result<IngestResult>> {
+  const fileHash = deps.hasher.sha256(input.buffer);
+  const existing = await deps.documents.findByName(input.fileName);
+  if (existing && existing.fileHash === fileHash) {
+    return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
+  }
+  if (existing && existing.storageKey) {
+    await deps.blobStorage.delete(existing.storageKey).catch(() => {
+      // Best-effort: an orphaned blob is preferable to blocking the
+      // re-upload. The old row is deleted below regardless.
+    });
+  }
+  const inserted = await deps.runner.run(async (tx) => {
+    if (existing && existing.fileHash !== fileHash) {
+      await tx.documents.deleteById(existing.id);
+    }
+    const row = await tx.documents.insert({
+      fileName: input.fileName,
+      fileHash,
+      uploadedBy: input.actorId,
+    });
+    const key = blobKey(row.id, input.fileName);
+    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+    await tx.documents.setStorageKey(row.id, key);
+    await tx.documents.updateIngestStatus(row.id, 'queued');
+    const a = auditFor(row.id);
+    await tx.audit.logDocumentEvent({
+      action: a.action,
+      documentId: a.documentId,
+      actorId: input.actorId,
+    });
+    return row;
+  });
+  try {
+    await deps.ingestQueue.enqueue({ documentId: inserted.id });
+  } catch (e) {
+    // The blob + row are committed but the QStash publish failed.
+    // Mark `failed` so the UI doesn't show a forever-`queued` doc.
+    // A future re-drive can re-enqueue once QStash is reachable.
+    await deps.documents.updateIngestStatus(inserted.id, 'failed').catch(() => {});
+    throw e;
+  }
+  return ok({ documentId: inserted.id, chunks: 0, status: 'queued' });
 }
 
 export async function softDeleteDocument(
@@ -171,11 +269,14 @@ export async function getDocumentById(
 
 export async function hardDeleteDocument(
   input: { documentId: number; actorId: string },
-  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner },
+  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<void>> {
   return wrapServiceCall(async () => {
-    const check = await ensureDocument(input.documentId, deps.documents);
-    if (!check.ok) return check;
+    const existing = await deps.documents.findById(input.documentId);
+    if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
+    // Clean up the stored blob before the DB row disappears — once the
+    // row is gone we no longer know which key to delete.
+    const storageKey = existing.storageKey;
     await deps.runner.run(async (tx) => {
       await tx.audit.logDocumentEvent({
         action: 'delete',
@@ -184,17 +285,33 @@ export async function hardDeleteDocument(
       });
       await tx.documents.deleteById(input.documentId);
     });
+    if (storageKey) {
+      await deps.blobStorage.delete(storageKey).catch(() => {
+        // Best-effort: an orphaned blob is preferable to failing the
+        // hard-delete. Logged by the caller if needed.
+      });
+    }
     return ok(undefined);
   }, 'Failed to hard-delete document');
 }
 
 export async function replacePdf(
   input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
 ): Promise<Result<IngestResult>> {
   return wrapServiceCall(async () => {
     const check = await ensureDocument(input.documentId, deps.documents);
     if (!check.ok) return check;
+
+    if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled()) {
+      // Replace via the async queue: audit `replace` against the
+      // original documentId (mirrors the sync path's convention).
+      return queuePdfForIngest(
+        input,
+        deps,
+        () => ({ action: 'replace', documentId: input.documentId }),
+      );
+    }
 
     return await deps.runner.run(async (tx) => {
       const r = await ingestFile(
@@ -202,7 +319,9 @@ export async function replacePdf(
         { ...deps, documents: tx.documents, chunks: tx.chunks },
       );
       if (!r.ok) return r;
-      await tx.documents.updateBlob(r.value.documentId, input.buffer);
+      const key = blobKey(r.value.documentId, input.fileName);
+      await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+      await tx.documents.setStorageKey(r.value.documentId, key);
       if (r.value.status !== 'unchanged') {
         await tx.audit.logDocumentEvent({
           action: 'replace',
