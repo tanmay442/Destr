@@ -1,7 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // `output: 'standalone'` produces a self-contained server for the
+  // Docker image. On Vercel it must be OFF — Next 16's standalone output
+  // collapses every route into a single `index` function and Vercel's
+  // edge stops routing dynamic paths (/chat, /admin/*, /api/*), returning
+  // 404 for them. The Dockerfile sets DOCKER_BUILD=1 so only `docker
+  // build` gets standalone; Vercel builds (no DOCKER_BUILD) use Vercel's
+  // native per-route serverless output.
+  output: process.env.DOCKER_BUILD === '1' ? 'standalone' : undefined,
   poweredByHeader: false,
   experimental: {
     // Limit request body size for server actions (replaces the spoofable

@@ -18,6 +18,7 @@ COPY tsconfig.base.json ./
 RUN pnpm install --frozen-lockfile
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV DOCKER_BUILD=1
 RUN pnpm next build
 
 # Stage 2: Runtime
