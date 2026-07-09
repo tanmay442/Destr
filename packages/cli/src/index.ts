@@ -1,5 +1,3 @@
-// CLI dispatcher. Sub-commands live in commands/<name>.ts; run with
-// `tsx packages/cli/src/index.ts <sub-command> [...args]`.
 import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
 import { spawnSync } from 'node:child_process';
@@ -34,7 +32,6 @@ async function main(): Promise<void> {
       await runSetup(REPO_ROOT);
       return;
     case 'seed': {
-      // Delegate to scripts/seed-docs.ts (which already supports --dir=...).
       const result = spawnSync('pnpm', ['exec', 'tsx', 'scripts/seed-docs.ts', ...rest], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
@@ -42,7 +39,7 @@ async function main(): Promise<void> {
       process.exit(result.status ?? 0);
     }
     case 'db-migrate': {
-      // Run apply-migration first (enables pgvector + pending SQL migrations).
+      // apply-migration first: enables pgvector + pending SQL migrations
       const pre = spawnSync('node', ['scripts/apply-migration.mjs'], {
         cwd: REPO_ROOT,
         stdio: 'inherit',

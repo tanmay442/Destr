@@ -1,7 +1,4 @@
-/**
- * Marketing route group. Passthrough layout so future pages
- * (/pricing, /changelog) pick up shared chrome via a sibling page.tsx.
- */
+// Marketing route group. Passthrough layout; future pages pick up shared chrome here.
 export default function MarketingLayout({
   children,
 }: {

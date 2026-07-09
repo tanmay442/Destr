@@ -1,4 +1,3 @@
-// Use-case: record chat queries and read the top list.
 import { ok, type Result } from '@app/domain';
 import type { QueryStats } from '@app/domain';
 

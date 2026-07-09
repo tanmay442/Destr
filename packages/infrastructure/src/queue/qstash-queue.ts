@@ -1,8 +1,7 @@
 import { Client } from '@upstash/qstash';
 import type { IngestQueue } from '@app/domain';
 
-/** QStash-backed `IngestQueue`: publishes a JSON message to the public
- *  ingest-worker route, retrying on non-2xx. Requires `QSTASH_TOKEN` and `QSTASH_INGEST_WORKER_URL`. */
+/** QStash queue: publishes JSON to the ingest-worker route, retries on non-2xx. Needs QSTASH_TOKEN + QSTASH_INGEST_WORKER_URL. */
 export function createQstashQueue(): IngestQueue {
   const token = process.env.QSTASH_TOKEN;
   if (!token) throw new Error('QSTASH_TOKEN is not set.');

@@ -1,7 +1,5 @@
-// Port interfaces (abstractions). Living in @app/domain keeps the
-// dependency graph unidirectional: domain ← application ← infrastructure.
-
 /** Ingest lifecycle: `queued`→`ingesting`→`done`; `failed` is terminal despite QStash retry budget. */
+
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
 export interface DocumentRow {
@@ -188,7 +186,6 @@ export interface BlobStorage {
   signedUrl?(key: string, ttlSec: number): Promise<string>;
 }
 
-// Async ingest queue; no-op in sync mode (QStash-backed).
 
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
@@ -204,7 +201,6 @@ export interface TextSplitter {
 }
 
 
-/** Repositories scoped to the active DB transaction. */
 export interface TransactionContext {
   documents: DocumentRepository;
   chunks: ChunkRepository;
@@ -213,7 +209,6 @@ export interface TransactionContext {
   users: UserRepository;
 }
 
-/** Runs a callback inside a DB transaction, scoped to a TransactionContext. */
 export interface TransactionRunner {
   run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T>;
 }
@@ -227,7 +222,6 @@ export interface Hasher {
 }
 
 export interface SessionStore {
-  /** Resolves the active session (or null when signed out). */
   getSession(): Promise<{
     user: { id: string; email: string; name: string; imageUrl: string | null; role: 'admin' | 'user' };
   } | null>;

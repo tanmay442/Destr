@@ -1,5 +1,3 @@
-// Runtime config schema. The loader re-parses config through this
-// schema so malformed config fails loudly at server start.
 import { z } from 'zod';
 
 const toneSchema = z.enum(['friendly', 'formal', 'casual', 'concise']);

@@ -1,5 +1,4 @@
-// Ollama embedding adapter behind the EmbeddingService port. Uses the
-// OpenAI-compatible /v1 endpoint; nomic-embed-text = 768-dim (pgvector).
+// OpenAI-compatible /v1; nomic-embed-text is 768-dim to match pgvector.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import type { EmbeddingService } from '@app/domain';

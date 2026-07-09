@@ -1,4 +1,3 @@
-// Ollama chat adapter. Uses the OpenAI-compatible /v1 endpoint.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 

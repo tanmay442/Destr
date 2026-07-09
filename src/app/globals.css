@@ -1,40 +1,29 @@
 @import "tailwindcss";
 
-/* ----------------------------------------------------------------
-   Design tokens
-   Dark graphite surface, single warm-tinted neutral ramp, one
-   accent (a deliberate teal/violet — not generic SaaS blue). All
-   semantic colors are derived from the ramp so states (hover,
-   focus, selected) stay coherent across the app.
-   ---------------------------------------------------------------- */
+/* Design tokens: dark graphite surface + single teal/violet accent (not generic SaaS blue).
+   All semantic colors derive from one ramp so states (hover/focus/selected) stay coherent. */
 :root {
-  /* Surfaces (cooler graphite; chroma 0.005-0.012 toward indigo) */
   --background: oklch(0.17 0.012 262);
   --surface: oklch(0.205 0.013 262);
   --surface-elevated: oklch(0.245 0.013 262);
   --surface-sunken: oklch(0.155 0.011 262);
 
-  /* Borders */
   --border: oklch(0.32 0.014 262);
   --border-subtle: oklch(0.265 0.012 262);
   --border-strong: oklch(0.4 0.016 262);
 
-  /* Ink (high-contrast body, muted-secondary, hint/eyebrow) */
   --foreground: oklch(0.965 0.005 250);
   --foreground-muted: oklch(0.78 0.012 256);
   --foreground-subtle: oklch(0.6 0.012 258);
   --foreground-faint: oklch(0.45 0.012 260);
 
-  /* Accent (single brand hue: a saturated teal leaning violet).
-     Used for primary actions, current selection, and citation
-     indicators only — not decoration. */
+  /* Accent: primary actions, current selection, citation indicators only — not decoration. */
   --accent: oklch(0.78 0.14 196);
   --accent-hover: oklch(0.84 0.13 196);
   --accent-pressed: oklch(0.72 0.15 198);
   --accent-foreground: oklch(0.18 0.04 198);
   --accent-soft: oklch(0.34 0.08 196);
 
-  /* Semantic */
   --ring: oklch(0.78 0.14 196 / 0.55);
   --danger: oklch(0.7 0.18 25);
   --danger-soft: oklch(0.32 0.08 25);
@@ -43,18 +32,15 @@
   --warning: oklch(0.82 0.15 80);
   --warning-soft: oklch(0.32 0.08 80);
 
-  /* Glow (only used behind hero / on focus, never as decoration
-     on cards). Tinted from the accent. */
+  /* Glow: behind hero / on focus only — never card decoration. Tinted from accent. */
   --glow-accent: oklch(0.78 0.14 196 / 0.18);
 
-  /* Motion */
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 140ms;
   --dur-base: 200ms;
   --dur-slow: 320ms;
 
-  /* Radii */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -96,9 +82,7 @@ body {
 }
 
 body {
-  /* A barely-there radial wash gives the dark surface depth without
-     becoming a hero gradient. Anchored top-center, fades to the
-     background color in ~60% of the viewport. */
+  /* Barely-there radial wash adds depth without becoming a hero gradient. */
   background-image: radial-gradient(
     1200px 600px at 50% -10%,
     var(--glow-accent),
@@ -107,7 +91,6 @@ body {
   background-attachment: fixed;
 }
 
-/* Themed scrollbars. Slim, low-contrast on idle, brighter on hover. */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -127,17 +110,14 @@ body {
   background: var(--border-strong);
 }
 
-/* Focus ring. Two-layer box-shadow gives a clean inner+outer ring
-   against any background (Tailwind's default ring is invisible on
-   the graphite surface). */
+/* Two-layer ring stays visible on the graphite surface (Tailwind's default ring isn't). */
 :where(button, a, input, textarea, [role="button"], [tabindex]):focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
   border-radius: var(--radius-md);
 }
 
-/* Subtle reveal for elements that opt in. The default state is
-   visible — the animation enhances, it doesn't gate. */
+/* Reveal animation enhances; default state is visible, never gating. */
 @keyframes impex-fade-up {
   from {
     opacity: 0;
@@ -165,9 +145,7 @@ body {
   }
 }
 
-/* ----------------------------------------------------------------
-   Chat markdown styles
-   ---------------------------------------------------------------- */
+/* Chat markdown styles */
 .chat-markdown p {
   margin: 0 0 0.5em;
 }

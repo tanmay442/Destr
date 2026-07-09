@@ -1,5 +1,4 @@
-// Fallback loading UI shown while the root layout resolves auth/data.
-// Route groups provide their own loading.tsx with domain-appropriate skeletons.
+// Shown while the root layout resolves auth/data; route groups supply their own skeletons.
 export default function RootLoading() {
   return (
     <div

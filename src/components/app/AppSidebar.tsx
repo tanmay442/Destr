@@ -48,12 +48,10 @@ export function AppSidebar({
   const pathname = usePathname();
   const { signOut } = useClerk();
 
-  // Admin accordion: open by default on /admin/* so deep links show context,
-  // but the user can collapse it; it reopens automatically on the next admin visit.
+  // Open by default on /admin/* so deep links show context; collapses but reopens next visit.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminOpen, setAdminOpen] = useState<boolean>(onAdmin);
-  // Rerender-derived reset: when the route goes non-admin → admin, reopen the
-  // accordion via the "adjust state in render" pattern (no effect).
+  // Reset state in render (no effect) when route flips non-admin → admin.
   const [prevOnAdmin, setPrevOnAdmin] = useState<boolean>(onAdmin);
   if (prevOnAdmin !== onAdmin) {
     setPrevOnAdmin(onAdmin);
@@ -62,14 +60,13 @@ export function AppSidebar({
 
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
-  // Close the mobile drawer on route change using the same render-derived pattern (no effect).
+  // Close drawer on route change via the same render-derived pattern (no effect).
   const [lastPath, setLastPath] = useState<string | null>(pathname);
   if (lastPath !== pathname) {
     setLastPath(pathname);
     if (mobileOpen) setMobileOpen(false);
   }
 
-  // Lock body scroll while the mobile drawer is open.
   useEffect(() => {
     if (!mobileOpen) return;
     const prev = document.documentElement.style.overflow;
@@ -79,7 +76,6 @@ export function AppSidebar({
     };
   }, [mobileOpen]);
 
-  // Escape closes the mobile drawer.
   useEffect(() => {
     if (!mobileOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -89,7 +85,6 @@ export function AppSidebar({
     return () => window.removeEventListener('keydown', onKey);
   }, [mobileOpen]);
 
-  // Toggle the admin accordion (a no-op when off /admin/*).
   const toggleAdmin = () => {
     setAdminOpen((open) => !open);
   };
@@ -103,7 +98,6 @@ export function AppSidebar({
 
   return (
     <>
-      {/* Mobile top bar (below md): brand left, single hamburger right. */}
       <header
         className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--background)]/85 px-4 backdrop-blur-md md:hidden"
         data-testid="app-mobile-topbar"
@@ -130,7 +124,6 @@ export function AppSidebar({
         </button>
       </header>
 
-      {/* Desktop sidebar: fixed left, full height; hidden below md. */}
       <aside
         className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-[var(--border-subtle)] md:bg-[var(--surface)]/60 md:backdrop-blur-md"
         data-testid="app-sidebar"
@@ -145,7 +138,6 @@ export function AppSidebar({
         />
       </aside>
 
-      {/* Mobile drawer overlay; hidden at md+. */}
       {mobileOpen ? (
         <div
           className="fixed inset-0 z-50 md:hidden"
@@ -156,7 +148,7 @@ export function AppSidebar({
             onClick={() => setMobileOpen(false)}
             aria-hidden
           />
-          {/* TODO: Add a focus trap so keyboard focus stays within the drawer when open. */}
+          {/* TODO: trap focus within the drawer while open. */}
           <nav
             id="app-mobile-drawer"
             role="dialog"

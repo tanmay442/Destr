@@ -1,4 +1,3 @@
-// Use-case: embed a query and return the closest document chunks above a threshold.
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type { ChunkRepository, EmbeddingService } from '@app/domain';
 import { SIMILARITY_THRESHOLD, DEFAULT_SEARCH_LIMIT } from '../../../../config/constants';

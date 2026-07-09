@@ -1,5 +1,3 @@
-// OpenAI-compatible embedding adapter behind the EmbeddingService port.
-// Defaults to text-embedding-3-small; dimension pinned to EMBEDDING_DIMENSION (768).
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import { embed } from 'ai';

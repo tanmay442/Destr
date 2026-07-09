@@ -6,8 +6,6 @@ if (!databaseUrl) {
   process.exit(0);
 }
 
-// Delegates to the idempotent apply-migration.mjs (pgvector + additive ALTERs,
-// skips "already exists"); safe to run on every build via push or migrate.
 (async () => {
   try {
     console.log('Running migrations...');

@@ -1,8 +1,7 @@
 import { err, ok, type Result } from '@app/domain';
 import { ExternalServiceError } from '@app/domain';
 
-/** Wrap an async Result-returning op; unhandled throws become
- *  ExternalServiceError, but `err(...)` results pass through. */
+/** Unhandled throws become ExternalServiceError; `err(...)` results pass through. */
 export async function wrapServiceCall<T>(
   op: () => Promise<Result<T>>,
   message: string,
@@ -14,7 +13,6 @@ export async function wrapServiceCall<T>(
   }
 }
 
-/** Wrap an async raw-value op into Result; throws become ExternalServiceError. */
 export async function serviceResult<T>(
   op: () => Promise<T>,
   message: string,
@@ -26,7 +24,6 @@ export async function serviceResult<T>(
   }
 }
 
-/** Clamp and sanitise pagination parameters (used by all admin list handlers). */
 export function sanitizePagination(
   rawLimit: number | undefined | null,
   rawOffset: number | undefined | null,

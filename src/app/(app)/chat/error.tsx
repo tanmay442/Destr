@@ -1,4 +1,3 @@
-// Chat page error boundary; the admin section has its own error.tsx.
 'use client';
 
 export default function ChatError({

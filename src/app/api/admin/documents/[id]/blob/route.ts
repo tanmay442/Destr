@@ -11,8 +11,7 @@ export async function GET(
   const storageKey = auth.document.storageKey!;
   const comp = auth.comp;
 
-  // R2/S3 adapters expose signedUrl — redirect to serve from the object-store edge.
-  // Filesystem adapter has no signedUrl, so stream the bytes back.
+  // R2/S3 adapters expose signedUrl → redirect to object-store edge; filesystem adapter streams bytes.
   if (comp.blobStorage.signedUrl) {
     const url = await comp.blobStorage.signedUrl(storageKey, 300);
     return NextResponse.redirect(url, {

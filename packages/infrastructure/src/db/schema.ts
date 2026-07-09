@@ -1,5 +1,4 @@
-// Drizzle tables. `blob` bytea is KEPT until the backfill moves binaries
-// to object storage (`storage_key`); bytea customType in storage/bytea-blob.ts.
+// `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
   pgTable, serial, text, timestamp, integer,
   index, check,

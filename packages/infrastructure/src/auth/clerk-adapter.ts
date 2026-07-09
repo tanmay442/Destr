@@ -1,4 +1,3 @@
-// Clerk implementation of the AuthAdapter interface.
 import {
   auth,
   clerkClient,
@@ -28,7 +27,6 @@ export interface AppSessionFull {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Parse once at module load — ADMIN_EMAILS never changes at runtime.
 const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
   .split(',')
   .map((s) => s.trim().toLowerCase())
@@ -88,7 +86,6 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       imageUrl: local.imageUrl,
       role: 'admin',
     });
-    // Sync the promoted role back to Clerk so the JWT carries the correct role.
     const client = await clerkClient();
     client.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } }).catch(() => {});
   }
@@ -117,7 +114,6 @@ export async function requireSession(): Promise<AppSessionFull> {
   return session;
 }
 
-// Public routes: landing, sign-in / sign-up, Next internals.
 const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
@@ -127,7 +123,6 @@ const isPublicRoute = createRouteMatcher([
   '/opengraph-image',
 ]);
 
-// Require signed-in user. Clerk's `auth.protect()` redirects to sign-in.
 const isProtectedRoute = createRouteMatcher([
   '/chat(.*)',
   '/admin(.*)',
@@ -135,7 +130,6 @@ const isProtectedRoute = createRouteMatcher([
   '/api/admin(.*)',
 ]);
 
-// Admin-only routes. Reads role from Clerk JWT (publicMetadata -> metadata).
 const isAdminRoute = createRouteMatcher([
   '/admin(.*)',
   '/api/admin(.*)',
@@ -146,7 +140,6 @@ async function resolveRole(
   sessionClaims: unknown,
 ): Promise<'admin' | 'user'> {
   if (sessionClaims && typeof sessionClaims === 'object') {
-    // Fast path: read role from JWT session token template.
     const claims = sessionClaims as
       | { metadata?: { role?: unknown } }
       | undefined;
@@ -155,7 +148,6 @@ async function resolveRole(
       return fromClaims;
     }
   }
-  // Fallback: read role from Clerk Backend SDK (Edge-compatible).
   try {
     const client = await clerkClient();
     const user = await client.users.getUser(userId);

@@ -1,5 +1,4 @@
-// Read-only session for SSR. Reads role from the DB but does NOT upsert
-// or promote admin-email (see getAppSession() in clerk-adapter.ts).
+// Read-only SSR session; does NOT upsert or promote admin-email.
 import { auth, currentUser, clerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';

@@ -1,4 +1,3 @@
-// Test shim: re-exports the CLI seed command; run as program root it delegates to it.
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

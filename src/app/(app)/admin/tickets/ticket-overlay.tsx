@@ -16,10 +16,6 @@ export interface TicketRow {
   notes: string | null;
 }
 
-/**
- * URL-driven slide-out overlay for a ticket: reads `?ticket=…` and renders
- * TicketDrawer in a portal. Closes on Escape/backdrop/close, preserving other params.
- */
 export function TicketOverlay({
   tickets,
   userOptions,
@@ -31,7 +27,6 @@ export function TicketOverlay({
   const params = useSearchParams();
   const activeId = params.get('ticket');
 
-  // Stash close() in a ref so the keydown effect reads the latest version without re-listing deps.
   const closeRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!activeId) return;

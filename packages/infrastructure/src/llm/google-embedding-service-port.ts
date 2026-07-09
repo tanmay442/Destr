@@ -1,4 +1,3 @@
-// Wraps the Google embedding model into the EmbeddingService port.
 import { embed } from 'ai';
 import { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
 import type { EmbeddingService } from '@app/domain';

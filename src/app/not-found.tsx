@@ -1,4 +1,3 @@
-// Root 404 page. Shown when no route matches.
 import Link from 'next/link';
 
 export default function RootNotFound() {

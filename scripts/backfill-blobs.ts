@@ -1,7 +1,3 @@
-// Move documents.blob binaries into the object store; set storage_key.
-// Idempotent — skips rows that already have a storage_key.
-// `blob` column is kept until a later migration drops it post-backfill.
-// Usage: pnpm tsx scripts/backfill-blobs.ts
 import 'dotenv/config';
 import { Db, Storage } from '@app/infrastructure';
 const { and, isNull, isNotNull } = Db;

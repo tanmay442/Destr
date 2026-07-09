@@ -11,7 +11,6 @@ export async function GET(
   const storageKey = auth.document.storageKey!;
   const comp = auth.comp;
 
-  // Force download (Content-Disposition: attachment); same redirect-vs-stream strategy as blob route.
   if (comp.blobStorage.signedUrl) {
     const url = await comp.blobStorage.signedUrl(storageKey, 300);
     return NextResponse.redirect(url, {

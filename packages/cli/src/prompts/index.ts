@@ -1,5 +1,3 @@
-// Reusable readline prompts. Mirrors scripts/setup.ts helpers so `rag-agent init`
-// and `rag-agent seed` show the same interaction. Pure Node, no extra deps.
 import { createInterface, type Interface } from 'node:readline';
 
 export function makeRl(): Interface {

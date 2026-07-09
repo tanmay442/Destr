@@ -1,4 +1,3 @@
-// Use-case: enforce a per-user rate limit on the chat route.
 import { err, ok, type Result, RateLimitedError } from '@app/domain';
 import type { RateLimiter } from '@app/domain';
 

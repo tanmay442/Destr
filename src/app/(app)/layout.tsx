@@ -2,10 +2,6 @@ import { redirect } from 'next/navigation';
 import { getAppSession } from '@/composition';
 import { AppSidebar, type AppRole } from '@/components/app/AppSidebar';
 
-/**
- * Authenticated app shell: renders the responsive sidebar and reserves
- * `md:pl-64` for page content. Session resolves here; page guards still run per subtree.
- */
 export default async function AppLayout({
   children,
 }: {

@@ -2,10 +2,6 @@ import Link from 'next/link';
 import { GithubIcon } from '@/components/icons/GithubIcon';
 import { BrandMark } from '@/components/icons/BrandMark';
 
-/**
- * Landing-page header (brand left; project note + GitHub link right).
- * Minimal by design: no nav/auth since the card carries the primary CTAs.
- */
 export function LandingHeader() {
   return (
     <header

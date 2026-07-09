@@ -20,7 +20,6 @@ const { currentUserMock } = vi.hoisted(() => ({
   currentUserMock: vi.fn(),
 }));
 
-// Hoisted mutable so tests can toggle appConfig.prefetchFirstTurn (default off).
 const { appConfigMock } = vi.hoisted(() => ({
   appConfigMock: {
     prefetchFirstTurn: false,
@@ -62,13 +61,11 @@ vi.mock('@/composition', () => ({
   appConfig: appConfigMock,
 }));
 
-// Mock the AI SDK so we don't actually hit any model providers.
 vi.mock('ai', async () => {
   const actual = await vi.importActual<typeof import('ai')>('ai');
   return {
     ...actual,
     streamText: streamTextImpl,
-    // The tool() helper should pass through — keep the real one.
     tool: actual.tool,
   };
 });
@@ -81,7 +78,6 @@ function makeUIMessageStream(): ReadableStream<Uint8Array> {
   });
 }
 
-// Captures the `tools` arg passed to streamText so tests can invoke a tool's execute.
 async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
   authMock.mockResolvedValue({ userId: 'user_test' });
   let captured: T | undefined;
@@ -109,10 +105,7 @@ beforeEach(() => {
   currentUserMock.mockReset();
   createTicketMock.mockReset();
   ticketInsertedValues.length = 0;
-  // Default: createTicket succeeds with a TKT-prefixed id.
   createTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-abcd1234', status: 'created' }) as never);
-  // Default Clerk identity: every test gets a known user unless it
-  // explicitly overrides the mock.
   currentUserMock.mockResolvedValue({
     id: 'user_test',
     emailAddresses: [{ emailAddress: 'real@example.com' }],
@@ -188,7 +181,6 @@ describe('/api/chat createSupportTicket tool', () => {
     expect(out).toHaveProperty('status', 'created');
     expect(out).toHaveProperty('ticketId');
     expect((out as { ticketId: string }).ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
-    // Use-case uses signed-in identity, not LLM-supplied name/email.
     expect(createTicketMock).toHaveBeenCalledWith({
       userId: 'user_test',
       name: 'Real Person',
@@ -309,7 +301,6 @@ describe('/api/chat searchDocumentation tool', () => {
 });
 
 describe('/api/chat pre-fetch toggle (default off)', () => {
-  // Captures the `system` arg for a body; no-op stream lets us read it after the request.
   async function captureSystemForBody(body: { messages: unknown[] }) {
     authMock.mockResolvedValue({ userId: 'user_test' });
     let capturedSystem: unknown;
@@ -329,7 +320,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
   }
 
   it('respects appConfig.prefetchFirstTurn = false (default): no pre-fetch block, tool-driven branch', async () => {
-    // With prefetch off, route must not inject a pre-fetch block; model calls searchDocumentation itself.
     const { system } = await captureSystemForBody({
       messages: [
         {
@@ -342,7 +332,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     expect(typeof system).toBe('string');
     const sys = system as string;
     expect(sys).not.toMatch(/Pre-fetched documentation/);
-    // Tool-contract block still present so the model knows to call the tool.
     expect(sys).toContain('searchDocumentation');
     expect(sys).toContain('createSupportTicket');
   });
@@ -391,7 +380,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
       }),
     );
     expect(res.status).toBe(200);
-    // Tool call pushes chunks into capturedCitations; post-loop wrapper emits them as data-citation parts.
     await capturedTools?.searchDocumentation.execute({ query: 'q' });
     streamController!.close();
     const reader = res.body!.getReader();

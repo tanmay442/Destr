@@ -1,5 +1,4 @@
-// In-process LRU of userId -> query -> count. Resets on cold start and
-// is per-deployment, so analytics are best-effort.
+// In-process LRU; resets on cold start and is per-deployment, so analytics are best-effort.
 import type { QueryStats } from '@app/domain';
 
 const MAX_USERS = 5_000;
@@ -8,8 +7,6 @@ const MAX_QUERIES_PER_USER = 1_000;
 interface UserBucket { queries: Map<string, number>; lastTouched: number; }
 const users = new Map<string, UserBucket>();
 
-// Global aggregated counts maintained incrementally on record() calls,
-// so top() never has to iterate all users × queries.
 const globalCounts = new Map<string, number>();
 let cachedTop: Array<{ q: string; count: number }> | null = null;
 let cachedLimit = 0;

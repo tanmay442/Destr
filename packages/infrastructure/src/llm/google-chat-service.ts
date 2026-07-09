@@ -1,4 +1,3 @@
-// Google AI Studio chat adapter.
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 

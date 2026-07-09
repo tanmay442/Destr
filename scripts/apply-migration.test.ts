@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Mock `pg` so no real socket opens; inject a fake pool via poolFactory.
 vi.mock('pg', () => {
   class FakePool {
     query = vi.fn().mockResolvedValue({ rows: [] });
@@ -38,7 +37,7 @@ describe('applyMigrations', () => {
     const { query, end, factory } = makePoolFactory();
     await applyMigrations({ dir: tmp, poolFactory: factory, logger: silent });
 
-    // 1 extension + 4 addColumns + 2 statements from the fake migration.
+    // 1 extension + 4 addColumns + 2 migration statements
     expect(query).toHaveBeenCalledTimes(7);
     expect(query.mock.calls[0]?.[0]).toMatch(/CREATE EXTENSION IF NOT EXISTS vector/);
     expect(query.mock.calls[1]?.[0]).toMatch(

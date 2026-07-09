@@ -38,8 +38,6 @@ export default async function DocumentsPage({
   const search = params.search?.trim() ?? '';
   const page = parsePageParam(params.page);
   const offset = (page - 1) * PAGE_SIZE;
-  // Read success-banner params (set by RecountAllButton) so the message
-  // survives the revalidatePath reload.
   const recountedDocsRaw = params.recountedDocs;
   const recountedTotalRaw = params.recountedTotal;
   const recountedDocs =

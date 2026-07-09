@@ -183,7 +183,6 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
 
     const errors: string[] = [];
 
-    // DB was already validated inline, but re-check in case .env.local was overwritten
     const dbErr = await validateDbUrl(process.env.DATABASE_URL ?? '');
     if (dbErr) errors.push(`DATABASE_URL: ${dbErr}`);
 
@@ -205,7 +204,6 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
     for (const err of errors) {
       console.error(`  \x1b[31m✗\x1b[0m ${err}`);
     }
-    // Loop back to re-prompt
   }
 }
 
@@ -337,7 +335,6 @@ export async function runSetup(repoRoot: string): Promise<void> {
     rl,
   });
 
-  // rl is now closed by writeOutputs
 
   if (!result.ranSeed) {
     if (result.copied.length > 0) {

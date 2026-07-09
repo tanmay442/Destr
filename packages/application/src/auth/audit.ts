@@ -1,4 +1,3 @@
-// Use-case: log document and ticket audit events.
 import { ok, type Result } from '@app/domain';
 import type { AuditLog } from '@app/domain';
 

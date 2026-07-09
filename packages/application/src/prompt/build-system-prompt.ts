@@ -1,8 +1,7 @@
 import type { AppConfig } from '@app/domain';
 import type { RetrievedChunk } from '../rag/search';
 
-// The tool-contract block: the only description of the AI SDK tool-use
-// contract. Hardcoded because it must match src/app/api/chat/route.ts.
+// The only description of the AI SDK tool-use contract; hardcoded to match src/app/api/chat/route.ts.
 const TOOL_CONTRACT_BLOCK = `# How to navigate a conversation
 
 You answer product questions for a BI / dashboard SaaS. You have two
@@ -79,7 +78,6 @@ heavily that the user cannot verify it against the docs.
   the signed-in Clerk identity is used instead. Just pass a short
   placeholder string for those.`;
 
-// Tone guidance derived from the persona config.
 const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   friendly:
     'Friendly, calm, and direct. No emojis. No exclamation marks. ' +
@@ -103,7 +101,6 @@ const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
     'what you can do, not on apologies.',
 };
 
-// Build the persona block from the config.
 function buildPersonaBlock(config: AppConfig): string {
   const nameClause = config.agentPersona.name
     ? ` Your name is ${config.agentPersona.name}.`
@@ -121,8 +118,7 @@ function buildPersonaBlock(config: AppConfig): string {
   ].join('\n');
 }
 
-// Build the out-of-scope block from the config. If empty, still emit a
-// "stay within the docs" rule so the model never improvises.
+// If empty, still emit a "stay within the docs" rule so the model never improvises.
 function buildOutOfScopeBlock(config: AppConfig): string {
   if (config.outOfScopeTopics.length === 0) {
     return [
@@ -145,7 +141,6 @@ function buildOutOfScopeBlock(config: AppConfig): string {
   ].join('\n');
 }
 
-// Optional free-form custom instructions from the config.
 function buildCustomInstructionsBlock(config: AppConfig): string | null {
   if (!config.customInstructions || config.customInstructions.trim() === '') {
     return null;
@@ -157,8 +152,6 @@ function buildCustomInstructionsBlock(config: AppConfig): string | null {
   ].join('\n');
 }
 
-// Pre-fetched chunks for the user's first message, gated on whether
-// the caller passes them (`prefetchFirstTurn` controls this).
 function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   const header = `# Pre-fetched documentation for the user's first message`;
   const bullets = chunks
@@ -175,8 +168,7 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   return `${header}\n${bullets}\n\n${directive}`;
 }
 
-// Compose the full system prompt: tool contract → persona →
-// out-of-scope → custom instructions → pre-fetched chunks.
+// Compose: tool contract → persona → out-of-scope → custom instructions → pre-fetched chunks.
 export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,

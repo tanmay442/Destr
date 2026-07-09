@@ -1,5 +1,4 @@
-// RAG Support brand mark: a chat bubble with a "tail" (retrieval metaphor),
-// strokeWidth 2.5 so it stays legible at 16x16. BrandMark = icon, BrandLogo = icon + wordmark.
+// RAG Support brand mark: chat-bubble retrieval metaphor, strokeWidth 2.5 for 16px legibility. BrandMark = icon, BrandLogo = icon + wordmark.
 
 import Link from 'next/link';
 

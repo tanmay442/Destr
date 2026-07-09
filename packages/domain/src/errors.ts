@@ -1,5 +1,3 @@
-// The route layer maps these to HTTP status codes via
-// `instanceof` checks in respond() (src/lib/http.ts).
 
 export abstract class DomainError extends Error {
   abstract readonly code: string;

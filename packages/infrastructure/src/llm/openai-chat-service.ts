@@ -1,4 +1,3 @@
-// Custom OpenAI-compatible chat adapter; config from env.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 

@@ -1,5 +1,3 @@
-// Provision a per-run Neon branch, write DATABASE_URL to .env.test, apply
-// migrations, and seed. Skips cleanly if NEON_API_KEY is unset (local dev).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -43,8 +41,7 @@ export async function main() {
     };
     branch = created.branch;
     console.log(`[setup-test-db] Created branch ${branch.name} (${branch.id})`);
-    // Wait for branch to leave `init` (create runs async on Neon; acting early
-    // returns HTTP 423 "conflicting operations"). Poll 60s max so CI can't hang.
+    // 423 until branch ready; poll ≤60s
     {
       const deadline = Date.now() + 60_000;
       let state = created.branch.current_state;
@@ -72,8 +69,6 @@ export async function main() {
     throw new Error('Internal error: branch was not assigned.');
   }
 
-  // Ensure a read-write endpoint exists (Neon does not auto-create one on
-  // branch creation); reuse if present.
   const endpointsRes = await fetch(api(`/branches/${branch.id}/endpoints`), { headers });
   if (!endpointsRes.ok) {
     throw new Error(
@@ -86,8 +81,6 @@ export async function main() {
   let endpoint =
     endpoints.find((e) => e.type === 'read_write') ?? endpoints[0];
   if (!endpoint) {
-    // Retry endpoint create on 423 (concurrent ops); the branch-ready wait
-    // already covers the create_branch case.
     const createEp = await (async () => {
       const deadline = Date.now() + 60_000;
       let lastErr: Response | undefined;
@@ -105,7 +98,6 @@ export async function main() {
           await new Promise((res) => setTimeout(res, 2000));
           continue;
         }
-        // Non-retryable: surface immediately.
         throw new Error(`Failed to create endpoint: ${r.status} ${await r.text()}`);
       }
       throw new Error(
@@ -121,7 +113,6 @@ export async function main() {
     );
   }
 
-  // Wait for endpoint to become `active` (polls; ~60s cap so CI can't hang).
   const deadline = Date.now() + 60_000;
   while (endpoint.current_state !== 'active' && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
@@ -140,9 +131,7 @@ export async function main() {
     );
   }
 
-  // Fetch the connection URI for this branch. Neon's API uses /connection_uri
-  // (not /connection_string) with role_name + database_name; pin via branch_id
-  // (endpoint_id filter rejects branch-only endpoints with 404).
+  // endpoint_id filter 404s; pin via branch_id
   const conn = await fetch(
     api(
       `/connection_uri?role_name=neondb_owner&database_name=neondb&branch_id=${branch.id}`,
@@ -165,8 +154,6 @@ export async function main() {
   writeFileSync(envPath, envText, 'utf8');
   console.log(`[setup-test-db] Wrote DATABASE_URL to ${envPath}`);
 
-  // Apply migrations/seed against the *test* branch; override DATABASE_URL
-  // since dotenv loaded it pointing at production.
   try {
     execFileSync('node', ['scripts/apply-migration.mjs'], {
       stdio: 'inherit',

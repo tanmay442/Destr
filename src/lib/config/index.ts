@@ -2,8 +2,7 @@ import 'server-only';
 import rawConfig from '../../../config/app.config';
 import { appConfigSchema, type AppConfig } from '@app/domain/app-config';
 
-// Validate config at module load so the server never boots with broken
-// prompts/admin bootstrap; schema .default() fills in unset fields.
+// Validate at module load so server never boots with broken config.
 const parsed = appConfigSchema.safeParse(rawConfig);
 if (!parsed.success) {
   const issues = parsed.error.issues

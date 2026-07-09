@@ -1,9 +1,5 @@
 import { requireAdmin } from '@/composition';
 
-/**
- * Admin subtree layout. Runs the role guard, then frames page content;
- * the sidebar/drawer comes from the parent (app) layout.
- */
 export default async function AdminLayout({
   children,
 }: {

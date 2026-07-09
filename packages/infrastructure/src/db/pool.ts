@@ -8,8 +8,7 @@ const POOL_OPTS = {
   connectionTimeoutMillis: 10_000,
 } as const;
 
-// Neon's serverless driver can't reach plain TCP Postgres (e.g. local
-// Docker); route Neon URLs to it, everything else through `pg` over TCP.
+// Neon's serverless driver can't reach plain TCP Postgres; route Neon URLs to it, everything else via `pg`.
 export function isNeonUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname;
@@ -33,8 +32,6 @@ export function buildPgPool(): pg.Pool {
   });
 }
 
-// Graceful stub for when DATABASE_URL is missing; queries reject with a
-// clear message instead of the app throwing at import time.
 function makeMissingDatabasePool(): NeonPool {
   const message = 'DATABASE_URL is not set.';
   const stub = {

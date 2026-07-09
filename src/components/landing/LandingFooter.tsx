@@ -2,10 +2,6 @@ import { GithubIcon } from '@/components/icons/GithubIcon';
 
 const STACK = ['Next.js', 'Tailwind', 'AI SDK', 'pgvector'];
 
-/**
- * Landing footer. The tech list is a non-linked visual badge
- * ("built with") for a quick scannable overview.
- */
 export function LandingFooter() {
   return (
     <footer

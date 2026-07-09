@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 
 const POLL_INTERVAL_MS = 3000;
 
-/** Refreshes the documents list on an interval while any doc is `queued` or
- *  `ingesting`, so the UI reflects async ingest progress without a reload. */
 export function IngestStatusPoller({ hasPending }: { hasPending: boolean }) {
   const router = useRouter();
   useEffect(() => {

@@ -1,9 +1,6 @@
 import type { SVGProps } from 'react';
 
-/**
- * Inline GitHub mark — Lucide lacks one (v1.21) and we avoid a heavyweight
- * icon set for a single glyph. Renders as a peer of Lucide icons.
- */
+// Inline GitHub mark; Lucide lacks one and a full icon set is overkill for a single glyph.
 export function GithubIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg

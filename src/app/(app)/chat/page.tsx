@@ -2,12 +2,8 @@ import { ChatInterface } from '@/components/ChatInterface';
 import { requireSession } from '@/composition';
 
 export default async function ChatPage() {
-  // requireSession() throws/redirects when signed out, so we call it
-  // even though this page no longer reads the returned session.
   await requireSession();
   return (
-    // Full-height flex column; the chat card uses `flex-1` (not `h-full`)
-    // so it shrinks on short viewports and caps naturally on tall ones.
     <div className="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
       <header className="flex shrink-0 flex-col gap-2.5">
         <div className="flex items-center gap-2">

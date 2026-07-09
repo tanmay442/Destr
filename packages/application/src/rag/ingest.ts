@@ -17,7 +17,6 @@ export interface IngestResult {
   status: 'inserted' | 'updated' | 'unchanged' | 'queued';
 }
 
-/** Dependencies for the ingest pipeline (application-layer ports). */
 export interface IngestDeps {
   documents: DocumentRepository;
   chunks: ChunkRepository;
@@ -60,7 +59,7 @@ export async function ingestFile(
     return err(new ExternalServiceError('Embedding count mismatch'));
   }
 
-  // Callers should wrap these in a transaction for atomicity (TransactionRunner).
+  // Callers should wrap these in a transaction for atomicity.
   if (existing) {
     await deps.documents.deleteById(existing.id);
   }
@@ -92,8 +91,7 @@ export interface PreparedChunk {
   embedding: number[];
 }
 
-/** Parse/split/embed a PDF for an existing `queued` row (no name
- *  lookup or insert). Caller inserts chunks + flips status atomically. */
+/** Parse/split/embed for an existing `queued` row; caller inserts chunks + flips status atomically. */
 export async function prepareIngest(
   input: { documentId: number; fileName: string; buffer: Buffer },
   deps: { embeddings: EmbeddingService; pdfParser: PdfParser; textSplitter: TextSplitter },

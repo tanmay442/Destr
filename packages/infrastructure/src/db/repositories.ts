@@ -1,4 +1,3 @@
-// Drizzle-backed repository implementations.
 import { eq, desc, ilike, or, sql, inArray, isNull, and } from 'drizzle-orm';
 import { db } from './client';
 import {
@@ -178,7 +177,6 @@ export const ticketRepo = {
     limit: number;
     offset: number;
   }, client: Client = db): Promise<{ rows: TicketRow[]; total: number }> {
-    // Defense-in-depth: enforce a hard maximum at the repository level.
     const limit = Math.min(Math.max(opts.limit, 1), 500);
     const whereParts = [] as ReturnType<typeof eq>[];
     if (opts.status) whereParts.push(eq(tickets.status, opts.status));
@@ -338,8 +336,6 @@ export const auditRepo = {
     }>;
     total: number;
   }> {
-    // When both filters are set, total = document_audit + ticket_audit counts;
-    // a single filter's other count is 0.
     const wantDoc = !input.ticketId || input.documentId !== undefined;
     const wantTix = !input.documentId || input.ticketId !== undefined;
     const docWhere = input.documentId
@@ -391,7 +387,6 @@ export const auditRepo = {
   },
 };
 
-// Wraps Drizzle's db.transaction() so the app runs repository calls atomically.
 import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRepository, AuditLog, TicketRepository, UserRepository } from '@app/domain';
 
 export function createDocumentRepo(client: Client): DocumentRepository {

@@ -58,7 +58,6 @@ describe('setup-test-db', () => {
         ],
       }),
     });
-    // Branch already has an active read_write endpoint, so no creation/polling.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -104,7 +103,6 @@ describe('setup-test-db', () => {
         branches: [{ id: 'br-primary', name: 'production', primary: true }],
       }),
     });
-    // Create branch returns state=ready, so the wait-for-ready loop is skipped.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -128,7 +126,6 @@ describe('setup-test-db', () => {
         endpoint: { id: 'ep-new', type: 'read_write', current_state: 'init' },
       }),
     });
-    // First poll returns active, so the wait loop exits immediately.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -158,7 +155,6 @@ describe('setup-test-db', () => {
     expect(JSON.parse(epCall[1]?.body as string)).toMatchObject({
       endpoint: { branch_id: 'br-new', type: 'read_write' },
     });
-    // Assert URI uses branch_id, not endpoint_id (rejected with 404).
     const uriCall = fetchMock.mock.calls[5];
     expect(uriCall[0]).toContain('/connection_uri');
     expect(uriCall[0]).toContain('branch_id=br-new');

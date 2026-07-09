@@ -1,6 +1,6 @@
 'use client';
 
-// Root global error boundary; catches unhandled errors. Must be a Client Component per Next.js.
+// Global error boundary — must be a Client Component (Next.js requirement).
 export default function GlobalError({
   error,
   reset,

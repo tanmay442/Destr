@@ -1,5 +1,4 @@
-// In-process sliding-window limiter. Single instance only; a soft cap
-// when multiple instances run concurrently.
+// In-process sliding-window limiter; single-instance only (best-effort across replicas).
 import type { RateLimiter } from '@app/domain';
 
 const MAX_KEYS = 5_000;
@@ -33,7 +32,6 @@ export const lruRateLimiter: RateLimiter = {
     bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
     bucket.lastTouched = now;
 
-    // Periodic eviction: every 100 checks, evict stale entries
     if (buckets.size > MAX_KEYS && ++evictionCounter % 100 === 0) {
       evictStale(now, opts.windowMs);
     }

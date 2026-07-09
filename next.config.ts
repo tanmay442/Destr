@@ -1,22 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // `output: 'standalone'` produces a self-contained server for the
-  // Docker image. On Vercel it must be OFF — Next 16's standalone output
-  // collapses every route into a single `index` function and Vercel's
-  // edge stops routing dynamic paths (/chat, /admin/*, /api/*), returning
-  // 404 for them. The Dockerfile sets DOCKER_BUILD=1 so only `docker
-  // build` gets standalone; Vercel builds (no DOCKER_BUILD) use Vercel's
-  // native per-route serverless output.
+  // standalone only for Docker; Vercel's standalone breaks dynamic route routing (404s)
   output: process.env.DOCKER_BUILD === '1' ? 'standalone' : undefined,
   poweredByHeader: false,
   experimental: {
-    // Limit request body size for server actions (replaces the spoofable
-    // Content-Length header check the chat route previously relied on).
+    // limit server-action body size
     serverActions: {
       bodySizeLimit: '4mb',
-      // Explicit allowed origins for CSRF mitigation. Next.js checks
-      // the Origin header against these for server-action requests.
+      // allowed origins for CSRF mitigation
       allowedOrigins: ['*'],
     },
   },
@@ -57,8 +49,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  // pdf-parse is now pinned to 1.1.1 (pure Node, no native
-  // canvas / DOMMatrix dependency). Nothing to externalise.
+  // pdf-parse pinned to pure-Node 1.1.1; nothing to externalise
   serverExternalPackages: [],
 };
 
