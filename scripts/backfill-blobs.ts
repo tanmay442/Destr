@@ -8,8 +8,8 @@
 // Usage:
 //   pnpm tsx scripts/backfill-blobs.ts
 import 'dotenv/config';
-import { and, isNull, isNotNull } from 'drizzle-orm';
 import { Db, Storage } from '@app/infrastructure';
+const { and, isNull, isNotNull } = Db;
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
