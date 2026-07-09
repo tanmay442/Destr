@@ -45,10 +45,8 @@ describe('ChatInterface', () => {
   it('renders a welcome intro when there are no messages', () => {
     setupChat();
     render(<ChatInterface />);
-    // The intro explains what the agent can do and how to open a
-    // ticket. We assert inside the intro testid so the quick-prompt
-    // buttons (which also say "open a ticket") don't collide with
-    // the body copy.
+    // The intro explains the agent's capabilities; asserting inside its
+    // testid avoids colliding with the quick-prompt buttons' "open a ticket" copy.
     const intro = screen.getByTestId('chat-intro');
     expect(intro).toBeInTheDocument();
     expect(
@@ -120,11 +118,8 @@ describe('ChatInterface', () => {
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {
     setupChat();
     render(<ChatInterface />);
-    // The container is the only element with `chat-messages`. It
-    // must use `flex-1` + `min-h-0` so the surrounding flex column
-    // gives it the remaining viewport height (and overflow-y-auto
-    // kicks in when the thread is long). We assert on the className
-    // rather than computing layout because jsdom does not lay out.
+    // The container uses `flex-1` + `min-h-0` so the flex column gives it the
+    // remaining height; we assert on className since jsdom doesn't lay out.
     const container = screen.getByTestId('chat-messages');
     const cls = container.className;
     expect(cls).toContain('flex-1');

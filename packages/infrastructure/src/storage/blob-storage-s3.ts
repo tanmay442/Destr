@@ -7,8 +7,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { BlobStorage } from '@app/domain';
 
-// Standard AWS S3 adapter. Doubles as a MinIO adapter via the
-// S3_ENDPOINT env var (points the client at a self-hosted endpoint).
+// Standard AWS S3 adapter; also works with MinIO via S3_ENDPOINT.
 export function createS3BlobStorage(): BlobStorage {
   const region = process.env.S3_REGION;
   const accessKeyId = process.env.S3_ACCESS_KEY_ID;

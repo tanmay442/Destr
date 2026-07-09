@@ -3,7 +3,6 @@
 
 export abstract class DomainError extends Error {
   abstract readonly code: string;
-  /** HTTP status code suggestion. Used by the route layer. */
   abstract readonly status: number;
 }
 
@@ -47,10 +46,7 @@ export class ConflictError extends DomainError {
   }
 }
 
-/**
- * 410 Gone: resource was soft-deleted, or its restore window
- * has expired. Used by the document restore flow.
- */
+/** 410 Gone: resource soft-deleted or its restore window expired. */
 export class GoneError extends DomainError {
   readonly code = 'gone';
   readonly status = 410;

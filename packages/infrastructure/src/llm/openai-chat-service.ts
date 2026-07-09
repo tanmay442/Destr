@@ -1,5 +1,4 @@
-// Custom OpenAI-compatible chat adapter. Reads the endpoint
-// config from env and returns the configured model.
+// Custom OpenAI-compatible chat adapter; config from env.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 

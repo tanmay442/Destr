@@ -2,8 +2,7 @@ import { getComposition, unwrap } from '@/composition';
 import { StatCard } from '@/components/admin/StatCard';
 import { AuditEventList } from '@/components/admin/AuditEventList';
 
-// TODO: Add explicit requireAdmin() guard if this page is ever
-// decoupled from AdminLayout. Currently relies on the layout guard.
+// Relies on AdminLayout's requireAdmin() guard; add an explicit guard if decoupled.
 
 export const dynamic = 'force-dynamic';
 

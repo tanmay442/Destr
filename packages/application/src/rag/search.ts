@@ -1,8 +1,4 @@
-// Use-case: search the document store for chunks similar to a
-// query string. Embeds the query, asks the chunk repository
-// for the closest matches above the threshold, and returns
-// the (similarity, content) pairs the rest of the system
-// consumes.
+// Use-case: embed a query and return the closest document chunks above a threshold.
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type { ChunkRepository, EmbeddingService } from '@app/domain';
 import { SIMILARITY_THRESHOLD, DEFAULT_SEARCH_LIMIT } from '../../../../config/constants';

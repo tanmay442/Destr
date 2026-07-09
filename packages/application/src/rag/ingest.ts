@@ -17,8 +17,7 @@ export interface IngestResult {
   status: 'inserted' | 'updated' | 'unchanged' | 'queued';
 }
 
-/** Dependencies required by the ingest pipeline. Each property
- *  maps to a port interface from the application layer. */
+/** Dependencies for the ingest pipeline (application-layer ports). */
 export interface IngestDeps {
   documents: DocumentRepository;
   chunks: ChunkRepository;
@@ -61,8 +60,7 @@ export async function ingestFile(
     return err(new ExternalServiceError('Embedding count mismatch'));
   }
 
-  // NOTE: Callers should wrap these operations in a database transaction
-  // when atomicity is required (see TransactionRunner).
+  // Callers should wrap these in a transaction for atomicity (TransactionRunner).
   if (existing) {
     await deps.documents.deleteById(existing.id);
   }
@@ -94,14 +92,8 @@ export interface PreparedChunk {
   embedding: number[];
 }
 
-/** Parse, split, and embed a PDF buffer for a document row that
- *  already exists (created by the async queued-upload path with
- *  `ingest_status = 'queued'`). Unlike `ingestFile`, this does NOT
- *  look up or delete rows by name, and does NOT insert a document
- *  row — the row is already there. Returns the prepared chunk rows;
- *  the caller inserts them, typically inside a transaction together
- *  with the `done` status flip so the chunk insert and status update
- *  are atomic (and a QStash retry that sees `done` is a no-op). */
+/** Parse/split/embed a PDF for an existing `queued` row (no name
+ *  lookup or insert). Caller inserts chunks + flips status atomically. */
 export async function prepareIngest(
   input: { documentId: number; fileName: string; buffer: Buffer },
   deps: { embeddings: EmbeddingService; pdfParser: PdfParser; textSplitter: TextSplitter },

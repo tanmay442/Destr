@@ -27,8 +27,7 @@ vi.mock('drizzle-orm', () => ({
   ),
 }));
 
-// We mock dotenv so importing the script (which calls `import 'dotenv/config'`)
-// does not try to read the host's .env files.
+// Mock dotenv so importing the script doesn't read the host's .env files.
 vi.mock('dotenv/config', () => ({}));
 
 import { runSeed, parseArgs } from './seed-docs';

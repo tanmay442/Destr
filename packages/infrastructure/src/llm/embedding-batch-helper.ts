@@ -1,6 +1,5 @@
-// Shared embedding batch processor. Splits a large list of values into
-// configurable batches, runs them with bounded concurrency, and retries
-// individual failures once. Used by all EmbeddingService adapters.
+// Shared embedding batch processor: batches with bounded concurrency and
+// retries individual failures once. Used by all EmbeddingService adapters.
 import { embed } from 'ai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '../../../../config/constants';

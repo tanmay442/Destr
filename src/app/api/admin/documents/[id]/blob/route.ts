@@ -11,10 +11,8 @@ export async function GET(
   const storageKey = auth.document.storageKey!;
   const comp = auth.comp;
 
-  // R2/S3 adapters expose a signedUrl — redirect so the PDF is served
-  // straight from the object-store edge instead of streaming through
-  // the function. The filesystem adapter has no signedUrl, so fall back
-  // to streaming the bytes back.
+  // R2/S3 adapters expose signedUrl — redirect to serve from the object-store edge.
+  // Filesystem adapter has no signedUrl, so stream the bytes back.
   if (comp.blobStorage.signedUrl) {
     const url = await comp.blobStorage.signedUrl(storageKey, 300);
     return NextResponse.redirect(url, {

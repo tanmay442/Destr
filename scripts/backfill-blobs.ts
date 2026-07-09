@@ -1,12 +1,7 @@
-// Backfill: move existing `documents.blob` (bytea) binaries into the
-// object store and set `documents.storage_key`. Idempotent — rows that
-// already have a `storage_key` are skipped.
-//
-// The `blob` column is intentionally KEPT in the schema for now; it is
-// dropped in a later migration once this backfill has run everywhere.
-//
-// Usage:
-//   pnpm tsx scripts/backfill-blobs.ts
+// Move documents.blob binaries into the object store; set storage_key.
+// Idempotent — skips rows that already have a storage_key.
+// `blob` column is kept until a later migration drops it post-backfill.
+// Usage: pnpm tsx scripts/backfill-blobs.ts
 import 'dotenv/config';
 import { Db, Storage } from '@app/infrastructure';
 const { and, isNull, isNotNull } = Db;

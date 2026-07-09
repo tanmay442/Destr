@@ -20,8 +20,6 @@ function whereAnd(parts: ReturnType<typeof eq>[]) {
   return and(...parts);
 }
 
-// ---- Documents / Chunks ----
-
 export async function findDocumentByName(name: string, client: Client = db): Promise<Document | null> {
   const row = await client.query.documents.findFirst({ where: eq(documents.fileName, name) });
   return (row as Document | undefined) ?? null;
@@ -168,8 +166,6 @@ export async function listDocuments(
   return { documents: rows as unknown as Array<Document & { hasBlob: boolean }>, total };
 }
 
-// ---- Tickets ----
-
 export const ticketRepo = {
   async findByTicketId(ticketId: string, client: Client = db): Promise<TicketRow | null> {
     const row = await client.query.tickets.findFirst({ where: eq(tickets.ticketId, ticketId) });
@@ -243,8 +239,6 @@ export const ticketRepo = {
     return row?.count ?? 0;
   },
 };
-
-// ---- Users ----
 
 export const userRepo = {
   async upsertFromClerk(input: {
@@ -322,8 +316,6 @@ export const userRepo = {
   },
 };
 
-// ---- Audit ----
-
 export const auditRepo = {
   async logDocumentEvent(
     input: { action: 'upload' | 'replace' | 'delete' | 'restore'; documentId: number; actorId: string },
@@ -346,9 +338,8 @@ export const auditRepo = {
     }>;
     total: number;
   }> {
-    // When both documentId and ticketId are provided, the total is the sum of
-    // document_audit rows matching documentId plus ticket_audit rows matching
-    // ticketId. If only one filter is provided the other count is 0.
+    // When both filters are set, total = document_audit + ticket_audit counts;
+    // a single filter's other count is 0.
     const wantDoc = !input.ticketId || input.documentId !== undefined;
     const wantTix = !input.documentId || input.ticketId !== undefined;
     const docWhere = input.documentId
@@ -400,10 +391,7 @@ export const auditRepo = {
   },
 };
 
-// ---- Transaction runner ----
-// Wraps Drizzle's db.transaction() so the application layer
-// can execute multiple repository calls atomically.
-
+// Wraps Drizzle's db.transaction() so the app runs repository calls atomically.
 import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRepository, AuditLog, TicketRepository, UserRepository } from '@app/domain';
 
 export function createDocumentRepo(client: Client): DocumentRepository {

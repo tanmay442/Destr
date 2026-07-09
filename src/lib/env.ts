@@ -2,7 +2,7 @@ interface EnvVarSpec {
   name: string;
   required: boolean;
   description: string;
-  condition?: () => boolean; // if false, var is not required
+  condition?: () => boolean;
 }
 
 function providerIs(provider: string, envVar: string): boolean {
@@ -10,7 +10,6 @@ function providerIs(provider: string, envVar: string): boolean {
 }
 
 const ENV_VARS: EnvVarSpec[] = [
-  // Always required
   {
     name: 'DATABASE_URL',
     required: true,
@@ -26,8 +25,6 @@ const ENV_VARS: EnvVarSpec[] = [
     required: true,
     description: 'Clerk secret key',
   },
-
-  // Embedding provider
   {
     name: 'AI_STUDIO_KEY',
     required: true,
@@ -54,8 +51,6 @@ const ENV_VARS: EnvVarSpec[] = [
       providerIs('ollama', 'EMBEDDING_PROVIDER') ||
       providerIs('ollama', 'CHAT_PROVIDER'),
   },
-
-  // Chat provider
   {
     name: 'CUSTOM_LLM_API_KEY',
     required: true,
@@ -68,8 +63,6 @@ const ENV_VARS: EnvVarSpec[] = [
     description: 'OpenAI-compatible chat base URL',
     condition: () => providerIs('openai', 'CHAT_PROVIDER'),
   },
-
-  // Blob storage: R2
   {
     name: 'R2_ACCOUNT_ID',
     required: true,
@@ -94,8 +87,6 @@ const ENV_VARS: EnvVarSpec[] = [
     description: 'R2 bucket name',
     condition: () => providerIs('r2', 'BLOB_STORAGE_PROVIDER'),
   },
-
-  // Blob storage: S3
   {
     name: 'S3_REGION',
     required: true,
@@ -120,8 +111,6 @@ const ENV_VARS: EnvVarSpec[] = [
     description: 'S3 bucket name',
     condition: () => providerIs('s3', 'BLOB_STORAGE_PROVIDER'),
   },
-
-  // QStash (required if QSTASH_TOKEN is set)
   {
     name: 'QSTASH_CURRENT_SIGNING_KEY',
     required: true,

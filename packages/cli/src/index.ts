@@ -1,10 +1,5 @@
-// Thin CLI dispatcher. Sub-commands live in
-// packages/cli/src/commands/<name>.ts. Run from the repo root
-// with: \`tsx packages/cli/src/index.ts <sub-command> [...args]\`.
-//
-// When tsx is run against this file directly, process.argv
-// looks like: ['node', 'index.ts', 'init', ...]. We strip the
-// first two to get the sub-command and its args.
+// CLI dispatcher. Sub-commands live in commands/<name>.ts; run with
+// `tsx packages/cli/src/index.ts <sub-command> [...args]`.
 import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
 import { spawnSync } from 'node:child_process';
@@ -39,8 +34,7 @@ async function main(): Promise<void> {
       await runSetup(REPO_ROOT);
       return;
     case 'seed': {
-      // Delegate to scripts/seed-docs.ts via tsx. The script
-      // already supports --dir=...
+      // Delegate to scripts/seed-docs.ts (which already supports --dir=...).
       const result = spawnSync('pnpm', ['exec', 'tsx', 'scripts/seed-docs.ts', ...rest], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
@@ -48,8 +42,7 @@ async function main(): Promise<void> {
       process.exit(result.status ?? 0);
     }
     case 'db-migrate': {
-      // Run the apply-migration script which enables pgvector
-      // extension and applies any pending SQL migrations first.
+      // Run apply-migration first (enables pgvector + pending SQL migrations).
       const pre = spawnSync('node', ['scripts/apply-migration.mjs'], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
@@ -58,7 +51,6 @@ async function main(): Promise<void> {
       if (pre.status !== 0) {
         process.exit(pre.status ?? 1);
       }
-      // Prompts for confirmation before destructive ops.
       if (rest.includes('--force')) {
         const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', ...rest], {
           cwd: REPO_ROOT,

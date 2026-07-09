@@ -1,7 +1,5 @@
-// Auth adapter factory. Dispatches to a concrete provider based on the
-// AUTH_PROVIDER env var. Currently only `clerk` is implemented; the
-// factory creates the seam for adding a future Auth.js adapter without
-// touching route code.
+// Auth adapter factory: dispatches to a provider based on AUTH_PROVIDER.
+// Only `clerk` is implemented; the seam allows adding others later.
 import type { NextRequest, NextResponse } from 'next/server';
 import type { clerkClient } from '@clerk/nextjs/server';
 import { createClerkAdapter, type AppSessionFull } from './clerk-adapter';

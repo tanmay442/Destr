@@ -1,7 +1,5 @@
-// Dynamic favicon. Renders the RAG Support brand mark on a
-// dark graphite background at 32x32. Generated at build time by
-// Next.js and served as /icon (and /favicon.ico for legacy
-// browsers via the metadata.icons.icon field in layout.tsx).
+// Dynamic favicon: RAG Support brand mark on dark graphite at 32x32, served as /icon.
+// Next.js generates it at build time; legacy browsers use /favicon.ico.
 import { ImageResponse } from 'next/og';
 
 export const size = { width: 32, height: 32 };

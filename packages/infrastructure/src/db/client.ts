@@ -7,12 +7,8 @@ export { schema };
 
 const url = process.env.DATABASE_URL ?? '';
 
-// `db` is typed as NeonDatabase<typeof schema> so the derived `Client`
-// type in repositories.ts stays a single, non-union type. The local
-// (non-Neon) branch builds a node-postgres drizzle and casts it: both
-// drivers extend the same PgDatabase base and expose the identical
-// query/select/insert/update/delete/transaction API the repositories
-// use, so the cast is sound at runtime.
+// Typed as NeonDatabase<typeof schema> so repositories' `Client` stays a
+// single type; the node-postgres branch casts soundly (both share PgDatabase).
 export const db: NeonDatabase<typeof schema> = !url
   ? drizzleNeon(buildMissingPool(), { schema })
   : isNeonUrl(url)

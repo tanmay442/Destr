@@ -1,5 +1,4 @@
-// Clerk-specific auth adapter. Implements the AuthAdapter interface
-// by wrapping Clerk's middleware, auth()/currentUser(), and backend SDK.
+// Clerk implementation of the AuthAdapter interface.
 import {
   auth,
   clerkClient,
@@ -46,8 +45,7 @@ async function findUserByClerkId(clerkUserId: string) {
 }
 
 async function touchLastSeen(clerkUserId: string): Promise<void> {
-  // Single UPDATE with conditional WHERE avoids the extra SELECT.
-  // Only updates if last_seen_at is NULL or older than 60s.
+  // Avoids an extra SELECT: only updates when last_seen_at is NULL or >60s stale.
   await db.update(users).set({ lastSeenAt: sql`now()` }).where(
     and(
       eq(users.clerkUserId, clerkUserId),

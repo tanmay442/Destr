@@ -35,9 +35,8 @@ export default function MarketingHome() {
         className="relative flex flex-1 items-center justify-center overflow-hidden px-6 py-16 sm:py-24"
         data-testid="landing-main"
       >
-        {/* Background depth: a single accent wash + a faint
-            grid mask. Same vocabulary the rest of the app
-            uses (see globals.css body wash + old home page). */}
+        {/* Background depth: a single accent wash + a faint grid mask,
+            matching the rest of the app's visual vocabulary. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
           <div
             className="absolute left-1/2 top-1/3 h-[520px] w-[520px] -translate-x-1/2 rounded-full opacity-40 blur-3xl"
@@ -61,7 +60,6 @@ export default function MarketingHome() {
         </div>
 
         <div className="grid w-full max-w-6xl grid-cols-1 gap-12 md:grid-cols-[3fr_2fr] md:gap-14 lg:gap-20">
-          {/* Left: 60% on md+ */}
           <section
             className="flex flex-col gap-6"
             data-testid="landing-left"
@@ -127,7 +125,6 @@ export default function MarketingHome() {
             </div>
           </section>
 
-          {/* Right: 40% on md+ */}
           <section
             className="flex items-center"
             data-testid="landing-right"

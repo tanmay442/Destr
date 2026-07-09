@@ -1,6 +1,5 @@
-// Public re-exports for @app/domain. Other packages should
-// import from '@app/domain' rather than reaching into
-// sub-paths so we can refactor internals without breakage.
+// Public re-exports for @app/domain; import from here to avoid
+// reaching into sub-paths (keeps internals refactorable).
 export * from './result';
 export * from './errors';
 export * from './app-config';

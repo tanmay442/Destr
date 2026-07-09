@@ -1,6 +1,5 @@
-// In-process sliding-window rate limiter. Good enough for a single
-// Vercel function instance; in production with multiple concurrent
-// instances this is a soft cap.
+// In-process sliding-window limiter. Single instance only; a soft cap
+// when multiple instances run concurrently.
 import type { RateLimiter } from '@app/domain';
 
 const MAX_KEYS = 5_000;

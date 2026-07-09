@@ -1,8 +1,5 @@
-// Provision a per-run Neon branch for tests, write the resulting
-// DATABASE_URL into .env.test, then apply migrations + run the seed
-// script. Skips cleanly when NEON_API_KEY is not set (local dev
-// without network access — `.env.test` is then left as-is and the
-// caller decides how to source a database).
+// Provision a per-run Neon branch, write DATABASE_URL to .env.test, apply
+// migrations, and seed. Skips cleanly if NEON_API_KEY is unset (local dev).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -28,7 +25,6 @@ export async function main() {
     branches.find((b) => b.name === TEST_BRANCH);
 
   if (!branch) {
-    // Create the branch off the project's primary branch.
     const primary = branches.find((b) => b.primary);
     const create = await fetch(api('/branches'), {
       method: 'POST',
@@ -47,13 +43,8 @@ export async function main() {
     };
     branch = created.branch;
     console.log(`[setup-test-db] Created branch ${branch.name} (${branch.id})`);
-    // Wait for the branch to leave the `init` state before
-    // making further API calls against it. The create_branch
-    // operation runs asynchronously on Neon's side; trying
-    // to add an endpoint while it's still running returns
-    // HTTP 423 "project already has running conflicting
-    // operations". We poll current_state until it's `ready`,
-    // with a 60s deadline so a stuck branch doesn't hang CI.
+    // Wait for branch to leave `init` (create runs async on Neon; acting early
+    // returns HTTP 423 "conflicting operations"). Poll 60s max so CI can't hang.
     {
       const deadline = Date.now() + 60_000;
       let state = created.branch.current_state;
@@ -78,14 +69,11 @@ export async function main() {
   }
 
   if (!branch) {
-    // Unreachable: the if/else above always assigns it.
     throw new Error('Internal error: branch was not assigned.');
   }
 
-  // 2. Ensure the branch has a read-write endpoint. As of the
-  //    current Neon API, creating a branch does not auto-create
-  //    an endpoint; we have to POST one explicitly. If one
-  //    already exists we reuse it.
+  // Ensure a read-write endpoint exists (Neon does not auto-create one on
+  // branch creation); reuse if present.
   const endpointsRes = await fetch(api(`/branches/${branch.id}/endpoints`), { headers });
   if (!endpointsRes.ok) {
     throw new Error(
@@ -98,10 +86,8 @@ export async function main() {
   let endpoint =
     endpoints.find((e) => e.type === 'read_write') ?? endpoints[0];
   if (!endpoint) {
-    // Retry the endpoint create if Neon returns 423
-    // "project already has running conflicting operations".
-    // The wait-for-branch-ready above handles the *create_branch*
-    // case; this handles concurrent ops from other sources.
+    // Retry endpoint create on 423 (concurrent ops); the branch-ready wait
+    // already covers the create_branch case.
     const createEp = await (async () => {
       const deadline = Date.now() + 60_000;
       let lastErr: Response | undefined;
@@ -120,9 +106,7 @@ export async function main() {
           continue;
         }
         // Non-retryable: surface immediately.
-        throw new Error(
-          `Failed to create endpoint: ${r.status} ${await r.text()}`,
-        );
+        throw new Error(`Failed to create endpoint: ${r.status} ${await r.text()}`);
       }
       throw new Error(
         `Failed to create endpoint: still 423 after 60s (last=${lastErr ? await lastErr.text() : 'n/a'})`,
@@ -137,9 +121,7 @@ export async function main() {
     );
   }
 
-  // 3. Wait for the endpoint to be ready (poll current_state).
-  //    Neon returns "init" -> "active" over a few seconds; we
-  //    bail after ~60s so a stuck branch doesn't hang CI.
+  // Wait for endpoint to become `active` (polls; ~60s cap so CI can't hang).
   const deadline = Date.now() + 60_000;
   while (endpoint.current_state !== 'active' && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
@@ -158,12 +140,9 @@ export async function main() {
     );
   }
 
-  // 4. Get the connection URI for this branch.
-  //    Neon's current API uses /connection_uri (not /connection_string)
-  //    with `role_name` + `database_name` query params, returning
-  //    { uri: "..." }. We pin to our branch via `branch_id`; the
-  //    `endpoint_id` filter is restricted to the project's primary
-  //    endpoint and rejects branch-only endpoints with 404.
+  // Fetch the connection URI for this branch. Neon's API uses /connection_uri
+  // (not /connection_string) with role_name + database_name; pin via branch_id
+  // (endpoint_id filter rejects branch-only endpoints with 404).
   const conn = await fetch(
     api(
       `/connection_uri?role_name=neondb_owner&database_name=neondb&branch_id=${branch.id}`,
@@ -176,7 +155,6 @@ export async function main() {
   const { uri: connectionString } = (await conn.json()) as { uri: string };
 
 
-  // 5. Write DATABASE_URL into .env.test.
   const envPath = resolve(process.cwd(), '.env.test');
   let envText = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
   if (/^DATABASE_URL=.*$/m.test(envText)) {
@@ -187,11 +165,8 @@ export async function main() {
   writeFileSync(envPath, envText, 'utf8');
   console.log(`[setup-test-db] Wrote DATABASE_URL to ${envPath}`);
 
-  // 6. Enable pgvector extension and apply migrations against
-  //    the *test* branch URI. The parent process loaded .env via
-  //    dotenv/config which points DATABASE_URL at the production
-  //    branch, so we must override it for the child process.
-  //    The same override is applied to `pnpm seed` below.
+  // Apply migrations/seed against the *test* branch; override DATABASE_URL
+  // since dotenv loaded it pointing at production.
   try {
     execFileSync('node', ['scripts/apply-migration.mjs'], {
       stdio: 'inherit',
@@ -206,7 +181,6 @@ export async function main() {
     process.exit(1);
   }
 
-  // 7. Run the seed script against the test branch.
   const seed = spawnSync('pnpm', ['seed'], {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: connectionString },

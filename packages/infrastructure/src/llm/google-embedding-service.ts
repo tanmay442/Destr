@@ -1,7 +1,5 @@
-// Google AI Studio embedding adapter. The factory and the
-// per-call options are exported so use-cases that need a
-// raw model (e.g. tests) can ask for one. In production
-// the application layer only sees the EmbeddingService port.
+// Google AI Studio embedding adapter. The factory/options are exported so
+// tests can use a raw model; production sees only the EmbeddingService port.
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 

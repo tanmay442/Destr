@@ -1,11 +1,5 @@
-// Single source of truth for the app's runtime configuration.
-// `config/app.config.ts` exports a value of this type; the
-// loader in src/lib/config/index.ts re-parses it through this
-// schema so a malformed config file fails loudly at server
-// start instead of producing silently broken prompts.
-//
-// Moved verbatim from src/lib/config/schema.ts as part of the
-// Clean Architecture refactor. No behaviour change.
+// Runtime config schema. The loader re-parses config through this
+// schema so malformed config fails loudly at server start.
 import { z } from 'zod';
 
 const toneSchema = z.enum(['friendly', 'formal', 'casual', 'concise']);

@@ -1,6 +1,5 @@
-// In-process LRU map of (userId -> query -> count). The
-// counter resets on cold start and is per-deployment, not
-// per-user-end-of-day, so analytics are best-effort.
+// In-process LRU of userId -> query -> count. Resets on cold start and
+// is per-deployment, so analytics are best-effort.
 import type { QueryStats } from '@app/domain';
 
 const MAX_USERS = 5_000;

@@ -8,10 +8,8 @@ const POOL_OPTS = {
   connectionTimeoutMillis: 10_000,
 } as const;
 
-// Neon's serverless driver speaks Neon's HTTP/WebSocket protocol and
-// cannot reach a plain TCP Postgres (e.g. the local Docker container).
-// Route Neon URLs to the serverless driver; everything else (local
-// Docker, any plain TCP Postgres) goes through `pg` over TCP.
+// Neon's serverless driver can't reach plain TCP Postgres (e.g. local
+// Docker); route Neon URLs to it, everything else through `pg` over TCP.
 export function isNeonUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname;

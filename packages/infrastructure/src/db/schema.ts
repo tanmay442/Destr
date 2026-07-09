@@ -1,11 +1,5 @@
-// Drizzle table definitions. The `blob` bytea column is KEPT for now:
-// PDF binaries are migrating to object storage (`storage_key`), but the
-// `blob` column is not dropped until a later session, after the
-// backfill script has moved every existing blob into the store. Keeping
-// it in the schema means `drizzle-kit generate` emits only the additive
-// `ADD COLUMN storage_key` migration here; removing `blob` from the
-// schema in a later session will generate the `DROP COLUMN` migration.
-// The bytea customType lives in storage/bytea-blob.ts.
+// Drizzle tables. `blob` bytea is KEPT until the backfill moves binaries
+// to object storage (`storage_key`); bytea customType in storage/bytea-blob.ts.
 import {
   pgTable, serial, text, timestamp, integer,
   index, check,

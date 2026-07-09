@@ -1,6 +1,5 @@
-// Upstash Redis-backed query stats using a sorted set.
-// Falls back to the in-memory adapter when UPSTASH_REDIS_REST_URL is
-// unset (see the factory in src/composition.ts).
+// Upstash Redis sorted-set query stats; falls back to in-memory when
+// UPSTASH_REDIS_REST_URL is unset (factory in src/composition.ts).
 import { Redis } from '@upstash/redis';
 import type { QueryStats } from '@app/domain';
 

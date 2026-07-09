@@ -1,5 +1,4 @@
-// Delete the per-run Neon test branch. Idempotent — does nothing when
-// the branch is missing. Skips cleanly when NEON_API_KEY is not set.
+// Delete the per-run Neon test branch (idempotent; skips if NEON_API_KEY unset).
 import 'dotenv/config';
 import { neonHeaders, neonApiUrl, fetchBranches, isMainModule } from './neon-api';
 

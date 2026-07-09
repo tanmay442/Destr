@@ -1,6 +1,5 @@
-// LangChain text splitter adapter. The chunk size and
-// overlap match the production settings used by the legacy
-// ingestFile helper.
+// LangChain text splitter adapter. Chunk size/overlap match the legacy
+// ingestFile helper's production settings.
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import type { TextSplitter } from '@app/domain';
 

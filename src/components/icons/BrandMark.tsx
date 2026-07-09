@@ -1,15 +1,5 @@
-// Custom RAG Support brand mark. The mark is a stylized chat
-// bubble with a small "tail" — a literal RAG (retrieval) metaphor
-// where the bubble holds retrieved context and the tail points
-// back to the source. strokeWidth=2.5 (instead of 2) so it stays
-// legible when scaled down to 16x16 favicon size.
-//
-// Two variants:
-//   <BrandMark />   icon only (square container + glyph)
-//   <BrandLogo />   icon + "RAG Support" wordmark, used in landing
-//
-// The square container uses the accent CSS variable so the mark
-// picks up the theme's brand color automatically.
+// RAG Support brand mark: a chat bubble with a "tail" (retrieval metaphor),
+// strokeWidth 2.5 so it stays legible at 16x16. BrandMark = icon, BrandLogo = icon + wordmark.
 
 import Link from 'next/link';
 

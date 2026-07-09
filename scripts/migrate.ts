@@ -6,11 +6,8 @@ if (!databaseUrl) {
   process.exit(0);
 }
 
-// Uses the idempotent migrator in apply-migration.mjs, which enables the
-// pgvector extension, runs additive ALTERs, and plays every Drizzle SQL
-// file in ./drizzle — skipping benign "already exists" errors. This works
-// whether the target DB was set up via `drizzle-kit push` (no journal) or
-// `drizzle-kit migrate` (journaled), so it is safe to run on every build.
+// Delegates to the idempotent apply-migration.mjs (pgvector + additive ALTERs,
+// skips "already exists"); safe to run on every build via push or migrate.
 (async () => {
   try {
     console.log('Running migrations...');

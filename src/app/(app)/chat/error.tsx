@@ -1,5 +1,4 @@
-// Chat page error boundary. Catches errors from the chat page (outside
-// the admin section, which has its own error.tsx).
+// Chat page error boundary; the admin section has its own error.tsx.
 'use client';
 
 export default function ChatError({

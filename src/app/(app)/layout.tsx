@@ -3,16 +3,8 @@ import { getAppSession } from '@/composition';
 import { AppSidebar, type AppRole } from '@/components/app/AppSidebar';
 
 /**
- * Authenticated app shell. Renders the unified responsive
- * sidebar (desktop fixed-left, mobile slide-in drawer) and
- * reserves `md:pl-64` so page content sits to the right of
- * the fixed sidebar. On mobile the top bar lives in the
- * sidebar component itself; page content starts directly
- * underneath it.
- *
- * The session is resolved here (server-side) and passed to
- * the client-side sidebar. Page-level guards (requireSession,
- * requireAdmin) still run inside each page subtree.
+ * Authenticated app shell: renders the responsive sidebar and reserves
+ * `md:pl-64` for page content. Session resolves here; page guards still run per subtree.
  */
 export default async function AppLayout({
   children,

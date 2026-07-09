@@ -24,8 +24,7 @@ export default function UploadPage() {
       return;
     }
     setLocalError(null);
-    // The native <input type="file"> is read-only; we have to copy the
-    // dropped file into a DataTransfer and assign that to .files.
+    // The native file input is read-only, so copy the dropped file into a DataTransfer for .files.
     const dt = new DataTransfer();
     dt.items.add(file);
     if (inputRef.current) {

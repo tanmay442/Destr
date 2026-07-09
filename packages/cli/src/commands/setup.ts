@@ -62,7 +62,6 @@ async function askSecret(rl: Interface, question: string, existing: string): Pro
   return answer === '' ? existing : answer;
 }
 
-// ── Prereq checks ──────────────────────────────────────────────
 
 function promptPrereqs(repoRoot: string): boolean {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -89,7 +88,6 @@ function promptPrereqs(repoRoot: string): boolean {
   return true;
 }
 
-// ── DB validation ──────────────────────────────────────────────
 
 async function validateDbUrl(url: string): Promise<string | null> {
   if (!url) return 'DATABASE_URL is required';
@@ -107,7 +105,6 @@ async function validateDbUrl(url: string): Promise<string | null> {
   }
 }
 
-// ── Embedding test ─────────────────────────────────────────────
 
 async function testEmbedding(): Promise<string | null> {
   if (!process.env.AI_STUDIO_KEY) return 'AI_STUDIO_KEY is not set in environment';
@@ -120,7 +117,6 @@ async function testEmbedding(): Promise<string | null> {
   }
 }
 
-// ── Chat endpoint validation ───────────────────────────────────
 
 function validateChatVars(): string | null {
   if (!process.env.CUSTOM_LLM_API_KEY) return 'CUSTOM_LLM_API_KEY is not set';
@@ -129,7 +125,6 @@ function validateChatVars(): string | null {
   return null;
 }
 
-// ── Clerk validation ───────────────────────────────────────────
 
 function validateClerkVars(): string | null {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
@@ -139,7 +134,6 @@ function validateClerkVars(): string | null {
   return null;
 }
 
-// ── Env collection (step 2-4 combined) ─────────────────────────
 
 async function promptEnv(rl: Interface, envPath: string): Promise<void> {
   while (true) {
@@ -187,7 +181,6 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
     writeEnvFile(envPath, vars);
     applyToProcess(vars);
 
-    // ── Validate everything ──────────────────────────────────────
     const errors: string[] = [];
 
     // DB was already validated inline, but re-check in case .env.local was overwritten
@@ -216,7 +209,6 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
   }
 }
 
-// ── Migration ──────────────────────────────────────────────────
 
 function runMigration(repoRoot: string): boolean {
   banner('Database migration');
@@ -247,7 +239,6 @@ function runMigration(repoRoot: string): boolean {
   return true;
 }
 
-// ── Verify RAG ─────────────────────────────────────────────────
 
 async function verifyRag(): Promise<void> {
   banner('End-to-end verification');
@@ -269,7 +260,6 @@ async function verifyRag(): Promise<void> {
   }
 }
 
-// ── Next steps ─────────────────────────────────────────────────
 
 function printNextSteps(repoRoot: string, config: AppConfig): void {
   banner('Setup complete — next steps');
@@ -290,7 +280,6 @@ function printNextSteps(repoRoot: string, config: AppConfig): void {
   console.log();
 }
 
-// ── Orchestrator ───────────────────────────────────────────────
 
 export async function runSetup(repoRoot: string): Promise<void> {
   const CONFIG_PATH = join(repoRoot, 'config', 'app.config.ts');
@@ -299,17 +288,14 @@ export async function runSetup(repoRoot: string): Promise<void> {
   console.log('\n\x1b[1mRAG Support Agent — setup\x1b[0m');
   console.log('This wizard configures everything needed to run the RAG Support Agent.\n');
 
-  // Step 1: Prereq checks
   if (!promptPrereqs(repoRoot)) {
     console.error('\nFix the issues above and re-run `pnpm configure`.');
     process.exit(1);
   }
 
-  // Step 2-4: Environment collection, embedding model, and validation
   const rl = makeRl();
   await promptEnv(rl, ENV_PATH);
 
-  // Step 5: Migration
   banner('Migration');
   if (await askYesNo(rl, 'Run database migration now?', true)) {
     runMigration(repoRoot);
@@ -317,7 +303,6 @@ export async function runSetup(repoRoot: string): Promise<void> {
     warn('Skipped migration. Run `pnpm cli db-migrate` later.');
   }
 
-  // Step 6: Init prompts (org, persona, admin, docs)
   banner('Configuration');
   console.log('Press Enter to keep the current value shown in [brackets].\n');
 
@@ -330,20 +315,17 @@ export async function runSetup(repoRoot: string): Promise<void> {
     ? config.seedDocsDir
     : resolve(repoRoot, config.seedDocsDir);
 
-  // If no PDFs found, skip seeding
   if (!absSource || !existsSync(absSource) || readdirSync(absSource).length === 0) {
     absSource = '';
     warn('No PDFs found. You can upload documents later via /admin/upload.');
   }
 
-  // Validate config schema
   try {
     config = validateConfig(rl, config);
   } catch {
     process.exit(1);
   }
 
-  // Step 7: Write config, admin emails, copy PDFs, run seed (closes rl)
   banner('Writing outputs');
   const result = await writeOutputs({
     repoRoot,
@@ -357,7 +339,6 @@ export async function runSetup(repoRoot: string): Promise<void> {
 
   // rl is now closed by writeOutputs
 
-  // If writeOutputs did not seed (e.g. no DATABASE_URL at that point), offer alternative
   if (!result.ranSeed) {
     if (result.copied.length > 0) {
       warn(`Seed skipped: ${result.seedReason ?? 'unknown'}`);
@@ -374,14 +355,11 @@ export async function runSetup(repoRoot: string): Promise<void> {
     }
   }
 
-  // Step 8: Verify end-to-end
   await verifyRag();
 
-  // Step 9: Next steps
   printNextSteps(repoRoot, config);
 }
 
-// ── CLI entry ───────────────────────────────────────────────────
 
 import { cliMain } from './common';
 

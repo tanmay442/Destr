@@ -1,9 +1,6 @@
 /**
- * Marketing route group. The landing page composes its own
- * header, content, and footer inline; this layout is a
- * passthrough so future marketing pages (e.g. /pricing,
- * /changelog) can pick up shared chrome by simply adding
- * a page.tsx next to this file.
+ * Marketing route group. Passthrough layout so future pages
+ * (/pricing, /changelog) pick up shared chrome via a sibling page.tsx.
  */
 export default function MarketingLayout({
   children,

@@ -1,6 +1,4 @@
-// Lightweight structured logger. Uses console under the hood but
-// outputs JSON for easy parsing by log aggregators.
-// Replace with pino or similar if richer features are needed.
+// Structured JSON logger over console; swap for pino if richer features needed.
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
@@ -14,8 +12,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 const configuredLevel: LogLevel =
   (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
 
-/** Serialise Error objects so JSON.stringify captures their
- *  properties (Error props are non-enumerable by default). */
+/** Serialise Error objects (non-enumerable props are skipped by JSON.stringify). */
 function serializeMeta(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {
