@@ -8,9 +8,11 @@ cited answers drawn from uploaded PDF documentation.
 ## Quick start
 
 ```bash
-git clone <repo-url> && cd rag_agent
+git clone https://github.com/tanmay442/rag_agent.git && cd rag_agent
 docker compose up -d db          # Postgres + pgvector
-pnpm install && pnpm dev         # http://localhost:3000
+pnpm install
+pnpm db:push                     # Create tables in local DB
+pnpm dev                         # http://localhost:3000
 ```
 
 That's it. The defaults in `.env.example` boot against the Docker
@@ -27,9 +29,11 @@ needed for local development.
 ```bash
 docker compose --profile ollama up -d   # Postgres + Ollama
 # Pull the models (first time only):
-docker compose exec ollama ollama pull nomic-embed-text
-docker compose exec ollama ollama pull llama3.1
-pnpm install && pnpm dev
+docker compose exec ollama ollama pull embeddinggemma:latest
+docker compose exec ollama ollama pull lfm2.5-thinking:1.2b
+pnpm install
+pnpm db:push                            # Create tables in local DB
+pnpm dev
 ```
 
 ### Deploy to Vercel
