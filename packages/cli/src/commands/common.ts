@@ -19,7 +19,6 @@ export async function loadCurrentDefaults(
       )) as { default: AppConfig };
       return appConfigSchema.parse(existing);
     } catch {
-      // Fall through to defaults.
     }
   }
   void repoRoot;

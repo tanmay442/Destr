@@ -48,19 +48,10 @@ export function AppSidebar({
   const pathname = usePathname();
   const { signOut } = useClerk();
 
-  // Admin accordion state. The accordion is open by default
-  // whenever the user is on a /admin/* route, so deep links
-  // don't hide their context. The user can collapse it manually
-  // and we honour that choice for the rest of the current admin
-  // visit; the accordion auto-reopens on the next visit (i.e.
-  // when the route transitions from non-admin to admin).
+  // Open by default on /admin/* so deep links show context; collapses but reopens next visit.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminOpen, setAdminOpen] = useState<boolean>(onAdmin);
-  // When the route transitions from non-admin to admin, reset
-  // the accordion to open. We use the "adjust state in render"
-  // pattern (compare against a stored previous value and call
-  // the setter during render) so the reset is a direct
-  // derivation from the route change, not a side effect.
+  // Reset state in render (no effect) when route flips non-admin → admin.
   const [prevOnAdmin, setPrevOnAdmin] = useState<boolean>(onAdmin);
   if (prevOnAdmin !== onAdmin) {
     setPrevOnAdmin(onAdmin);
@@ -69,16 +60,13 @@ export function AppSidebar({
 
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
-  // Close the mobile drawer on route change. Same pattern as
-  // above: track the last-seen path in state and reset when it
-  // shifts, without an effect.
+  // Close drawer on route change via the same render-derived pattern (no effect).
   const [lastPath, setLastPath] = useState<string | null>(pathname);
   if (lastPath !== pathname) {
     setLastPath(pathname);
     if (mobileOpen) setMobileOpen(false);
   }
 
-  // Lock body scroll while the mobile drawer is open.
   useEffect(() => {
     if (!mobileOpen) return;
     const prev = document.documentElement.style.overflow;
@@ -88,7 +76,6 @@ export function AppSidebar({
     };
   }, [mobileOpen]);
 
-  // Escape closes the mobile drawer.
   useEffect(() => {
     if (!mobileOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -98,9 +85,6 @@ export function AppSidebar({
     return () => window.removeEventListener('keydown', onKey);
   }, [mobileOpen]);
 
-  // Toggle the admin accordion. While on /admin/* this just
-  // flips the state; off /admin/* the accordion isn't rendered
-  // so the call is a no-op.
   const toggleAdmin = () => {
     setAdminOpen((open) => !open);
   };
@@ -114,8 +98,6 @@ export function AppSidebar({
 
   return (
     <>
-      {/* Mobile top bar - visible only below md. Single hamburger
-          on the right, brand on the left, no other controls. */}
       <header
         className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--background)]/85 px-4 backdrop-blur-md md:hidden"
         data-testid="app-mobile-topbar"
@@ -142,7 +124,6 @@ export function AppSidebar({
         </button>
       </header>
 
-      {/* Desktop sidebar - fixed left, full height, hidden below md. */}
       <aside
         className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-[var(--border-subtle)] md:bg-[var(--surface)]/60 md:backdrop-blur-md"
         data-testid="app-sidebar"
@@ -157,7 +138,6 @@ export function AppSidebar({
         />
       </aside>
 
-      {/* Mobile drawer overlay - hidden on md+. */}
       {mobileOpen ? (
         <div
           className="fixed inset-0 z-50 md:hidden"
@@ -168,9 +148,7 @@ export function AppSidebar({
             onClick={() => setMobileOpen(false)}
             aria-hidden
           />
-          {/* TODO: Implement focus trap (e.g. using @focus-trap/react or a
-              manual Tab/Shift+Tab handler) to keep keyboard focus within
-              the drawer when it is open. */}
+          {/* TODO: trap focus within the drawer while open. */}
           <nav
             id="app-mobile-drawer"
             role="dialog"
@@ -225,7 +203,6 @@ function SidebarBody({
 }) {
   return (
     <div className="flex h-full flex-col">
-      {/* Brand */}
       <div className="flex h-14 items-center border-b border-[var(--border-subtle)] px-4">
         <Link
           href="/chat"
@@ -237,7 +214,6 @@ function SidebarBody({
         </Link>
       </div>
 
-      {/* Nav list */}
       <nav className="flex-1 overflow-y-auto p-3" aria-label="Primary">
         <NavItem
           href="/chat"
@@ -311,7 +287,6 @@ function SidebarBody({
         ) : null}
       </nav>
 
-      {/* User block */}
       <div className="border-t border-[var(--border-subtle)] p-3">
         {user ? (
           <div

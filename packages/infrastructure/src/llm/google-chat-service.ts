@@ -1,5 +1,3 @@
-// Google AI Studio chat adapter for users who want Google for both
-// embedding and chat.
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 

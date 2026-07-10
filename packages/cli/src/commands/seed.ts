@@ -1,7 +1,3 @@
-// `rag-agent seed [--dir=...]` — read every PDF in the given
-// directory and run it through the ingest pipeline. Mirrors
-// what the admin upload flow does at runtime, so the seeded
-// data is indistinguishable from production uploads.
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,11 +58,6 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
     console.error(`No PDFs found in ${fixturesDir}`);
     process.exit(1);
   }
-  // Lazy-load the ingest pipeline + db + schema. We do this here
-  // (and not at module top) so the file works the same way from
-  // both the CLI and the legacy tsx scripts/ entrypoint — and so
-  // unit tests can inject a fake `ingest` without touching the
-  // real database adapter.
   const { ingestFile } = opts.ingest
     ? { ingestFile: opts.ingest }
     : await (async () => {
@@ -125,16 +116,12 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
   }
 }
 
-// CLI entry — only run when this module is the program root.
 import { isMainModule } from '../is-main-module';
 
 if (isMainModule()) {
-  // Load .env.local so DATABASE_URL and AI_STUDIO_KEY are
-  // available when running via `pnpm seed` (CLI entry below).
   try {
     process.loadEnvFile('.env.local');
   } catch {
-    // .env.local may not exist; rely on env vars from the caller.
   }
   const HERE = dirname(fileURLToPath(import.meta.url));
   const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');

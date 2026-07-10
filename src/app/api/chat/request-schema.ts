@@ -1,6 +1,3 @@
-// Zod schema for the POST /api/chat request body. Parsed
-// at the boundary before any business logic runs so we
-// fail fast on malformed input.
 import { z } from 'zod';
 
 const MAX_TEXT_LENGTH = 50_000;
@@ -14,9 +11,7 @@ export const ChatRequestSchema = z.object({
   messages: z.array(
     z.object({
       id: z.string().optional(),
-      // Only user/assistant roles are accepted from the client.
-      // System prompts are server-side only — accepting them here
-      // would allow prompt injection.
+      // Client may only send user/assistant; system prompts stay server-side to block prompt injection.
       role: z.enum(['user', 'assistant']),
       parts: z.array(MessagePartSchema),
     }).strip(),

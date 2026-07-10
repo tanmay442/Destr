@@ -1,7 +1,3 @@
-// Thin shim — re-exports the CLI command for tests, and when
-// run as the program root, delegates to it. Existing tests
-// import `parseArgs` and `runSeed` from this file so we
-// preserve that path.
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

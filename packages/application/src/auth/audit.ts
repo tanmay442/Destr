@@ -1,5 +1,3 @@
-// Use-case: log document / ticket audit events.
-// Source: src/lib/auth/audit.ts (logDocumentEvent, logTicketEvent).
 import { ok, type Result } from '@app/domain';
 import type { AuditLog } from '@app/domain';
 

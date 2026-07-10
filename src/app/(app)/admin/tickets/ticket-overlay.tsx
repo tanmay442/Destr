@@ -16,17 +16,6 @@ export interface TicketRow {
   notes: string | null;
 }
 
-/**
- * TicketOverlay — URL-driven right-side slide-out overlay for the admin
- * tickets page. Reads `?ticket=…` via useSearchParams and, when present,
- * renders the existing TicketDrawer body inside a portal:
- *
- *   <backdrop> → <panel> → <header> + <TicketDrawer />
- *
- * Closes on: Escape, backdrop click, close button. Closing removes the
- * `ticket` query param and preserves the rest of the URL. No focus trap
- * in v1 — close button + Escape give screen-reader users a way out.
- */
 export function TicketOverlay({
   tickets,
   userOptions,
@@ -38,8 +27,6 @@ export function TicketOverlay({
   const params = useSearchParams();
   const activeId = params.get('ticket');
 
-  // Stash close() on a ref so the keydown effect reads the latest
-  // version without listing it in the dependency array.
   const closeRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!activeId) return;

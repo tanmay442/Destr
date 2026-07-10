@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
-// Mock @ai-sdk/react useChat so we can drive messages from the test.
+// Mock useChat to drive messages from the test.
 const useChatMock = vi.fn();
 vi.mock('@ai-sdk/react', () => ({
   useChat: (...args: unknown[]) => useChatMock(...args),
 }));
 
-// DefaultChatTransport is just a class — we don't need a real impl.
+// No-op class mock; real impl not needed.
 vi.mock('ai', () => ({
   DefaultChatTransport: class {
     constructor() {}
@@ -45,10 +45,7 @@ describe('ChatInterface', () => {
   it('renders a welcome intro when there are no messages', () => {
     setupChat();
     render(<ChatInterface />);
-    // The intro explains what the agent can do and how to open a
-    // ticket. We assert inside the intro testid so the quick-prompt
-    // buttons (which also say "open a ticket") don't collide with
-    // the body copy.
+    // Assert inside intro's testid to avoid colliding with the quick-prompt "open a ticket" copy.
     const intro = screen.getByTestId('chat-intro');
     expect(intro).toBeInTheDocument();
     expect(
@@ -57,7 +54,6 @@ describe('ChatInterface', () => {
     expect(
       within(intro).getByText(/file a support ticket/i),
     ).toBeInTheDocument();
-    // Quick-prompt affordance is part of the empty state.
     expect(
       within(intro).getAllByTestId('chat-quick-prompt').length,
     ).toBeGreaterThan(0);
@@ -80,7 +76,7 @@ describe('ChatInterface', () => {
     render(<ChatInterface />);
     const citation = screen.getByTestId('chat-citation');
     expect(citation).toBeInTheDocument();
-    // Similarity is now rendered as a percentage match.
+    // Similarity rendered as a percentage match.
     expect(within(citation).getByText(/92% match/i)).toBeInTheDocument();
     expect(
       within(citation).getByText(/dental plan covers two cleanings/i),
@@ -120,11 +116,7 @@ describe('ChatInterface', () => {
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {
     setupChat();
     render(<ChatInterface />);
-    // The container is the only element with `chat-messages`. It
-    // must use `flex-1` + `min-h-0` so the surrounding flex column
-    // gives it the remaining viewport height (and overflow-y-auto
-    // kicks in when the thread is long). We assert on the className
-    // rather than computing layout because jsdom does not lay out.
+    // flex-1 + min-h-0 give the flex column height; assert on className (jsdom no layout).
     const container = screen.getByTestId('chat-messages');
     const cls = container.className;
     expect(cls).toContain('flex-1');

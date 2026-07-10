@@ -1,6 +1,3 @@
-// Upstash Redis-backed fixed-window rate limiter.
-// Falls back to the in-memory adapter when UPSTASH_REDIS_REST_URL is
-// unset (see the factory in src/composition.ts).
 import { Redis } from '@upstash/redis';
 import type { RateLimiter } from '@app/domain';
 

@@ -1,9 +1,4 @@
-// Read-only session resolution for SSR. Reads the role from the DB
-// users table but does NOT upsert or perform admin-email promotion
-// (that is handled by getAppSession() in clerk-adapter.ts). Use
-// getAppSession() when you need the full promotion/upsert path;
-// use this store for lightweight SSR where the user is already
-// known to exist in the DB.
+// Read-only SSR session; does NOT upsert or promote admin-email.
 import { auth, currentUser, clerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';

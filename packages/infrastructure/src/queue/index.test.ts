@@ -16,8 +16,6 @@ describe('Ingest queue factory dispatch', () => {
   it('returns the sync (no-op) queue when QSTASH_TOKEN is unset', async () => {
     delete process.env.QSTASH_TOKEN;
     const q = Queue.createIngestQueue();
-    // The sync queue is a fresh object each call, so check behaviour
-    // rather than identity: enqueue must resolve and do nothing.
     expect(q).not.toBeUndefined();
     expect(typeof q.enqueue).toBe('function');
     await expect(q.enqueue({ documentId: 1 })).resolves.toBeUndefined();

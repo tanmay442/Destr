@@ -1,9 +1,3 @@
-// `rag-agent init` (and `pnpm configure`) — interactive first-time
-// configuration. Walks the user through org details, agent
-// persona, custom instructions, admin emails, and a folder of
-// seed PDFs. Writes config/app.config.ts, upserts ADMIN_EMAILS in
-// .env.local, copies PDFs (PDF-only) into the configured seed
-// dir, and invokes the seed command.
 import {
   existsSync,
   mkdirSync,
@@ -89,8 +83,6 @@ export function upsertAdminEmails(envPath: string, emails: string[]): void {
   writeFileSync(envPath, next.join('\n'));
 }
 
-// The config schema is at @app/domain. Import the JSON shape
-// and reuse it here so the CLI keeps working.
 import { appConfigSchema, type AppConfig } from '@app/domain';
 
 const TONE_OPTIONS: ReadonlyArray<PromptOption<AppConfig['agentPersona']['tone']>> = [
@@ -385,9 +377,7 @@ function renderConfigFile(config: AppConfig): string {
   const body = jsonToTs(config);
   return `import type { AppConfig } from '@app/domain';
 
-// Runtime configuration for this deployment of the RAG Support Agent.
-// Edit any field, or run \`pnpm configure\` to be walked through the values
-// interactively. The schema validates this object on load.
+// Runtime config. Edit fields or run \`pnpm configure\`. Validated on load.
 
 const config: AppConfig = ${body};
 
@@ -417,7 +407,6 @@ function runSeedIfPossible(repoRoot: string, destDir: string): { ran: boolean; r
   return { ran: true };
 }
 
-// CLI entry
 import { cliMain } from './common';
 
 cliMain(() => {

@@ -1,5 +1,3 @@
-// Generic admin section loading skeleton. Shows a heading + table-shaped
-// placeholder while the page fetches data.
 export default function AdminLoading() {
   return (
     <section className="flex flex-col gap-4" role="status" aria-label="Loading admin page">

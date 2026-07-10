@@ -1,6 +1,4 @@
-// Root layout loading — shows while the root layout resolves auth/data.
-// Individual route groups provide their own loading.tsx with a
-// domain-appropriate skeleton; this one is the fallback.
+// Shown while the root layout resolves auth/data; route groups supply their own skeletons.
 export default function RootLoading() {
   return (
     <div

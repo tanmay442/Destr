@@ -1,15 +1,6 @@
-// Backfill: move existing `documents.blob` (bytea) binaries into the
-// object store and set `documents.storage_key`. Idempotent — rows that
-// already have a `storage_key` are skipped.
-//
-// The `blob` column is intentionally KEPT in the schema for now; it is
-// dropped in a later migration once this backfill has run everywhere.
-//
-// Usage:
-//   pnpm tsx scripts/backfill-blobs.ts
 import 'dotenv/config';
-import { and, isNull, isNotNull } from 'drizzle-orm';
 import { Db, Storage } from '@app/infrastructure';
+const { and, isNull, isNotNull } = Db;
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);

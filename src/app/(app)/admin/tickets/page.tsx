@@ -32,13 +32,9 @@ export default async function TicketsPage({
       limit: PAGE_SIZE,
       offset,
     }),
-    // TODO: Replace with a search/autocomplete endpoint that only fetches
-    // the users needed for the current page's assignee dropdown, rather
-    // than loading up to 100 users upfront.
     comp.listUsers({ limit: 100 }),
   ]).then(([t, u]) => [unwrap(t), unwrap(u)] as const);
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
-  // Index by clerkUserId; fall back to userList for tickets with placeholder identity fields.
   const userByClerkId = new Map<
     string,
     { name: string | null; email: string }
@@ -171,7 +167,6 @@ export default async function TicketsPage({
                     <div className="flex min-w-0 flex-col">
                       <span className="truncate">
                         {(() => {
-                          // Fall back to userList if stored name is a placeholder.
                           const looksLikeClerkId = t.userId.startsWith('user_');
                           const nameLooksPlaceholder =
                             !t.name || t.name === 'User' || t.name === 'Unknown';

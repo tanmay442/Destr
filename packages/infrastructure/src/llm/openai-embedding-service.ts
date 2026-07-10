@@ -1,7 +1,3 @@
-// OpenAI-compatible embedding adapter behind the EmbeddingService port.
-// Defaults to text-embedding-3-small; override with OPENAI_EMBEDDING_MODEL.
-// The embedding dimension is pinned to EMBEDDING_DIMENSION (default 768) so
-// the output matches the pgvector column size.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import { embed } from 'ai';

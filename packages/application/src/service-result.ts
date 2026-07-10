@@ -1,10 +1,7 @@
 import { err, ok, type Result } from '@app/domain';
 import { ExternalServiceError } from '@app/domain';
 
-/** Wrap an async op that returns a {@link Result} so that any
- *  unhandled throw is converted to an {@link ExternalServiceError}.
- *  Domain errors returned as `err(...)` from the op itself pass
- *  through unchanged. */
+/** Unhandled throws become ExternalServiceError; `err(...)` results pass through. */
 export async function wrapServiceCall<T>(
   op: () => Promise<Result<T>>,
   message: string,
@@ -16,8 +13,6 @@ export async function wrapServiceCall<T>(
   }
 }
 
-/** Wrap an async op that returns a raw value into {@link Result}.
- *  Converts any throw into an {@link ExternalServiceError}. */
 export async function serviceResult<T>(
   op: () => Promise<T>,
   message: string,
@@ -29,8 +24,6 @@ export async function serviceResult<T>(
   }
 }
 
-/** Clamp and sanitise pagination parameters.  Used by every
- *  admin list handler (documents, users, audit, tickets). */
 export function sanitizePagination(
   rawLimit: number | undefined | null,
   rawOffset: number | undefined | null,

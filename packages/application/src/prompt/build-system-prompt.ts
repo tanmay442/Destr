@@ -1,14 +1,7 @@
 import type { AppConfig } from '@app/domain';
 import type { RetrievedChunk } from '../rag/search';
 
-// The tool-contract block. This is the **only** place that describes
-// the AI SDK tool-use contract to the model: which tools exist, when
-// to call them, when not to, and how to structure their inputs.
-//
-// It is intentionally hardcoded — the names, semantics, and rules
-// here are a contract with the code in src/app/api/chat/route.ts.
-// Deployment-specific copy (org name, audience, tone, custom rules)
-// is composed in below from the config.
+// The only description of the AI SDK tool-use contract; hardcoded to match src/app/api/chat/route.ts.
 const TOOL_CONTRACT_BLOCK = `# How to navigate a conversation
 
 You answer product questions for a BI / dashboard SaaS. You have two
@@ -85,8 +78,6 @@ heavily that the user cannot verify it against the docs.
   the signed-in Clerk identity is used instead. Just pass a short
   placeholder string for those.`;
 
-// Tone guidance derived from the persona config. Kept short — the
-// model already understands these words.
 const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   friendly:
     'Friendly, calm, and direct. No emojis. No exclamation marks. ' +
@@ -110,8 +101,6 @@ const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
     'what you can do, not on apologies.',
 };
 
-// Build the persona block. Identical across deployments except for
-// the org name, audience, agent name, and tone rule.
 function buildPersonaBlock(config: AppConfig): string {
   const nameClause = config.agentPersona.name
     ? ` Your name is ${config.agentPersona.name}.`
@@ -129,9 +118,7 @@ function buildPersonaBlock(config: AppConfig): string {
   ].join('\n');
 }
 
-// Build the out-of-scope block from the config list. If the list is
-// empty we still emit a single "stay within the docs" rule so the
-// model never improvises answers to off-topic questions.
+// If empty, still emit a "stay within the docs" rule so the model never improvises.
 function buildOutOfScopeBlock(config: AppConfig): string {
   if (config.outOfScopeTopics.length === 0) {
     return [
@@ -154,8 +141,6 @@ function buildOutOfScopeBlock(config: AppConfig): string {
   ].join('\n');
 }
 
-// Optional free-form additions from the config. Emitted only when
-// the user has actually set them.
 function buildCustomInstructionsBlock(config: AppConfig): string | null {
   if (!config.customInstructions || config.customInstructions.trim() === '') {
     return null;
@@ -167,12 +152,6 @@ function buildCustomInstructionsBlock(config: AppConfig): string | null {
   ].join('\n');
 }
 
-// Pre-fetched chunks for the user's first message. Identical in
-// shape to the previous inline version; gated on whether the caller
-// passes any chunks. The route only passes chunks when
-// `appConfig.prefetchFirstTurn === true`; when the toggle is off
-// (the default), the route calls `searchChunks` itself
-// and the model is expected to call the tool every turn.
 function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   const header = `# Pre-fetched documentation for the user's first message`;
   const bullets = chunks
@@ -189,10 +168,7 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   return `${header}\n${bullets}\n\n${directive}`;
 }
 
-// Compose the full system prompt for a given turn.
-// Order: tool contract (fixed) \u2192 persona (config) \u2192 out-of-scope
-// (config) \u2192 custom instructions (config) \u2192 pre-fetched chunks
-// (runtime, optional).
+// Compose: tool contract → persona → out-of-scope → custom instructions → pre-fetched chunks.
 export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,

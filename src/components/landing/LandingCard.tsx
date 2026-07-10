@@ -2,21 +2,13 @@ import Link from 'next/link';
 import { SignInButton } from '@clerk/nextjs';
 import { ArrowRight, Sparkles, Zap, ShieldCheck } from 'lucide-react';
 
-/**
- * The "Get started" card on the right side of the landing split.
- * Houses the primary CTA (Open chat) and a secondary sign-in
- * action. Kept as a Server Component - the only interactive
- * surface (Clerk's <SignInButton mode="modal">) is rendered
- * server-side; it becomes interactive on hydration.
- */
+// Server Component; Clerk's SignInButton hydrates to interactive.
 export function LandingCard() {
   return (
     <div
       className="relative isolate rounded-2xl border border-white/10 bg-[var(--surface)]/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-md sm:p-8"
       data-testid="landing-card"
     >
-      {/* Soft accent glow behind the card, clipped to its rounded
-          shape so it reads as depth rather than a hard halo. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 overflow-hidden rounded-2xl"

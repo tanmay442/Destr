@@ -2,11 +2,6 @@ import { GithubIcon } from '@/components/icons/GithubIcon';
 
 const STACK = ['Next.js', 'Tailwind', 'AI SDK', 'pgvector'];
 
-/**
- * Bottom bar for the landing page. Tech list on the right is a
- * plain visual badge - no link target, just a quick scannable
- * "what's it built with" for recruiters / reviewers.
- */
 export function LandingFooter() {
   return (
     <footer

@@ -1,11 +1,5 @@
 import { requireAdmin } from '@/composition';
 
-/**
- * Admin subtree layout. The sidebar/drawer chrome is provided
- * by the parent (app) layout; this layout is just the role
- * guard + page content frame. Non-admins never reach the
- * child page render.
- */
 export default async function AdminLayout({
   children,
 }: {

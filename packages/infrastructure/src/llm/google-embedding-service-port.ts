@@ -1,6 +1,3 @@
-// Wraps the google-embedding model into the application's
-// EmbeddingService port. Processes batches with configurable
-// concurrency to balance throughput against rate limits.
 import { embed } from 'ai';
 import { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
 import type { EmbeddingService } from '@app/domain';

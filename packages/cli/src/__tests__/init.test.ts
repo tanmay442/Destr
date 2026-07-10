@@ -3,8 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Mock dotenv so the script (which calls `import 'dotenv/config'`)
-// does not try to read the host's .env files when this test imports it.
+// mock dotenv/config to avoid reading host .env files
 vi.mock('dotenv/config', () => ({}));
 
 import { copyPdfsFromDir, upsertAdminEmails } from '../commands/init';

@@ -2,12 +2,6 @@ import Link from 'next/link';
 import { GithubIcon } from '@/components/icons/GithubIcon';
 import { BrandMark } from '@/components/icons/BrandMark';
 
-/**
- * Landing-page-only header. Intentionally minimal: brand on the
- * left, "Personal Next.js project" + GitHub link on the right.
- * No nav links, no auth controls - the rest of the marketing
- * surface (the card on the right) carries the primary CTAs.
- */
 export function LandingHeader() {
   return (
     <header

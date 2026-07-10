@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ok, err } from '@app/domain';
 
-// Mocks for the route's deps. We control:
 const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = vi.hoisted(() => ({
   searchValue: [
     { content: 'The dental plan covers two cleanings per year.', similarity: 0.91 },
@@ -21,9 +20,6 @@ const { currentUserMock } = vi.hoisted(() => ({
   currentUserMock: vi.fn(),
 }));
 
-// The route reads `appConfig.prefetchFirstTurn` at request time. We
-// expose a hoisted mutable so individual tests can flip the toggle
-// on and off. Default is `false`.
 const { appConfigMock } = vi.hoisted(() => ({
   appConfigMock: {
     prefetchFirstTurn: false,
@@ -65,13 +61,11 @@ vi.mock('@/composition', () => ({
   appConfig: appConfigMock,
 }));
 
-// Mock the AI SDK so we don't actually hit any model providers.
 vi.mock('ai', async () => {
   const actual = await vi.importActual<typeof import('ai')>('ai');
   return {
     ...actual,
     streamText: streamTextImpl,
-    // The tool() helper should pass through — keep the real one.
     tool: actual.tool,
   };
 });
@@ -84,12 +78,6 @@ function makeUIMessageStream(): ReadableStream<Uint8Array> {
   });
 }
 
-/**
- * Wire streamTextImpl so the next call to POST captures the
- * `tools` argument. Returns the captured tools object after
- * the request resolves. Used by every test that needs to invoke
- * a tool's `execute` method.
- */
 async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
   authMock.mockResolvedValue({ userId: 'user_test' });
   let captured: T | undefined;
@@ -117,10 +105,7 @@ beforeEach(() => {
   currentUserMock.mockReset();
   createTicketMock.mockReset();
   ticketInsertedValues.length = 0;
-  // Default: createTicket succeeds with a TKT-prefixed id.
   createTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-abcd1234', status: 'created' }) as never);
-  // Default Clerk identity: every test gets a known user unless it
-  // explicitly overrides the mock.
   currentUserMock.mockResolvedValue({
     id: 'user_test',
     emailAddresses: [{ emailAddress: 'real@example.com' }],
@@ -131,7 +116,6 @@ beforeEach(() => {
   rateLimitResult.ok = true;
   rateLimitResult.remaining = 29;
   rateLimitResult.resetMs = 60_000;
-  // Reset the toggle to the default.
   appConfigMock.prefetchFirstTurn = false;
 });
 
@@ -197,8 +181,6 @@ describe('/api/chat createSupportTicket tool', () => {
     expect(out).toHaveProperty('status', 'created');
     expect(out).toHaveProperty('ticketId');
     expect((out as { ticketId: string }).ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
-    // The use-case receives the signed-in user's identity, not the
-    // LLM-supplied name/email.
     expect(createTicketMock).toHaveBeenCalledWith({
       userId: 'user_test',
       name: 'Real Person',
@@ -319,9 +301,6 @@ describe('/api/chat searchDocumentation tool', () => {
 });
 
 describe('/api/chat pre-fetch toggle (default off)', () => {
-  // Captures the `system` argument passed to streamText for a given
-  // body. The LLM stream is a no-op so we can read the captured
-  // argument synchronously after the request resolves.
   async function captureSystemForBody(body: { messages: unknown[] }) {
     authMock.mockResolvedValue({ userId: 'user_test' });
     let capturedSystem: unknown;
@@ -341,9 +320,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
   }
 
   it('respects appConfig.prefetchFirstTurn = false (default): no pre-fetch block, tool-driven branch', async () => {
-    // Default is off. On a first turn with a real user message, the
-    // route must NOT inject a pre-fetched block, the model is
-    // expected to call searchDocumentation itself.
     const { system } = await captureSystemForBody({
       messages: [
         {
@@ -356,8 +332,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     expect(typeof system).toBe('string');
     const sys = system as string;
     expect(sys).not.toMatch(/Pre-fetched documentation/);
-    // The tool-contract block is still present, so the model knows
-    // it must call the tool itself.
     expect(sys).toContain('searchDocumentation');
     expect(sys).toContain('createSupportTicket');
   });
@@ -406,9 +380,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
       }),
     );
     expect(res.status).toBe(200);
-    // Model calls the tool, which pushes the fixture chunks into
-    // the capturedCitations array. The post-loop wrapper emits them
-    // as data-citation parts.
     await capturedTools?.searchDocumentation.execute({ query: 'q' });
     streamController!.close();
     const reader = res.body!.getReader();

@@ -47,7 +47,6 @@ describe('setup-test-db', () => {
     process.env.NEON_API_KEY = 'key-1';
     process.env.NEON_TEST_BRANCH = 'dev-test';
 
-    // 1. List returns the branch already.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -59,8 +58,6 @@ describe('setup-test-db', () => {
         ],
       }),
     });
-    // 2. List branch endpoints — branch already has a read_write
-    //    endpoint that's active, so no creation/polling happens.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -71,7 +68,6 @@ describe('setup-test-db', () => {
         ],
       }),
     });
-    // 3. Connection URI fetch.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -99,7 +95,6 @@ describe('setup-test-db', () => {
     process.env.NEON_API_KEY = 'key-1';
     process.env.NEON_TEST_BRANCH = 'dev-test';
 
-    // 1. List branches — none matching.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -108,8 +103,6 @@ describe('setup-test-db', () => {
         branches: [{ id: 'br-primary', name: 'production', primary: true }],
       }),
     });
-    // 2. Create branch (returns branch with state=ready so the
-    //    wait-for-ready loop is skipped).
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -119,14 +112,12 @@ describe('setup-test-db', () => {
         operations: [],
       }),
     });
-    // 3. List endpoints on the new branch — empty.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       text: async () => '',
       json: async () => ({ endpoints: [] }),
     });
-    // 4. Create endpoint.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -135,14 +126,12 @@ describe('setup-test-db', () => {
         endpoint: { id: 'ep-new', type: 'read_write', current_state: 'init' },
       }),
     });
-    // 5. Poll endpoint — first call says "active", loop exits.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       text: async () => '',
       json: async () => ({ endpoint: { current_state: 'active' } }),
     });
-    // 6. Connection URI fetch.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -153,7 +142,6 @@ describe('setup-test-db', () => {
     spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
 
     await runSetup();
-    // Branch create call should have included the primary branch as parent.
     const createCall = fetchMock.mock.calls[1];
     expect(createCall[0]).toContain('/branches');
     expect(createCall[1]?.method).toBe('POST');
@@ -161,14 +149,12 @@ describe('setup-test-db', () => {
       name: 'dev-test',
       parent_id: 'br-primary',
     });
-    // Endpoint create call.
     const epCall = fetchMock.mock.calls[3];
     expect(epCall[0]).toContain('/endpoints');
     expect(epCall[1]?.method).toBe('POST');
     expect(JSON.parse(epCall[1]?.body as string)).toMatchObject({
       endpoint: { branch_id: 'br-new', type: 'read_write' },
     });
-    // Connection URI call must use branch_id (not endpoint_id).
     const uriCall = fetchMock.mock.calls[5];
     expect(uriCall[0]).toContain('/connection_uri');
     expect(uriCall[0]).toContain('branch_id=br-new');

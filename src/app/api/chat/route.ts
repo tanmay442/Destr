@@ -135,8 +135,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
   if (!contentType?.includes('application/json')) {
     return new Response('Content-Type must be application/json', { status: 415 });
   }
-  // Body size is enforced by next.config.ts experimental.bodySizeLimit
-  // at the framework level (not via a spoofable Content-Length header).
+  // Body size enforced at framework level (next.config.ts), not a spoofable header.
   const comp = getComposition();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {

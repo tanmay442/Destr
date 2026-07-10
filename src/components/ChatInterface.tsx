@@ -86,7 +86,6 @@ export function ChatInterface() {
   }, [messages, status]);
 
   return (
-    // Height constraint to prevent layout stretch.
     <div
       className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface)]/40"
       data-testid="chat-frame"

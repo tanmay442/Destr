@@ -1,4 +1,3 @@
-// pg bytea ↔ Buffer customType. Separated from schema for type reasons with the pg-driver.
 import { customType } from 'drizzle-orm/pg-core';
 
 export const byteaBlob = customType<{ data: Buffer | null; driverData: Buffer | null }>({

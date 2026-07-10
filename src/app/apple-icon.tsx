@@ -1,6 +1,4 @@
-// Apple touch icon (180x180). Same brand mark on the dark
-// background, scaled up with a larger rounded corner so it
-// reads correctly against iOS home-screen wallpapers.
+// Apple touch icon (180x180): brand mark; larger radius reads better on iOS home screens.
 import { ImageResponse } from 'next/og';
 
 export const size = { width: 180, height: 180 };

@@ -22,7 +22,6 @@ export function RecountAllButton() {
             setError(res.error);
             return;
           }
-          // Include search params so page re-renders with success banner.
           const next = new URLSearchParams(params.toString());
           if (typeof res.documents === 'number') {
             next.set('recountedDocs', String(res.documents));

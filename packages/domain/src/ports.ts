@@ -1,16 +1,5 @@
-// Port interfaces — pure abstractions used by the application layer
-// and implemented by the infrastructure layer. Living in @app/domain
-// keeps the dependency graph unidirectional:
-//   domain ← application ← infrastructure
-// Infrastructure can depend on domain (to implement these ports)
-// without creating a circular dependency on application.
+/** Ingest lifecycle: `queued`→`ingesting`→`done`; `failed` is terminal despite QStash retry budget. */
 
-/** Lifecycle status of a document's ingest pipeline.
- *  - `queued`: large PDF uploaded, awaiting the async ingest worker.
- *  - `ingesting`: the worker is currently parsing/embedding.
- *  - `done`: chunks are inserted and the document is searchable.
- *  - `failed`: the worker ran but ingest threw (QStash will still
- *    retry up to its retry budget; this marks a terminal failure). */
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
 export interface DocumentRow {
@@ -47,7 +36,6 @@ export interface UserRow {
   createdAt: Date;
 }
 
-// ---- Documents & Chunks ----
 
 export interface DocumentRepository {
   findByName(fileName: string): Promise<DocumentRow | null>;
@@ -80,7 +68,6 @@ export interface ChunkRepository {
   recountAll(): Promise<Array<{ documentId: number; count: number }>>;
 }
 
-// ---- Tickets ----
 
 export interface TicketRepository {
   findByTicketId(ticketId: string): Promise<TicketRow | null>;
@@ -109,7 +96,6 @@ export interface TicketRepository {
   countOpen(): Promise<number>;
 }
 
-// ---- Users ----
 
 export interface UserRepository {
   upsertFromClerk(input: {
@@ -132,7 +118,6 @@ export interface UserRepository {
   syncClerkRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void>;
 }
 
-// ---- Audit ----
 
 type DocumentAuditAction = 'upload' | 'replace' | 'delete' | 'restore';
 type TicketAuditAction =
@@ -173,7 +158,6 @@ export interface AuditLog {
   }>;
 }
 
-// ---- Rate Limiting & Query Stats ----
 
 export interface RateLimiter {
   check(
@@ -187,14 +171,12 @@ export interface QueryStats {
   top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
-// ---- LLM / Embedding / Chat ----
 
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;
   embedBatch(values: string[]): Promise<number[][]>;
 }
 
-// ---- Blob storage (object storage for PDF binaries) ----
 
 export interface BlobStorage {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
@@ -204,13 +186,11 @@ export interface BlobStorage {
   signedUrl?(key: string, ttlSec: number): Promise<string>;
 }
 
-// ---- Async ingest queue (QStash-backed; no-op in sync mode) ----
 
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
 }
 
-// ---- PDF parsing & text splitting ----
 
 export interface PdfParser {
   extractText(buffer: Buffer): Promise<string>;
@@ -220,11 +200,7 @@ export interface TextSplitter {
   splitText(text: string): Promise<string[]>;
 }
 
-// ---- Misc ----
 
-/** Context provided inside a transaction. Each property is a
- *  repository instance whose operations participate in the
- *  active database transaction. */
 export interface TransactionContext {
   documents: DocumentRepository;
   chunks: ChunkRepository;
@@ -233,9 +209,6 @@ export interface TransactionContext {
   users: UserRepository;
 }
 
-/** Runs a callback inside a database transaction. The callback
- *  receives a `TransactionContext` whose repository instances
- *  are scoped to the transaction. */
 export interface TransactionRunner {
   run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T>;
 }
@@ -249,7 +222,6 @@ export interface Hasher {
 }
 
 export interface SessionStore {
-  /** Resolves the active session (or null when signed out). */
   getSession(): Promise<{
     user: { id: string; email: string; name: string; imageUrl: string | null; role: 'admin' | 'user' };
   } | null>;

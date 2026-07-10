@@ -1,5 +1,3 @@
-// Use-case: record chat queries and read the top list.
-// Source: src/lib/auth/query-stats.ts.
 import { ok, type Result } from '@app/domain';
 import type { QueryStats } from '@app/domain';
 

@@ -1,6 +1,4 @@
-// Open Graph share image (1200x630). Brand mark + "RAG Support"
-// wordmark on the dark graphite background. Used by social media
-// link previews (Twitter, LinkedIn, Slack, etc.).
+// Open Graph share image (1200x630); used by social link previews.
 import { ImageResponse } from 'next/og';
 
 export const alt = 'RAG Support';
