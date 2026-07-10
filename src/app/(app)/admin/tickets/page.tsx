@@ -215,7 +215,7 @@ export default async function TicketsPage({
                     {t.assignedTo ?? '—'}
                   </td>
                   <td
-                    className="whitespace-nowrap px-3 py-2 text-right text-xs text-zinc-500"
+                    className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted"
                     title={t.createdAt.toISOString()}
                   >
                     {t.createdAt.toISOString().slice(0, 16).replace('T', ' ')}

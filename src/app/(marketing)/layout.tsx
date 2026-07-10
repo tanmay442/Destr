@@ -1,4 +1,4 @@
-import Ferrofluid from '@/components/ferrofluid/Ferrofluid';
+import Ferrofluid from '@/components/react-bits/Ferrofluid';
 
 // Marketing route group. Passthrough layout; future pages pick up shared chrome here.
 export default function MarketingLayout({
@@ -15,13 +15,13 @@ export default function MarketingLayout({
         <div className="h-full w-full">
           <Ferrofluid
             colors={['#ffffff', '#ffffff', '#ffffff']}
-            speed={0.5}
-            scale={1}
+            speed={0.33}
+            scale={1.6}
             turbulence={1}
             fluidity={0.1}
-            rimWidth={0.2}
-            sharpness={3}
-            shimmer={1}
+            rimWidth={0.175}
+            sharpness={2.5}
+            shimmer={1.15}
             glow={2}
             flowDirection="down"
             opacity={1}

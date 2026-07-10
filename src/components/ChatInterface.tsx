@@ -238,7 +238,7 @@ export function ChatInterface() {
                       sim >= 0.8
                         ? 'oklch(0.78 0.16 155)'
                         : sim >= 0.6
-                          ? 'oklch(0.78 0.14 196)'
+                          ? '#e5e5e5'
                           : 'oklch(0.82 0.15 80)';
                     return (
                       <div

@@ -21,11 +21,11 @@ export default async function PreviewPage({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-medium">{doc.fileName}</h2>
-            <p className="text-xs text-zinc-500">This document has been deleted. Restore it to preview.</p>
+            <p className="text-xs text-foreground-muted">This document has been deleted. Restore it to preview.</p>
           </div>
           <Link
             href="/admin/documents"
-            className="rounded border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className="rounded border border-border bg-surface/40 px-3 py-1 text-sm text-foreground transition-colors duration-150 hover:bg-surface-elevated"
           >
             Back
           </Link>
@@ -38,7 +38,7 @@ export default async function PreviewPage({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-medium">{doc.fileName}</h2>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-foreground-muted">
             {doc.storageKey
               ? 'PDF stored in object storage'
               : 'Preview unavailable (no stored file)'}
@@ -46,7 +46,7 @@ export default async function PreviewPage({
         </div>
         <Link
           href="/admin/documents"
-          className="rounded border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          className="rounded border border-border bg-surface/40 px-3 py-1 text-sm text-foreground transition-colors duration-150 hover:bg-surface-elevated"
         >
           Back
         </Link>
@@ -54,12 +54,12 @@ export default async function PreviewPage({
       {doc.storageKey ? (
         <iframe
           src={`/api/admin/documents/${docId}/blob#toolbar=0`}
-          className="h-[80vh] w-full rounded border border-zinc-200 dark:border-zinc-800"
+          className="h-[80vh] w-full rounded border border-border"
           title={`Preview ${doc.fileName}`}
           data-testid="document-iframe"
         />
       ) : (
-        <div className="rounded border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500 dark:border-zinc-700">
+        <div className="rounded border border-dashed border-border p-6 text-center text-sm text-foreground-muted">
           Preview unavailable.
         </div>
       )}

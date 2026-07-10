@@ -16,7 +16,7 @@ export default function OpengraphImage() {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          background: '#1a1d2e',
+          background: '#0a0a0a',
           gap: 32,
         }}
       >
@@ -28,8 +28,8 @@ export default function OpengraphImage() {
             width: 120,
             height: 120,
             borderRadius: 28,
-            background: '#222639',
-            border: '2px solid #3ddbd9',
+            background: '#141414',
+            border: '2px solid #e5e5e5',
           }}
         >
           <svg
@@ -37,7 +37,7 @@ export default function OpengraphImage() {
             width="72"
             height="72"
             fill="none"
-            stroke="#3ddbd9"
+            stroke="#e5e5e5"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
