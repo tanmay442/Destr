@@ -19,11 +19,11 @@ export function MarketingQuickStart() {
 
   return (
     <section data-testid="landing-quickstart">
-      <div className="relative rounded-lg border border-border-subtle bg-surface-sunken p-4 font-mono text-sm text-foreground-muted">
+      <div className="relative rounded-lg border border-border-subtle bg-surface-sunken p-4 font-mono text-sm text-muted-foreground">
         <button
           type="button"
           onClick={handleCopy}
-          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface/40 px-2 py-1 text-xs text-foreground-muted transition-colors duration-150 hover:bg-surface-elevated"
+          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-card/40 px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-elevated"
           data-testid="landing-quickstart-copy"
         >
           <Copy className="h-3.5 w-3.5" aria-hidden />

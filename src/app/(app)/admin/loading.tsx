@@ -1,17 +1,19 @@
+import { Skeleton } from "@/components/ui/skeleton";
+
 export default function AdminLoading() {
   return (
     <section className="flex flex-col gap-4" role="status" aria-label="Loading admin page">
-      <div className="h-6 w-32 animate-pulse rounded bg-surface-elevated" />
+      <Skeleton className="h-6 w-32" />
       <div className="flex gap-2">
-        <div className="h-10 flex-1 animate-pulse rounded-xl bg-surface-elevated" />
-        <div className="h-10 w-24 animate-pulse rounded-xl bg-surface-elevated" />
+        <Skeleton className="h-10 flex-1 rounded-xl" />
+        <Skeleton className="h-10 w-24 rounded-xl" />
       </div>
-      <div className="overflow-hidden rounded-xl border border-border">
-        <div className="h-10 animate-pulse bg-surface-elevated" />
+      <div className="overflow-hidden rounded-xl border border-border-subtle">
+        <Skeleton className="h-10 rounded-none" />
         {Array.from({ length: 8 }).map((_, i) => (
-          <div
+          <Skeleton
             key={i}
-            className="h-12 animate-pulse border-t border-border-subtle bg-background"
+            className="h-12 rounded-none border-t border-border-subtle"
             style={{ animationDelay: `${i * 50}ms` }}
           />
         ))}

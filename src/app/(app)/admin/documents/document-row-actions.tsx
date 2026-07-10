@@ -1,13 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import {
   deleteDocumentAction,
   restoreDocumentAction,
   hardDeleteDocumentAction,
   recountChunksAction,
 } from '../actions';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/sonner';
+
+const btn =
+  'text-muted-foreground hover:bg-surface-elevated hover:text-foreground';
 
 export function DocumentRowActions({
   id,
@@ -21,124 +26,102 @@ export function DocumentRowActions({
   isDeleted: boolean;
 }) {
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
   const [recountPending, startRecount] = useTransition();
-  const [recountCount, setRecountCount] = useState<number | null>(null);
-  const [recountError, setRecountError] = useState<string | null>(null);
   const [hardDeletePending, startHardDelete] = useTransition();
-  const btn =
-    'rounded-xl border border-border px-2 py-1 text-xs text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground disabled:opacity-50';
   return (
     <div className="flex flex-wrap items-center gap-1">
       {hasBlob && !isDeleted ? (
         <>
-          <Link
-            href={`/admin/documents/${id}/preview`}
+          <Button
+            asChild
+            variant="outline"
+            size="xs"
             className={btn}
             data-testid={`documents-preview-${id}`}
           >
-            Preview
-          </Link>
-          <a
-            href={`/api/admin/documents/${id}/download`}
+            <Link href={`/admin/documents/${id}/preview`}>Preview</Link>
+          </Button>
+          <Button
+            asChild
+            variant="outline"
+            size="xs"
             className={btn}
             data-testid={`documents-download-${id}`}
           >
-            Download
-          </a>
+            <a href={`/api/admin/documents/${id}/download`}>Download</a>
+          </Button>
         </>
       ) : null}
       {isDeleted ? (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="xs"
+          className="border-success/40 text-success hover:bg-success/10"
           disabled={pending}
           onClick={() =>
             startTransition(async () => {
-              setError(null);
               const res = await restoreDocumentAction(id);
-              if (res.error) setError(res.error);
+              if (res.error) toast.error(res.error);
+              else toast.success('Document restored');
             })
           }
-          className="rounded-xl border border-success/40 px-2 py-1 text-xs text-success transition-colors hover:bg-success/10 disabled:opacity-50"
           data-testid={`documents-restore-${id}`}
         >
           {pending ? 'Restoring…' : 'Restore'}
-        </button>
+        </Button>
       ) : (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="xs"
+          className={btn}
           disabled={pending}
           onClick={() =>
             startTransition(async () => {
-              setError(null);
               const res = await deleteDocumentAction(id);
-              if (res.error) setError(res.error);
+              if (res.error) toast.error(res.error);
+              else toast.success('Document deleted');
             })
           }
-          className={btn}
           data-testid={`documents-delete-${id}`}
         >
           {pending ? 'Deleting…' : 'Delete'}
-        </button>
+        </Button>
       )}
       {isDeleted ? (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="xs"
+          className="border-destructive/40 text-destructive hover:bg-destructive/10"
           disabled={hardDeletePending}
           onClick={() =>
             startHardDelete(async () => {
-              setError(null);
               const res = await hardDeleteDocumentAction(id);
-              if (res.error) setError(res.error);
+              if (res.error) toast.error(res.error);
+              else toast.success('Document permanently removed');
             })
           }
-          className="rounded-xl border border-danger/40 px-2 py-1 text-xs text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
           data-testid={`documents-hard-delete-${id}`}
         >
           {hardDeletePending ? 'Removing…' : 'Hard delete'}
-        </button>
+        </Button>
       ) : null}
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="xs"
+        className={btn}
         disabled={recountPending}
         onClick={() =>
           startRecount(async () => {
-            setRecountError(null);
             const res = await recountChunksAction(id);
-            if (res.error) {
-              setRecountError(res.error);
-            } else if (typeof res.count === 'number') {
-              setRecountCount(res.count);
-            }
+            if (res.error) toast.error(res.error);
+            else if (typeof res.count === 'number')
+              toast.success(`Recount: ${res.count} chunks`);
           })
         }
-        className={btn}
         data-testid={`documents-recount-${id}`}
       >
         {recountPending ? 'Recounting…' : 'Recount chunks'}
-      </button>
-      {recountCount !== null ? (
-        <span
-          className="text-xs text-success"
-          data-testid={`documents-recount-result-${id}`}
-        >
-          → {recountCount}
-        </span>
-      ) : null}
-      {recountError ? (
-        <span
-          className="text-xs text-danger"
-          role="alert"
-          data-testid={`documents-recount-error-${id}`}
-        >
-          {recountError}
-        </span>
-      ) : null}
-      {error ? (
-        <span className="text-xs text-danger" role="alert">
-          {error}
-        </span>
-      ) : null}
+      </Button>
       <span className="sr-only">{fileName}</span>
     </div>
   );

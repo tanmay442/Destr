@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { buttonVariants } from '@/components/ui/button';
 
 interface PaginationProps {
   page: number;
@@ -9,8 +10,7 @@ interface PaginationProps {
   linkClassName?: string;
 }
 
-const defaultLinkClass =
-  'rounded-xl border border-border px-3 py-1 text-foreground-muted hover:bg-surface hover:text-foreground';
+const defaultLinkClass = buttonVariants({ variant: 'outline', size: 'sm' });
 
 export function Pagination({
   page,

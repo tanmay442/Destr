@@ -1,9 +1,21 @@
-import Link from 'next/link';
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { DocumentRowActions } from './document-row-actions';
 import { RecountAllButton } from './recount-all-button';
 import { IngestStatusPoller } from './ingest-status-poller';
 import { Pagination } from '@/components/admin/Pagination';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Alert } from '@/components/ui/alert';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import type { IngestStatus } from '@app/domain';
 
 export const dynamic = 'force-dynamic';
@@ -15,12 +27,12 @@ function ingestBadgeClass(status: IngestStatus): string {
     case 'queued':
       return 'rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs text-warning';
     case 'ingesting':
-      return 'rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs text-accent';
+      return 'rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary';
     case 'failed':
-      return 'rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-xs text-danger';
+      return 'rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive';
     case 'done':
     default:
-      return 'rounded-full border border-foreground-muted/30 px-2 py-0.5 text-xs text-foreground-muted';
+      return 'rounded-full border border-muted-foreground/30 px-2 py-0.5 text-xs text-muted-foreground';
   }
 }
 
@@ -68,110 +80,119 @@ export default async function DocumentsPage({
       <h2 className="text-xl font-medium">Documents</h2>
       <div className="flex flex-col gap-2">
         <form className="flex gap-2" method="get" aria-label="Search documents">
-          <label className="sr-only" htmlFor="documents-search">
+          <Label className="sr-only" htmlFor="documents-search">
             Search documents
-          </label>
-          <input
+          </Label>
+          <Input
             id="documents-search"
             type="search"
             name="search"
             defaultValue={search}
             placeholder="Search file name…"
-            className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
+            className="flex-1 bg-background"
             data-testid="documents-search"
           />
-          <button
-            type="submit"
-            className="rounded-xl bg-accent px-3 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
-          >
-            Search
-          </button>
+          <Button type="submit">Search</Button>
           <RecountAllButton />
         </form>
         {showRecountBanner ? (
-          <div
-            className="rounded-xl border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
+          <Alert
+            className="border-success/40 bg-success/10 px-3 py-2 text-success"
             data-testid="documents-recount-banner"
             role="status"
           >
             Recounted {recountedDocs} document{recountedDocs === 1 ? '' : 's'}, total {recountedTotal} chunk{recountedTotal === 1 ? '' : 's'}.
-          </div>
+          </Alert>
         ) : null}
       </div>
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-sm" data-testid="documents-table" aria-label="Documents">
-          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
-            <tr>
-              <th className="px-3 py-2">File</th>
-              <th className="px-3 py-2">Uploaded by</th>
-              <th className="px-3 py-2 text-right">At</th>
-              <th className="px-3 py-2 text-right">Chunks</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Ingest</th>
-              <th className="px-3 py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-x-auto rounded-xl border border">
+        <Table data-testid="documents-table" aria-label="Documents">
+          <TableHeader className="bg-secondary text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                File
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Uploaded by
+              </TableHead>
+              <TableHead className="px-3 py-2 text-right text-xs uppercase">
+                At
+              </TableHead>
+              <TableHead className="px-3 py-2 text-right text-xs uppercase">
+                Chunks
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Status
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Ingest
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Actions
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {result.documents.length === 0 ? (
-              <tr>
-                <td
+              <TableRow>
+                <TableCell
                   colSpan={7}
-                  className="px-3 py-4 text-center text-foreground-muted"
+                  className="px-3 py-4 text-center text-muted-foreground"
                 >
                   No documents.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               result.documents.map((d) => (
-                <tr
+                <TableRow
                   key={d.id}
-                  className="border-t border-border-subtle hover:bg-surface-elevated/40"
+                  className="border-border-subtle hover:bg-secondary/40"
                   data-testid={`documents-row-${d.id}`}
                 >
-                  <td className="px-3 py-2 font-medium text-foreground">
+                  <TableCell className="px-3 py-2 font-medium text-foreground">
                     {d.fileName}
-                  </td>
-                  <td className="px-3 py-2 text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-muted-foreground">
                     {d.uploaderName ?? d.uploadedBy}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground">
                     {d.uploadedAt.toISOString()}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-foreground">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-foreground">
                     {d.chunkCount}
-                  </td>
-                  <td className="px-3 py-2">
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     {d.deletedAt ? (
-                      <span className="rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-xs text-danger">
+                      <Badge className="rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
                         deleted
-                      </span>
+                      </Badge>
                     ) : (
-                      <span className="rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs text-success">
+                      <Badge className="rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs text-success">
                         live
-                      </span>
+                      </Badge>
                     )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
+                    <Badge
                       className={ingestBadgeClass(d.ingestStatus)}
                       data-testid={`documents-ingest-status-${d.id}`}
                     >
                       {d.ingestStatus}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     <DocumentRowActions
                       id={d.id}
                       fileName={d.fileName}
                       hasBlob={d.hasBlob}
                       isDeleted={d.deletedAt != null}
                     />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       <Pagination
         page={page}

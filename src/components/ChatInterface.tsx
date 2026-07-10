@@ -12,7 +12,14 @@ import {
 } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { toast } from 'sonner';
 
 const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
   {
@@ -85,10 +92,21 @@ export function ChatInterface() {
     };
   }, [messages, status]);
 
+  useEffect(() => {
+    if (!error) return;
+    const message =
+      error instanceof Error
+        ? error.name === 'AbortError'
+          ? 'Request was aborted.'
+          : error.message || 'Something went wrong.'
+        : 'Something went wrong.';
+    toast.error(message);
+  }, [error]);
+
   return (
-    <div
-      className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border-subtle bg-surface/40"
+    <Card
       data-testid="chat-frame"
+      className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col gap-0 overflow-hidden rounded-2xl border-border-subtle bg-card/40 p-0"
     >
       <div
         ref={messagesScrollRef}
@@ -103,7 +121,7 @@ export function ChatInterface() {
             <div className="flex flex-col items-start gap-3">
               <span
                 aria-hidden
-                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-accent/15 text-accent ring-1 ring-inset ring-accent/30"
+                className="inline-flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -112,7 +130,7 @@ export function ChatInterface() {
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-4 w-4"
+                  className="size-4"
                 >
                   <path d="M4 4h16v12H7l-3 4V4z" />
                 </svg>
@@ -121,11 +139,11 @@ export function ChatInterface() {
                 <p className="text-[15px] font-semibold text-foreground">
                   Hi! I&apos;m the support assistant.
                 </p>
-                <p className="text-sm leading-relaxed text-foreground-muted">
+                <p className="text-sm leading-relaxed text-muted-foreground">
                   Ask a question about your docs and I&apos;ll search the
                   official documentation and cite the source I used.
                 </p>
-                <p className="text-sm leading-relaxed text-foreground-muted">
+                <p className="text-sm leading-relaxed text-muted-foreground">
                   If I can&apos;t find an answer, just ask me to file a support
                   ticket and I&apos;ll get one started for you.
                 </p>
@@ -138,21 +156,22 @@ export function ChatInterface() {
               </span>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {QUICK_PROMPTS.map((q) => (
-                  <button
+                  <Button
                     key={q.label}
                     type="button"
+                    variant="outline"
                     onClick={() => {
                       setInput(q.text);
                       composerRef.current?.focus();
                     }}
-                    className="group flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface/70 px-3.5 py-2.5 text-left text-sm text-foreground-muted transition-all duration-150 ease-out-quart hover:border-border hover:bg-surface-elevated hover:text-foreground"
+                    className="group flex w-full items-center justify-between gap-3 rounded-xl border-border-subtle bg-card/70 px-3.5 py-2.5 text-left text-sm text-muted-foreground transition-all duration-150 ease-out-quart hover:border hover:bg-surface-elevated hover:text-foreground"
                     data-testid="chat-quick-prompt"
                   >
                     <span className="flex flex-col gap-0.5">
                       <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">
                         {q.label}
                       </span>
-                      <span className="text-[13px] leading-snug text-foreground-muted group-hover:text-foreground">
+                      <span className="text-[13px] leading-snug text-muted-foreground group-hover:text-foreground">
                         {q.text}
                       </span>
                     </span>
@@ -163,13 +182,13 @@ export function ChatInterface() {
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className="h-3.5 w-3.5 shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground-muted"
+                      className="shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
                       aria-hidden
                     >
                       <path d="M5 12h14" />
                       <path d="m12 5 7 7-7 7" />
                     </svg>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -188,40 +207,42 @@ export function ChatInterface() {
           return (
             <div
               key={m.id}
-              className={
+              className={cn(
                 isUser
                   ? 'flex flex-col items-end gap-2'
-                  : 'flex flex-col items-start gap-2.5'
-              }
+                  : 'flex flex-col items-start gap-2.5',
+              )}
               data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
             >
               <span
-                className={
+                className={cn(
                   isUser
                     ? 'text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground-subtle'
-                    : 'text-[10px] font-semibold uppercase tracking-[0.14em] text-accent'
-                }
+                    : 'text-[10px] font-semibold uppercase tracking-[0.14em] text-primary',
+                )}
               >
                 {isUser ? 'You' : 'Assistant'}
               </span>
               {textParts.map((part, i) => {
                 if (part.type === 'text') {
-                  return isUser ? (
+                   return isUser ? (
                     <div
                       key={i}
-                      className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-relaxed text-accent-foreground shadow-sm"
+                      className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm"
                       data-testid="chat-text"
                     >
                       {part.text}
                     </div>
                   ) : (
-                    <div
+                    <Card
                       key={i}
-                      className="chat-markdown max-w-[90%] rounded-2xl rounded-bl-md border border-border-subtle bg-surface-elevated/80 px-4 py-3 text-[14.5px] leading-relaxed text-foreground shadow-sm"
+                      className={cn(
+                        'chat-markdown flex w-fit max-w-[90%] flex-col gap-0 rounded-2xl rounded-bl-md border-border-subtle bg-secondary/80 px-4 py-3 text-[14.5px] leading-relaxed text-foreground shadow-sm',
+                      )}
                       data-testid="chat-text"
                     >
                       <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
-                    </div>
+                    </Card>
                   );
                 }
                 return null;
@@ -236,14 +257,14 @@ export function ChatInterface() {
                     const simPct = Math.round(sim * 100);
                     const simTone =
                       sim >= 0.8
-                        ? 'oklch(0.78 0.16 155)'
+                        ? 'var(--success)'
                         : sim >= 0.6
-                          ? '#e5e5e5'
-                          : 'oklch(0.82 0.15 80)';
+                          ? 'var(--primary)'
+                          : 'var(--warning)';
                     return (
-                      <div
+                      <Card
                         key={i}
-                        className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/70 p-3 shadow-sm"
+                        className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border-border-subtle bg-surface-sunken/70 p-3 shadow-sm"
                         data-testid="chat-citation"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -255,7 +276,7 @@ export function ChatInterface() {
                               strokeWidth="2"
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              className="h-3 w-3"
+                                className="size-3"
                               aria-hidden
                             >
                               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -263,8 +284,9 @@ export function ChatInterface() {
                             </svg>
                             Source {i + 1}
                           </span>
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
+                          <Badge
+                            variant="outline"
+                            className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
                             style={{
                               color: simTone,
                               background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
@@ -272,7 +294,7 @@ export function ChatInterface() {
                             title="Cosine similarity to your question"
                           >
                             {simPct}% match
-                          </span>
+                          </Badge>
                         </div>
                         <div
                           className="h-1 w-full overflow-hidden rounded-full bg-surface-elevated"
@@ -282,14 +304,14 @@ export function ChatInterface() {
                             className="h-full rounded-full"
                             style={{
                               width: `${simPct}%`,
-                              background: simTone,
+                              background: 'var(--success)',
                             }}
                           />
                         </div>
-                        <p className="line-clamp-4 text-[12.5px] leading-relaxed text-foreground-muted">
+                        <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
                           {c.data.snippet}
                         </p>
-                      </div>
+                      </Card>
                     );
                   })}
                 </div>
@@ -300,29 +322,31 @@ export function ChatInterface() {
 
         {isStreaming && (
           <div
-            className="flex items-center gap-2 self-start rounded-full border border-border-subtle bg-surface/80 px-2.5 py-1 text-xs text-foreground-muted"
+            className="flex items-center gap-2 self-start rounded-full border border-border-subtle bg-card/80 px-2.5 py-1 text-xs text-muted-foreground"
             data-testid="chat-streaming"
           >
             <span className="flex gap-1" aria-hidden>
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
             </span>
             <span>Generating</span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
               onClick={() => stop()}
-              className="ml-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-foreground-subtle transition-colors hover:bg-surface-elevated hover:text-foreground"
+              className="ml-1 px-1.5 py-0.5 text-[11px] font-medium text-foreground-subtle transition-colors hover:bg-surface-elevated hover:text-foreground"
             >
               Stop
-            </button>
+            </Button>
           </div>
         )}
 
         {error && (
-          <div
-            className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
-            role="alert"
+          <Alert
+            variant="destructive"
+            className="flex items-start gap-2.5 rounded-xl border-destructive/30 bg-destructive/10 p-3 text-destructive"
             data-testid="chat-error"
           >
             <svg
@@ -332,7 +356,7 @@ export function ChatInterface() {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="mt-0.5 h-4 w-4 shrink-0"
+              className="mt-0.5 shrink-0"
               aria-hidden
             >
               <circle cx="12" cy="12" r="10" />
@@ -340,29 +364,29 @@ export function ChatInterface() {
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             <div className="flex flex-col gap-0.5">
-              <span className="font-medium">
+              <AlertTitle className="font-medium">
                 {error instanceof Error
                   ? error.name === 'AbortError'
                     ? 'Request was aborted.'
                     : error.message || 'Something went wrong.'
                   : 'Something went wrong.'}
-              </span>
-              <span className="text-[12px] text-danger/80">
+              </AlertTitle>
+              <AlertDescription className="text-[12px] text-destructive/80">
                 {error instanceof Error && error.name === 'AbortError'
                   ? ''
                   : 'Try again in a moment.'}
-              </span>
+              </AlertDescription>
             </div>
-          </div>
+          </Alert>
         )}
       </div>
 
       <form
         onSubmit={onSubmit}
-        className="group/composer flex shrink-0 items-end gap-2 border-t border-border-subtle bg-surface/60 p-2 backdrop-blur-md transition-colors duration-150 focus-within:border-accent/60"
+        className="group/composer flex shrink-0 items-end gap-2 border-t border-border-subtle bg-card/60 p-2 backdrop-blur-md transition-colors duration-150 focus-within:border-primary/60"
         data-testid="chat-composer"
       >
-        <textarea
+        <Textarea
           ref={composerRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -370,14 +394,14 @@ export function ChatInterface() {
           disabled={isStreaming}
           placeholder="Type your question…"
           rows={1}
-          className="min-h-[40px] max-h-[160px] flex-1 resize-none rounded-xl bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus:outline-none disabled:opacity-60"
+          className="min-h-[40px] max-h-[160px] flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus-visible:ring-0 disabled:opacity-60"
           data-testid="chat-input"
         />
-        <button
+        <Button
           type="submit"
           disabled={isStreaming || !input.trim()}
           aria-label={isStreaming ? 'Stop generating' : 'Send message'}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground transition-all duration-150 ease-out-quart hover:bg-accent-hover active:bg-accent-pressed disabled:cursor-not-allowed disabled:opacity-40"
+          className="h-10 w-10 shrink-0 rounded-xl transition-all duration-150 ease-out-quart hover:bg-primary active:bg-primary/80 disabled:cursor-not-allowed disabled:opacity-40"
           data-testid="chat-send"
         >
           {isStreaming ? (
@@ -388,7 +412,6 @@ export function ChatInterface() {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="h-4 w-4"
               aria-hidden
             >
               <rect x="6" y="6" width="12" height="12" rx="1" />
@@ -401,15 +424,14 @@ export function ChatInterface() {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="h-4 w-4"
               aria-hidden
             >
               <path d="M12 19V5" />
               <path d="m5 12 7-7 7 7" />
             </svg>
           )}
-        </button>
+        </Button>
       </form>
-    </div>
+    </Card>
   );
 }

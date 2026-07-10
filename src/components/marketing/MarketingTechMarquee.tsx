@@ -62,14 +62,14 @@ export function MarketingTechMarquee() {
     if (entry) {
       const { Icon, href } = entry;
       return {
-        node: <Icon className="h-11 w-11 text-foreground-muted" aria-hidden />,
+        node: <Icon className="h-11 w-11 text-muted-foreground" aria-hidden />,
         title: name,
         href,
       };
     }
     return {
       node: (
-        <span className="font-medium tracking-tight text-foreground-muted">
+        <span className="font-medium tracking-tight text-muted-foreground">
           {name}
         </span>
       ),

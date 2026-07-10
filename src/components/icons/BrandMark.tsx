@@ -25,7 +25,7 @@ export function BrandMark({ className = '', size = 'sm' }: BrandMarkProps) {
     <span
       aria-hidden
       className={[
-        'relative inline-flex items-center justify-center rounded-[10px] bg-accent/15 text-accent ring-1 ring-inset ring-accent/25',
+        'relative inline-flex items-center justify-center rounded-[10px] bg-primary/15 text-primary ring-1 ring-inset ring-primary/25',
         SIZE_MAP[size],
         className,
       ].join(' ')}

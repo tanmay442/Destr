@@ -1,6 +1,18 @@
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { UserRowActions } from './user-row-actions';
 import { Pagination } from '@/components/admin/Pagination';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,90 +37,97 @@ export default async function UsersPage({
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-medium">Users</h2>
       <form className="flex gap-2" method="get" aria-label="Search users">
-        <label className="sr-only" htmlFor="users-search">
+        <Label className="sr-only" htmlFor="users-search">
           Search users
-        </label>
-        <input
+        </Label>
+        <Input
           id="users-search"
           type="search"
           name="search"
           defaultValue={search}
           placeholder="Search name or email…"
-          className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
+          className="flex-1 bg-background"
           data-testid="users-search"
         />
-        <button
-          type="submit"
-          className="rounded-xl bg-accent px-3 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
-        >
-          Search
-        </button>
+        <Button type="submit">Search</Button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-sm" data-testid="users-table" aria-label="Users">
-          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
-            <tr>
-              <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Email</th>
-              <th className="px-3 py-2">Role</th>
-              <th className="px-3 py-2 text-right">Last seen</th>
-              <th className="px-3 py-2 text-right">Created</th>
-              <th className="px-3 py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-x-auto rounded-xl border border">
+        <Table data-testid="users-table" aria-label="Users">
+          <TableHeader className="bg-secondary text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Name
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Email
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Role
+              </TableHead>
+              <TableHead className="px-3 py-2 text-right text-xs uppercase">
+                Last seen
+              </TableHead>
+              <TableHead className="px-3 py-2 text-right text-xs uppercase">
+                Created
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Actions
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {result.users.length === 0 ? (
-              <tr>
-                <td
+              <TableRow>
+                <TableCell
                   colSpan={6}
-                  className="px-3 py-4 text-center text-foreground-muted"
+                  className="px-3 py-4 text-center text-muted-foreground"
                 >
                   No users.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               result.users.map((u) => (
-                <tr
+                <TableRow
                   key={u.clerkUserId}
-                  className="border-t border-border-subtle hover:bg-surface-elevated/40"
+                  className="border-border-subtle hover:bg-secondary/40"
                   data-testid={`users-row-${u.clerkUserId}`}
                 >
-                  <td className="px-3 py-2 font-medium text-foreground">
+                  <TableCell className="px-3 py-2 font-medium text-foreground">
                     {u.name ?? '—'}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
                     {u.email}
-                  </td>
-                  <td className="px-3 py-2 text-xs">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs">
                     {u.role === 'admin' ? (
-                      <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent">
+                      <Badge className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-primary">
                         admin
-                      </span>
+                      </Badge>
                     ) : (
-                      <span className="rounded-full border border-border bg-surface px-2 py-0.5 text-foreground-muted">
+                      <Badge className="rounded-full border border bg-card px-2 py-0.5 text-muted-foreground">
                         user
-                      </span>
+                      </Badge>
                     )}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground">
                     {u.lastSeenAt
                       ? u.lastSeenAt.toISOString()
                       : '—'}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground">
                     {u.createdAt.toISOString()}
-                  </td>
-                  <td className="px-3 py-2">
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     <UserRowActions
                       clerkUserId={u.clerkUserId}
                       role={u.role as 'admin' | 'user'}
                     />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       <Pagination
         page={page}

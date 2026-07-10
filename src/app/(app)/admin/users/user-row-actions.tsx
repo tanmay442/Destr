@@ -1,8 +1,13 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { useSession } from '@clerk/nextjs';
 import { setRoleAction } from '../actions';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/sonner';
+
+const btn =
+  'text-muted-foreground hover:bg-surface-elevated hover:text-foreground';
 
 export function UserRowActions({
   clerkUserId,
@@ -13,41 +18,28 @@ export function UserRowActions({
 }) {
   const { session } = useSession();
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   return (
     <div className="flex flex-wrap items-center gap-1">
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="xs"
+        className={btn}
         disabled={pending}
         onClick={() =>
           startTransition(async () => {
-            setError(null);
-            setMessage(null);
             const next: 'admin' | 'user' = role === 'admin' ? 'user' : 'admin';
             const res = await setRoleAction(clerkUserId, next);
-            if (res.error) setError(res.error);
+            if (res.error) toast.error(res.error);
             else {
               await session?.reload();
-              setMessage(`Role set to ${next}`);
+              toast.success(`Role set to ${next}`);
             }
           })
         }
-        className="rounded-xl border border-border px-2 py-1 text-xs text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground disabled:opacity-50"
         data-testid={`users-toggle-role-${clerkUserId}`}
       >
         {pending ? '…' : role === 'admin' ? 'Demote' : 'Promote'}
-      </button>
-      {error ? (
-        <span className="text-xs text-danger" role="alert">
-          {error}
-        </span>
-      ) : null}
-      {message ? (
-        <span className="text-xs text-success" role="status">
-          {message}
-        </span>
-      ) : null}
+      </Button>
     </div>
   );
 }

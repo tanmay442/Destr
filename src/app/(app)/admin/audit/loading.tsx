@@ -1,19 +1,18 @@
+import { Skeleton } from "@/components/ui/skeleton";
+
 export default function AuditLoading() {
   return (
     <section className="flex flex-col gap-4" role="status" aria-label="Loading audit log">
-      <div className="h-6 w-24 animate-pulse rounded bg-surface-elevated" />
+      <Skeleton className="h-6 w-24" />
       <div className="flex flex-wrap gap-2">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-10 w-32 animate-pulse rounded-xl bg-surface-elevated" />
+          <Skeleton key={i} className="h-10 w-32 rounded-xl" />
         ))}
       </div>
-      <div className="overflow-hidden rounded-xl border border-border">
-        <div className="h-10 animate-pulse bg-surface-elevated" />
+      <div className="overflow-hidden rounded-xl border border-border-subtle">
+        <Skeleton className="h-10 rounded-none" />
         {Array.from({ length: 10 }).map((_, i) => (
-          <div
-            key={i}
-            className="h-12 animate-pulse border-t border-border-subtle bg-background"
-          />
+          <Skeleton key={i} className="h-12 rounded-none border-t border-border-subtle" />
         ))}
       </div>
     </section>

@@ -1,7 +1,17 @@
 import Link from 'next/link';
 import { getComposition, TICKET_STATUSES, unwrap, parsePageParam } from '@/composition';
 import { TicketOverlay, type TicketRow } from './ticket-overlay';
+import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,109 +71,67 @@ export default async function TicketsPage({
     <section className="flex flex-col gap-4">
       <TicketOverlay tickets={rows} userOptions={userList.users} />
       <h2 className="text-xl font-medium">Tickets</h2>
-      <form
-        className="grid grid-cols-1 gap-2 sm:grid-cols-4"
-        method="get"
-        aria-label="Filter tickets"
-      >
-        <label className="sr-only" htmlFor="tickets-filter-status">
-          Status
-        </label>
-        <select
-          id="tickets-filter-status"
-          name="status"
-          defaultValue={status ?? ''}
-          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-          data-testid="tickets-filter-status"
-        >
-          <option value="">All statuses</option>
-          {TICKET_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <label className="sr-only" htmlFor="tickets-filter-assignee">
-          Assignee
-        </label>
-        <select
-          id="tickets-filter-assignee"
-          name="assignee"
-          defaultValue={assignee ?? ''}
-          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-          data-testid="tickets-filter-assignee"
-        >
-          <option value="">Any assignee</option>
-          {userList.users.map((u) => (
-            <option key={u.clerkUserId} value={u.clerkUserId}>
-              {u.name ?? u.email}
-            </option>
-          ))}
-        </select>
-        <label className="sr-only" htmlFor="tickets-search">
-          Search issue
-        </label>
-        <input
-          id="tickets-search"
-          type="search"
-          name="q"
-          defaultValue={search ?? ''}
-          placeholder="Search issue…"
-          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-          data-testid="tickets-search"
-        />
-        <button
-          type="submit"
-          className="rounded bg-accent px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover"
-        >
-          Apply
-        </button>
-      </form>
+      <TicketsFilterForm
+        statuses={TICKET_STATUSES}
+        users={userList.users}
+        status={status}
+        assignee={assignee}
+        search={search}
+      />
       <div className="overflow-x-auto rounded border border-border-subtle">
-        <table
-          className="w-full table-fixed text-sm"
-          data-testid="tickets-table"
-        >
-          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
-            <tr>
-              <th className="w-24 px-3 py-2">Ticket</th>
-              <th className="w-44 px-3 py-2">User</th>
-              <th className="px-3 py-2">Issue</th>
-              <th className="w-28 px-3 py-2">Status</th>
-              <th className="w-40 px-3 py-2">Assignee</th>
-              <th className="w-32 px-3 py-2 text-right">Created</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="w-full table-fixed text-sm" data-testid="tickets-table">
+          <TableHeader className="bg-surface-elevated text-left text-xs uppercase text-muted-foreground">
+            <TableRow>
+              <TableHead className="w-24 px-3 py-2 text-muted-foreground">
+                Ticket
+              </TableHead>
+              <TableHead className="w-44 px-3 py-2 text-muted-foreground">
+                User
+              </TableHead>
+              <TableHead className="px-3 py-2 text-muted-foreground">
+                Issue
+              </TableHead>
+              <TableHead className="w-28 px-3 py-2 text-muted-foreground">
+                Status
+              </TableHead>
+              <TableHead className="w-40 px-3 py-2 text-muted-foreground">
+                Assignee
+              </TableHead>
+              <TableHead className="w-32 px-3 py-2 text-right text-muted-foreground">
+                Created
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {result.tickets.length === 0 ? (
-              <tr>
-                <td
+              <TableRow>
+                <TableCell
                   colSpan={6}
-                  className="px-3 py-4 text-center text-foreground-muted"
+                  className="px-3 py-4 text-center text-muted-foreground"
                 >
                   No tickets.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               result.tickets.map((t) => (
-                <tr
+                <TableRow
                   key={t.ticketId}
-                  className="border-t border-border-subtle"
+                  className="border-t border-border-subtle hover:bg-transparent"
                   data-testid={`tickets-row-${t.ticketId}`}
                 >
-                  <td className="px-3 py-2 font-medium">
+                  <TableCell className="px-3 py-2 font-medium">
                     <Link
                       href={{
                         pathname: '/admin/tickets',
                         query: { ...params, ticket: t.ticketId },
                       }}
-                      className="text-accent hover:underline"
+                      className="text-primary hover:underline"
                       data-testid={`tickets-open-${t.ticketId}`}
                     >
                       {t.ticketId}
                     </Link>
-                  </td>
-                  <td className="px-3 py-2">
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     <div className="flex min-w-0 flex-col">
                       <span className="truncate">
                         {(() => {
@@ -183,7 +151,7 @@ export default async function TicketsPage({
                           return t.name;
                         })()}
                       </span>
-                      <span className="truncate text-xs text-foreground-muted">
+                      <span className="truncate text-xs text-muted-foreground">
                         {(() => {
                           const looksLikeClerkId = t.userId.startsWith('user_');
                           if (
@@ -197,34 +165,37 @@ export default async function TicketsPage({
                         })()}
                       </span>
                       {t.userId === 'anonymous' ? (
-                        <span className="mt-1 rounded bg-warning/10 px-1 py-0.5 text-[10px] text-warning">
+                        <Badge className="mt-1 bg-warning/10 text-[10px] text-warning">
                           (anonymous)
-                        </span>
+                        </Badge>
                       ) : null}
                     </div>
-                  </td>
-                  <td className="max-w-md truncate px-3 py-2 text-xs">
+                  </TableCell>
+                  <TableCell className="max-w-md truncate px-3 py-2 text-xs">
                     {t.issue}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs">
-                    <span className="rounded bg-surface-elevated px-2 py-0.5 text-foreground">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-xs">
+                    <Badge className="bg-surface-elevated text-foreground">
                       {t.status}
-                    </span>
-                  </td>
-                  <td className="truncate px-3 py-2 text-xs" title={t.assignedTo ?? undefined}>
+                    </Badge>
+                  </TableCell>
+                  <TableCell
+                    className="truncate px-3 py-2 text-xs"
+                    title={t.assignedTo ?? undefined}
+                  >
                     {t.assignedTo ?? '—'}
-                  </td>
-                  <td
-                    className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted"
+                  </TableCell>
+                  <TableCell
+                    className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground"
                     title={t.createdAt.toISOString()}
                   >
                     {t.createdAt.toISOString().slice(0, 16).replace('T', ' ')}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       <Pagination
         page={page}
@@ -232,7 +203,7 @@ export default async function TicketsPage({
         total={result.total}
         pathname="/admin/tickets"
         query={{ status, assignee, q: search }}
-        linkClassName="rounded border border-border px-3 py-1 text-foreground-muted hover:bg-surface-elevated hover:text-foreground"
+        linkClassName="rounded-md border border-border px-3 py-1 text-muted-foreground hover:bg-card hover:text-foreground"
       />
     </section>
   );

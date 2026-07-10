@@ -1,5 +1,7 @@
 'use client';
 
+import { Button } from '@/components/ui/button';
+
 export default function ChatError({
   error,
   reset,
@@ -15,7 +17,7 @@ export default function ChatError({
       <h2 className="text-xl font-medium text-foreground">
         Chat is temporarily unavailable
       </h2>
-      <p className="text-sm text-foreground-muted">
+      <p className="text-sm text-muted-foreground">
         An error occurred while loading the chat. Please try again.
       </p>
       {error.digest ? (
@@ -23,13 +25,9 @@ export default function ChatError({
           Error ID: <code>{error.digest}</code>
         </p>
       ) : null}
-      <button
-        type="button"
-        onClick={reset}
-        className="mt-2 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
-      >
+      <Button type="button" onClick={reset}>
         Try again
-      </button>
+      </Button>
     </section>
   );
 }

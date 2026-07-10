@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getComposition, unwrap } from '@/composition';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,14 +23,11 @@ export default async function PreviewPage({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-medium">{doc.fileName}</h2>
-            <p className="text-xs text-foreground-muted">This document has been deleted. Restore it to preview.</p>
+            <p className="text-xs text-muted-foreground">This document has been deleted. Restore it to preview.</p>
           </div>
-          <Link
-            href="/admin/documents"
-            className="rounded border border-border bg-surface/40 px-3 py-1 text-sm text-foreground transition-colors duration-150 hover:bg-surface-elevated"
-          >
-            Back
-          </Link>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/documents">Back</Link>
+          </Button>
         </div>
       </section>
     );
@@ -38,30 +37,29 @@ export default async function PreviewPage({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-medium">{doc.fileName}</h2>
-          <p className="text-xs text-foreground-muted">
+          <p className="text-xs text-muted-foreground">
             {doc.storageKey
               ? 'PDF stored in object storage'
               : 'Preview unavailable (no stored file)'}
           </p>
         </div>
-        <Link
-          href="/admin/documents"
-          className="rounded border border-border bg-surface/40 px-3 py-1 text-sm text-foreground transition-colors duration-150 hover:bg-surface-elevated"
-        >
-          Back
-        </Link>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/admin/documents">Back</Link>
+        </Button>
       </div>
       {doc.storageKey ? (
-        <iframe
-          src={`/api/admin/documents/${docId}/blob#toolbar=0`}
-          className="h-[80vh] w-full rounded border border-border"
-          title={`Preview ${doc.fileName}`}
-          data-testid="document-iframe"
-        />
+        <Card className="overflow-hidden p-0 shadow-none">
+          <iframe
+            src={`/api/admin/documents/${docId}/blob#toolbar=0`}
+            className="h-[80vh] w-full"
+            title={`Preview ${doc.fileName}`}
+            data-testid="document-iframe"
+          />
+        </Card>
       ) : (
-        <div className="rounded border border-dashed border-border p-6 text-center text-sm text-foreground-muted">
+        <Card className="border-dashed p-6 text-center text-sm text-muted-foreground">
           Preview unavailable.
-        </div>
+        </Card>
       )}
     </section>
   );

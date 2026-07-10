@@ -14,7 +14,7 @@ export function MarketingHero() {
         {HERO.headline}
       </h1>
 
-      <p className="max-w-xl text-pretty text-sm leading-relaxed text-foreground-muted">
+      <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground">
         {HERO.subcopy}
       </p>
 
@@ -28,7 +28,7 @@ export function MarketingHero() {
               aria-hidden
               className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground-subtle"
             />
-            <p className="text-foreground-muted">
+            <p className="text-muted-foreground">
               <span className="font-semibold text-foreground">
                 {feature.title}
               </span>

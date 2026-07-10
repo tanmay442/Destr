@@ -1,5 +1,16 @@
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { Pagination } from '@/components/admin/Pagination';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,84 +38,89 @@ export default async function AuditPage({
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-medium">Audit log</h2>
       <form className="flex flex-wrap gap-2" method="get" aria-label="Filter audit log">
-        <label className="sr-only" htmlFor="audit-documentId">
+        <Label className="sr-only" htmlFor="audit-documentId">
           Document id
-        </label>
-        <input
+        </Label>
+        <Input
           id="audit-documentId"
           type="number"
           name="documentId"
           defaultValue={documentId ?? ''}
           placeholder="Document id"
-          className="w-32 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
+          className="w-32 bg-background"
         />
-        <label className="sr-only" htmlFor="audit-ticketId">
+        <Label className="sr-only" htmlFor="audit-ticketId">
           Ticket id
-        </label>
-        <input
+        </Label>
+        <Input
           id="audit-ticketId"
           type="text"
           name="ticketId"
           defaultValue={ticketId ?? ''}
           placeholder="Ticket id (TKT-1001)"
-          className="w-48 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
+          className="w-48 bg-background"
         />
-        <button
-          type="submit"
-          className="rounded-xl bg-accent px-3 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
-        >
-          Filter
-        </button>
+        <Button type="submit">Filter</Button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-sm" data-testid="audit-table" aria-label="Audit events">
-          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
-            <tr>
-              <th className="px-3 py-2">When</th>
-              <th className="px-3 py-2">Kind</th>
-              <th className="px-3 py-2">Action</th>
-              <th className="px-3 py-2">Target</th>
-              <th className="px-3 py-2">Actor</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-x-auto rounded-xl border border">
+        <Table data-testid="audit-table" aria-label="Audit events">
+          <TableHeader className="bg-secondary text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                When
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Kind
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Action
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Target
+              </TableHead>
+              <TableHead className="px-3 py-2 text-left text-xs uppercase">
+                Actor
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {result.events.length === 0 ? (
-              <tr>
-                <td
+              <TableRow>
+                <TableCell
                   colSpan={5}
-                  className="px-3 py-4 text-center text-foreground-muted"
+                  className="px-3 py-4 text-center text-muted-foreground"
                 >
                   No audit events.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               result.events.map((e) => (
-                <tr
+                <TableRow
                   key={`${e.kind}-${e.id}`}
-                  className="border-t border-border-subtle hover:bg-surface-elevated/40"
+                  className="border-border-subtle hover:bg-secondary/40"
                 >
-                  <td className="whitespace-nowrap px-3 py-2 text-xs text-foreground-muted">
+                  <TableCell className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                     {e.at.toISOString()}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-foreground">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs text-foreground">
                     {e.kind}
-                  </td>
-                  <td className="px-3 py-2 text-xs font-medium text-foreground">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs font-medium text-foreground">
                     {e.action}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
                     {e.kind === 'document'
                       ? `document #${e.documentId}`
                       : e.ticketId}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-foreground-muted">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
                     {e.actorName ?? e.actorId}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       <Pagination
         page={page}

@@ -3,12 +3,26 @@
 import { useState, useTransition } from 'react';
 import { updateTicketAction } from '../actions';
 import { VALID_TRANSITIONS, type TicketStatus } from '@app/application/admin/tickets';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Alert } from '@/components/ui/alert';
 
 export interface UserOption {
   clerkUserId: string;
   email: string;
   name: string | null;
 }
+
+const UNASSIGNED = '__unassigned__';
 
 export function TicketDrawer({
   ticketId,
@@ -35,68 +49,83 @@ export function TicketDrawer({
   const [currentStatus, setCurrentStatus] = useState(status);
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
   return (
-    <div
-      className="flex flex-col gap-3 rounded-xl border border-border bg-surface-elevated p-4 text-sm"
+    <Card
       data-testid={`ticket-drawer-body-${ticketId}`}
+      className="flex flex-col gap-3 rounded-xl border border bg-surface-elevated p-4 text-sm"
     >
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Name
-        </span>
+        </Label>
         <div className="mt-0.5 text-foreground">{name}</div>
       </div>
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Email
-        </span>
+        </Label>
         <div className="mt-0.5 text-foreground">{email}</div>
       </div>
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Issue
-        </span>
-        <div className="mt-0.5 whitespace-pre-wrap text-foreground">
-          {issue}
-        </div>
+        </Label>
+        <div className="mt-0.5 whitespace-pre-wrap text-foreground">{issue}</div>
       </div>
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-1 flex-col gap-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
+        <div className="flex flex-1 flex-col gap-1">
+          <Label
+            htmlFor={`ticket-status-${ticketId}`}
+            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          >
             Status
-          </span>
-          <select
-            value={currentStatus}
-            onChange={(e) => setCurrentStatus(e.target.value)}
-            className="rounded-xl border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-            data-testid={`ticket-status-${ticketId}`}
+          </Label>
+          <Select value={currentStatus} onValueChange={setCurrentStatus}>
+            <SelectTrigger
+              id={`ticket-status-${ticketId}`}
+              data-testid={`ticket-status-${ticketId}`}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={currentStatus}>{currentStatus}</SelectItem>
+              {VALID_TRANSITIONS[currentStatus as TicketStatus]?.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-1 flex-col gap-1">
+          <Label
+            htmlFor={`ticket-assignee-${ticketId}`}
+            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
           >
-            <option value={currentStatus}>{currentStatus}</option>
-            {VALID_TRANSITIONS[currentStatus as TicketStatus]?.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-1 flex-col gap-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
             Assignee
-          </span>
-          <select
+          </Label>
+          <Select
             value={currentAssignee}
-            onChange={(e) => setCurrentAssignee(e.target.value)}
-            className="rounded-xl border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-            data-testid={`ticket-assignee-${ticketId}`}
+            onValueChange={(v) =>
+              setCurrentAssignee(v === UNASSIGNED ? '' : v)
+            }
           >
-            <option value="">—</option>
-            {userOptions.map((u) => (
-              <option key={u.clerkUserId} value={u.clerkUserId}>
-                {u.name ?? u.email}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
+            <SelectTrigger
+              id={`ticket-assignee-${ticketId}`}
+              data-testid={`ticket-assignee-${ticketId}`}
+            >
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={UNASSIGNED}>—</SelectItem>
+              {userOptions.map((u) => (
+                <SelectItem key={u.clerkUserId} value={u.clerkUserId}>
+                  {u.name ?? u.email}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button
           type="button"
           disabled={pending}
           onClick={() =>
@@ -109,29 +138,29 @@ export function TicketDrawer({
               if (res.error) setError(res.error);
             })
           }
-          className="rounded-xl bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover disabled:opacity-50"
           data-testid={`ticket-save-${ticketId}`}
         >
           {pending ? 'Saving…' : 'Save'}
-        </button>
+        </Button>
       </div>
       <div className="flex flex-col gap-1">
-        <label
+        <Label
           htmlFor={`ticket-note-${ticketId}`}
-          className="text-xs font-medium uppercase tracking-wide text-foreground-muted"
+          className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
         >
           Add note
-        </label>
-        <textarea
+        </Label>
+        <Textarea
           id={`ticket-note-${ticketId}`}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={3}
-          className="rounded-xl border border-border bg-background p-2 text-sm text-foreground"
           data-testid={`ticket-note-${ticketId}`}
+          className="rounded-xl border border bg-background p-2 text-sm text-foreground"
         />
-        <button
+        <Button
           type="button"
+          variant="outline"
           disabled={pending || note.trim().length === 0}
           onClick={() =>
             startTransition(async () => {
@@ -144,33 +173,31 @@ export function TicketDrawer({
               }
             })
           }
-          className="self-start rounded-xl border border-border px-3 py-1.5 text-sm text-foreground-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-50"
           data-testid={`ticket-add-note-${ticketId}`}
+          className="self-start text-muted-foreground"
         >
           {pending ? 'Posting…' : 'Post note'}
-        </button>
+        </Button>
       </div>
       {notes ? (
         <div
-          className="rounded-xl border border-border bg-background p-3 text-sm"
+          className="rounded-xl border border bg-background p-3 text-sm"
           data-testid={`ticket-notes-${ticketId}`}
         >
-          <span className="mt-1 text-xs font-medium uppercase tracking-wide text-foreground-muted">
+          <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Notes
-          </span>
-          <div className="mt-1 whitespace-pre-wrap text-foreground">
-            {notes}
-          </div>
+          </Label>
+          <div className="mt-1 whitespace-pre-wrap text-foreground">{notes}</div>
         </div>
       ) : null}
       {error ? (
-        <div
-          className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger"
-          role="alert"
+        <Alert
+          variant="destructive"
+          className="border-destructive/40 bg-destructive/10 p-3 text-destructive"
         >
           {error}
-        </div>
+        </Alert>
       ) : null}
-    </div>
+    </Card>
   );
 }

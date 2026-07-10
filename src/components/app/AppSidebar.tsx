@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useClerk } from '@clerk/nextjs';
+import { Dialog as SheetPrimitive } from 'radix-ui';
 import {
   MessageSquare,
   ChevronRight,
@@ -19,6 +20,16 @@ import {
   LogOut,
 } from 'lucide-react';
 import { BrandMark } from '@/components/icons/BrandMark';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import {
+  Sheet,
+  SheetTrigger,
+  SheetPortal,
+  SheetTitle,
+  SheetClose,
+} from '@/components/ui/sheet';
+import { cn } from '@/lib/utils';
 
 const ADMIN_LINKS = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard },
@@ -58,7 +69,6 @@ export function AppSidebar({
     if (onAdmin) setAdminOpen(true);
   }
 
-
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
   // Close drawer on route change via the same render-derived pattern (no effect).
   const [lastPath, setLastPath] = useState<string | null>(pathname);
@@ -66,24 +76,6 @@ export function AppSidebar({
     setLastPath(pathname);
     if (mobileOpen) setMobileOpen(false);
   }
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const prev = document.documentElement.style.overflow;
-    document.documentElement.style.overflow = 'hidden';
-    return () => {
-      document.documentElement.style.overflow = prev;
-    };
-  }, [mobileOpen]);
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMobileOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [mobileOpen]);
 
   const toggleAdmin = () => {
     setAdminOpen((open) => !open);
@@ -97,7 +89,7 @@ export function AppSidebar({
   };
 
   return (
-    <>
+    <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
       <header
         className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border-subtle bg-background/85 px-4 backdrop-blur-md md:hidden"
         data-testid="app-mobile-topbar"
@@ -111,21 +103,22 @@ export function AppSidebar({
           <span>RAG Support</span>
         </Link>
 
-        <button
-          type="button"
-          aria-label="Open navigation"
-          aria-expanded={mobileOpen}
-          aria-controls="app-mobile-drawer"
-          onClick={() => setMobileOpen(true)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border-subtle bg-surface/90 text-foreground shadow-sm transition-colors duration-150 hover:bg-surface-elevated"
-          data-testid="app-mobile-hamburger"
-        >
-          <Menu className="h-4 w-4" aria-hidden />
-        </button>
+        <SheetTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Open navigation"
+            className="rounded-lg bg-card/90 shadow-sm hover:bg-surface-elevated"
+            data-testid="app-mobile-hamburger"
+          >
+            <Menu aria-hidden />
+          </Button>
+        </SheetTrigger>
       </header>
 
       <aside
-        className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-border-subtle md:bg-surface/60 md:backdrop-blur-md"
+        className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-border-subtle md:bg-card/60 md:backdrop-blur-md"
         data-testid="app-sidebar"
       >
         <SidebarBody
@@ -138,51 +131,45 @@ export function AppSidebar({
         />
       </aside>
 
-      {mobileOpen ? (
+      <SheetPortal>
         <div
-          className="fixed inset-0 z-50 md:hidden"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 md:hidden"
+          data-slot="sheet-overlay"
+        />
+        <SheetPrimitive.Content
+          className="fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-card p-4 shadow-2xl outline-none data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=closed]:slide-out-to-left data-[state=open]:animate-in data-[state=open]:duration-500 data-[state=open]:slide-in-from-left md:hidden"
           data-testid="app-mobile-drawer"
         >
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setMobileOpen(false)}
-            aria-hidden
-          />
-          {/* TODO: trap focus within the drawer while open. */}
-          <nav
-            id="app-mobile-drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Navigation"
-            className="absolute inset-y-0 left-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-surface p-4 shadow-2xl"
-          >
-            <div className="mb-3 flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
-                Menu
-              </span>
-              <button
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <div className="mb-3 flex items-center justify-between px-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
+              Menu
+            </span>
+            <SheetClose asChild>
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-sm"
                 aria-label="Close navigation"
-                onClick={() => setMobileOpen(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground"
+                className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
               >
-                <X className="h-4 w-4" aria-hidden />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <SidebarBody
-                user={user}
-                role={role}
-                adminOpen={adminOpen}
-                toggleAdmin={toggleAdmin}
-                isActive={isActive}
-                onSignOut={() => signOut({ redirectUrl: '/' })}
-              />
-            </div>
-          </nav>
-        </div>
-      ) : null}
-    </>
+                <X aria-hidden />
+              </Button>
+            </SheetClose>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SidebarBody
+              user={user}
+              role={role}
+              adminOpen={adminOpen}
+              toggleAdmin={toggleAdmin}
+              isActive={isActive}
+              onSignOut={() => signOut({ redirectUrl: '/' })}
+            />
+          </div>
+        </SheetPrimitive.Content>
+      </SheetPortal>
+    </Sheet>
   );
 }
 
@@ -225,31 +212,30 @@ function SidebarBody({
 
         {role === 'admin' ? (
           <div className="mt-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={toggleAdmin}
               aria-expanded={adminOpen}
-              className={[
-                'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150',
+              className={cn(
+                'w-full justify-start gap-2.5 rounded-lg px-3',
                 isActive('/admin')
-                  ? 'bg-surface-elevated text-foreground'
-                  : 'text-foreground-muted hover:bg-surface hover:text-foreground',
-              ].join(' ')}
+                  ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
+                  : 'text-muted-foreground hover:bg-card hover:text-foreground'
+              )}
               data-testid="app-sidebar-admin-toggle"
             >
-              <LayoutDashboard
-                className="h-4 w-4 shrink-0"
-                aria-hidden
-              />
+              <LayoutDashboard className="shrink-0" aria-hidden />
               <span className="flex-1 text-left">Admin</span>
               <ChevronRight
-                className={[
-                  'h-3.5 w-3.5 text-foreground-subtle transition-transform duration-200',
-                  adminOpen ? 'rotate-90' : '',
-                ].join(' ')}
+                className={cn(
+                  'text-foreground-subtle transition-transform duration-200',
+                  adminOpen && 'rotate-90'
+                )}
                 aria-hidden
               />
-            </button>
+            </Button>
 
             {adminOpen ? (
               <ul
@@ -260,24 +246,28 @@ function SidebarBody({
                   const Icon = link.icon;
                   return (
                     <li key={link.href}>
-                      <Link
-                        href={link.href}
-                        className={[
-                          'flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-colors duration-150',
+                      <Button
+                        asChild
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          'h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-1.5',
                           isActive(link.href)
-                            ? 'bg-surface-elevated text-foreground'
-                            : 'text-foreground-muted hover:bg-surface hover:text-foreground',
-                        ].join(' ')}
+                            ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
+                            : 'text-muted-foreground hover:bg-card hover:text-foreground'
+                        )}
                         data-testid={`app-sidebar-admin-${link.label
                           .toLowerCase()
                           .replace(/\s+/g, '-')}`}
                       >
-                        <Icon
-                          className="h-3.5 w-3.5 shrink-0 text-foreground-subtle"
-                          aria-hidden
-                        />
-                        <span>{link.label}</span>
-                      </Link>
+                        <Link href={link.href}>
+                            <Icon
+                              className="shrink-0 text-foreground-subtle"
+                              aria-hidden
+                            />
+                          <span>{link.label}</span>
+                        </Link>
+                      </Button>
                     </li>
                   );
                 })}
@@ -293,33 +283,30 @@ function SidebarBody({
             className="flex items-center gap-2.5 rounded-lg px-2 py-2"
             data-testid="app-sidebar-user"
           >
-            {user.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={user.imageUrl}
-                alt={user.name ?? 'User avatar'}
-                className="h-8 w-8 shrink-0 rounded-full ring-1 ring-border-subtle"
-              />
-            ) : (
-              <span
-                aria-hidden
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-elevated text-xs font-semibold text-foreground"
-              >
+            <Avatar className="size-8 shrink-0 ring-1 ring-border-subtle">
+              {user.imageUrl ? (
+                <AvatarImage
+                  src={user.imageUrl}
+                  alt={user.name ?? 'User avatar'}
+                />
+              ) : null}
+              <AvatarFallback className="bg-surface-elevated text-xs font-semibold text-foreground">
                 {(user.name ?? '?').charAt(0).toUpperCase()}
-              </span>
-            )}
+              </AvatarFallback>
+            </Avatar>
             <span className="min-w-0 flex-1 truncate text-sm text-foreground">
               {user.name ?? user.email}
             </span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={onSignOut}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-foreground-muted transition-colors duration-150 hover:bg-surface-elevated hover:text-foreground"
+              className="h-auto gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
               data-testid="app-sidebar-sign-out"
             >
-              <LogOut className="h-3 w-3" aria-hidden />
+              <LogOut aria-hidden />
               <span>Sign out</span>
-            </button>
+            </Button>
           </div>
         ) : (
           <p className="px-2 py-1 text-xs text-foreground-subtle">
@@ -345,19 +332,23 @@ function NavItem({
   testId?: string;
 }) {
   return (
-    <Link
-      href={href}
-      className={[
-        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150',
+    <Button
+      asChild
+      variant="ghost"
+      size="sm"
+      className={cn(
+        'w-full justify-start gap-2.5 rounded-lg px-3',
         active
-          ? 'bg-surface-elevated text-foreground'
-          : 'text-foreground-muted hover:bg-surface hover:text-foreground',
-      ].join(' ')}
+          ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
+          : 'text-muted-foreground hover:bg-card hover:text-foreground'
+      )}
       data-testid={testId}
       aria-current={active ? 'page' : undefined}
     >
-      <Icon className="h-4 w-4 shrink-0" aria-hidden />
-      <span>{label}</span>
-    </Link>
+      <Link href={href}>
+        <Icon className="shrink-0" aria-hidden />
+        <span>{label}</span>
+      </Link>
+    </Button>
   );
 }

@@ -25,7 +25,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           <h2 className="text-xl font-semibold tracking-tight text-foreground">
             Get started
           </h2>
-          <p className="mt-2 text-sm leading-relaxed text-foreground-muted">
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Open the chat to talk with the assistant, or sign in to save your
             session history and track support tickets.
           </p>
@@ -47,7 +47,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           <SignInButton mode="modal">
             <button
               type="button"
-              className="rounded-xl border border-border bg-surface/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-surface-elevated"
+              className="rounded-xl border border bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-surface-elevated"
               data-testid="home-sign-in"
             >
               Sign in
