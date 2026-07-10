@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { SignInButton } from '@clerk/nextjs';
 import { ArrowRight } from 'lucide-react';
 import BorderGlow from '@/components/react-bits/BorderGlow';
+import { Button } from '@/components/ui/button';
 
 type MarketingAuthCardProps = {
   floating?: boolean;
@@ -32,22 +33,17 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
         </div>
 
         <div className="flex flex-col gap-2.5">
-          <Link
-            href="/chat"
-            className="group inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-neutral-900 transition-all duration-200 ease-out-quart hover:-translate-y-0.5 hover:bg-neutral-200 active:translate-y-0"
-            data-testid="home-open-chat"
-          >
-            Open chat
-            <ArrowRight
-              className="h-4 w-4 transition-transform duration-200 ease-out-quart group-hover:translate-x-0.5"
-              aria-hidden
-            />
-          </Link>
+          <Button asChild size="lg" className="w-full rounded-xl" data-testid="home-open-chat">
+            <Link href="/chat">
+              Open chat
+              <ArrowRight data-icon="inline-end" />
+            </Link>
+          </Button>
 
           <SignInButton mode="modal">
             <button
               type="button"
-              className="rounded-xl border border bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-surface-elevated"
+              className="inline-flex w-full items-center justify-center rounded-xl border border-border bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-primary/50 hover:bg-surface-elevated"
               data-testid="home-sign-in"
             >
               Sign in
