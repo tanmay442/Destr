@@ -115,10 +115,10 @@ export function ChatInterface() {
       >
         {messages.length === 0 && (
           <div
-            className="m-auto flex w-full max-w-xl flex-col gap-5"
+            className="mx-auto mt-4 flex w-full max-w-xl flex-col gap-8 px-1 py-2"
             data-testid="chat-intro"
           >
-            <div className="flex flex-col items-start gap-3">
+            <div className="flex flex-col items-start gap-4">
               <span
                 aria-hidden
                 className="inline-flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
@@ -135,7 +135,7 @@ export function ChatInterface() {
                   <path d="M4 4h16v12H7l-3 4V4z" />
                 </svg>
               </span>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-2 break-words">
                 <p className="text-[15px] font-semibold text-foreground">
                   Hi! I&apos;m the support assistant.
                 </p>
@@ -150,28 +150,27 @@ export function ChatInterface() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
                 Try one of these
               </span>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
                 {QUICK_PROMPTS.map((q) => (
-                  <Button
+                  <button
                     key={q.label}
                     type="button"
-                    variant="outline"
                     onClick={() => {
                       setInput(q.text);
                       composerRef.current?.focus();
                     }}
-                    className="group flex w-full items-center justify-between gap-3 rounded-xl border-border-subtle bg-card/70 px-3.5 py-2.5 text-left text-sm text-muted-foreground transition-all duration-150 ease-out-quart hover:border hover:bg-surface-elevated hover:text-foreground"
+                    className="group flex h-auto w-full cursor-pointer items-start justify-between gap-4 overflow-hidden rounded-xl border border-border-subtle bg-card/70 p-4 text-left text-sm text-muted-foreground transition-all duration-150 ease-out-quart hover:border-primary/40 hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 sm:p-5"
                     data-testid="chat-quick-prompt"
                   >
-                    <span className="flex flex-col gap-0.5">
+                    <span className="flex min-w-0 flex-1 flex-col gap-1.5">
                       <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">
                         {q.label}
                       </span>
-                      <span className="text-[13px] leading-snug text-muted-foreground group-hover:text-foreground">
+                      <span className="text-[13.5px] leading-relaxed text-muted-foreground group-hover:text-foreground [overflow-wrap:anywhere]">
                         {q.text}
                       </span>
                     </span>
@@ -182,13 +181,13 @@ export function ChatInterface() {
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className="shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
+                      className="mt-0.5 size-4 shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
                       aria-hidden
                     >
                       <path d="M5 12h14" />
                       <path d="m12 5 7 7-7 7" />
                     </svg>
-                  </Button>
+                  </button>
                 ))}
               </div>
             </div>
