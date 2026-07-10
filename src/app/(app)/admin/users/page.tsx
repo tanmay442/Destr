@@ -34,19 +34,19 @@ export default async function UsersPage({
           name="search"
           defaultValue={search}
           placeholder="Search name or email…"
-          className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-subtle)]"
+          className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
           data-testid="users-search"
         />
         <button
           type="submit"
-          className="rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent-hover)]"
+          className="rounded-xl bg-accent px-3 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
         >
           Search
         </button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm" data-testid="users-table" aria-label="Users">
-          <thead className="bg-[var(--surface-elevated)] text-left text-xs uppercase text-[var(--foreground-muted)]">
+          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
             <tr>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Email</th>
@@ -61,7 +61,7 @@ export default async function UsersPage({
               <tr>
                 <td
                   colSpan={6}
-                  className="px-3 py-4 text-center text-[var(--foreground-muted)]"
+                  className="px-3 py-4 text-center text-foreground-muted"
                 >
                   No users.
                 </td>
@@ -70,32 +70,32 @@ export default async function UsersPage({
               result.users.map((u) => (
                 <tr
                   key={u.clerkUserId}
-                  className="border-t border-[var(--border-subtle)] hover:bg-[var(--surface-elevated)]/40"
+                  className="border-t border-border-subtle hover:bg-surface-elevated/40"
                   data-testid={`users-row-${u.clerkUserId}`}
                 >
-                  <td className="px-3 py-2 font-medium text-[var(--foreground)]">
+                  <td className="px-3 py-2 font-medium text-foreground">
                     {u.name ?? '—'}
                   </td>
-                  <td className="px-3 py-2 text-xs text-[var(--foreground-muted)]">
+                  <td className="px-3 py-2 text-xs text-foreground-muted">
                     {u.email}
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {u.role === 'admin' ? (
-                      <span className="rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2 py-0.5 text-[var(--accent)]">
+                      <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent">
                         admin
                       </span>
                     ) : (
-                      <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-[var(--foreground-muted)]">
+                      <span className="rounded-full border border-border bg-surface px-2 py-0.5 text-foreground-muted">
                         user
                       </span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-[var(--foreground-muted)]">
+                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted">
                     {u.lastSeenAt
                       ? u.lastSeenAt.toISOString()
                       : '—'}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-[var(--foreground-muted)]">
+                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-foreground-muted">
                     {u.createdAt.toISOString()}
                   </td>
                   <td className="px-3 py-2">

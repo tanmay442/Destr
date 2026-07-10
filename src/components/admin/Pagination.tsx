@@ -10,7 +10,7 @@ interface PaginationProps {
 }
 
 const defaultLinkClass =
-  'rounded-xl border border-[var(--border)] px-3 py-1 text-[var(--foreground-muted)] hover:bg-[var(--surface)] hover:text-[var(--foreground)]';
+  'rounded-xl border border-border px-3 py-1 text-foreground-muted hover:bg-surface hover:text-foreground';
 
 export function Pagination({
   page,

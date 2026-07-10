@@ -33,18 +33,18 @@ export function UserRowActions({
             }
           })
         }
-        className="rounded-xl border border-[var(--border)] px-2 py-1 text-xs text-[var(--foreground-muted)] transition-colors hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)] disabled:opacity-50"
+        className="rounded-xl border border-border px-2 py-1 text-xs text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground disabled:opacity-50"
         data-testid={`users-toggle-role-${clerkUserId}`}
       >
         {pending ? '…' : role === 'admin' ? 'Demote' : 'Promote'}
       </button>
       {error ? (
-        <span className="text-xs text-[var(--danger)]" role="alert">
+        <span className="text-xs text-danger" role="alert">
           {error}
         </span>
       ) : null}
       {message ? (
-        <span className="text-xs text-[var(--success)]" role="status">
+        <span className="text-xs text-success" role="status">
           {message}
         </span>
       ) : null}

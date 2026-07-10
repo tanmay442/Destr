@@ -10,10 +10,10 @@ interface StatCardProps {
 export function StatCard({ label, value, href, testId }: StatCardProps) {
   const content = (
     <>
-      <span className="text-xs uppercase tracking-wide text-[var(--foreground-muted)]">
+      <span className="text-xs uppercase tracking-wide text-foreground-muted">
         {label}
       </span>
-      <span className="text-2xl font-semibold text-[var(--foreground)]">
+      <span className="text-2xl font-semibold text-foreground">
         {value}
       </span>
     </>
@@ -23,7 +23,7 @@ export function StatCard({ label, value, href, testId }: StatCardProps) {
     return (
       <Link
         href={href}
-        className="group flex flex-col gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--accent)]/60 hover:bg-[var(--surface-elevated)] hover:shadow-lg"
+        className="group flex flex-col gap-1 rounded-xl border border-border bg-surface p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:bg-surface-elevated hover:shadow-lg"
         data-testid={testId}
       >
         {content}
@@ -32,7 +32,7 @@ export function StatCard({ label, value, href, testId }: StatCardProps) {
   }
 
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+    <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-4">
       {content}
     </div>
   );

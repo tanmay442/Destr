@@ -25,7 +25,7 @@ export function BrandMark({ className = '', size = 'sm' }: BrandMarkProps) {
     <span
       aria-hidden
       className={[
-        'relative inline-flex items-center justify-center rounded-[10px] bg-[var(--accent)]/15 text-[var(--accent)] ring-1 ring-inset ring-[var(--accent)]/25',
+        'relative inline-flex items-center justify-center rounded-[10px] bg-accent/15 text-accent ring-1 ring-inset ring-accent/25',
         SIZE_MAP[size],
         className,
       ].join(' ')}
@@ -56,7 +56,7 @@ function BrandLogo({ href, label = 'RAG Support', size = 'sm', className = '' }:
   const inner = (
     <>
       <BrandMark size={size} />
-      <span className="text-[15px] font-semibold tracking-tight text-[var(--foreground)]">
+      <span className="text-[15px] font-semibold tracking-tight text-foreground">
         {label}
       </span>
     </>

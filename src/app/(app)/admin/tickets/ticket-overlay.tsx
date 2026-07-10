@@ -86,8 +86,8 @@ export function TicketOverlay({
         className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
         data-testid="ticket-overlay-backdrop"
       />
-      <div className="relative flex h-full w-full max-w-md flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+      <div className="relative flex h-full w-full max-w-md flex-col border-l border-border bg-surface shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           <span className="text-sm font-semibold tracking-tight">
             {ticket ? `Ticket ${ticket.ticketId}` : activeId}
           </span>
@@ -95,7 +95,7 @@ export function TicketOverlay({
             type="button"
             aria-label="Close ticket"
             onClick={close}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground-muted)] transition-colors hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground"
             data-testid="ticket-overlay-close"
           >
             <svg
@@ -128,17 +128,17 @@ export function TicketOverlay({
             />
           ) : (
             <div
-              className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4 text-sm text-[var(--foreground-muted)]"
+              className="flex flex-col gap-3 rounded-xl border border-border bg-surface-elevated p-4 text-sm text-foreground-muted"
               data-testid="ticket-overlay-not-in-view"
             >
               <span>
-                Ticket <strong className="text-[var(--foreground)]">{activeId}</strong> is
+                Ticket <strong className="text-foreground">{activeId}</strong> is
                 not in the current filtered view. Clear the filter to see it here.
               </span>
               <button
                 type="button"
                 onClick={close}
-                className="self-start rounded-xl bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent-hover)]"
+                className="self-start rounded-xl bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent-hover"
               >
                 Clear filter
               </button>

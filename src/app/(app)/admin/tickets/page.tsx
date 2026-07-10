@@ -73,7 +73,7 @@ export default async function TicketsPage({
           id="tickets-filter-status"
           name="status"
           defaultValue={status ?? ''}
-          className="rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)]"
+          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
           data-testid="tickets-filter-status"
         >
           <option value="">All statuses</option>
@@ -90,7 +90,7 @@ export default async function TicketsPage({
           id="tickets-filter-assignee"
           name="assignee"
           defaultValue={assignee ?? ''}
-          className="rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)]"
+          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
           data-testid="tickets-filter-assignee"
         >
           <option value="">Any assignee</option>
@@ -109,22 +109,22 @@ export default async function TicketsPage({
           name="q"
           defaultValue={search ?? ''}
           placeholder="Search issue…"
-          className="rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)]"
+          className="rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
           data-testid="tickets-search"
         />
         <button
           type="submit"
-          className="rounded bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent-hover)]"
+          className="rounded bg-accent px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover"
         >
           Apply
         </button>
       </form>
-      <div className="overflow-x-auto rounded border border-[var(--border-subtle)]">
+      <div className="overflow-x-auto rounded border border-border-subtle">
         <table
           className="w-full table-fixed text-sm"
           data-testid="tickets-table"
         >
-          <thead className="bg-[var(--surface-elevated)] text-left text-xs uppercase text-[var(--foreground-muted)]">
+          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
             <tr>
               <th className="w-24 px-3 py-2">Ticket</th>
               <th className="w-44 px-3 py-2">User</th>
@@ -139,7 +139,7 @@ export default async function TicketsPage({
               <tr>
                 <td
                   colSpan={6}
-                  className="px-3 py-4 text-center text-[var(--foreground-muted)]"
+                  className="px-3 py-4 text-center text-foreground-muted"
                 >
                   No tickets.
                 </td>
@@ -148,7 +148,7 @@ export default async function TicketsPage({
               result.tickets.map((t) => (
                 <tr
                   key={t.ticketId}
-                  className="border-t border-[var(--border-subtle)]"
+                  className="border-t border-border-subtle"
                   data-testid={`tickets-row-${t.ticketId}`}
                 >
                   <td className="px-3 py-2 font-medium">
@@ -157,7 +157,7 @@ export default async function TicketsPage({
                         pathname: '/admin/tickets',
                         query: { ...params, ticket: t.ticketId },
                       }}
-                      className="text-[var(--accent)] hover:underline"
+                      className="text-accent hover:underline"
                       data-testid={`tickets-open-${t.ticketId}`}
                     >
                       {t.ticketId}
@@ -183,7 +183,7 @@ export default async function TicketsPage({
                           return t.name;
                         })()}
                       </span>
-                      <span className="truncate text-xs text-[var(--foreground-muted)]">
+                      <span className="truncate text-xs text-foreground-muted">
                         {(() => {
                           const looksLikeClerkId = t.userId.startsWith('user_');
                           if (
@@ -197,7 +197,7 @@ export default async function TicketsPage({
                         })()}
                       </span>
                       {t.userId === 'anonymous' ? (
-                        <span className="mt-1 rounded bg-[var(--warning)]/10 px-1 py-0.5 text-[10px] text-[var(--warning)]">
+                        <span className="mt-1 rounded bg-warning/10 px-1 py-0.5 text-[10px] text-warning">
                           (anonymous)
                         </span>
                       ) : null}
@@ -207,7 +207,7 @@ export default async function TicketsPage({
                     {t.issue}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs">
-                    <span className="rounded bg-[var(--surface-elevated)] px-2 py-0.5 text-[var(--foreground)]">
+                    <span className="rounded bg-surface-elevated px-2 py-0.5 text-foreground">
                       {t.status}
                     </span>
                   </td>
@@ -232,7 +232,7 @@ export default async function TicketsPage({
         total={result.total}
         pathname="/admin/tickets"
         query={{ status, assignee, q: search }}
-        linkClassName="rounded border border-[var(--border)] px-3 py-1 text-[var(--foreground-muted)] hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+        linkClassName="rounded border border-border px-3 py-1 text-foreground-muted hover:bg-surface-elevated hover:text-foreground"
       />
     </section>
   );

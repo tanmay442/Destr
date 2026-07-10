@@ -36,38 +36,38 @@ export function TicketDrawer({
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
   return (
     <div
-      className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4 text-sm"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-surface-elevated p-4 text-sm"
       data-testid={`ticket-drawer-body-${ticketId}`}
     >
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
           Name
         </span>
-        <div className="mt-0.5 text-[var(--foreground)]">{name}</div>
+        <div className="mt-0.5 text-foreground">{name}</div>
       </div>
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
           Email
         </span>
-        <div className="mt-0.5 text-[var(--foreground)]">{email}</div>
+        <div className="mt-0.5 text-foreground">{email}</div>
       </div>
       <div>
-        <span className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+        <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
           Issue
         </span>
-        <div className="mt-0.5 whitespace-pre-wrap text-[var(--foreground)]">
+        <div className="mt-0.5 whitespace-pre-wrap text-foreground">
           {issue}
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-1 flex-col gap-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+          <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
             Status
           </span>
           <select
             value={currentStatus}
             onChange={(e) => setCurrentStatus(e.target.value)}
-            className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-sm text-[var(--foreground)]"
+            className="rounded-xl border border-border bg-background px-2 py-1.5 text-sm text-foreground"
             data-testid={`ticket-status-${ticketId}`}
           >
             <option value={currentStatus}>{currentStatus}</option>
@@ -79,13 +79,13 @@ export function TicketDrawer({
           </select>
         </label>
         <label className="flex flex-1 flex-col gap-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+          <span className="text-xs font-medium uppercase tracking-wide text-foreground-muted">
             Assignee
           </span>
           <select
             value={currentAssignee}
             onChange={(e) => setCurrentAssignee(e.target.value)}
-            className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-sm text-[var(--foreground)]"
+            className="rounded-xl border border-border bg-background px-2 py-1.5 text-sm text-foreground"
             data-testid={`ticket-assignee-${ticketId}`}
           >
             <option value="">—</option>
@@ -109,7 +109,7 @@ export function TicketDrawer({
               if (res.error) setError(res.error);
             })
           }
-          className="rounded-xl bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
+          className="rounded-xl bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover disabled:opacity-50"
           data-testid={`ticket-save-${ticketId}`}
         >
           {pending ? 'Saving…' : 'Save'}
@@ -118,7 +118,7 @@ export function TicketDrawer({
       <div className="flex flex-col gap-1">
         <label
           htmlFor={`ticket-note-${ticketId}`}
-          className="text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]"
+          className="text-xs font-medium uppercase tracking-wide text-foreground-muted"
         >
           Add note
         </label>
@@ -127,7 +127,7 @@ export function TicketDrawer({
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={3}
-          className="rounded-xl border border-[var(--border)] bg-[var(--background)] p-2 text-sm text-[var(--foreground)]"
+          className="rounded-xl border border-border bg-background p-2 text-sm text-foreground"
           data-testid={`ticket-note-${ticketId}`}
         />
         <button
@@ -144,7 +144,7 @@ export function TicketDrawer({
               }
             })
           }
-          className="self-start rounded-xl border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground-muted)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--foreground)] disabled:opacity-50"
+          className="self-start rounded-xl border border-border px-3 py-1.5 text-sm text-foreground-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-50"
           data-testid={`ticket-add-note-${ticketId}`}
         >
           {pending ? 'Posting…' : 'Post note'}
@@ -152,20 +152,20 @@ export function TicketDrawer({
       </div>
       {notes ? (
         <div
-          className="rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 text-sm"
+          className="rounded-xl border border-border bg-background p-3 text-sm"
           data-testid={`ticket-notes-${ticketId}`}
         >
-          <span className="mt-1 text-xs font-medium uppercase tracking-wide text-[var(--foreground-muted)]">
+          <span className="mt-1 text-xs font-medium uppercase tracking-wide text-foreground-muted">
             Notes
           </span>
-          <div className="mt-1 whitespace-pre-wrap text-[var(--foreground)]">
+          <div className="mt-1 whitespace-pre-wrap text-foreground">
             {notes}
           </div>
         </div>
       ) : null}
       {error ? (
         <div
-          className="rounded-xl border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-3 text-sm text-[var(--danger)]"
+          className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger"
           role="alert"
         >
           {error}

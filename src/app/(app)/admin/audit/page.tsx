@@ -36,7 +36,7 @@ export default async function AuditPage({
           name="documentId"
           defaultValue={documentId ?? ''}
           placeholder="Document id"
-          className="w-32 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-subtle)]"
+          className="w-32 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
         />
         <label className="sr-only" htmlFor="audit-ticketId">
           Ticket id
@@ -47,18 +47,18 @@ export default async function AuditPage({
           name="ticketId"
           defaultValue={ticketId ?? ''}
           placeholder="Ticket id (TKT-1001)"
-          className="w-48 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-subtle)]"
+          className="w-48 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-subtle"
         />
         <button
           type="submit"
-          className="rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent-hover)]"
+          className="rounded-xl bg-accent px-3 py-2 text-sm font-medium text-accent-foreground transition-colors hover:bg-accent-hover"
         >
           Filter
         </button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm" data-testid="audit-table" aria-label="Audit events">
-          <thead className="bg-[var(--surface-elevated)] text-left text-xs uppercase text-[var(--foreground-muted)]">
+          <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
             <tr>
               <th className="px-3 py-2">When</th>
               <th className="px-3 py-2">Kind</th>
@@ -72,7 +72,7 @@ export default async function AuditPage({
               <tr>
                 <td
                   colSpan={5}
-                  className="px-3 py-4 text-center text-[var(--foreground-muted)]"
+                  className="px-3 py-4 text-center text-foreground-muted"
                 >
                   No audit events.
                 </td>
@@ -81,23 +81,23 @@ export default async function AuditPage({
               result.events.map((e) => (
                 <tr
                   key={`${e.kind}-${e.id}`}
-                  className="border-t border-[var(--border-subtle)] hover:bg-[var(--surface-elevated)]/40"
+                  className="border-t border-border-subtle hover:bg-surface-elevated/40"
                 >
-                  <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--foreground-muted)]">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-foreground-muted">
                     {e.at.toISOString()}
                   </td>
-                  <td className="px-3 py-2 text-xs text-[var(--foreground)]">
+                  <td className="px-3 py-2 text-xs text-foreground">
                     {e.kind}
                   </td>
-                  <td className="px-3 py-2 text-xs font-medium text-[var(--foreground)]">
+                  <td className="px-3 py-2 text-xs font-medium text-foreground">
                     {e.action}
                   </td>
-                  <td className="px-3 py-2 text-xs text-[var(--foreground-muted)]">
+                  <td className="px-3 py-2 text-xs text-foreground-muted">
                     {e.kind === 'document'
                       ? `document #${e.documentId}`
                       : e.ticketId}
                   </td>
-                  <td className="px-3 py-2 text-xs text-[var(--foreground-muted)]">
+                  <td className="px-3 py-2 text-xs text-foreground-muted">
                     {e.actorName ?? e.actorId}
                   </td>
                 </tr>

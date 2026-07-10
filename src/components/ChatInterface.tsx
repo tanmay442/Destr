@@ -87,7 +87,7 @@ export function ChatInterface() {
 
   return (
     <div
-      className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface)]/40"
+      className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border-subtle bg-surface/40"
       data-testid="chat-frame"
     >
       <div
@@ -103,7 +103,7 @@ export function ChatInterface() {
             <div className="flex flex-col items-start gap-3">
               <span
                 aria-hidden
-                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] ring-1 ring-inset ring-[var(--accent)]/30"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-accent/15 text-accent ring-1 ring-inset ring-accent/30"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -118,14 +118,14 @@ export function ChatInterface() {
                 </svg>
               </span>
               <div className="flex flex-col gap-1.5">
-                <p className="text-[15px] font-semibold text-[var(--foreground)]">
+                <p className="text-[15px] font-semibold text-foreground">
                   Hi! I&apos;m the support assistant.
                 </p>
-                <p className="text-sm leading-relaxed text-[var(--foreground-muted)]">
+                <p className="text-sm leading-relaxed text-foreground-muted">
                   Ask a question about your docs and I&apos;ll search the
                   official documentation and cite the source I used.
                 </p>
-                <p className="text-sm leading-relaxed text-[var(--foreground-muted)]">
+                <p className="text-sm leading-relaxed text-foreground-muted">
                   If I can&apos;t find an answer, just ask me to file a support
                   ticket and I&apos;ll get one started for you.
                 </p>
@@ -133,7 +133,7 @@ export function ChatInterface() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--foreground-subtle)]">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
                 Try one of these
               </span>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -145,14 +145,14 @@ export function ChatInterface() {
                       setInput(q.text);
                       composerRef.current?.focus();
                     }}
-                    className="group flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)]/70 px-3.5 py-2.5 text-left text-sm text-[var(--foreground-muted)] transition-all duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:border-[var(--border)] hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+                    className="group flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface/70 px-3.5 py-2.5 text-left text-sm text-foreground-muted transition-all duration-150 ease-out-quart hover:border-border hover:bg-surface-elevated hover:text-foreground"
                     data-testid="chat-quick-prompt"
                   >
                     <span className="flex flex-col gap-0.5">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--foreground-subtle)]">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">
                         {q.label}
                       </span>
-                      <span className="text-[13px] leading-snug text-[var(--foreground-muted)] group-hover:text-[var(--foreground)]">
+                      <span className="text-[13px] leading-snug text-foreground-muted group-hover:text-foreground">
                         {q.text}
                       </span>
                     </span>
@@ -163,7 +163,7 @@ export function ChatInterface() {
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className="h-3.5 w-3.5 shrink-0 text-[var(--foreground-faint)] transition-transform duration-[var(--dur-fast)] group-hover:translate-x-0.5 group-hover:text-[var(--foreground-muted)]"
+                      className="h-3.5 w-3.5 shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground-muted"
                       aria-hidden
                     >
                       <path d="M5 12h14" />
@@ -198,8 +198,8 @@ export function ChatInterface() {
               <span
                 className={
                   isUser
-                    ? 'text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--foreground-subtle)]'
-                    : 'text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--accent)]'
+                    ? 'text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground-subtle'
+                    : 'text-[10px] font-semibold uppercase tracking-[0.14em] text-accent'
                 }
               >
                 {isUser ? 'You' : 'Assistant'}
@@ -209,7 +209,7 @@ export function ChatInterface() {
                   return isUser ? (
                     <div
                       key={i}
-                      className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[var(--accent)] px-4 py-2.5 text-sm leading-relaxed text-[var(--accent-foreground)] shadow-sm"
+                      className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm leading-relaxed text-accent-foreground shadow-sm"
                       data-testid="chat-text"
                     >
                       {part.text}
@@ -217,7 +217,7 @@ export function ChatInterface() {
                   ) : (
                     <div
                       key={i}
-                      className="chat-markdown max-w-[90%] rounded-2xl rounded-bl-md border border-[var(--border-subtle)] bg-[var(--surface-elevated)]/80 px-4 py-3 text-[14.5px] leading-relaxed text-[var(--foreground)] shadow-sm"
+                      className="chat-markdown max-w-[90%] rounded-2xl rounded-bl-md border border-border-subtle bg-surface-elevated/80 px-4 py-3 text-[14.5px] leading-relaxed text-foreground shadow-sm"
                       data-testid="chat-text"
                     >
                       <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
@@ -236,18 +236,18 @@ export function ChatInterface() {
                     const simPct = Math.round(sim * 100);
                     const simTone =
                       sim >= 0.8
-                        ? 'var(--success)'
+                        ? 'oklch(0.78 0.16 155)'
                         : sim >= 0.6
-                          ? 'var(--accent)'
-                          : 'var(--warning)';
+                          ? 'oklch(0.78 0.14 196)'
+                          : 'oklch(0.82 0.15 80)';
                     return (
                       <div
                         key={i}
-                        className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-sunken)]/70 p-3 shadow-sm"
+                        className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/70 p-3 shadow-sm"
                         data-testid="chat-citation"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--foreground-subtle)]">
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
                             <svg
                               viewBox="0 0 24 24"
                               fill="none"
@@ -275,7 +275,7 @@ export function ChatInterface() {
                           </span>
                         </div>
                         <div
-                          className="h-1 w-full overflow-hidden rounded-full bg-[var(--surface-elevated)]"
+                          className="h-1 w-full overflow-hidden rounded-full bg-surface-elevated"
                           aria-hidden
                         >
                           <div
@@ -286,7 +286,7 @@ export function ChatInterface() {
                             }}
                           />
                         </div>
-                        <p className="line-clamp-4 text-[12.5px] leading-relaxed text-[var(--foreground-muted)]">
+                        <p className="line-clamp-4 text-[12.5px] leading-relaxed text-foreground-muted">
                           {c.data.snippet}
                         </p>
                       </div>
@@ -300,19 +300,19 @@ export function ChatInterface() {
 
         {isStreaming && (
           <div
-            className="flex items-center gap-2 self-start rounded-full border border-[var(--border-subtle)] bg-[var(--surface)]/80 px-2.5 py-1 text-xs text-[var(--foreground-muted)]"
+            className="flex items-center gap-2 self-start rounded-full border border-border-subtle bg-surface/80 px-2.5 py-1 text-xs text-foreground-muted"
             data-testid="chat-streaming"
           >
             <span className="flex gap-1" aria-hidden>
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)] [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)] [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" />
             </span>
             <span>Generating</span>
             <button
               type="button"
               onClick={() => stop()}
-              className="ml-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[var(--foreground-subtle)] transition-colors hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+              className="ml-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-foreground-subtle transition-colors hover:bg-surface-elevated hover:text-foreground"
             >
               Stop
             </button>
@@ -321,7 +321,7 @@ export function ChatInterface() {
 
         {error && (
           <div
-            className="flex items-start gap-2.5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/10 p-3 text-sm text-[var(--danger)]"
+            className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
             role="alert"
             data-testid="chat-error"
           >
@@ -347,7 +347,7 @@ export function ChatInterface() {
                     : error.message || 'Something went wrong.'
                   : 'Something went wrong.'}
               </span>
-              <span className="text-[12px] text-[var(--danger)]/80">
+              <span className="text-[12px] text-danger/80">
                 {error instanceof Error && error.name === 'AbortError'
                   ? ''
                   : 'Try again in a moment.'}
@@ -359,7 +359,7 @@ export function ChatInterface() {
 
       <form
         onSubmit={onSubmit}
-        className="group/composer flex shrink-0 items-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--surface)]/60 p-2 backdrop-blur-md transition-colors duration-[var(--dur-fast)] focus-within:border-[var(--accent)]/60"
+        className="group/composer flex shrink-0 items-end gap-2 border-t border-border-subtle bg-surface/60 p-2 backdrop-blur-md transition-colors duration-150 focus-within:border-accent/60"
         data-testid="chat-composer"
       >
         <textarea
@@ -370,14 +370,14 @@ export function ChatInterface() {
           disabled={isStreaming}
           placeholder="Type your question…"
           rows={1}
-          className="min-h-[40px] max-h-[160px] flex-1 resize-none rounded-xl bg-transparent px-3 py-2 text-sm leading-relaxed text-[var(--foreground)] placeholder:text-[var(--foreground-subtle)] focus:outline-none disabled:opacity-60"
+          className="min-h-[40px] max-h-[160px] flex-1 resize-none rounded-xl bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus:outline-none disabled:opacity-60"
           data-testid="chat-input"
         />
         <button
           type="submit"
           disabled={isStreaming || !input.trim()}
           aria-label={isStreaming ? 'Stop generating' : 'Send message'}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-foreground)] transition-all duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:bg-[var(--accent-hover)] active:bg-[var(--accent-pressed)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground transition-all duration-150 ease-out-quart hover:bg-accent-hover active:bg-accent-pressed disabled:cursor-not-allowed disabled:opacity-40"
           data-testid="chat-send"
         >
           {isStreaming ? (

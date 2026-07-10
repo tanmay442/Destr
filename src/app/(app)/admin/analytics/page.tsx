@@ -11,7 +11,7 @@ export default async function AnalyticsPage() {
   return (
     <section className="flex flex-col gap-6">
       <h2 className="text-xl font-medium">Analytics</h2>
-      <p className="text-xs text-[var(--foreground-muted)]">
+      <p className="text-xs text-foreground-muted">
         The &quot;top queries&quot; counter is in-process; values reset on cold
         start and only count queries made since the most recent deploy.
       </p>
@@ -25,15 +25,15 @@ export default async function AnalyticsPage() {
       <div className="flex flex-col gap-2">
         <h3 className="text-lg font-medium">Top queries</h3>
         {summary.topQueries.length === 0 ? (
-          <p className="text-sm text-[var(--foreground-muted)]">No queries yet.</p>
+          <p className="text-sm text-foreground-muted">No queries yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+          <div className="overflow-x-auto rounded-xl border border-border">
             <table
               className="w-full text-sm"
               data-testid="analytics-top-queries"
               aria-label="Top queries"
             >
-              <thead className="bg-[var(--surface-elevated)] text-left text-xs uppercase text-[var(--foreground-muted)]">
+              <thead className="bg-surface-elevated text-left text-xs uppercase text-foreground-muted">
                 <tr>
                   <th className="px-3 py-2">Query</th>
                   <th className="px-3 py-2 text-right">Count</th>
@@ -43,10 +43,10 @@ export default async function AnalyticsPage() {
                 {summary.topQueries.map((q) => (
                   <tr
                     key={q.q}
-                    className="border-t border-[var(--border-subtle)]"
+                    className="border-t border-border-subtle"
                   >
-                    <td className="px-3 py-2 text-[var(--foreground)]">{q.q}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right text-[var(--foreground-muted)]">
+                    <td className="px-3 py-2 text-foreground">{q.q}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-foreground-muted">
                       {q.count}
                     </td>
                   </tr>

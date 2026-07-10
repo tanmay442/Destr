@@ -99,12 +99,12 @@ export function AppSidebar({
   return (
     <>
       <header
-        className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--background)]/85 px-4 backdrop-blur-md md:hidden"
+        className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border-subtle bg-background/85 px-4 backdrop-blur-md md:hidden"
         data-testid="app-mobile-topbar"
       >
         <Link
           href="/chat"
-          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-[var(--foreground)]"
+          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
           data-testid="app-mobile-brand"
         >
           <BrandMark size="sm" />
@@ -117,7 +117,7 @@ export function AppSidebar({
           aria-expanded={mobileOpen}
           aria-controls="app-mobile-drawer"
           onClick={() => setMobileOpen(true)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)]/90 text-[var(--foreground)] shadow-sm transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-elevated)]"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border-subtle bg-surface/90 text-foreground shadow-sm transition-colors duration-150 hover:bg-surface-elevated"
           data-testid="app-mobile-hamburger"
         >
           <Menu className="h-4 w-4" aria-hidden />
@@ -125,7 +125,7 @@ export function AppSidebar({
       </header>
 
       <aside
-        className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-[var(--border-subtle)] md:bg-[var(--surface)]/60 md:backdrop-blur-md"
+        className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-border-subtle md:bg-surface/60 md:backdrop-blur-md"
         data-testid="app-sidebar"
       >
         <SidebarBody
@@ -154,17 +154,17 @@ export function AppSidebar({
             role="dialog"
             aria-modal="true"
             aria-label="Navigation"
-            className="absolute inset-y-0 left-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-[var(--border-subtle)] bg-[var(--surface)] p-4 shadow-2xl"
+            className="absolute inset-y-0 left-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-surface p-4 shadow-2xl"
           >
             <div className="mb-3 flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--foreground-subtle)]">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
                 Menu
               </span>
               <button
                 type="button"
                 aria-label="Close navigation"
                 onClick={() => setMobileOpen(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--foreground-muted)] transition-colors hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground-muted transition-colors hover:bg-surface-elevated hover:text-foreground"
               >
                 <X className="h-4 w-4" aria-hidden />
               </button>
@@ -203,10 +203,10 @@ function SidebarBody({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center border-b border-[var(--border-subtle)] px-4">
+      <div className="flex h-14 items-center border-b border-border-subtle px-4">
         <Link
           href="/chat"
-          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-[var(--foreground)]"
+          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
           data-testid="app-sidebar-brand"
         >
           <BrandMark size="sm" />
@@ -230,10 +230,10 @@ function SidebarBody({
               onClick={toggleAdmin}
               aria-expanded={adminOpen}
               className={[
-                'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-[var(--dur-fast)]',
+                'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150',
                 isActive('/admin')
-                  ? 'bg-[var(--surface-elevated)] text-[var(--foreground)]'
-                  : 'text-[var(--foreground-muted)] hover:bg-[var(--surface)] hover:text-[var(--foreground)]',
+                  ? 'bg-surface-elevated text-foreground'
+                  : 'text-foreground-muted hover:bg-surface hover:text-foreground',
               ].join(' ')}
               data-testid="app-sidebar-admin-toggle"
             >
@@ -244,7 +244,7 @@ function SidebarBody({
               <span className="flex-1 text-left">Admin</span>
               <ChevronRight
                 className={[
-                  'h-3.5 w-3.5 text-[var(--foreground-subtle)] transition-transform duration-[var(--dur-base)]',
+                  'h-3.5 w-3.5 text-foreground-subtle transition-transform duration-200',
                   adminOpen ? 'rotate-90' : '',
                 ].join(' ')}
                 aria-hidden
@@ -253,7 +253,7 @@ function SidebarBody({
 
             {adminOpen ? (
               <ul
-                className="mt-1 ml-4 flex flex-col border-l border-[var(--border-subtle)] pl-3"
+                className="mt-1 ml-4 flex flex-col border-l border-border-subtle pl-3"
                 data-testid="app-sidebar-admin-list"
               >
                 {ADMIN_LINKS.map((link) => {
@@ -263,17 +263,17 @@ function SidebarBody({
                       <Link
                         href={link.href}
                         className={[
-                          'flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-colors duration-[var(--dur-fast)]',
+                          'flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-colors duration-150',
                           isActive(link.href)
-                            ? 'bg-[var(--surface-elevated)] text-[var(--foreground)]'
-                            : 'text-[var(--foreground-muted)] hover:bg-[var(--surface)] hover:text-[var(--foreground)]',
+                            ? 'bg-surface-elevated text-foreground'
+                            : 'text-foreground-muted hover:bg-surface hover:text-foreground',
                         ].join(' ')}
                         data-testid={`app-sidebar-admin-${link.label
                           .toLowerCase()
                           .replace(/\s+/g, '-')}`}
                       >
                         <Icon
-                          className="h-3.5 w-3.5 shrink-0 text-[var(--foreground-subtle)]"
+                          className="h-3.5 w-3.5 shrink-0 text-foreground-subtle"
                           aria-hidden
                         />
                         <span>{link.label}</span>
@@ -287,7 +287,7 @@ function SidebarBody({
         ) : null}
       </nav>
 
-      <div className="border-t border-[var(--border-subtle)] p-3">
+      <div className="border-t border-border-subtle p-3">
         {user ? (
           <div
             className="flex items-center gap-2.5 rounded-lg px-2 py-2"
@@ -298,23 +298,23 @@ function SidebarBody({
               <img
                 src={user.imageUrl}
                 alt={user.name ?? 'User avatar'}
-                className="h-8 w-8 shrink-0 rounded-full ring-1 ring-[var(--border-subtle)]"
+                className="h-8 w-8 shrink-0 rounded-full ring-1 ring-border-subtle"
               />
             ) : (
               <span
                 aria-hidden
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-elevated)] text-xs font-semibold text-[var(--foreground)]"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-elevated text-xs font-semibold text-foreground"
               >
                 {(user.name ?? '?').charAt(0).toUpperCase()}
               </span>
             )}
-            <span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
               {user.name ?? user.email}
             </span>
             <button
               type="button"
               onClick={onSignOut}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-[var(--foreground-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-elevated)] hover:text-[var(--foreground)]"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-foreground-muted transition-colors duration-150 hover:bg-surface-elevated hover:text-foreground"
               data-testid="app-sidebar-sign-out"
             >
               <LogOut className="h-3 w-3" aria-hidden />
@@ -322,7 +322,7 @@ function SidebarBody({
             </button>
           </div>
         ) : (
-          <p className="px-2 py-1 text-xs text-[var(--foreground-subtle)]">
+          <p className="px-2 py-1 text-xs text-foreground-subtle">
             Not signed in
           </p>
         )}
@@ -348,10 +348,10 @@ function NavItem({
     <Link
       href={href}
       className={[
-        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-[var(--dur-fast)]',
+        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150',
         active
-          ? 'bg-[var(--surface-elevated)] text-[var(--foreground)]'
-          : 'text-[var(--foreground-muted)] hover:bg-[var(--surface)] hover:text-[var(--foreground)]',
+          ? 'bg-surface-elevated text-foreground'
+          : 'text-foreground-muted hover:bg-surface hover:text-foreground',
       ].join(' ')}
       data-testid={testId}
       aria-current={active ? 'page' : undefined}

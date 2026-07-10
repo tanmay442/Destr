@@ -32,7 +32,7 @@ export function RecountAllButton() {
           router.push(`/admin/documents?${next.toString()}`);
         })
       }
-      className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--surface-elevated)] disabled:opacity-50"
+      className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground transition-colors hover:bg-surface-elevated disabled:opacity-50"
       data-testid="documents-recount-all"
     >
       {pending ? 'Recounting…' : 'Recount all chunks'}
