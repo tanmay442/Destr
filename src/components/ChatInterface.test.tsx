@@ -104,13 +104,24 @@ describe('ChatInterface', () => {
     expect((input).value).toBe('');
   });
 
-  it('disables the send button while streaming', () => {
-    setupChat([], { status: 'streaming' });
+  it('stops generation when the stop button is clicked while streaming', async () => {
+    const stop = vi.fn();
+    useChatMock.mockReturnValue({
+      messages: [],
+      sendMessage: vi.fn(),
+      status: 'streaming',
+      error: undefined,
+      stop,
+    });
     render(<ChatInterface />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'q' } });
     expect(input).toBeDisabled();
-    expect(screen.getByTestId('chat-send')).toBeDisabled();
+    const button = screen.getByTestId('chat-send');
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAttribute('aria-label', 'Stop generating');
+    fireEvent.click(button);
+    await waitFor(() => expect(stop).toHaveBeenCalled());
   });
 
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {

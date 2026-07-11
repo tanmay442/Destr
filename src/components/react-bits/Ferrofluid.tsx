@@ -239,6 +239,7 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
   const rendererRef = useRef<Renderer | null>(null);
   const mouseTargetRef = useRef<[number, number]>([0, 0]);
   const lastTimeRef = useRef(0);
+  const isVisibleRef = useRef(true);
 
   const [reduced, setReduced] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia
@@ -347,39 +348,73 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
     }
 
     const frozen = paused || reduced;
+
+    const loop = (t: number) => {
+      rafRef.current = requestAnimationFrame(loop);
+      uniforms.iTime.value = t * 0.001;
+      if (mouseDampening > 0) {
+        if (!lastTimeRef.current) lastTimeRef.current = t;
+        const dt = (t - lastTimeRef.current) / 1000;
+        lastTimeRef.current = t;
+        const tau = Math.max(1e-4, mouseDampening);
+        let factor = 1 - Math.exp(-dt / tau);
+        if (factor > 1) factor = 1;
+        const target = mouseTargetRef.current;
+        const cur = uniforms.iMouse.value as number[];
+        cur[0] += (target[0] - cur[0]) * factor;
+        cur[1] += (target[1] - cur[1]) * factor;
+      } else {
+        lastTimeRef.current = t;
+      }
+      if (programRef.current && meshRef.current) {
+        try {
+          renderer.render({ scene: meshRef.current });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    };
+
+    const evaluateActivity = () => {
+      if (frozen) return;
+      const active =
+        isVisibleRef.current &&
+        (typeof document === 'undefined' || !document.hidden);
+      if (active) {
+        if (rafRef.current === null) rafRef.current = requestAnimationFrame(loop);
+      } else if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+
     if (frozen) {
       renderFrame();
     } else {
-      const loop = (t: number) => {
-        rafRef.current = requestAnimationFrame(loop);
-        uniforms.iTime.value = t * 0.001;
-        if (mouseDampening > 0) {
-          if (!lastTimeRef.current) lastTimeRef.current = t;
-          const dt = (t - lastTimeRef.current) / 1000;
-          lastTimeRef.current = t;
-          const tau = Math.max(1e-4, mouseDampening);
-          let factor = 1 - Math.exp(-dt / tau);
-          if (factor > 1) factor = 1;
-          const target = mouseTargetRef.current;
-          const cur = uniforms.iMouse.value as number[];
-          cur[0] += (target[0] - cur[0]) * factor;
-          cur[1] += (target[1] - cur[1]) * factor;
-        } else {
-          lastTimeRef.current = t;
-        }
-        if (programRef.current && meshRef.current) {
-          try {
-            renderer.render({ scene: meshRef.current });
-          } catch (e) {
-            console.error(e);
-          }
-        }
-      };
-      rafRef.current = requestAnimationFrame(loop);
+      evaluateActivity();
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        isVisibleRef.current = !!entry?.isIntersecting;
+        evaluateActivity();
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+
+    const onVisibility = () => evaluateActivity();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
     }
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+      io.disconnect();
       if (mouseInteraction) canvas.removeEventListener('pointermove', onPointerMove);
       ro.disconnect();
       if (canvas.parentElement === container) {

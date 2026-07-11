@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { warn } from './common';
 
 export interface SeedParseResult {
   dir: string;
@@ -70,6 +71,7 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
             findById: (id: number) => Db.findDocumentById(id),
             setStorageKey: (id: number, key: string) => Db.setDocumentStorageKey(id, key),
             updateIngestStatus: (id: number, status: 'queued' | 'ingesting' | 'done' | 'failed') => Db.updateDocumentIngestStatus(id, status),
+            claimIngest: (id: number) => Db.claimDocumentIngest(id),
             insert: (i: { fileName: string; fileHash: string; uploadedBy: string }) => Db.insertDocument(i),
             deleteById: (id: number) => Db.deleteDocumentById(id),
             softDelete: (id: number, at: Date) => Db.softDeleteDocument(id, at),
@@ -80,6 +82,7 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
           },
           chunks: {
             insertMany: (rows: Array<{ documentId: number; content: string; embedding: number[] }>) => Db.insertChunks(rows),
+            deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
             countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
             countForAll: () => Db.countChunksForAll(),
             countForDocument: (id: number) => Db.countChunksForDocument(id),
@@ -88,7 +91,7 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
           },
           embeddings: Llm.getEmbeddingService(),
           hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
-          pdfParser: Pdf.pdfParseParser,
+          pdfParser: Pdf.unpdfParser,
           textSplitter: Pdf.langchainSplitter,
         };
         return {
@@ -107,12 +110,18 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
     await Db.setDocumentStorageKey(documentId, key);
   });
   for (const name of files) {
-    const buffer = readFileSync(join(fixturesDir, name));
-    const result = await ingestFile({ fileName: name, buffer, uploadedBy: userId });
-    await storeBlob(result.documentId, buffer, name);
-    console.log(
-      `${name}: status=${result.status} documentId=${result.documentId} chunks=${result.chunks}`,
-    );
+    try {
+      const buffer = readFileSync(join(fixturesDir, name));
+      const result = await ingestFile({ fileName: name, buffer, uploadedBy: userId });
+      await storeBlob(result.documentId, buffer, name);
+      console.log(
+        `${name}: status=${result.status} documentId=${result.documentId} chunks=${result.chunks}`,
+      );
+    } catch (err: unknown) {
+      console.error(
+        `${name}: seed failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
 
@@ -121,7 +130,12 @@ import { isMainModule } from '../is-main-module';
 if (isMainModule()) {
   try {
     process.loadEnvFile('.env.local');
-  } catch {
+  } catch (err) {
+    if (existsSync('.env.local')) {
+      warn(
+        `Failed to load .env.local: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
   const HERE = dirname(fileURLToPath(import.meta.url));
   const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');

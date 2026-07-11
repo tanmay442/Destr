@@ -23,6 +23,12 @@ export const VALID_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = 
   closed: [],
 };
 
+const NOTE_CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+
+function sanitizeTicketNote(input: string): string {
+  return input.replace(NOTE_CONTROL_CHARS, '').replace(/\r\n/g, '\n').trim();
+}
+
 export async function listTickets(
   input: {
     status?: TicketStatus;
@@ -66,6 +72,7 @@ export async function updateTicket(
     if (!existing) return err(new NotFoundError('Ticket not found'));
     if (
       input.status &&
+      input.status !== existing.status &&
       isTicketStatus(existing.status) &&
       !VALID_TRANSITIONS[existing.status].includes(input.status)
     ) {
@@ -74,28 +81,24 @@ export async function updateTicket(
     const patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>> = {};
     if (input.status) patch.status = input.status;
     if (input.assignedTo !== undefined) patch.assignedTo = input.assignedTo;
-    if (input.note) {
-      const newNotes = existing.notes
-        ? (existing.notes + '\n' + input.note).slice(-MAX_TICKET_NOTES_LENGTH)
-        : input.note;
-      patch.notes = newNotes;
+    const note = input.note ? sanitizeTicketNote(input.note) : undefined;
+    if (note) {
+      const appended = existing.notes ? existing.notes + '\n' + note : note;
+      patch.notes = appended.slice(-MAX_TICKET_NOTES_LENGTH);
     }
     const updated = await deps.tickets.update(input.ticketId, patch);
     if (!updated) return err(new NotFoundError('Ticket not found'));
-    const auditAction = input.status
-      ? 'status_change'
-      : input.assignedTo !== undefined
-        ? 'assign'
-        : 'note';
-    void deps.audit
-      .logTicketEvent({
-        action: auditAction,
-        ticketId: input.ticketId,
-        actorId: input.actorId,
-      })
-      .catch((auditErr) => {
-        console.error('Audit logging failed:', auditErr);
-      });
+    const auditActions: Array<'assign' | 'status_change' | 'note'> = [];
+    if (input.status && input.status !== existing.status) auditActions.push('status_change');
+    if (input.assignedTo !== undefined) auditActions.push('assign');
+    if (note) auditActions.push('note');
+    for (const action of auditActions) {
+      void deps.audit
+        .logTicketEvent({ action, ticketId: input.ticketId, actorId: input.actorId })
+        .catch((auditErr) => {
+          console.error(`Audit logging failed (action=${action}, ticket=${input.ticketId}):`, auditErr);
+        });
+    }
     return ok(updated);
   } catch (e) {
     return err(new ExternalServiceError('Failed to update ticket', e));
@@ -113,26 +116,31 @@ export async function createTicket(
   input: CreateTicketInput,
   deps: { tickets: TicketRepository; audit: AuditLog },
 ): Promise<Result<{ ticketId: string; status: 'created' }>> {
-  try {
+  const MAX_CREATE_ATTEMPTS = 5;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
     const ticketId = `TKT-${randomUUID().slice(0, 8)}`;
-    const row = await deps.tickets.insert({
-      ticketId,
-      userId: input.userId,
-      name: input.name,
-      email: input.email,
-      issue: input.issue,
-    });
-    void deps.audit
-      .logTicketEvent({
-        action: 'create',
-        ticketId: row.ticketId,
-        actorId: input.userId,
-      })
-      .catch((auditErr) => {
-        console.error('Audit logging failed:', auditErr);
+    try {
+      const row = await deps.tickets.insert({
+        ticketId,
+        userId: input.userId,
+        name: input.name,
+        email: input.email,
+        issue: input.issue,
       });
-    return ok({ ticketId: row.ticketId, status: 'created' as const });
-  } catch (e) {
-    return err(new ExternalServiceError('Failed to create ticket', e));
+      void deps.audit
+        .logTicketEvent({
+          action: 'create',
+          ticketId: row.ticketId,
+          actorId: input.userId,
+        })
+        .catch((auditErr) => {
+          console.error(`Audit logging failed (action=create, ticket=${row.ticketId}):`, auditErr);
+        });
+      return ok({ ticketId: row.ticketId, status: 'created' as const });
+    } catch (e) {
+      lastErr = e;
+    }
   }
+  return err(new ExternalServiceError('Failed to create ticket', lastErr));
 }

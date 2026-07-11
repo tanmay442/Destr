@@ -61,7 +61,7 @@ export function isActionError<T>(
 export function respond(err: Error | DomainError | Response | unknown): Response {
   if (err instanceof DomainError) {
     const headers: Record<string, string> = {};
-    if (err instanceof RateLimitedError) {
+    if (err instanceof RateLimitedError && Number.isFinite(err.retryAfterMs)) {
       headers['Retry-After'] = String(Math.ceil(err.retryAfterMs / 1000));
     }
     return Response.json(toErrorBody(err), { status: err.status, headers });

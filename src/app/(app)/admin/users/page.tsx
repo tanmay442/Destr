@@ -51,7 +51,7 @@ export default async function UsersPage({
         />
         <Button type="submit">Search</Button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border">
+      <div className="overflow-x-auto rounded-xl border border-border-subtle">
         <Table data-testid="users-table" aria-label="Users">
           <TableHeader className="bg-secondary text-muted-foreground">
             <TableRow>

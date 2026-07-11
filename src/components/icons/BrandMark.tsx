@@ -1,6 +1,4 @@
-// RAG Support brand mark: chat-bubble retrieval metaphor, strokeWidth 2.5 for 16px legibility. BrandMark = icon, BrandLogo = icon + wordmark.
-
-import Link from 'next/link';
+// RAG Support brand mark: chat-bubble retrieval metaphor, strokeWidth 2.5 for 16px legibility.
 
 interface BrandMarkProps {
   className?: string;
@@ -42,43 +40,6 @@ export function BrandMark({ className = '', size = 'sm' }: BrandMarkProps) {
       >
         <path d="M4 4h16v12H7l-3 4V4z" />
       </svg>
-    </span>
-  );
-}
-
-interface BrandLogoProps extends BrandMarkProps {
-  href?: string;
-  /** Override the wordmark text. Default "RAG Support". */
-  label?: string;
-}
-
-function BrandLogo({ href, label = 'RAG Support', size = 'sm', className = '' }: BrandLogoProps) {
-  const inner = (
-    <>
-      <BrandMark size={size} />
-      <span className="text-[15px] font-semibold tracking-tight text-foreground">
-        {label}
-      </span>
-    </>
-  );
-
-  if (href) {
-    return (
-      <Link
-        href={href}
-        className={['inline-flex items-center gap-2.5', className].join(' ')}
-        data-testid="brand-logo"
-      >
-        {inner}
-      </Link>
-    );
-  }
-  return (
-    <span
-      className={['inline-flex items-center gap-2.5', className].join(' ')}
-      data-testid="brand-logo"
-    >
-      {inner}
     </span>
   );
 }

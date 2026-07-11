@@ -1,5 +1,6 @@
 import { eq, desc, ilike, or, sql, inArray, isNull, and } from 'drizzle-orm';
 import { db } from './client';
+import { VECTOR_DIM } from './schema-vector';
 import {
   documents,
   chunks,
@@ -7,6 +8,7 @@ import {
   users,
   documentAudit,
   ticketAudit,
+  userAudit,
   type Document,
 } from './schema';
 import type { TicketRow, UserRow } from '@app/domain';
@@ -19,13 +21,25 @@ function whereAnd(parts: ReturnType<typeof eq>[]) {
   return and(...parts);
 }
 
-export async function findDocumentByName(name: string, client: Client = db): Promise<Document | null> {
-  const row = await client.query.documents.findFirst({ where: eq(documents.fileName, name) });
+export async function findDocumentByName(
+  name: string,
+  client: Client = db,
+  opts: { includeDeleted?: boolean } = {},
+): Promise<Document | null> {
+  const parts = [eq(documents.fileName, name)];
+  if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
+  const row = await client.query.documents.findFirst({ where: whereAnd(parts) });
   return (row as Document | undefined) ?? null;
 }
 
-export async function findDocumentById(id: number, client: Client = db): Promise<Document | null> {
-  const row = await client.query.documents.findFirst({ where: eq(documents.id, id) });
+export async function findDocumentById(
+  id: number,
+  client: Client = db,
+  opts: { includeDeleted?: boolean } = {},
+): Promise<Document | null> {
+  const parts = [eq(documents.id, id)];
+  if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
+  const row = await client.query.documents.findFirst({ where: whereAnd(parts) });
   return (row as Document | undefined) ?? null;
 }
 
@@ -33,7 +47,14 @@ export async function insertDocument(
   input: { fileName: string; fileHash: string; uploadedBy: string },
   client: Client = db,
 ): Promise<Document> {
-  const [row] = await client.insert(documents).values(input).returning();
+  const [row] = await client
+    .insert(documents)
+    .values(input)
+    .onConflictDoUpdate({
+      target: documents.fileName,
+      set: { fileHash: input.fileHash, uploadedBy: input.uploadedBy, deletedAt: null },
+    })
+    .returning();
   if (!row) throw new Error('Failed to insert document');
   return row as Document;
 }
@@ -54,6 +75,16 @@ export async function updateDocumentIngestStatus(
   await client.update(documents).set({ ingestStatus: status }).where(eq(documents.id, id));
 }
 
+/** Conditional claim: flips `queued`→`ingesting` atomically; true iff a row was updated. */
+export async function claimDocumentIngest(id: number, client: Client = db): Promise<boolean> {
+  const [row] = await client
+    .update(documents)
+    .set({ ingestStatus: 'ingesting' })
+    .where(and(eq(documents.id, id), eq(documents.ingestStatus, 'queued')))
+    .returning({ id: documents.id });
+  return row !== undefined;
+}
+
 export async function softDeleteDocument(id: number, at: Date, client: Client = db): Promise<Document | null> {
   const [row] = await client.update(documents).set({ deletedAt: at }).where(eq(documents.id, id)).returning();
   return (row as Document | null) ?? null;
@@ -72,12 +103,21 @@ export async function searchChunksByVector(
   if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every((v) => Number.isFinite(v))) {
     throw new Error('Invalid embedding: must be a non-empty array of finite numbers');
   }
+  if (embedding.length !== VECTOR_DIM) {
+    throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${embedding.length}`);
+  }
   const vectorLiteral = `[${embedding.join(',')}]`;
   const result = await client.execute(sql`
-    SELECT content, 1 - (embedding <=> ${vectorLiteral}::vector) AS similarity
-    FROM chunks
-    WHERE 1 - (embedding <=> ${vectorLiteral}::vector) > ${opts.threshold}
-    ORDER BY embedding <=> ${vectorLiteral}::vector
+    WITH matches AS (
+      SELECT c.content AS content, 1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
+      FROM chunks c
+      JOIN documents d ON d.id = c.document_id
+      WHERE d.deleted_at IS NULL
+    )
+    SELECT content, similarity
+    FROM matches
+    WHERE similarity > ${opts.threshold}
+    ORDER BY similarity DESC
     LIMIT ${opts.limit}
   `);
   const rows = (result as unknown as { rows?: Array<{ content: string; similarity: number }> })
@@ -90,10 +130,19 @@ export async function insertChunks(
   client: Client = db,
 ): Promise<void> {
   if (rows.length === 0) return;
+  for (const r of rows) {
+    if (r.embedding.length !== VECTOR_DIM) {
+      throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${r.embedding.length}`);
+    }
+  }
   const BATCH_SIZE = 500;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE));
   }
+}
+
+export async function deleteChunksByDocumentId(documentId: number, client: Client = db): Promise<void> {
+  await client.delete(chunks).where(eq(chunks.documentId, documentId));
 }
 
 export async function countChunksForDocuments(
@@ -143,6 +192,8 @@ export async function listDocuments(
   if (!opts.includeDeleted) whereParts.push(isNull(documents.deletedAt));
   if (opts.search) whereParts.push(ilike(documents.fileName, `%${opts.search.replace(/[%_]/g, '\\$&')}%`));
   const where = whereAnd(whereParts);
+  const limit = Math.min(Math.max(opts.limit, 1), 500);
+  const offset = Math.max(opts.offset, 0);
   const rows = await client
     .select({
       id: documents.id,
@@ -152,16 +203,18 @@ export async function listDocuments(
       uploadedAt: documents.uploadedAt,
       storageKey: documents.storageKey,
       ingestStatus: documents.ingestStatus,
-      hasBlob: sql<boolean>`${documents.storageKey} IS NOT NULL`.as('hasBlob'),
+      hasBlob: sql<boolean>`(${documents.storageKey} IS NOT NULL OR ${documents.blob} IS NOT NULL)`.as('hasBlob'),
       deletedAt: documents.deletedAt,
-      total: sql<number>`count(*) over()`.as('total'),
     })
     .from(documents)
     .where(where)
-    .orderBy(desc(documents.uploadedAt))
-    .limit(opts.limit)
-    .offset(opts.offset);
-  const total = rows[0]?.total ?? 0;
+    .orderBy(desc(documents.uploadedAt), desc(documents.id))
+    .limit(limit)
+    .offset(offset);
+  const total = (await client
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documents)
+    .where(where))[0]?.count ?? 0;
   return { documents: rows as unknown as Array<Document & { hasBlob: boolean }>, total };
 }
 
@@ -178,6 +231,7 @@ export const ticketRepo = {
     offset: number;
   }, client: Client = db): Promise<{ rows: TicketRow[]; total: number }> {
     const limit = Math.min(Math.max(opts.limit, 1), 500);
+    const offset = Math.max(opts.offset, 0);
     const whereParts = [] as ReturnType<typeof eq>[];
     if (opts.status) whereParts.push(eq(tickets.status, opts.status));
     if (opts.assignee !== undefined && opts.assignee !== null) {
@@ -197,14 +251,16 @@ export const ticketRepo = {
         assignedTo: tickets.assignedTo,
         notes: tickets.notes,
         createdAt: tickets.createdAt,
-        total: sql<number>`count(*) over()`.as('total'),
       })
       .from(tickets)
       .where(where)
-      .orderBy(desc(tickets.createdAt))
+      .orderBy(desc(tickets.createdAt), desc(tickets.id))
       .limit(limit)
-      .offset(opts.offset);
-    const total = rows[0]?.total ?? 0;
+      .offset(offset);
+    const total = (await client
+      .select({ count: sql<number>`count(*)::int` })
+      .from(tickets)
+      .where(where))[0]?.count ?? 0;
     return { rows: rows as unknown as TicketRow[], total };
   },
   async latest(client: Client = db): Promise<{ id: number; ticketId: string } | null> {
@@ -253,9 +309,9 @@ export const userRepo = {
         target: users.clerkUserId,
         set: {
           email: input.email,
-          name: input.name ?? null,
-          imageUrl: input.imageUrl ?? null,
           role: input.role,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
         },
       })
       .returning();
@@ -322,10 +378,16 @@ export const auditRepo = {
     await client.insert(documentAudit).values(input);
   },
   async logTicketEvent(
-    input: { action: 'create' | 'assign' | 'status_change' | 'note' | 'role_change'; ticketId: string; actorId: string },
+    input: { action: 'create' | 'assign' | 'status_change' | 'note' | 'impersonation' | 'role_change'; ticketId: string; actorId: string },
     client: Client = db,
   ): Promise<void> {
     await client.insert(ticketAudit).values(input);
+  },
+  async logUserEvent(
+    input: { targetUserId: string; actorId: string; fromRole: 'admin' | 'user'; toRole: 'admin' | 'user' },
+    client: Client = db,
+  ): Promise<void> {
+    await client.insert(userAudit).values(input);
   },
   async list(input: { documentId?: number; ticketId?: string; limit: number; offset: number }, client: Client = db): Promise<{
     events: Array<{
@@ -391,10 +453,11 @@ import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRe
 
 export function createDocumentRepo(client: Client): DocumentRepository {
   return {
-    findByName: (name) => findDocumentByName(name, client),
-    findById: (id) => findDocumentById(id, client),
+    findByName: (name, opts) => findDocumentByName(name, client, opts),
+    findById: (id, opts) => findDocumentById(id, client, opts),
     setStorageKey: (id, key) => setDocumentStorageKey(id, key, client),
     updateIngestStatus: (id, status) => updateDocumentIngestStatus(id, status, client),
+    claimIngest: (id) => claimDocumentIngest(id, client),
     insert: (input) => insertDocument(input, client),
     deleteById: (id) => deleteDocumentById(id, client),
     softDelete: (id, at) => softDeleteDocument(id, at, client),
@@ -409,6 +472,7 @@ export function createChunkRepo(client: Client): ChunkRepository {
   return {
     searchByVector: (embedding, opts) => searchChunksByVector(embedding, opts, client),
     insertMany: (rows) => insertChunks(rows, client),
+    deleteByDocumentId: (documentId) => deleteChunksByDocumentId(documentId, client),
     countForDocuments: (ids) => countChunksForDocuments(ids, client),
     countForAll: () => countChunksForAll(client),
     countForDocument: (id) => countChunksForDocument(id, client),
@@ -420,6 +484,7 @@ function createAuditRepo(client: Client): AuditLog {
   return {
     logDocumentEvent: (input) => auditRepo.logDocumentEvent(input, client),
     logTicketEvent: (input) => auditRepo.logTicketEvent(input, client),
+    logUserEvent: (input) => auditRepo.logUserEvent(input, client),
     list: (input) => auditRepo.list(input, client),
   };
 }

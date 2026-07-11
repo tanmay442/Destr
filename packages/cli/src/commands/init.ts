@@ -10,7 +10,8 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { type Interface } from 'node:readline';
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
+loadEnv({ path: '.env.local' });
 import {
   makeRl,
   ask,
@@ -80,7 +81,7 @@ export function upsertAdminEmails(envPath: string, emails: string[]): void {
     if (next.length > 0 && next[next.length - 1] !== '') next.push('');
     next.push(`ADMIN_EMAILS=${csv}`);
   }
-  writeFileSync(envPath, next.join('\n'));
+  writeFileSync(envPath, next.join('\n'), { mode: 0o600 });
 }
 
 import { appConfigSchema, type AppConfig } from '@app/domain';
@@ -92,7 +93,7 @@ const TONE_OPTIONS: ReadonlyArray<PromptOption<AppConfig['agentPersona']['tone']
   { value: 'concise', label: 'Concise', blurb: 'direct, minimal, one or two sentences' },
 ];
 
-import { banner, ok, warn, loadCurrentDefaults } from './common';
+import { banner, ok, warn, loadCurrentDefaults, getRepoRoot } from './common';
 
 export interface InitOptions {
   repoRoot: string;
@@ -309,13 +310,18 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const ENV_PATH = join(REPO_ROOT, '.env.local');
 
   const rl = makeRl();
-  const defaults = await loadCurrentDefaults(REPO_ROOT, CONFIG_PATH);
+  const defaults = await loadCurrentDefaults(CONFIG_PATH);
   let config: AppConfig = defaults;
 
   console.log('\n\x1b[1mRAG Support Agent — setup\x1b[0m');
   console.log('Press Enter to keep the current value shown in [brackets].\n');
 
-  const absSource = await runConfigPrompts(rl, config, REPO_ROOT);
+  const absSourceRaw = await runConfigPrompts(rl, config, REPO_ROOT);
+  let absSource = absSourceRaw;
+  if (absSource && (!existsSync(absSource) || readdirSync(absSource).length === 0)) {
+    absSource = '';
+    warn('No PDFs found in the seed directory. You can upload documents later via /admin/upload.');
+  }
   config = validateConfig(rl, config);
 
   const destDir = isAbsolute(config.seedDocsDir)
@@ -347,6 +353,8 @@ function jsonToTs(obj: unknown, indent = 2): string {
     if (typeof val === 'string') {
       const escaped = val
         .replace(/\\/g, '\\\\')
+        .replace(/`/g, '\\`')
+        .replace(/\$\{/g, '\\${')
         .replace(/"/g, '\\"')
         .replace(/\n/g, '\\n')
         .replace(/\r/g, '\\r')
@@ -375,14 +383,16 @@ function jsonToTs(obj: unknown, indent = 2): string {
 
 function renderConfigFile(config: AppConfig): string {
   const body = jsonToTs(config);
-  return `import type { AppConfig } from '@app/domain';
-
-// Runtime config. Edit fields or run \`pnpm configure\`. Validated on load.
-
-const config: AppConfig = ${body};
-
-export default config;
-`;
+  return [
+    "import type { AppConfig } from '@app/domain';",
+    '',
+    '// Runtime config. Edit fields or run `pnpm configure`. Validated on load.',
+    '',
+    'const config: AppConfig = ' + body + ';',
+    '',
+    'export default config;',
+    '',
+  ].join('\n');
 }
 
 function runSeedIfPossible(repoRoot: string, destDir: string): { ran: boolean; reason?: string } {
@@ -410,6 +420,5 @@ function runSeedIfPossible(repoRoot: string, destDir: string): { ran: boolean; r
 import { cliMain } from './common';
 
 cliMain(() => {
-  const repoRoot = process.cwd();
-  return runInit({ repoRoot });
+  return runInit({ repoRoot: getRepoRoot() });
 });

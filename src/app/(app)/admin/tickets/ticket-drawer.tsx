@@ -48,6 +48,17 @@ export function TicketDrawer({
   const [note, setNote] = useState('');
   const [currentStatus, setCurrentStatus] = useState(status);
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
+  const [prevStatus, setPrevStatus] = useState(status);
+  const [prevAssignee, setPrevAssignee] = useState(assignedTo ?? '');
+
+  if (status !== prevStatus) {
+    setPrevStatus(status);
+    setCurrentStatus(status);
+  }
+  if ((assignedTo ?? '') !== prevAssignee) {
+    setPrevAssignee(assignedTo ?? '');
+    setCurrentAssignee(assignedTo ?? '');
+  }
   return (
     <Card
       data-testid={`ticket-drawer-body-${ticketId}`}

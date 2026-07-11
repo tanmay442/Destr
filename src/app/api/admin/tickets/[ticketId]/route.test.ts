@@ -152,4 +152,10 @@ describe('PATCH /api/admin/tickets/[ticketId]', () => {
       expect.objectContaining({ assignedTo: 'user_2' }),
     );
   });
+
+  it('returns 400 for an empty/malformed ticketId', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    const res = await route.PATCH(makeReq({ status: 'closed' }), makeParams(''));
+    expect(res.status).toBe(400);
+  });
 });

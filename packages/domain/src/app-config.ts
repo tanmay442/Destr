@@ -60,7 +60,7 @@ export const appConfigSchema = z.object({
           'Decline politely. This assistant is for this product only.',
       },
     ]),
-  adminEmails: z.array(z.string().email()).default([]),
+  adminEmails: z.array(z.email()).default([]),
   branding: z
     .object({
       title: z.string().min(1).default('RAG Support'),

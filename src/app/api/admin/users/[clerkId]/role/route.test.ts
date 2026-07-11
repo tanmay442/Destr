@@ -105,4 +105,12 @@ describe('POST /api/admin/users/[clerkId]/role', () => {
       user: { clerkUserId: 'user_1', role: 'user' },
     });
   });
+
+  it('returns 400 for an empty/malformed clerkId', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x', name: 'A', role: 'admin' },
+    });
+    const res = await route.POST(makeReq({ role: 'admin' }), makeParams(''));
+    expect(res.status).toBe(400);
+  });
 });

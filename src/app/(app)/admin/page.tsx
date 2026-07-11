@@ -18,8 +18,12 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminOverviewPage() {
   const comp = getComposition();
-  const summary = unwrap(await comp.getAnalyticsSummary());
-  const audit = unwrap(await comp.listAudit({ limit: 10 }));
+  const [summaryRes, auditRes] = await Promise.all([
+    comp.getAnalyticsSummary(),
+    comp.listAudit({ limit: 10 }),
+  ]);
+  const summary = unwrap(summaryRes);
+  const audit = unwrap(auditRes);
 
   const openTickets = summary.openTicketCount;
   const resolvedTickets = Math.max(0, summary.ticketCount - openTickets);

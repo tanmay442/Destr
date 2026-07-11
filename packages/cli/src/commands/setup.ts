@@ -8,7 +8,8 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { type Interface } from 'node:readline';
 import pg from 'pg';
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
+loadEnv({ path: '.env.local' });
 
 import {
   makeRl,
@@ -26,6 +27,7 @@ import {
   warn,
   fail,
   loadCurrentDefaults,
+  getRepoRoot,
 } from './common';
 import {
   type AppConfig,
@@ -34,21 +36,42 @@ import { Llm } from '@app/infrastructure';
 
 const { Pool } = pg;
 
-function readEnvFile(envPath: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!existsSync(envPath)) return result;
-  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
-    const m = line.match(/^(\w+)\s*=\s*(.+)$/);
-    if (m) result[m[1]] = m[2];
+function readEnvFile(envPath: string): { vars: Record<string, string>; lines: string[] } {
+  const lines = existsSync(envPath)
+    ? readFileSync(envPath, 'utf8').split(/\r?\n/)
+    : [];
+  const vars: Record<string, string> = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([^=\s][^=]*?)\s*=\s*(.*)$/);
+    if (m) vars[m[1]!] = m[2]!;
   }
-  return result;
+  return { vars, lines };
 }
 
-function writeEnvFile(envPath: string, vars: Record<string, string>): void {
-  const lines = Object.entries(vars)
-    .filter(([, v]) => v !== '')
-    .map(([k, v]) => `${k}=${v}`);
-  writeFileSync(envPath, lines.join('\n') + '\n', { mode: 0o600 });
+function writeEnvFile(
+  envPath: string,
+  vars: Record<string, string>,
+  existingLines: string[],
+): void {
+  const updated = new Set<string>();
+  const out: string[] = [];
+  for (const line of existingLines) {
+    const m = line.match(/^\s*([^=\s][^=]*?)\s*=/);
+    const key = m?.[1];
+    if (key && vars[key] !== undefined && vars[key] !== '') {
+      out.push(`${key}=${vars[key]}`);
+      updated.add(key);
+    } else {
+      out.push(line);
+    }
+  }
+  for (const [k, v] of Object.entries(vars)) {
+    if (v === '' || updated.has(k)) continue;
+    out.push(`${k}=${v}`);
+  }
+  const existed = existsSync(envPath);
+  writeFileSync(envPath, out.join('\n') + (out.length ? '\n' : ''), { mode: 0o600 });
+  if (existed) warn(`Updated existing ${envPath} (unrecognized lines preserved).`);
 }
 
 function applyToProcess(vars: Record<string, string>): void {
@@ -58,8 +81,41 @@ function applyToProcess(vars: Record<string, string>): void {
 }
 
 async function askSecret(rl: Interface, question: string, existing: string): Promise<string> {
-  const answer = await ask(rl, `${question} [hidden]`, '');
-  return answer === '' ? existing : answer;
+  const suffix = existing ? ' [press Enter to keep existing]' : '';
+  process.stdout.write(`${question}${suffix}: `);
+  const stdin = process.stdin;
+  rl.pause();
+  stdin.setRawMode?.(true);
+  stdin.resume();
+  return new Promise<string>((resolve) => {
+    let value = '';
+    const onData = (buf: Buffer) => {
+      const chunk = buf.toString('utf8');
+      for (const ch of chunk) {
+        if (ch === '\n' || ch === '\r' || ch === '\u0004') {
+          stdin.setRawMode?.(false);
+          stdin.removeListener('data', onData);
+          rl.resume();
+          process.stdout.write('\n');
+          resolve(value === '' ? existing : value);
+          return;
+        }
+        if (ch === '\u0003') {
+          stdin.setRawMode?.(false);
+          stdin.removeListener('data', onData);
+          rl.resume();
+          process.stdout.write('\n');
+          process.exit(1);
+        }
+        if (ch === '\u007f' || ch === '\b') {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += ch;
+      }
+    };
+    stdin.on('data', onData);
+  });
 }
 
 
@@ -89,11 +145,26 @@ function promptPrereqs(repoRoot: string): boolean {
 }
 
 
+function dbSslOptions(url: string): { rejectUnauthorized: boolean } {
+  let hostname = '';
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return { rejectUnauthorized: true };
+  }
+  const isLocal =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    process.env.NODE_ENV === 'development';
+  return isLocal ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
+}
+
 async function validateDbUrl(url: string): Promise<string | null> {
   if (!url) return 'DATABASE_URL is required';
   const pool = new Pool({
     connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ssl: dbSslOptions(url),
   });
   try {
     await pool.query('SELECT 1');
@@ -136,9 +207,10 @@ function validateClerkVars(): string | null {
 
 
 async function promptEnv(rl: Interface, envPath: string): Promise<void> {
+  const initial = readEnvFile(envPath);
+  let lines = initial.lines;
   while (true) {
-    const existing = readEnvFile(envPath);
-    const vars: Record<string, string> = { ...existing };
+    const vars: Record<string, string> = { ...initial.vars };
 
     banner('Database');
     {
@@ -178,7 +250,10 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
     banner('Embedding (Google AI Studio)');
     vars.AI_STUDIO_KEY = await askSecret(rl, 'AI_STUDIO_KEY', vars.AI_STUDIO_KEY ?? '');
 
-    writeEnvFile(envPath, vars);
+    writeEnvFile(envPath, vars, lines);
+    lines = existsSync(envPath)
+      ? readFileSync(envPath, 'utf8').split(/\r?\n/)
+      : [];
     applyToProcess(vars);
 
     const errors: string[] = [];
@@ -243,7 +318,7 @@ async function verifyRag(): Promise<void> {
   try {
     const pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
+      ssl: dbSslOptions(process.env.DATABASE_URL ?? ''),
     });
     const { rows } = await pool.query('SELECT COUNT(*) AS cnt FROM chunks');
     const count = Number(rows[0]?.cnt ?? 0);
@@ -304,7 +379,7 @@ export async function runSetup(repoRoot: string): Promise<void> {
   banner('Configuration');
   console.log('Press Enter to keep the current value shown in [brackets].\n');
 
-  const defaults = await loadCurrentDefaults(repoRoot, CONFIG_PATH);
+  const defaults = await loadCurrentDefaults(CONFIG_PATH);
   let config: AppConfig = defaults;
 
   let absSource = await runConfigPrompts(rl, config, repoRoot);
@@ -361,6 +436,5 @@ export async function runSetup(repoRoot: string): Promise<void> {
 import { cliMain } from './common';
 
 cliMain(() => {
-  const repoRoot = process.cwd();
-  return runSetup(repoRoot);
+  return runSetup(getRepoRoot());
 });

@@ -47,18 +47,22 @@ export function ChatInterface() {
     transport,
   });
 
+  const submit = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    sendMessage({ text: trimmed });
+    setInput('');
+  };
+
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const text = input.trim();
-    if (!text) return;
-    sendMessage({ text });
-    setInput('');
+    submit(input);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSubmit(e as unknown as FormEvent<HTMLFormElement>);
+      submit(input);
     }
   };
 
@@ -397,9 +401,10 @@ export function ChatInterface() {
           data-testid="chat-input"
         />
         <Button
-          type="submit"
-          disabled={isStreaming || !input.trim()}
+          type={isStreaming ? 'button' : 'submit'}
+          disabled={!isStreaming && !input.trim()}
           aria-label={isStreaming ? 'Stop generating' : 'Send message'}
+          onClick={isStreaming ? () => stop() : undefined}
           className="h-10 w-10 shrink-0 rounded-xl transition-all duration-150 ease-out-quart hover:bg-primary active:bg-primary/80 disabled:cursor-not-allowed disabled:opacity-40"
           data-testid="chat-send"
         >

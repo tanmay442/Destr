@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import {
   err,
   ok,
@@ -6,7 +7,6 @@ import {
   ConflictError,
   ValidationError,
   GoneError,
-  ExternalServiceError,
 } from '@app/domain';
 import type {
   DocumentRepository,
@@ -19,15 +19,15 @@ import type {
   IngestQueue,
   IngestStatus,
 } from '@app/domain';
-import { ingestFile } from '../rag/ingest';
+import { ingestFile, parseAndEmbed } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
 
-/** Object-storage key, namespaced by id so renamed/duplicates never collide. */
-function blobKey(documentId: number, fileName: string): string {
+/** Object-storage key, unique per upload so renames/duplicates never collide. */
+function newBlobKey(fileName: string): string {
   const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
-  return `docs/${documentId}/${safe}`;
+  return `docs/${randomUUID()}/${safe}`;
 }
 
 async function ensureDocument(
@@ -125,22 +125,37 @@ async function uploadPdfSync(
   input: { fileName: string; buffer: Buffer; actorId: string },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
-  return await deps.runner.run(async (tx) => {
-    const r = await ingestFile(
+  const fileHash = deps.hasher.sha256(input.buffer);
+  const existing = await deps.documents.findByName(input.fileName);
+  if (existing && existing.fileHash === fileHash) {
+    return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
+  }
+  const oldStorageKey = existing?.storageKey ?? null;
+  // Upload the blob BEFORE the DB transaction so a tx rollback can never
+  // leave the row pointing at a deleted blob.
+  const key = newBlobKey(input.fileName);
+  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+  const r = await deps.runner.run(async (tx) => {
+    const res = await ingestFile(
       { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
       { ...deps, documents: tx.documents, chunks: tx.chunks },
     );
-    if (!r.ok) return r;
-    const key = blobKey(r.value.documentId, input.fileName);
-    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
-    await tx.documents.setStorageKey(r.value.documentId, key);
+    if (!res.ok) return res;
+    await tx.documents.setStorageKey(res.value.documentId, key);
     await tx.audit.logDocumentEvent({
-      action: r.value.status === 'inserted' ? 'upload' : 'replace',
-      documentId: r.value.documentId,
+      action: res.value.status === 'inserted' ? 'upload' : 'replace',
+      documentId: res.value.documentId,
       actorId: input.actorId,
     });
-    return r;
+    return res;
   });
+  // Only delete the superseded blob after the new row has committed.
+  if (r.ok && oldStorageKey) {
+    await deps.blobStorage.delete(oldStorageKey).catch(() => {
+      // Orphaned blob beats failing the upload.
+    });
+  }
+  return r;
 }
 
 async function queuePdfForIngest(
@@ -153,11 +168,11 @@ async function queuePdfForIngest(
   if (existing && existing.fileHash === fileHash) {
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
-  if (existing && existing.storageKey) {
-    await deps.blobStorage.delete(existing.storageKey).catch(() => {
-      // Orphaned blob beats blocking the re-upload.
-    });
-  }
+  const oldStorageKey = existing?.storageKey ?? null;
+  // Upload the blob BEFORE the DB transaction so a tx rollback can never
+  // leave the row pointing at a deleted blob.
+  const key = newBlobKey(input.fileName);
+  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
   const inserted = await deps.runner.run(async (tx) => {
     if (existing && existing.fileHash !== fileHash) {
       await tx.documents.deleteById(existing.id);
@@ -167,8 +182,6 @@ async function queuePdfForIngest(
       fileHash,
       uploadedBy: input.actorId,
     });
-    const key = blobKey(row.id, input.fileName);
-    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
     await tx.documents.setStorageKey(row.id, key);
     await tx.documents.updateIngestStatus(row.id, 'queued');
     const a = auditFor(row.id);
@@ -179,6 +192,12 @@ async function queuePdfForIngest(
     });
     return row;
   });
+  // Only delete the superseded blob after the new row has committed.
+  if (oldStorageKey) {
+    await deps.blobStorage.delete(oldStorageKey).catch(() => {
+      // Orphaned blob beats blocking the re-upload.
+    });
+  }
   try {
     await deps.ingestQueue.enqueue({ documentId: inserted.id });
   } catch (e) {
@@ -214,7 +233,7 @@ export async function restoreDocument(
   deps: { documents: DocumentRepository; audit: AuditLog; clock: Clock; runner: TransactionRunner },
 ): Promise<Result<void>> {
   try {
-    const doc = await deps.documents.findById(documentId);
+    const doc = await deps.documents.findById(documentId, { includeDeleted: true });
     if (!doc) return err(new NotFoundError('Document not found'));
     if (!doc.deletedAt) return err(new ValidationError('Document is not deleted'));
     if (deps.clock.now().getTime() - doc.deletedAt.getTime() > RESTORE_WINDOW_MS) {
@@ -236,9 +255,10 @@ export async function restoreDocument(
 export async function getDocumentById(
   documentId: number,
   deps: { documents: DocumentRepository },
+  opts: { includeDeleted?: boolean } = {},
 ): Promise<Result<{ document: import('@app/domain').DocumentRow | null }>> {
   return serviceResult(
-    () => deps.documents.findById(documentId).then((doc) => ({ document: doc })),
+    () => deps.documents.findById(documentId, opts).then((doc) => ({ document: doc })),
     'Failed to get document',
   );
 }
@@ -248,9 +268,8 @@ export async function hardDeleteDocument(
   deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<void>> {
   return wrapServiceCall(async () => {
-    const existing = await deps.documents.findById(input.documentId);
+    const existing = await deps.documents.findById(input.documentId, { includeDeleted: true });
     if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
-    // Delete blob before the DB row — after that we lose the key.
     const storageKey = existing.storageKey;
     await deps.runner.run(async (tx) => {
       await tx.audit.logDocumentEvent({
@@ -273,37 +292,75 @@ export async function replacePdf(
   input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
 ): Promise<Result<IngestResult>> {
-  return wrapServiceCall(async () => {
-    const check = await ensureDocument(input.documentId, deps.documents);
-    if (!check.ok) return check;
+  return wrapServiceCall(async (): Promise<Result<IngestResult>> => {
+    const existing = await deps.documents.findById(input.documentId);
+    if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
 
-    if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled()) {
-      // Replace via async queue; audit `replace` against the original docId.
-      return queuePdfForIngest(
-        input,
-        deps,
-        () => ({ action: 'replace', documentId: input.documentId }),
-      );
+    const fileHash = deps.hasher.sha256(input.buffer);
+    if (existing.fileHash === fileHash) {
+      return ok({ documentId: input.documentId, chunks: 0, status: 'unchanged' });
     }
 
-    return await deps.runner.run(async (tx) => {
-      const r = await ingestFile(
-        { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
-        { ...deps, documents: tx.documents, chunks: tx.chunks },
+    // Resolve by documentId (never by fileName) so we never touch an unrelated
+    // document, and audit against the id that actually survives the replace.
+    const oldStorageKey = existing.storageKey;
+    const key = newBlobKey(input.fileName);
+    // Upload the new blob BEFORE the transaction; the old blob is removed only
+    // after the new row commits.
+    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+
+    const useAsync = input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled();
+    let parsed: Awaited<ReturnType<typeof parseAndEmbed>> | null = null;
+    if (!useAsync) {
+      parsed = await parseAndEmbed(
+        { fileName: input.fileName, buffer: input.buffer },
+        deps,
       );
-      if (!r.ok) return r;
-      const key = blobKey(r.value.documentId, input.fileName);
-      await deps.blobStorage.put(key, input.buffer, 'application/pdf');
-      await tx.documents.setStorageKey(r.value.documentId, key);
-      if (r.value.status !== 'unchanged') {
-        await tx.audit.logDocumentEvent({
-          action: 'replace',
-          documentId: input.documentId,
-          actorId: input.actorId,
-        });
+      if (!parsed.ok) return parsed;
+    }
+
+    const newId = await deps.runner.run(async (tx) => {
+      await tx.documents.deleteById(input.documentId);
+      const row = await tx.documents.insert({
+        fileName: input.fileName,
+        fileHash,
+        uploadedBy: input.actorId,
+      });
+      if (parsed) {
+        await tx.chunks.insertMany(
+          parsed.value.rows.map((r) => ({
+            documentId: row.id,
+            content: r.content,
+            embedding: r.embedding,
+          })),
+        );
       }
-      return r;
+      await tx.documents.setStorageKey(row.id, key);
+      await tx.documents.updateIngestStatus(row.id, useAsync ? 'queued' : 'done');
+      await tx.audit.logDocumentEvent({
+        action: 'replace',
+        documentId: row.id,
+        actorId: input.actorId,
+      });
+      return row.id;
     });
+
+    if (useAsync) {
+      try {
+        await deps.ingestQueue.enqueue({ documentId: newId });
+      } catch (e) {
+        await deps.documents.updateIngestStatus(newId, 'failed').catch(() => {});
+        throw e;
+      }
+    }
+
+    if (oldStorageKey) {
+      await deps.blobStorage.delete(oldStorageKey).catch(() => {
+        // Orphaned blob beats failing the replace.
+      });
+    }
+
+    return ok({ documentId: newId, chunks: parsed?.value.chunks ?? 0, status: useAsync ? 'queued' : 'updated' });
   }, 'Failed to replace PDF');
 }
 

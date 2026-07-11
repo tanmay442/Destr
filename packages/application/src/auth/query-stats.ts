@@ -1,4 +1,4 @@
-import { ok, type Result } from '@app/domain';
+import { type Result, serviceResult } from '../service-result';
 import type { QueryStats } from '@app/domain';
 
 export async function recordQuery(
@@ -6,13 +6,12 @@ export async function recordQuery(
   query: string,
   deps: { stats: QueryStats },
 ): Promise<Result<void>> {
-  await deps.stats.record(userId, query);
-  return ok(undefined);
+  return serviceResult(() => deps.stats.record(userId, query), 'Failed to record query');
 }
 
 export async function getTopQueries(
   limit: number,
   deps: { stats: QueryStats },
 ): Promise<Result<Array<{ q: string; count: number }>>> {
-  return ok(await deps.stats.top(limit));
+  return serviceResult(() => deps.stats.top(limit), 'Failed to get top queries');
 }

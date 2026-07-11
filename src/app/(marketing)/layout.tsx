@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import Ferrofluid from '@/components/react-bits/Ferrofluid';
 
 // Marketing route group. Passthrough layout; future pages pick up shared chrome here.
@@ -6,6 +7,7 @@ export default function MarketingLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const colors = useMemo(() => ['#ffffff', '#ffffff', '#ffffff'], []);
   return (
     <div className="relative flex flex-1 flex-col">
       <div
@@ -14,7 +16,7 @@ export default function MarketingLayout({
       >
         <div className="h-full w-full">
           <Ferrofluid
-            colors={['#ffffff', '#ffffff', '#ffffff']}
+            colors={colors}
             speed={0.33}
             scale={1.6}
             turbulence={1}

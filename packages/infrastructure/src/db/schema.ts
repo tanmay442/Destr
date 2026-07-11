@@ -81,6 +81,17 @@ export const ticketAudit = pgTable('ticket_audit', {
   check('ticket_audit_action_check', sql`${table.action} IN ('create','assign','status_change','note','impersonation','role_change')`),
 ]);
 
+export const userAudit = pgTable('user_audit', {
+  id: serial('id').primaryKey(),
+  targetUserId: text('target_user_id').notNull(),
+  actorId: text('actor_id').notNull(),
+  fromRole: text('from_role').notNull(),
+  toRole: text('to_role').notNull(),
+  at: timestamp('at').defaultNow().notNull(),
+}, (table) => [
+  check('user_audit_role_check', sql`${table.fromRole} IN ('admin','user') AND ${table.toRole} IN ('admin','user')`),
+]);
+
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
 export type User = typeof users.$inferSelect;

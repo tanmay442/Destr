@@ -14,6 +14,9 @@ export async function POST(
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
   const { clerkId } = await context.params;
+  if (!clerkId || !/^[\w-]{1,255}$/.test(clerkId)) {
+    return respond(new ValidationError('Invalid clerkId'));
+  }
   const body = await req.json().catch(() => ({}));
   const parsed = RoleSchema.safeParse(body);
   if (!parsed.success) {

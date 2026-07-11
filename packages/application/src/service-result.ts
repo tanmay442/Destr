@@ -1,6 +1,8 @@
 import { err, ok, type Result } from '@app/domain';
 import { ExternalServiceError } from '@app/domain';
 
+export type { Result } from '@app/domain';
+
 /** Unhandled throws become ExternalServiceError; `err(...)` results pass through. */
 export async function wrapServiceCall<T>(
   op: () => Promise<Result<T>>,
@@ -17,11 +19,7 @@ export async function serviceResult<T>(
   op: () => Promise<T>,
   message: string,
 ): Promise<Result<T>> {
-  try {
-    return ok(await op());
-  } catch (e) {
-    return err(new ExternalServiceError(message, e));
-  }
+  return wrapServiceCall(async () => ok(await op()), message);
 }
 
 export function sanitizePagination(

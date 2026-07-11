@@ -27,6 +27,7 @@ import {
   SheetTrigger,
   SheetPortal,
   SheetTitle,
+  SheetDescription,
   SheetClose,
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
@@ -62,19 +63,17 @@ export function AppSidebar({
   // Open by default on /admin/* so deep links show context; collapses but reopens next visit.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminOpen, setAdminOpen] = useState<boolean>(onAdmin);
-  // Reset state in render (no effect) when route flips non-admin → admin.
   const [prevOnAdmin, setPrevOnAdmin] = useState<boolean>(onAdmin);
-  if (prevOnAdmin !== onAdmin) {
+  if (onAdmin !== prevOnAdmin) {
     setPrevOnAdmin(onAdmin);
     if (onAdmin) setAdminOpen(true);
   }
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
-  // Close drawer on route change via the same render-derived pattern (no effect).
-  const [lastPath, setLastPath] = useState<string | null>(pathname);
-  if (lastPath !== pathname) {
-    setLastPath(pathname);
-    if (mobileOpen) setMobileOpen(false);
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setMobileOpen(false);
   }
 
   const toggleAdmin = () => {
@@ -141,6 +140,9 @@ export function AppSidebar({
           data-testid="app-mobile-drawer"
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SheetDescription className="sr-only">
+            Primary navigation menu
+          </SheetDescription>
           <div className="mb-3 flex items-center justify-between px-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
               Menu

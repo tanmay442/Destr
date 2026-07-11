@@ -7,7 +7,7 @@ if (!Number.isFinite(parsedDim) || parsedDim <= 0) {
       'Expected a positive integer (default 768).',
   );
 }
-const VECTOR_DIM = parsedDim;
+export const VECTOR_DIM = parsedDim;
 
 export const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {

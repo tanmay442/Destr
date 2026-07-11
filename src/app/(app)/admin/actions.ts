@@ -64,7 +64,15 @@ export async function uploadPdfAction(
       buffer,
       actorId: session.user.id,
     });
-    if (!result.ok) return toSafeError(result.error);
+    if (!result.ok) {
+      logger.error('uploadPdfAction: upload failed', {
+        code: result.error.code,
+        message: result.error.message,
+        fileName: file.name,
+        cause: result.error.cause,
+      });
+      return toSafeError(result.error);
+    }
     revalidatePath('/admin');
     revalidatePath('/admin/upload');
     revalidatePath('/admin/documents');

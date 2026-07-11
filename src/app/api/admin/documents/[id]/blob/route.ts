@@ -7,7 +7,6 @@ export async function GET(
 ) {
   const auth = await requireAdminDocument(context);
   if (!auth.ok) return auth.response;
-  const safeName = auth.document.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
   const storageKey = auth.document.storageKey!;
   const comp = auth.comp;
 
@@ -19,6 +18,7 @@ export async function GET(
       headers: { 'Cache-Control': 'private, max-age=300' },
     });
   }
+  const safeName = auth.document.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
   const stream = await comp.blobStorage.stream(storageKey);
   return new NextResponse(stream, {
     status: 200,

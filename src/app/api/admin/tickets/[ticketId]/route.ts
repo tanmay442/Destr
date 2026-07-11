@@ -16,6 +16,9 @@ export async function PATCH(
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
   const { ticketId } = await context.params;
+  if (!ticketId || !/^[\w-]{1,255}$/.test(ticketId)) {
+    return respond(new ValidationError('Invalid ticketId'));
+  }
   const body = await req.json().catch(() => ({}));
   const parsed = PatchSchema.safeParse(body);
   if (!parsed.success) {

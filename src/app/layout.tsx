@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
+import { ThemeProvider } from "next-themes";
 import { appConfig } from "@/lib/config";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -42,7 +43,9 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <body className="min-h-full flex flex-col bg-background text-foreground">
-          {children}
+          <ThemeProvider attribute="class" forcedTheme="dark" enableSystem={false}>
+            {children}
+          </ThemeProvider>
           <Toaster theme="dark" position="bottom-right" />
         </body>
       </html>

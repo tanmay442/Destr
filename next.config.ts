@@ -1,5 +1,29 @@
 import type { NextConfig } from "next";
 
+// Derive the set of origins permitted to call Server Actions. Next's default
+// (omitted) already whitelists the same-origin host, which is the safe choice.
+// When the app is served from a known external origin (custom domain / Vercel),
+// derive it from NEXT_PUBLIC_APP_URL / VERCEL_URL. A wildcard ('*') would
+// disable Next's Origin-check CSRF mitigation, so we never use it.
+function resolveServerActionOrigins(): string[] {
+  const origins = new Set<string>();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (appUrl) {
+    try {
+      origins.add(new URL(appUrl).origin);
+    } catch {
+      /* ignore malformed URLs */
+    }
+  }
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) {
+    origins.add(`https://${vercelUrl.replace(/^https?:\/\//, "")}`);
+  }
+  return [...origins];
+}
+
+const serverActionOrigins = resolveServerActionOrigins();
+
 const nextConfig: NextConfig = {
   // standalone only for Docker; Vercel's standalone breaks dynamic route routing (404s)
   output: process.env.DOCKER_BUILD === '1' ? 'standalone' : undefined,
@@ -8,8 +32,9 @@ const nextConfig: NextConfig = {
     // limit server-action body size
     serverActions: {
       bodySizeLimit: '4mb',
-      // allowed origins for CSRF mitigation
-      allowedOrigins: ['*'],
+      // allowed origins for CSRF mitigation; omit when none derived so the
+      // default same-origin check applies (safe for local dev).
+      ...(serverActionOrigins.length ? { allowedOrigins: serverActionOrigins } : {}),
     },
   },
   async headers() {
@@ -49,8 +74,9 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  // pdf-parse pinned to pure-Node 1.1.1; nothing to externalise
-  serverExternalPackages: [],
+  // unpdf pulls in pdfjs-dist (ESM worker code) — keep it external to the
+  // Next server bundle so it isn't mis-transformed at build time.
+  serverExternalPackages: ['unpdf', 'pdfjs-dist'],
 };
 
 export default nextConfig;

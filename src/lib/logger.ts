@@ -23,7 +23,13 @@ function serializeMeta(meta: Record<string, unknown>): Record<string, unknown> {
       const code = (value as { code?: unknown }).code;
       if (code !== undefined) errObj.code = code;
       const cause = (value as { cause?: unknown }).cause;
-      if (cause !== undefined) errObj.cause = String(cause);
+      if (cause !== undefined) {
+        // Avoid leaking secrets (DB connection strings, etc.) that may live in
+        // an Error's message/stack: only surface its type + code, never its text.
+        errObj.cause = cause instanceof Error
+          ? { name: cause.name, ...(cause as { code?: unknown }).code !== undefined ? { code: (cause as { code?: unknown }).code } : {} }
+          : String(cause);
+      }
       out[key] = errObj;
     } else {
       out[key] = value;

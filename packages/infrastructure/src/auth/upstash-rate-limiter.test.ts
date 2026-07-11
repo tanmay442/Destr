@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createUpstashRateLimiter } from './upstash-rate-limiter';
 
 const createRedisMock = () => ({
-  incr: vi.fn(),
-  expire: vi.fn(),
+  eval: vi.fn(),
 });
 
 let redisMock = createRedisMock();
@@ -30,20 +29,19 @@ describe('createUpstashRateLimiter', () => {
     expect(() => createUpstashRateLimiter()).toThrow('UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be set.');
   });
 
-  it('allows the first request and sets expiry on the window key', async () => {
-    redisMock.incr.mockResolvedValue(1);
-    redisMock.expire.mockResolvedValue(1);
+  it('allows the first request and sets expiry via the atomic eval', async () => {
+    redisMock.eval.mockResolvedValue(1);
     const limiter = createUpstashRateLimiter();
     const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.remaining).toBe(29);
-    expect(redisMock.expire).toHaveBeenCalledOnce();
+    expect(redisMock.eval).toHaveBeenCalledOnce();
   });
 
   it('rejects requests over the limit', async () => {
-    redisMock.incr.mockResolvedValue(31);
+    redisMock.eval.mockResolvedValue(31);
     const limiter = createUpstashRateLimiter();
     const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
 

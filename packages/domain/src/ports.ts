@@ -38,10 +38,12 @@ export interface UserRow {
 
 
 export interface DocumentRepository {
-  findByName(fileName: string): Promise<DocumentRow | null>;
-  findById(id: number): Promise<DocumentRow | null>;
+  findByName(fileName: string, opts?: { includeDeleted?: boolean }): Promise<DocumentRow | null>;
+  findById(id: number, opts?: { includeDeleted?: boolean }): Promise<DocumentRow | null>;
   setStorageKey(id: number, key: string): Promise<void>;
   updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
+  /** Atomically flip `queued`→`ingesting`; returns true iff this caller won the claim. */
+  claimIngest(id: number): Promise<boolean>;
   insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
@@ -62,6 +64,7 @@ export interface ChunkRepository {
     opts: { threshold: number; limit: number },
   ): Promise<Array<{ content: string; similarity: number }>>;
   insertMany(rows: Array<{ documentId: number; content: string; embedding: number[] }>): Promise<void>;
+  deleteByDocumentId(documentId: number): Promise<void>;
   countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countForAll(): Promise<number>;
   countForDocument(documentId: number): Promise<number>;
@@ -125,6 +128,7 @@ type TicketAuditAction =
   | 'assign'
   | 'status_change'
   | 'note'
+  | 'impersonation'
   | 'role_change';
 
 export interface AuditLog {
@@ -137,6 +141,13 @@ export interface AuditLog {
     action: TicketAuditAction;
     ticketId: string;
     actorId: string;
+  }): Promise<void>;
+  /** Record a dedicated user/role audit entry (separate from the ticket trail). */
+  logUserEvent(input: {
+    targetUserId: string;
+    actorId: string;
+    fromRole: 'admin' | 'user';
+    toRole: 'admin' | 'user';
   }): Promise<void>;
   list(input: {
     documentId?: number;

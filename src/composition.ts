@@ -24,7 +24,7 @@ import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';
 import { logger } from './lib/logger';
-import { respond, respondResult, toActionResult, isActionError } from './lib/http';
+import { respond, respondResult } from './lib/http';
 import { MAX_LIST_LIMIT } from '../config/constants';
 
 const systemClock = { now: () => new Date() };
@@ -48,6 +48,12 @@ const embeddingService = Llm.getEmbeddingService();
 // BLOB_STORAGE_PROVIDER (filesystem | r2 | s3). Default: filesystem.
 const blobStorage: BlobStorage = Storage.createBlobStorage();
 
+// Filesystem storage is ephemeral on serverless/edge — warn so misconfig in
+// production is visible rather than silently losing uploaded PDFs.
+if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
+  logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
+}
+
 // Async ingest queue. QStash-backed when QSTASH_TOKEN is set; a no-op
 // (sync mode) otherwise. The upload use-cases enqueue large PDFs here
 // and the /api/admin/ingest-worker route drains them.
@@ -56,7 +62,7 @@ const ingestQueue: IngestQueue = Queue.createIngestQueue();
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
-  pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter,
+  pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
 };
 const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
 function createRateLimiter(): RateLimiter {
@@ -101,18 +107,23 @@ function createComposition() {
       bind(updateTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
       bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
-    getDocumentById: (id: number) => getDocumentById(id, { documents: documentRepo }),
+    getDocumentById: (id: number, opts?: { includeDeleted?: boolean }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
       bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
     /** Drain a queued ingest: called by the /api/admin/ingest-worker
-     *  route on a QStash callback. Loads the doc, marks `ingesting`,
-     *  reads the PDF from the blob store, parses+embeds it, and
-     *  inserts chunks + flips to `done` in one transaction (so a
-     *  retry that sees `done` is a no-op). Idempotent: a `done` doc
-     *  returns `already-done`; an `ingesting` doc returns `busy`
-     *  (the route maps that to 409 so QStash retries later). */
+     *  route on a QStash callback. Loads the doc, reads the PDF from the blob
+     *  store, parses+embeds it, then claims the job and inserts chunks + flips
+     *  to `done` inside one transaction. A retry that sees `done` is a no-op; a
+     *  concurrent worker that already claimed the job returns `busy` (the route
+     *  maps that to 409 so QStash retries later).
+     *  The claim is now atomic via `DocumentRepository.claimIngest`
+     *  (`UPDATE … WHERE ingest_status='queued' RETURNING`), so concurrent
+     *  deliveries cannot both embed/insert (M1).
+     *  NOTE: a crash after a successful claim leaves the doc stuck in
+     *  `ingesting`; there is no auto-recovery scan — a future job should
+     *  periodically re-queue (or time-out) stuck `ingesting` rows. */
     ingestQueuedDocument: async (documentId: number): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> => {
       const doc = await documentRepo.findById(documentId);
       if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
@@ -121,7 +132,6 @@ function createComposition() {
       if (!doc.storageKey) {
         return err(new NotFoundError(`Document ${documentId} has no stored blob`));
       }
-      await documentRepo.updateIngestStatus(documentId, 'ingesting');
       let buffer: Buffer;
       try {
         buffer = await blobStorage.get(doc.storageKey);
@@ -131,22 +141,28 @@ function createComposition() {
       }
       const prepared = await prepareIngest(
         { documentId, fileName: doc.fileName, buffer },
-        { embeddings: embeddingService, pdfParser: Pdf.pdfParseParser, textSplitter: Pdf.langchainSplitter },
+        { embeddings: embeddingService, pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter },
       );
       if (!prepared.ok) {
         await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
         return prepared;
       }
       try {
-        await Db.transactionRunner.run(async (tx) => {
+        const outcome = await Db.transactionRunner.run(async (tx) => {
+          // Atomic conditional claim: only the caller that flips
+          // queued→ingesting wins; a concurrent/replayed worker gets false.
+          const claimed = await tx.documents.claimIngest(documentId);
+          if (!claimed) return { claimed: false } as const;
           await tx.chunks.insertMany(prepared.value.rows);
           await tx.documents.updateIngestStatus(documentId, 'done');
+          return { claimed: true, chunks: prepared.value.chunks } as const;
         });
+        if (!outcome.claimed) return ok({ status: 'busy', chunks: 0 });
+        return ok({ status: 'done', chunks: outcome.chunks });
       } catch (e) {
         await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
         return err(new ExternalServiceError('Chunk insert failed', e));
       }
-      return ok({ status: 'done', chunks: prepared.value.chunks });
     },
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
@@ -175,10 +191,6 @@ let _composition: Composition | null = null;
 export function getComposition(): Composition {
   if (!_composition) _composition = createComposition();
   return _composition;
-}
-
-function resetComposition() {
-  _composition = null;
 }
 
 export async function requireAdminRoute(): Promise<
@@ -243,7 +255,7 @@ export async function requireAdminDocument(
   const { id } = await context.params;
   const docId = Number(id);
   if (!Number.isInteger(docId)) return { ok: false, response: new Response('Invalid id', { status: 400 }) };
-  const r = await auth.comp.getDocumentById(docId);
+  const r = await auth.comp.getDocumentById(docId, { includeDeleted: opts.allowDeleted });
   if (!r.ok) return { ok: false, response: respond(r.error) };
   const doc = r.value.document;
   if (!doc) return { ok: false, response: new Response('Not found', { status: 404 }) };

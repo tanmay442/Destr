@@ -98,7 +98,8 @@ for detailed sign-up links and per-service walkthroughs.
 - **Route gating:** `src/proxy.ts` runs `clerkMiddleware`. `/chat(.*)`,
   `/admin(.*)`, `/api/chat(.*)`, and `/api/admin(.*)` require a signed-in
   user; `/admin(.*)` and `/api/admin(.*)` additionally require
-  `role === 'admin'` (non-admins are redirected to `/chat`).
+  `role === 'admin'`. Non-admin page routes redirect to `/chat`;
+  non-admin `/api/admin` requests return HTTP 403.
 - **JWT template:** To enable fast role checks in middleware without
   hitting the Clerk Backend SDK on every request, configure a JWT
   template in the Clerk Dashboard (Sessions → Customize session token):
@@ -144,15 +145,14 @@ for detailed sign-up links and per-service walkthroughs.
   table.
 - **`/admin/audit`** — Full audit log filterable by document id or
   ticket id. Document audit events: upload, replace, delete, restore.
-  Ticket audit events: create, assign, status_change, note,
-  role_change.
+  Ticket audit events: create, assign, status_change, note.
 
 ### Rate limit
 
 `packages/infrastructure/src/auth/lru-rate-limiter.ts` is a single-instance,
 in-memory sliding-window limiter keyed by `chat:${userId}`. Default budget:
-30 requests / 60 s, max 5 000 keys. Periodic eviction prunes stale entries
-in batches to avoid O(n) scans. The 31st request returns HTTP 429 with a
+30 requests / 60 s, max 5 000 keys. When the 5 000-key cap is exceeded,
+the least-recently-used keys are evicted (LRU). The 31st request returns HTTP 429 with a
 `Retry-After` header. When the app moves to a multi-region deployment, swap
 this for an Upstash hash; the call sites do not need to change.
 
@@ -187,7 +187,7 @@ this for an Upstash hash; the call sites do not need to change.
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
 | `pnpm cli init` | Interactive first-time setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts` and re-seeds. |
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
-| `pnpm cli db-migrate` | Apply the Drizzle schema + enable pgvector + add-column migrations |
+| `pnpm cli db-migrate` | Apply the Drizzle schema + enable pgvector + add-column migrations. Prompts for confirmation before the destructive `drizzle-kit push`; pass `--force` to skip the prompt |
 | `pnpm arch` | Architecture boundary check via dependency-cruiser |
 
 ### Tests

@@ -85,7 +85,7 @@ export async function askMultiLine(
   defaultValue: string,
 ): Promise<string> {
   console.log(`${prompt}`);
-  console.log('  (Enter a single dot "." on its own line to finish)');
+  console.log('  (Enter a line with two dots ".." on its own to finish)');
   if (defaultValue) {
     console.log(`  (Leave empty to keep current value)`);
   }
@@ -95,9 +95,8 @@ export async function askMultiLine(
     rl.setPrompt(promptLine);
     rl.prompt();
     rl.on('line', (line) => {
-      if (line.trim() === '.') {
+      if (line.trim() === '..') {
         rl.removeAllListeners('line');
-        rl.close();
         resolve(lines.join('\n'));
         return;
       }

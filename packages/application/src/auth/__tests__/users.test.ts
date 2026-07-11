@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { ForbiddenError } from '@app/domain';
 import { setUserRole } from '../users';
 import type { UserRepository, AuditLog } from '@app/domain';
 
@@ -10,7 +11,7 @@ function makeDeps(overrides?: {
   return {
     users: {
       upsertFromClerk: vi.fn(),
-      findByClerkId: vi.fn(),
+      findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'actor_1', role: 'admin' }),
       setRole: vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' }),
       touchLastSeen: vi.fn(),
       list: vi.fn(),
@@ -21,6 +22,7 @@ function makeDeps(overrides?: {
     audit: {
       logDocumentEvent: vi.fn(),
       logTicketEvent,
+      logUserEvent: vi.fn(),
       list: vi.fn(),
       ...overrides?.audit,
     } as AuditLog,
@@ -28,18 +30,19 @@ function makeDeps(overrides?: {
 }
 
 describe('setUserRole', () => {
-  it('logs a role_change ticket audit event', async () => {
-    const logTicketEvent = vi.fn().mockResolvedValue(undefined);
-    const deps = makeDeps({ audit: { logTicketEvent } });
+  it('logs a role_change user audit event', async () => {
+    const logUserEvent = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({ audit: { logUserEvent } });
     const result = await setUserRole(
       { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_1' },
       deps as Parameters<typeof setUserRole>[1],
     );
     expect(result.ok).toBe(true);
-    expect(logTicketEvent).toHaveBeenCalledWith({
-      action: 'role_change',
-      ticketId: 'user:user_1',
+    expect(logUserEvent).toHaveBeenCalledWith({
+      targetUserId: 'user_1',
       actorId: 'actor_1',
+      fromRole: 'admin',
+      toRole: 'admin',
     });
   });
 
@@ -66,6 +69,32 @@ describe('setUserRole', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.message).toMatch(/User not found/);
+    }
+  });
+
+  it('rejects changing your own role', async () => {
+    const deps = makeDeps();
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'user', actorId: 'user_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ForbiddenError);
+    }
+  });
+
+  it('rejects when actor is not an admin', async () => {
+    const deps = makeDeps({
+      users: { findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'actor_2', role: 'user' }) },
+    });
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_2' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ForbiddenError);
     }
   });
 });

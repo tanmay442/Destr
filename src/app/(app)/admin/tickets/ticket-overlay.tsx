@@ -8,6 +8,7 @@ import {
   Sheet,
   SheetContent,
   SheetTitle,
+  SheetDescription,
 } from '@/components/ui/sheet';
 import { TicketDrawer, type UserOption } from './ticket-drawer';
 
@@ -40,6 +41,15 @@ export function TicketOverlay({
     router.push(`/admin/tickets${qs ? `?${qs}` : ''}`);
   }
 
+  function clearFilters() {
+    const next = new URLSearchParams(params.toString());
+    next.delete('status');
+    next.delete('assignee');
+    next.delete('q');
+    const qs = next.toString();
+    router.push(`/admin/tickets${qs ? `?${qs}` : ''}`);
+  }
+
   const ticket = activeId
     ? tickets.find((t) => t.ticketId === activeId) ?? null
     : null;
@@ -63,6 +73,9 @@ export function TicketOverlay({
           <SheetTitle className="text-sm font-semibold tracking-tight">
             {ticket ? `Ticket ${ticket.ticketId}` : activeId}
           </SheetTitle>
+          <SheetDescription className="sr-only">
+            Ticket details and actions
+          </SheetDescription>
           <Button
             type="button"
             variant="ghost"
@@ -98,7 +111,7 @@ export function TicketOverlay({
                 is not in the current filtered view. Clear the filter to see it
                 here.
               </span>
-              <Button type="button" size="sm" onClick={close}>
+              <Button type="button" size="sm" onClick={clearFilters}>
                 Clear filter
               </Button>
             </div>

@@ -13,10 +13,17 @@ export async function GET(req: Request) {
     if (!Number.isInteger(n)) return respond(new ValidationError('Invalid documentId'));
     documentId = n;
   }
+  let ticketIdFilter: string | undefined;
+  if (ticketId !== null) {
+    if (!/^[\w-]{1,255}$/.test(ticketId)) {
+      return respond(new ValidationError('Invalid ticketId'));
+    }
+    ticketIdFilter = ticketId;
+  }
   const { limit, offset } = parseQueryPagination(url, { limit: 50 });
   const result = await comp.listAudit({
     documentId,
-    ticketId: ticketId ?? undefined,
+    ticketId: ticketIdFilter,
     limit,
     offset,
   });

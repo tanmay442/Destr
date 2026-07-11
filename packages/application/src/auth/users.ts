@@ -1,8 +1,9 @@
-import { err, ok, type Result, NotFoundError, ValidationError, ExternalServiceError } from '@app/domain';
+import { err, ok, type Result, NotFoundError, ValidationError, ForbiddenError, ExternalServiceError } from '@app/domain';
 import type { UserRepository } from '@app/domain';
 import type { AuditLog } from '@app/domain';
 import { MAX_LIST_LIMIT } from '../../../../config/constants';
 import { sanitizePagination } from '../service-result';
+import { logUserRoleChange } from './audit';
 
 export async function listUsers(
   input: { search?: string; limit?: number; offset?: number },
@@ -24,18 +25,26 @@ export async function setUserRole(
   if (input.role !== 'admin' && input.role !== 'user') {
     return err(new ValidationError(`Invalid role: ${input.role}`));
   }
+  if (input.actorId === input.clerkUserId) {
+    return err(new ForbiddenError('Cannot change your own role'));
+  }
   try {
+    const actor = await deps.users.findByClerkId(input.actorId);
+    if (!actor || actor.role !== 'admin') {
+      return err(new ForbiddenError('Only admins can change user roles'));
+    }
+    const target = await deps.users.findByClerkId(input.clerkUserId);
+    if (!target) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
     const row = await deps.users.setRole(input.clerkUserId, input.role);
     if (!row) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
     void deps.users.syncClerkRole(input.clerkUserId, input.role).catch((err) => {
       console.error(`Failed to sync Clerk role for ${input.clerkUserId}:`, err);
     });
-    void deps.audit.logTicketEvent({
-      action: 'role_change',
-      ticketId: `user:${input.clerkUserId}`,
-      actorId: input.actorId,
-    }).catch((err) => {
-      console.error(`Failed to log role change audit for ${input.clerkUserId}:`, err);
+    void logUserRoleChange(
+      { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role },
+      { audit: deps.audit },
+    ).then((r) => {
+      if (!r.ok) console.error(`Failed to log role change audit for ${input.clerkUserId}:`, r.error);
     });
     return ok({ user: { clerkUserId: row.clerkUserId, role: row.role } });
   } catch (e) {

@@ -2,6 +2,10 @@
 export abstract class DomainError extends Error {
   abstract readonly code: string;
   abstract readonly status: number;
+  constructor(message?: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = new.target.name;
+  }
 }
 
 export class ValidationError extends DomainError {
@@ -64,7 +68,7 @@ export class RateLimitedError extends DomainError {
 export class ExternalServiceError extends DomainError {
   readonly code = 'external_service';
   readonly status = 502;
-  constructor(message: string, readonly cause?: unknown) {
+  constructor(message: string, cause?: unknown) {
     super(message, { cause });
   }
 }

@@ -62,7 +62,7 @@ export default async function AuditPage({
         />
         <Button type="submit">Filter</Button>
       </form>
-      <div className="overflow-x-auto rounded-xl border border">
+      <div className="overflow-x-auto rounded-xl border border-border-subtle">
         <Table data-testid="audit-table" aria-label="Audit events">
           <TableHeader className="bg-secondary text-muted-foreground">
             <TableRow>

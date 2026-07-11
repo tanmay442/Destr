@@ -11,21 +11,26 @@ export function createUpstashRateLimiter(): RateLimiter {
 
   return {
     async check(key, opts) {
-      const now = Date.now();
-      const windowId = Math.floor(now / opts.windowMs);
-      const redisKey = `ratelimit:${key}:${windowId}`;
-      const count = await redis.incr(redisKey);
-      if (count === 1) {
-        await redis.expire(redisKey, Math.ceil(opts.windowMs / 1000) + 1);
-      }
-      const resetMs = (windowId + 1) * opts.windowMs - now;
+      const ttlSeconds = Math.ceil(opts.windowMs / 1000);
+      const redisKey = `ratelimit:${key}`;
+      // Atomic incr + TTL: Lua keeps the count and expiry in one command,
+      // so the key can never persist without a TTL (and we avoid the
+      // fixed-window boundary double-count by anchoring the window to the
+      // first request rather than a wall-clock id).
+      const count = (await redis.eval(
+        `local c = redis.call('incr', KEYS[1])
+         if c == 1 then redis.call('expire', KEYS[1], ARGV[1]) end
+         return c`,
+        [redisKey],
+        [ttlSeconds],
+      )) as number;
       if (count > opts.limit) {
-        return { ok: false, retryAfterMs: Math.max(0, resetMs) };
+        return { ok: false, retryAfterMs: opts.windowMs };
       }
       return {
         ok: true,
         remaining: opts.limit - count,
-        resetMs: Math.max(0, resetMs),
+        resetMs: opts.windowMs,
       };
     },
   };

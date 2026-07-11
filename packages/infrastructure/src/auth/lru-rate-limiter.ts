@@ -2,21 +2,16 @@
 import type { RateLimiter } from '@app/domain';
 
 const MAX_KEYS = 5_000;
-const EVICT_BATCH = 500;
 
 interface Bucket { timestamps: number[]; lastTouched: number; }
 const buckets = new Map<string, Bucket>();
-let evictionCounter = 0;
 
-function evictStale(now: number, windowMs: number) {
-  const evictThreshold = now - windowMs;
-  let evicted = 0;
-  for (const [k, b] of buckets) {
-    if (evicted >= EVICT_BATCH) break;
-    if (b.lastTouched < evictThreshold) {
-      buckets.delete(k);
-      evicted++;
-    }
+function evictOldest() {
+  // Map iterates in insertion order; the first key is the
+  // least-recently-used. Stop once back at or below the cap.
+  for (const k of buckets.keys()) {
+    if (buckets.size <= MAX_KEYS) break;
+    buckets.delete(k);
   }
 }
 
@@ -31,9 +26,11 @@ export const lruRateLimiter: RateLimiter = {
     }
     bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
     bucket.lastTouched = now;
+    // Re-insert to move the key to the most-recently-used position.
+    buckets.set(key, bucket);
 
-    if (buckets.size > MAX_KEYS && ++evictionCounter % 100 === 0) {
-      evictStale(now, opts.windowMs);
+    if (buckets.size > MAX_KEYS) {
+      evictOldest();
     }
 
     if (bucket.timestamps.length >= opts.limit) {
@@ -48,8 +45,3 @@ export const lruRateLimiter: RateLimiter = {
     };
   },
 };
-
-function __resetRateLimitForTests(): void {
-  buckets.clear();
-  evictionCounter = 0;
-}

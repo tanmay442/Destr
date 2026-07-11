@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotFoundError, ValidationError, GoneError } from '@app/domain';
 import type { DocumentRepository, AuditLog, Clock, TransactionRunner, TransactionContext } from '@app/domain';
-import { restoreDocument, softDeleteDocument } from '../documents';
+import { restoreDocument, softDeleteDocument, hardDeleteDocument } from '../documents';
 import { RESTORE_WINDOW_MS } from '../../../../../config/constants';
 
 function makeMockDeps(overrides: {
@@ -9,6 +9,7 @@ function makeMockDeps(overrides: {
   audit?: Partial<AuditLog>;
   clock?: Partial<Clock>;
   runner?: Partial<TransactionRunner>;
+  blobStorage?: { delete?: (key: string) => Promise<void> };
 } = {}) {
   const documents = {
     findById: vi.fn().mockResolvedValue(null),
@@ -26,6 +27,7 @@ function makeMockDeps(overrides: {
   const audit = {
     logDocumentEvent: vi.fn().mockResolvedValue(undefined),
     logTicketEvent: vi.fn().mockResolvedValue(undefined),
+    logUserEvent: vi.fn().mockResolvedValue(undefined),
     ...overrides.audit,
   } as AuditLog;
   const clock = {
@@ -38,7 +40,14 @@ function makeMockDeps(overrides: {
     }),
     ...overrides.runner,
   } as TransactionRunner;
-  return { documents, audit, clock, runner };
+  const blobStorage = {
+    put: vi.fn().mockResolvedValue(undefined),
+    get: vi.fn().mockResolvedValue(Buffer.from('')),
+    stream: vi.fn(),
+    delete: vi.fn().mockResolvedValue(undefined),
+    ...overrides.blobStorage,
+  } as unknown as import('@app/domain').BlobStorage & { delete: ReturnType<typeof vi.fn> };
+  return { documents, audit, clock, runner, blobStorage };
 }
 
 beforeEach(() => {
@@ -107,6 +116,36 @@ describe('restoreDocument', () => {
     const result = await restoreDocument(1, 'user_1', deps);
     expect(result.ok).toBe(true);
     expect(deps.documents.restore).toHaveBeenCalledWith(1);
+    // Regression: a soft-deleted doc must be looked up including deleted rows.
+    expect(deps.documents.findById).toHaveBeenCalledWith(1, { includeDeleted: true });
+  });
+});
+
+describe('hardDeleteDocument', () => {
+  it('returns NotFoundError for missing document', async () => {
+    const deps = makeMockDeps();
+    const result = await hardDeleteDocument({ documentId: 999, actorId: 'user_1' }, deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(NotFoundError);
+  });
+
+  it('hard-deletes an already soft-deleted document', async () => {
+    const deps = makeMockDeps({
+      documents: {
+        findById: vi.fn().mockResolvedValue({ id: 1, deletedAt: new Date(), storageKey: 'docs/x/f.pdf' }),
+      },
+    });
+    const result = await hardDeleteDocument({ documentId: 1, actorId: 'user_1' }, deps);
+    expect(result.ok).toBe(true);
+    // Regression: must resolve soft-deleted rows, then cascade-delete + drop blob.
+    expect(deps.documents.findById).toHaveBeenCalledWith(1, { includeDeleted: true });
+    expect(deps.documents.deleteById).toHaveBeenCalledWith(1);
+    expect(deps.audit.logDocumentEvent).toHaveBeenCalledWith({
+      action: 'delete',
+      documentId: 1,
+      actorId: 'user_1',
+    });
+    expect(deps.blobStorage.delete).toHaveBeenCalledWith('docs/x/f.pdf');
   });
 });
 

@@ -74,10 +74,3 @@ export const inMemoryQueryStats: QueryStats = {
     return cachedTop;
   },
 };
-
-function __resetQueryStatsForTests(): void {
-  users.clear();
-  globalCounts.clear();
-  cachedTop = null;
-  cachedLimit = 0;
-}

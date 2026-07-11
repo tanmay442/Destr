@@ -6,6 +6,7 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
   return {
     chunks: {
       insertMany: vi.fn(),
+      deleteByDocumentId: vi.fn(),
       searchByVector: vi.fn().mockResolvedValue([{ content: 'test', similarity: 0.9 }]),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
@@ -25,6 +26,7 @@ describe('searchChunks', () => {
     const deps = makeDeps({
       chunks: {
         insertMany: vi.fn(),
+        deleteByDocumentId: vi.fn(),
         searchByVector: vi.fn().mockRejectedValue(new Error('connection refused')),
         countForDocuments: vi.fn(),
         countForAll: vi.fn(),
@@ -37,6 +39,19 @@ describe('searchChunks', () => {
     if (!result.ok) {
       expect(result.error.message).toMatch(/Vector search failed/);
     }
+  });
+
+  it('returns empty array for blank query without embedding', async () => {
+    const embed = vi.fn();
+    const deps = makeDeps({
+      embeddings: { embed, embedBatch: vi.fn() },
+    });
+    const result = await searchChunks('   ', {}, deps);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual([]);
+    }
+    expect(embed).not.toHaveBeenCalled();
   });
 
   it('returns results on success', async () => {

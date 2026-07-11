@@ -4,11 +4,13 @@ const {
   protectMock,
   redirectMock,
   nextMock,
+  jsonMock,
   getClerkUserMock,
 } = vi.hoisted(() => ({
   protectMock: vi.fn(),
   redirectMock: vi.fn(),
   nextMock: vi.fn(),
+  jsonMock: vi.fn(),
   getClerkUserMock: vi.fn(),
 }));
 
@@ -53,6 +55,10 @@ vi.mock('next/server', () => ({
       redirectMock(url);
       return { type: 'redirect', url: url.toString() };
     },
+    json: (body: unknown, init?: { status?: number }) => {
+      jsonMock(body, init);
+      return { type: 'json', body, status: init?.status ?? 200 };
+    },
   },
 }));
 
@@ -67,6 +73,7 @@ vi.mock('@app/infrastructure/auth', async () => {
     '/icon',
     '/apple-icon',
     '/opengraph-image',
+    '/api/admin/ingest-worker(.*)',
   ]);
 
   const isProtectedRoute = createRouteMatcher([
@@ -111,12 +118,15 @@ vi.mock('@app/infrastructure/auth', async () => {
         if (isPublicRoute(req)) return NextResponse.next();
         if (isProtectedRoute(req)) {
           const { userId, sessionClaims } = await auth.protect();
-          if (isAdminRoute(req)) {
-            const role = await resolveRole(userId, sessionClaims);
-            if (role !== 'admin') {
-              return NextResponse.redirect(new URL('/chat', (req as { url: string }).url));
+        if (isAdminRoute(req)) {
+          const role = await resolveRole(userId, sessionClaims);
+          if (role !== 'admin') {
+            if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
+              return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
             }
+            return NextResponse.redirect(new URL('/chat', (req as { url: string }).url));
           }
+        }
           return NextResponse.next();
         }
         if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
@@ -138,6 +148,7 @@ beforeEach(() => {
   protectMock.mockReset();
   redirectMock.mockReset();
   nextMock.mockReset();
+  jsonMock.mockReset();
   getClerkUserMock.mockReset();
   // Default: Clerk user lookup returns no role.
   getClerkUserMock.mockResolvedValue({ publicMetadata: {} });
@@ -185,10 +196,19 @@ describe('proxy.ts (auth adapter)', () => {
     expect(nextMock).toHaveBeenCalled();
   });
 
-  it('redirects non-admin on /api/admin', async () => {
+  it('returns 403 JSON for non-admin on /api/admin', async () => {
     protectMock.mockResolvedValue(makeAuth('user_1', 'user'));
-    await proxyHandler(makeReq('/api/admin/users'));
-    expect(redirectMock).toHaveBeenCalled();
+    const result = await proxyHandler(makeReq('/api/admin/users'));
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(jsonMock).toHaveBeenCalled();
+    expect(result.type).toBe('json');
+    expect((result as { status?: number }).status).toBe(403);
+  });
+
+  it('excludes /api/admin/ingest-worker from auth (QStash-signed)', async () => {
+    await proxyHandler(makeReq('/api/admin/ingest-worker'));
+    expect(protectMock).not.toHaveBeenCalled();
+    expect(nextMock).toHaveBeenCalled();
   });
 
   it('lets admin through on /api/admin', async () => {

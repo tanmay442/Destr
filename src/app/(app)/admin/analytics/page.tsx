@@ -47,8 +47,12 @@ function bucketByDay(
 
 export default async function AnalyticsPage() {
   const comp = getComposition();
-  const summary = unwrap(await comp.getAnalyticsSummary());
-  const audit = unwrap(await comp.listAudit({ limit: 20 }));
+  const [summaryRes, auditRes] = await Promise.all([
+    comp.getAnalyticsSummary(),
+    comp.listAudit({ limit: 20 }),
+  ]);
+  const summary = unwrap(summaryRes);
+  const audit = unwrap(auditRes);
 
   const documentEvents = audit.events.filter((e) => e.kind === 'document').length;
   const ticketEvents = audit.events.filter((e) => e.kind === 'ticket').length;

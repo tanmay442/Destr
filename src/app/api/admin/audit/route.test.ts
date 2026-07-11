@@ -147,4 +147,13 @@ describe('GET /api/admin/audit', () => {
     const body = await res.json();
     expect(body.code).toBe('external_service');
   });
+
+  it('returns 400 for a malformed ticketId', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+
+    const res = await route.GET(makeReq({ ticketId: 'not a valid id!' }));
+    expect(res.status).toBe(400);
+  });
 });

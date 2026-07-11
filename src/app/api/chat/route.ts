@@ -104,11 +104,14 @@ function buildChatTools(deps: {
             clerkUser.firstName ??
             clerkUser.username ??
             'User';
-          realEmail = clerkUser.emailAddresses[0]?.emailAddress ?? '';
+          const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress;
+          realEmail = primaryEmail && primaryEmail.includes('@')
+            ? primaryEmail
+            : `${clerkUser.id}@clerk.user`;
         } else {
           logger.warn('createSupportTicket: currentUser() returned null after auth() succeeded');
           realName = 'Unknown';
-          realEmail = '';
+          realEmail = `${uid}@clerk.user`;
         }
         const result = await createTicketFn({
           userId: uid,
@@ -139,9 +142,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const comp = getComposition();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {
+    const retryAfter = Number.isFinite(limit.retryAfterMs)
+      ? String(Math.ceil(limit.retryAfterMs / 1000))
+      : undefined;
     return new Response('Too Many Requests', {
       status: 429,
-      headers: { 'Retry-After': String(Math.ceil(limit.retryAfterMs / 1000)) },
+      ...(retryAfter ? { headers: { 'Retry-After': retryAfter } } : {}),
     });
   }
 

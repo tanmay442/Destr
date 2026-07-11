@@ -1,11 +1,12 @@
 import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
+import { parseSeedArgs } from './commands/seed';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
+import { askYesNo, makeRl } from './prompts/index';
+import { getRepoRoot } from './commands/common';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const REPO_ROOT = getRepoRoot();
 
 function usage(): void {
   console.log(`Usage: rag-agent <command> [args]
@@ -32,9 +33,15 @@ async function main(): Promise<void> {
       await runSetup(REPO_ROOT);
       return;
     case 'seed': {
-      const result = spawnSync('pnpm', ['exec', 'tsx', 'scripts/seed-docs.ts', ...rest], {
+      const { dir, userId } = parseSeedArgs(rest);
+      const result = spawnSync('pnpm', ['exec', 'tsx', 'scripts/seed-docs.ts'], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
+        env: {
+          ...process.env,
+          SEED_DOCS_DIR: resolve(REPO_ROOT, dir),
+          ...(userId ? { SEED_USER_ID: userId } : {}),
+        },
       });
       process.exit(result.status ?? 0);
     }
@@ -55,9 +62,15 @@ async function main(): Promise<void> {
         });
         process.exit(result.status ?? 0);
       }
-      console.log('About to run `drizzle-kit push` against the database in DATABASE_URL.');
-      console.log('Re-run with --force to skip this confirmation.');
-      const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', '--force', ...rest], {
+      console.log('About to run a destructive `drizzle-kit push` against the database in DATABASE_URL.');
+      const rl = makeRl();
+      const confirmed = await askYesNo(rl, 'Proceed with the schema push?', false);
+      rl.close();
+      if (!confirmed) {
+        console.log('Aborted. Re-run with --force to skip this confirmation.');
+        return;
+      }
+      const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', ...rest], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
       });

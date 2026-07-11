@@ -121,6 +121,8 @@ const isPublicRoute = createRouteMatcher([
   '/icon',
   '/apple-icon',
   '/opengraph-image',
+  // QStash-signed worker: gated solely by its own signature verification.
+  '/api/admin/ingest-worker(.*)',
 ]);
 
 const isProtectedRoute = createRouteMatcher([
@@ -167,6 +169,9 @@ function createMiddleware(): AuthAdapter['middleware'] {
       if (isAdminRoute(req)) {
         const role = await resolveRole(userId, sessionClaims);
         if (role !== 'admin') {
+          if (req.nextUrl.pathname.startsWith('/api/')) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+          }
           return NextResponse.redirect(new URL('/chat', req.url));
         }
       }

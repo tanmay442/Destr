@@ -17,6 +17,7 @@ function makeMockRepos(overrides: { tickets?: Partial<TicketRepository>; audit?:
   const audit = {
     logTicketEvent: vi.fn().mockResolvedValue(undefined),
     logDocumentEvent: vi.fn().mockResolvedValue(undefined),
+    logUserEvent: vi.fn().mockResolvedValue(undefined),
     ...overrides.audit,
   } as AuditLog;
   return { tickets, audit };
@@ -141,6 +142,77 @@ describe('updateTicket', () => {
       deps,
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('allows a no-op update to the current status', async () => {
+    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue(existing),
+      },
+    });
+    const result = await updateTicket(
+      { ticketId: 'TKT-1001', status: 'created', actorId: 'user_1' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('sanitizes the note in the shared use-case', async () => {
+    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue({ ...existing, notes: 'clean' }),
+      },
+    });
+    await updateTicket(
+      { ticketId: 'TKT-1001', note: '  dirty\r\n note\x00', actorId: 'user_1' },
+      deps,
+    );
+    expect(deps.tickets.update).toHaveBeenCalledWith(
+      'TKT-1001',
+      expect.objectContaining({ notes: 'dirty\n note' }),
+    );
+  });
+
+  it('truncates a long first note to MAX_TICKET_NOTES_LENGTH', async () => {
+    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    const longNote = 'x'.repeat(20_000);
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue({ ...existing, notes: 'x'.repeat(10_000) }),
+      },
+    });
+    await updateTicket(
+      { ticketId: 'TKT-1001', note: longNote, actorId: 'user_1' },
+      deps,
+    );
+    const call = vi.mocked(deps.tickets.update).mock.calls[0][1] as { notes: string };
+    expect(call.notes.length).toBe(10_000);
+  });
+
+  it('logs both status_change and assign when both are set', async () => {
+    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue({ ...existing, status: 'in_progress', assignedTo: 'u2' }),
+      },
+    });
+    const result = await updateTicket(
+      { ticketId: 'TKT-1001', status: 'in_progress', assignedTo: 'u2', actorId: 'user_1' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(deps.audit.logTicketEvent).toHaveBeenCalledWith(
+      { action: 'status_change', ticketId: 'TKT-1001', actorId: 'user_1' },
+    );
+    expect(deps.audit.logTicketEvent).toHaveBeenCalledWith(
+      { action: 'assign', ticketId: 'TKT-1001', actorId: 'user_1' },
+    );
   });
 });
 

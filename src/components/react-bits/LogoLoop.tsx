@@ -285,6 +285,7 @@ export const LogoLoop = memo(
             {item.node}
           </span>
         ) : (
+          // eslint-disable-next-line @next/next/no-img-element -- logos are arbitrary remote URLs with unknown dimensions; next/image would require remotePatterns config and fixed sizing that breaks the marquee.
           <img
             src={item.src}
             srcSet={item.srcSet}

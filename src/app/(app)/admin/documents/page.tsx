@@ -105,7 +105,7 @@ export default async function DocumentsPage({
           </Alert>
         ) : null}
       </div>
-      <div className="overflow-x-auto rounded-xl border border">
+      <div className="overflow-x-auto rounded-xl border border-border-subtle">
         <Table data-testid="documents-table" aria-label="Documents">
           <TableHeader className="bg-secondary text-muted-foreground">
             <TableRow>

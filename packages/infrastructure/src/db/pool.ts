@@ -4,7 +4,7 @@ import pg from 'pg';
 
 const POOL_OPTS = {
   max: 20,
-  idleTimeoutMillis: 20,
+  idleTimeoutMillis: 10_000,
   connectionTimeoutMillis: 10_000,
 } as const;
 

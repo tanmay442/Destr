@@ -11,6 +11,7 @@ function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
       findById: vi.fn(),
       setStorageKey: vi.fn(),
       updateIngestStatus: vi.fn(),
+      claimIngest: vi.fn(),
       insert: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
       deleteById: vi.fn(),
       softDelete: vi.fn(),
@@ -21,6 +22,7 @@ function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
     },
     chunks: {
       insertMany,
+      deleteByDocumentId: vi.fn().mockResolvedValue(undefined),
       searchByVector: vi.fn(),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
@@ -55,15 +57,19 @@ describe('ingestFile', () => {
     ]);
   });
 
-  it('deletes old document only after new insert succeeds', async () => {
+  it('replaces a same-name document in place without deleting the row', async () => {
     const deleteById = vi.fn().mockResolvedValue(undefined);
-    const insert = vi.fn().mockResolvedValue({ id: 2, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null });
+    const deleteByDocumentId = vi.fn().mockResolvedValue(undefined);
+    const insertMany = vi.fn().mockResolvedValue(undefined);
+    // Upsert-by-name reuses the existing row id (1).
+    const insert = vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null });
     const deps = makeDeps({
       documents: {
         findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'oldhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
         findById: vi.fn(),
         setStorageKey: vi.fn(),
         updateIngestStatus: vi.fn(),
+        claimIngest: vi.fn(),
         insert,
         deleteById,
         softDelete: vi.fn(),
@@ -72,13 +78,30 @@ describe('ingestFile', () => {
         countChunksForDocuments: vi.fn().mockResolvedValue(new Map()),
         countChunksForAll: vi.fn().mockResolvedValue(0),
       },
+      chunks: {
+        insertMany,
+        deleteByDocumentId,
+        searchByVector: vi.fn(),
+        countForDocuments: vi.fn(),
+        countForAll: vi.fn(),
+        countForDocument: vi.fn(),
+        recountAll: vi.fn(),
+      },
     });
     const result = await ingestFile(
       { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user' },
       deps,
     );
     expect(result.ok).toBe(true);
-    expect(deleteById).toHaveBeenCalledBefore(insert);
+    if (result.ok) expect(result.value.status).toBe('updated');
+    // Regression: never delete the row we just upserted (previously caused an FK
+    // violation on the audit insert), and replace its chunks wholesale.
+    expect(deleteById).not.toHaveBeenCalled();
+    expect(deleteByDocumentId).toHaveBeenCalledWith(1);
+    expect(deleteByDocumentId).toHaveBeenCalledBefore(insertMany);
+    expect(insertMany).toHaveBeenCalledWith([
+      { documentId: 1, content: 'Sample PDF text content.', embedding: [0.1, 0.2, 0.3] },
+    ]);
   });
 
   it('returns unchanged when hash matches', async () => {

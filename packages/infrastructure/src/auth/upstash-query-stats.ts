@@ -14,7 +14,11 @@ export function createUpstashQueryStats(): QueryStats {
     async record(userId, query) {
       const text = query.trim().toLowerCase();
       if (!text) return;
-      await redis.zincrby(ZSET_KEY, 1, text);
+      try {
+        await redis.zincrby(ZSET_KEY, 1, text);
+      } catch {
+        // Best-effort analytics; never fail the request path.
+      }
     },
     async top(limit) {
       const results = await redis.zrange<Array<{ member: string; score: number }>>(ZSET_KEY, 0, limit - 1, { rev: true, withScores: true });
