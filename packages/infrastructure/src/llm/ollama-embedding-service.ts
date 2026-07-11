@@ -7,7 +7,7 @@ import { embedBatchWithModel } from './embedding-batch-helper';
 export function getOllamaEmbeddingModel(): EmbeddingModelV3 {
   const baseURL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
   const provider = createOpenAI({ apiKey: 'ollama', baseURL: `${baseURL}/v1` });
-  const modelId = process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
+  const modelId = process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
   return provider.textEmbedding(modelId) as EmbeddingModelV3;
 }
 

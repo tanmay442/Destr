@@ -1,0 +1,94 @@
+# Tests
+
+## Unit + integration (Vitest)
+
+244 tests across 27 files. Run with `pnpm test` (single run) or
+`pnpm test:ui` (interactive). Highlights:
+
+- `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
+  `searchDocumentation` and `createSupportTicket` tool wiring
+  (searchChunks shape, 800-char cap, user-supplied limit, captured-
+  citation emission), the Clerk identity override in
+  `createSupportTicket`, and the first-turn pre-fetch (no header on
+  empty `lastUserText`, chunks injected on the first turn,
+  pre-fetched chunks surface as `data-citation` parts without a
+  tool call, no pre-fetch on follow-up turns)
+- `src/app/api/admin/documents/[id]/blob/route.test.ts` —
+  inline PDF preview route (auth + content-type + 404 paths)
+- `src/app/api/admin/tickets/[ticketId]/route.test.ts` —
+  single-ticket GET/PATCH (auth + 404 + status validation + notes update)
+- `src/app/api/admin/users/[clerkId]/role/route.test.ts` —
+  role update route (auth + invalid role + forbidden + happy path)
+- `src/components/ChatInterface.test.tsx` — chat frame layout
+  (`flex-1 min-h-0 overflow-y-auto`) + streaming / citations
+  rendering
+- `src/app/api/admin/{users,documents,tickets}/...` — 403 / 400 / 404 /
+  409 paths and the happy path
+- `src/app/(app)/admin/actions.test.ts` — every admin server action 403s for
+  non-admin and forwards the right shape on success
+- `src/proxy.test.ts` — middleware route gating (public / signed-in /
+  admin)
+- `packages/application/src/rag/__tests__/search.test.ts` —
+  vector search error propagation and success path
+- `packages/application/src/rag/__tests__/ingest.integration.test.ts` —
+  PDF ingest pipeline: chunk insertion, hash dedup, transactional
+  document replacement (insert-before-delete with TransactionRunner),
+  empty-text and API-failure error paths
+- `packages/application/src/auth/__tests__/users.test.ts` —
+  `setUserRole`: audit logging, invalid role, user-not-found
+- `packages/application/src/admin/__tests__/tickets.test.ts` —
+  `updateTicket`: missing ticket, invalid transition, race condition,
+  notes-only update, valid transitions; `createTicket`: generated ID,
+  audit logging, insert failure; `isTicketStatus`, `VALID_TRANSITIONS`
+- `packages/application/src/admin/__tests__/documents.test.ts` —
+  `restoreDocument`: missing doc, non-deleted, expired window,
+  within window; `softDeleteDocument`: missing doc, happy path
+- `src/lib/__tests__/http.test.ts` — `respond()` edge cases
+  (ConflictError→409, GoneError→410, ExternalServiceError→502,
+  non-Error→500), `isActionError`, `toActionResult`, `toSafeError`
+- `src/__tests__/composition.test.ts` — `parseQueryPagination` edge
+  cases (empty string, Infinity, negative offset, zero offset),
+  `parsePageParam`
+
+## Repository layout
+
+```
+src/
+├── app/
+│   ├── (marketing)/        # Public landing (no app chrome)
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   ├── (app)/              # Authenticated shell (sidebar + mobile drawer)
+│   │   ├── layout.tsx
+│   │   ├── chat/page.tsx
+│   │   └── admin/          # requireAdmin() guard + admin pages + actions
+│   ├── api/{chat,admin}/   # Tool-driven RAG + admin API routes
+│   ├── sign-in/[[...sign-in]]/page.tsx
+│   ├── sign-up/[[...sign-up]]/page.tsx
+│   ├── layout.tsx          # ClerkProvider, html/body, fonts
+│   └── globals.css         # Dark "obsidian slate" CSS tokens
+├── components/
+│   ├── ChatInterface.tsx
+│   ├── app/AppSidebar.tsx  # Unified sidebar + mobile drawer (Client)
+│   ├── marketing/          # MarketingHero, MarketingFooter, MarketingAuthCard, MarketingTechMarquee, MarketingQuickStart
+│   └── icons/GithubIcon.tsx
+├── lib/
+│   ├── http.ts             # respond() + respondResult() + toSafeError() + toActionResult() + isActionError()
+│   ├── logger.ts           # Structured JSON logger
+│   ├── sanitize.ts         # escapeHtml() + sanitizeText()
+│   └── config/             # App-level config types
+├── proxy.ts                # clerkMiddleware (Next 16 convention)
+└── ...
+config/
+├── app.config.ts           # Org name, persona, admin emails, out-of-scope topics
+└── constants.ts            # Centralised business-logic constants
+scripts/                    # setup, seed, migration scripts
+```
+
+## CI
+
+`pnpm test:ci` provisions a Neon test branch, runs the full Vitest
+suite, and tears the branch down. Requires `NEON_API_KEY` and
+`NEON_PROJECT_ID` in `.env.local`. When these are absent the
+branching step is skipped and the suite runs against whatever
+database `DATABASE_URL` points to.

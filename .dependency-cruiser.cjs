@@ -21,7 +21,7 @@ module.exports = {
       from: { path: '^packages/domain' },
       to: {
         dependencyTypes: ['npm'],
-        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-parse|pdf-lib|pg|@neondatabase|drizzle-kit|ai/)',
+        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-lib|pg|@neondatabase|drizzle-kit|ai|unpdf/)',
       },
     },
     {
@@ -50,7 +50,7 @@ module.exports = {
       from: { path: '^packages/application' },
       to: {
         dependencyTypes: ['npm'],
-        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-parse|pdf-lib|pg|@neondatabase|drizzle-kit/)',
+        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-lib|pg|@neondatabase|drizzle-kit|unpdf/)',
       },
     },
     {
@@ -83,6 +83,23 @@ module.exports = {
       severity: 'error',
       from: { path: '^packages/cli' },
       to: { path: '^src/(app|components)' },
+    },
+
+    // ---- SRC APP/COMPONENTS: no direct infra or data layers ----
+    {
+      name: 'no-src-app-importing-infrastructure',
+      severity: 'error',
+      from: { path: '^src/(app|components)' },
+      to: { path: '^packages/infrastructure' },
+    },
+    {
+      name: 'no-src-app-importing-data-packages',
+      severity: 'error',
+      from: { path: '^src/(app|components)' },
+      to: {
+        dependencyTypes: ['npm'],
+        path: 'node_modules/(drizzle-orm|pg|unpdf|@neondatabase|pdf-lib/)/',
+      },
     },
 
   ],

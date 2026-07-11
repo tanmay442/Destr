@@ -30,7 +30,7 @@ needed for local development.
 docker compose --profile ollama up -d   # Postgres + Ollama
 # Pull the models (first time only):
 docker compose exec ollama ollama pull embeddinggemma:latest
-docker compose exec ollama ollama pull lfm2.5-thinking:1.2b
+docker compose exec ollama ollama pull gemma4:e2b
 pnpm install
 pnpm db:push                            # Create tables in local DB
 pnpm dev
@@ -76,7 +76,14 @@ for detailed sign-up links and per-service walkthroughs.
   and HNSW cosine index
 - **ORM:** Drizzle
 - **Tooling:** Vitest, Testing Library, `drizzle-kit`
-- **UI:** Dark "obsidian slate" theme via CSS custom properties in `src/app/globals.css` (no light variant). Route groups split the app: `(marketing)` for the public landing, `(app)` for the unified sidebar + mobile-drawer shell that wraps `/chat` and `/admin/*`.
+- **UI:** Dark-only "matte-black / achromatic-greyscale" design system via Tailwind v4 CSS-variable tokens in `src/app/globals.css` (no light variant). Route groups split the app: `(marketing)` for the public landing, `(app)` for the unified sidebar + mobile-drawer shell that wraps `/chat` and `/admin/*`.
+
+### UI / design system
+
+- **Styling:** Tailwind CSS v4 (utility-first, `@theme` / `@theme inline` tokens). All semantic colors derive from one achromatic-greyscale ramp in `src/app/globals.css` (`--background: #0a0a0a`, `--foreground: #f5f5f5`, …) so hover/focus/selected states stay coherent. Theming is forced dark via the `next-themes` `ThemeProvider` (`forcedTheme="dark"`, `enableSystem={false}`); there is no light variant.
+- **Components:** [shadcn/ui](https://ui.shadcn.com) (`new-york` style) primitives live in `src/components/ui/` (button, card, dialog, select, input, label, badge, avatar, alert, separator, …). They are copied in (not a runtime dependency) and built on Radix UI for accessible behaviour.
+- **Variants:** component variants use `class-variance-authority`; sizes/intents are Tailwind utility classes rather than bespoke CSS.
+- **Structure:** the marketing landing lives in `src/components/marketing/`; the authenticated app shell (sidebar + mobile drawer) is `src/components/app/AppSidebar.tsx`.
 
 ## Reference
 
@@ -87,14 +94,17 @@ for detailed sign-up links and per-service walkthroughs.
 - **Sign-in:** `/sign-in` and `/sign-up` use Clerk's hosted `<SignIn />` /
   `<SignUp />` components. Email+password and Google are enabled in the
   Clerk dashboard; the app is provider-agnostic.
-- **Role model:** Every Clerk user has `publicMetadata.role` of `admin`
-  or `user`. The local `users` table is the single source of truth for
-  roles; Clerk's `publicMetadata` is kept in sync as a secondary store
-  for JWT-based middleware checks.
+- **Role model:** Every Clerk user carries a role of `admin` or `user`.
+  The local `users` table holds the role, and any email listed in
+  `ADMIN_EMAILS` is also treated as admin (so a listed email stays admin
+  even if locally demoted). Clerk's `publicMetadata` mirrors the role
+  for fast JWT-based middleware checks.
 - **Bootstrap:** `ADMIN_EMAILS` is a comma-separated env var. The first
   time a user with one of those emails signs in, they are auto-promoted
-  to `admin` in the local DB and the role is synced back to Clerk's
-  `publicMetadata`. After that, admins promote others from `/admin/users`.
+  to `admin` in the local DB. After that, admins promote others from
+  `/admin/users`. (The role is read by the API/SSR path directly from
+  `ADMIN_EMAILS` or the local row; ensure the JWT template below projects
+  `metadata.role` so middleware gating also sees it.)
 - **Route gating:** `src/proxy.ts` runs `clerkMiddleware`. `/chat(.*)`,
   `/admin(.*)`, `/api/chat(.*)`, and `/api/admin(.*)` require a signed-in
   user; `/admin(.*)` and `/api/admin(.*)` additionally require
@@ -120,11 +130,11 @@ for detailed sign-up links and per-service walkthroughs.
 
 - **`/admin` (Overview)** — Counts of docs, chunks, tickets, open
   tickets, and users, plus the latest 10 audit events.
-- **`/admin/upload`** — File picker. After a successful upload shows the
-  chunk count and links to the new row in Documents.
+- **`/admin/upload`** — File picker. After a successful upload shows a
+  toast with the file name, status, and chunk count.
 - **`/admin/documents`** — Searchable, paginated table. Each row has
   *Preview* (inline iframe over `/api/admin/documents/[id]/blob`),
-  *Download*, *Replace*, *Delete* (soft delete with 7-day restore
+   *Download*, *Delete* (soft delete with 7-day restore
   window), and *Hard delete* (cascade). A page-level *Recount all*
   button re-derives every document's chunk count from the
   `chunks` table (the `recountAllChunksAction` server action).
@@ -141,11 +151,11 @@ for detailed sign-up links and per-service walkthroughs.
   race conditions on concurrent creation.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
-- **`/admin/analytics`** — Read-only counts and an in-process top-queries
-  table.
+- **`/admin/analytics`** — Read-only overview: summary counts, an activity
+  donut, a 7-day activity timeline, and a recent-activity audit list.
 - **`/admin/audit`** — Full audit log filterable by document id or
   ticket id. Document audit events: upload, replace, delete, restore.
-  Ticket audit events: create, assign, status_change, note.
+  Ticket audit events: create, assign, status_change, note, impersonation, role_change.
 
 ### Rate limit
 
@@ -177,7 +187,7 @@ this for an Upstash hash; the call sites do not need to change.
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | Vitest unit + integration suite |
 | `pnpm test:ui` | Vitest with the interactive UI |
-| `pnpm test:ci` | Provision test DB + vitest suite (skipped when `NEON_API_KEY` is absent) |
+| `pnpm test:ci` | Provision a Neon test branch + run vitest. Neon branch provisioning is skipped when `NEON_API_KEY`/`NEON_PROJECT_ID` are absent; vitest still runs against `DATABASE_URL`. |
 | `pnpm db:push` | Apply the Drizzle schema to the configured DB (interactive) |
 | `pnpm db:generate` | Generate SQL migrations from `packages/infrastructure/src/db/schema.ts` |
 | `pnpm db:studio` | Drizzle Studio |
@@ -192,97 +202,8 @@ this for an Upstash hash; the call sites do not need to change.
 
 ### Tests
 
-#### Unit + integration (Vitest)
-
-192 tests across 21 files. Run with `pnpm test` (single run) or
-`pnpm test:ui` (interactive). Highlights:
-
-- `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
-  `searchDocumentation` and `createSupportTicket` tool wiring
-  (searchChunks shape, 800-char cap, user-supplied limit, captured-
-  citation emission), the Clerk identity override in
-  `createSupportTicket`, and the first-turn pre-fetch (no header on
-  empty `lastUserText`, chunks injected on the first turn,
-  pre-fetched chunks surface as `data-citation` parts without a
-  tool call, no pre-fetch on follow-up turns)
-- `src/app/api/admin/documents/[id]/blob/route.test.ts` —
-  inline PDF preview route (auth + content-type + 404 paths)
-- `src/app/api/admin/tickets/[ticketId]/route.test.ts` —
-  single-ticket GET/PATCH (auth + 404 + status validation + notes update)
-- `src/app/api/admin/users/[clerkId]/role/route.test.ts` —
-  role update route (auth + invalid role + forbidden + happy path)
-- `src/components/ChatInterface.test.tsx` — chat frame layout
-  (`flex-1 min-h-0 overflow-y-auto`) + streaming / citations
-  rendering
-- `src/app/api/admin/{users,documents,tickets}/...` — 403 / 400 / 404 /
-  409 paths and the happy path
-- `src/app/(app)/admin/actions.test.ts` — every admin server action 403s for
-  non-admin and forwards the right shape on success
-- `src/proxy.test.ts` — middleware route gating (public / signed-in /
-  admin)
-- `packages/application/src/rag/__tests__/search.test.ts` —
-  vector search error propagation and success path
-- `packages/application/src/rag/__tests__/ingest.integration.test.ts` —
-  PDF ingest pipeline: chunk insertion, hash dedup, transactional
-  document replacement (delete-before-insert with TransactionRunner),
-  empty-text and API-failure error paths
-- `packages/application/src/auth/__tests__/users.test.ts` —
-  `setUserRole`: audit logging, invalid role, user-not-found
-- `packages/application/src/admin/__tests__/tickets.test.ts` —
-  `updateTicket`: missing ticket, invalid transition, race condition,
-  notes-only update, valid transitions; `createTicket`: generated ID,
-  audit logging, insert failure; `isTicketStatus`, `VALID_TRANSITIONS`
-- `packages/application/src/admin/__tests__/documents.test.ts` —
-  `restoreDocument`: missing doc, non-deleted, expired window,
-  within window; `softDeleteDocument`: missing doc, happy path
-- `src/lib/__tests__/http.test.ts` — `respond()` edge cases
-  (ConflictError→409, GoneError→410, ExternalServiceError→502,
-  non-Error→500), `isActionError`, `toActionResult`, `toSafeError`
-- `src/__tests__/composition.test.ts` — `parseQueryPagination` edge
-  cases (empty string, Infinity, negative offset, zero offset),
-  `parsePageParam`
-
-
-```
-src/
-├── app/
-│   ├── (marketing)/        # Public landing (no app chrome)
-│   │   ├── layout.tsx
-│   │   └── page.tsx
-│   ├── (app)/              # Authenticated shell (sidebar + mobile drawer)
-│   │   ├── layout.tsx
-│   │   ├── chat/page.tsx
-│   │   └── admin/          # requireAdmin() guard + admin pages + actions
-│   ├── api/{chat,admin}/   # Tool-driven RAG + admin API routes
-│   ├── sign-in/[[...sign-in]]/page.tsx
-│   ├── sign-up/[[...sign-up]]/page.tsx
-│   ├── layout.tsx          # ClerkProvider, html/body, fonts
-│   └── globals.css         # Dark "obsidian slate" CSS tokens
-├── components/
-│   ├── ChatInterface.tsx
-│   ├── app/AppSidebar.tsx  # Unified sidebar + mobile drawer (Client)
-│   ├── landing/            # LandingHeader, LandingCard, LandingFooter
-│   └── icons/GithubIcon.tsx
-├── lib/
-│   ├── http.ts             # respond() + respondResult() + toSafeError() + toActionResult()
-│   ├── logger.ts           # Structured JSON logger
-│   ├── sanitize.ts         # escapeHtml() + sanitizeText()
-│   └── config/             # App-level config types
-├── proxy.ts                # clerkMiddleware (Next 16 convention)
-└── ...
-config/
-├── app.config.ts           # Org name, persona, admin emails, out-of-scope topics
-└── constants.ts            # Centralised business-logic constants
-scripts/                    # setup, seed, migration scripts
-```
-
-#### CI
-
-`pnpm test:ci` provisions a Neon test branch, runs the full Vitest
-suite, and tears the branch down. Requires `NEON_API_KEY` and
-`NEON_PROJECT_ID` in `.env.local`. When these are absent the
-branching step is skipped and the suite runs against whatever
-database `DATABASE_URL` points to.
+The full unit + integration (Vitest) test catalog, CI setup, and
+repository layout are documented in [docs/test.md](docs/test.md).
 
 ### Workspace layout
 
@@ -297,24 +218,25 @@ packages/
 ├── application/    # @app/application — use-cases that return
 │                   #   Result<T, DomainError>. Imports only domain.
 ├── infrastructure/ # @app/infrastructure — Drizzle repos, AI SDK
-│                   #   adapters, Clerk session, pdf-parse, bytea.
+│                   #   adapters, Clerk session, unpdf, bytea.
 │                   #   Imports domain only (not application).
 ├── cli/            # @app/cli — `rag-agent` sub-commands:
                     #   init, setup, seed, db-migrate
 ```
 
-`src/` is the Next.js app shell. `src/composition.ts` is the only
-place where adapters are instantiated; routes import from
+`src/` is the Next.js app shell. `src/composition.ts` is the main
+composition root where adapters are instantiated; `src/proxy.ts` also
+instantiates the Clerk auth adapter for route gating. Routes import from
 `@/composition` and call the use-cases.
 
 #### Layer rules (enforced by `pnpm arch`)
 
 | Layer            | May import                                | May NOT import                |
 |------------------|-------------------------------------------|-------------------------------|
-| `domain`         | zod                                       | application, infrastructure, cli, src/, drizzle, @ai-sdk, pdf-parse, next, node: built-ins |
-| `application`    | domain, config/constants                  | infrastructure, src/app, src/components, drizzle, @ai-sdk, pdf-parse, next |
-| `infrastructure` | domain, drizzle, @ai-sdk, clerk, pdf-parse, pg | application, src/app, src/components, next |
-| `src/app`, `src/components` | application, domain, src/lib/http, src/lib/config | drizzle, @ai-sdk, pdf-parse, infrastructure |
+| `domain`         | zod                                       | application, infrastructure, cli, src/, drizzle, @ai-sdk, unpdf, next, node: built-ins |
+| `application`    | domain, config/constants                  | infrastructure, src/app, src/components, drizzle, @ai-sdk, unpdf, next |
+| `infrastructure` | domain, drizzle, @ai-sdk, clerk, unpdf, pg | application, src/app, src/components, next |
+| `src/app`, `src/components` | application, domain, src/lib/http, src/lib/config, `@ai-sdk/react`, `next`, `@clerk/nextjs` | drizzle-orm, pg, unpdf, @app/infrastructure |
 | `cli`            | application, infrastructure, dotenv       | src/app, src/components |
 
 Run `pnpm arch` after any change that touches the import graph.
@@ -335,7 +257,7 @@ infrastructure adapter:
 - `packages/infrastructure/src/db/pool.ts` — validates `DATABASE_URL`
 - `packages/infrastructure/src/llm/google-embedding-service.ts` — validates `AI_STUDIO_KEY`
 - `packages/infrastructure/src/llm/openai-chat-service.ts` — validates `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_BASE_URL`
-- `packages/infrastructure/src/auth/session.ts` — parses `ADMIN_EMAILS`
+- `packages/infrastructure/src/auth/clerk-session.ts` (and `clerk-adapter.ts`) — parse `ADMIN_EMAILS`
 - `src/lib/logger.ts` — gates on `LOG_LEVEL`
 
 Use-cases return `Result<T, DomainError>`; `src/lib/http.ts` exports
