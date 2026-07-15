@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { warn } from './common';
+import type { ChunkingStrategyName } from '@app/infrastructure/chunking';
 
 export interface SeedParseResult {
   dir: string;
@@ -63,8 +64,10 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
     ? { ingestFile: opts.ingest }
     : await (async () => {
         const { ingestFile: rawIngest } = await import('@app/application/rag/ingest');
-        const { Db, Llm, Pdf } = await import('@app/infrastructure');
+        const { Db, Llm, Pdf, Chunking } = await import('@app/infrastructure');
         const { createHash } = await import('node:crypto');
+        const strategyName = (process.env.CHUNKING_STRATEGY ?? 'document-aware') as ChunkingStrategyName;
+        const useStrategy = !process.env.SEED_LEGACY_SPLITTER;
         const ingestDeps = {
           documents: {
             findByName: (n: string) => Db.findDocumentByName(n),
@@ -98,6 +101,10 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
           hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
           pdfParser: Pdf.unpdfParser,
           textSplitter: Pdf.langchainSplitter,
+          contentParser: useStrategy ? Pdf.unpdfParser : undefined,
+          chunkingStrategy: useStrategy
+            ? Chunking.getChunkingStrategy(strategyName, { embeddings: Llm.getEmbeddingService() })
+            : undefined,
         };
         return {
           ingestFile: (input: { fileName: string; buffer: Buffer; uploadedBy: string }) =>

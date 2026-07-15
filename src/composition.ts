@@ -13,7 +13,7 @@ import {
   uploadPrechunkedMarkdown,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking } from '@app/infrastructure';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
@@ -64,6 +64,12 @@ const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
+  // Session 4: strategy-driven chunking is the default path. Both ingest
+  // routes (ingestFile + ingestQueuedDocument) share this single resolution.
+  contentParser: Pdf.unpdfParser,
+  chunkingStrategy: Chunking.getChunkingStrategy(appConfig.chunkingStrategy, {
+    embeddings: embeddingService,
+  }),
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
 };
@@ -166,7 +172,7 @@ function createComposition() {
       }
       const prepared = await prepareIngest(
         { documentId, fileName: doc.fileName, buffer },
-        { embeddings: embeddingService, pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter, summarizer: Llm.docSummarizer },
+        ingestDeps,
       );
       if (!prepared.ok) {
         await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});

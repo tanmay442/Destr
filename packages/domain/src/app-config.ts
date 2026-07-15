@@ -78,6 +78,13 @@ export const appConfigSchema = z.object({
     }),
   seedDocsDir: z.string().min(1).default('./documents'),
   prefetchFirstTurn: z.boolean().default(false),
+  /** Chunking strategy used at ingest (Session 4). `document-aware` is the
+   *  default and produces `sectionTitle` provenance; override via the
+   *  `CHUNKING_STRATEGY` env var. `pre-chunked` is handled by the dedicated
+   *  pre-chunked ingest path and is intentionally not selectable here. */
+  chunkingStrategy: z
+    .enum(['document-aware', 'recursive-adaptive', 'semantic'])
+    .default('document-aware'),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

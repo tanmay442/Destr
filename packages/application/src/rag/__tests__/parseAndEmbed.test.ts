@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseAndEmbed } from '../ingest';
 import type { ParseDeps } from '../ingest';
-import type { DocSummarizer } from '@app/domain';
+import type { ChunkingStrategy, ContentParser, DocSummarizer } from '@app/domain';
 
 function makeParseDeps(overrides?: Partial<ParseDeps>): ParseDeps {
   return {
@@ -111,4 +111,45 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(result.value.rows[0]!.title).toBeNull();
     expect(result.value.rows[0]!.summary).toBe('loose summary');
   });
+
+  it('composes the CCH header with the strategy path, carrying sectionTitle + source', async () => {
+    const summarizer: DocSummarizer = {
+      generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),
+    };
+    const contentParser: ContentParser = {
+      extractPages: vi.fn().mockResolvedValue([{ page: 1, text: 'doc' }]),
+      extractText: vi.fn(),
+    };
+    const chunkingStrategy: ChunkingStrategy = {
+      splitPages: vi.fn().mockResolvedValue([
+        { content: 'Section A body.', chunkIndex: 0, page: 1, sectionTitle: 'Section A', source: 'Page 1 — Section A' },
+        { content: 'Section B body.', chunkIndex: 1, page: 1, sectionTitle: 'Section B', source: 'Page 1 — Section B' },
+      ]),
+    };
+    const deps = makeParseDeps({ summarizer, contentParser, chunkingStrategy });
+
+    const result = await parseAndEmbed({ fileName: 'd.pdf', buffer: Buffer.from('x') }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
+      'Document: My Doc\nSummary: About things.\n\nSection A body.',
+      'Document: My Doc\nSummary: About things.\n\nSection B body.',
+    ]);
+    expect(result.value.rows).toEqual([
+      expect.objectContaining({
+        content: 'Document: My Doc\nSummary: About things.\n\nSection A body.',
+        sectionTitle: 'Section A',
+        source: 'Page 1 — Section A',
+        title: 'My Doc',
+      }),
+      expect.objectContaining({
+        content: 'Document: My Doc\nSummary: About things.\n\nSection B body.',
+        sectionTitle: 'Section B',
+        source: 'Page 1 — Section B',
+        title: 'My Doc',
+      }),
+    ]);
+  });
 });
+

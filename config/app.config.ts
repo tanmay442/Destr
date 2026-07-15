@@ -102,6 +102,11 @@ const config: AppConfig = {
   // itself. Set false to disable the pre-fetch and rely on the
   // model to call the tool every turn.
   prefetchFirstTurn: false,
+
+  // Chunking strategy at ingest (Session 4). Override with the
+  // CHUNKING_STRATEGY env var. Default `document-aware` yields
+  // per-section `sectionTitle` provenance for richer citations.
+  chunkingStrategy: (process.env.CHUNKING_STRATEGY ?? 'document-aware') as AppConfig['chunkingStrategy'],
 };
 
 export default config;
