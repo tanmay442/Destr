@@ -1,6 +1,12 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
-import type { ChunkRepository, EmbeddingService, RetrievedChunkRow } from '@app/domain';
-import { SIMILARITY_THRESHOLD, DEFAULT_SEARCH_LIMIT, PARENT_CHILD_MODE, PARENT_CHILD_WINDOW } from '../../../../config/constants';
+import type { ChunkRepository, EmbeddingService, Reranker, RetrievedChunkRow } from '@app/domain';
+import {
+  SIMILARITY_THRESHOLD,
+  PARENT_CHILD_MODE,
+  PARENT_CHILD_WINDOW,
+  CANDIDATE_POOL,
+  RERANK_TOP_N,
+} from '../../../../config/constants';
 import { sanitizePagination } from '../service-result';
 
 const MAX_SEARCH_LIMIT = 50;
@@ -19,6 +25,11 @@ export interface RetrievedChunk {
 export interface SearchDeps {
   chunks: ChunkRepository;
   embeddings: EmbeddingService;
+  /** Optional second-stage reranker (Session 6). When present, `searchChunks`
+   *  retrieves a broad candidate pool then reorders it by true query–document
+   *  relevance before capping to `limit`. When absent, results fall back to
+   *  cosine (pgvector) ordering — the pre-Session-6 behaviour. */
+  reranker?: Reranker;
 }
 
 export interface SearchOpts {
@@ -26,6 +37,9 @@ export interface SearchOpts {
   limit?: number;
   /** Override the `PARENT_CHILD_MODE` config for this call (`parent`|`window`). */
   mode?: 'parent' | 'window';
+  /** Override the broad candidate-pool size retrieved before reranking
+   *  (Session 6). Ignored when no reranker is configured. */
+  candidateLimit?: number;
 }
 
 /** Map a raw query row to the public `RetrievedChunk` (drops `parentChunkId`). */
@@ -114,6 +128,35 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
   return out;
 }
 
+/**
+ * Reorder candidate rows by the reranker's relevance score and cap to `topN`.
+ * Defensive against out-of-range indices from the adapter. If the reranker
+ * throws, falls back to cosine (similarity) ordering so a reranker outage never
+ * breaks search (the default provider is on-device and could fail to load).
+ */
+async function rerankRows(
+  query: string,
+  rows: RetrievedChunkRow[],
+  topN: number,
+  reranker: Reranker,
+): Promise<RetrievedChunkRow[]> {
+  try {
+    const ranked = await reranker.rank(query, rows.map((r) => r.content));
+    const ordered = [...ranked]
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .map((r) => rows[r.index])
+      .filter((r): r is RetrievedChunkRow => r != null);
+    // If the adapter returned nothing usable, fall back to cosine ordering.
+    return (ordered.length > 0 ? ordered : sortBySimilarity(rows)).slice(0, topN);
+  } catch {
+    return sortBySimilarity(rows).slice(0, topN);
+  }
+}
+
+function sortBySimilarity(rows: RetrievedChunkRow[]): RetrievedChunkRow[] {
+  return [...rows].sort((a, b) => b.similarity - a.similarity);
+}
+
 export async function searchChunks(
   query: string,
   opts: SearchOpts,
@@ -122,8 +165,13 @@ export async function searchChunks(
   if (query.trim() === '') {
     return ok([]);
   }
-  const threshold = opts.threshold ?? SIMILARITY_THRESHOLD;
-  const { limit } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT);
+  const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, RERANK_TOP_N);
+  const rerankerEnabled = deps.reranker != null;
+  // With a reranker we cast a wide net (broad pool, no cosine cutoff) and let
+  // the cross-encoder decide; otherwise we keep the pre-Session-6 behaviour.
+  const threshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
+  const candidateLimit = rerankerEnabled ? (opts.candidateLimit ?? CANDIDATE_POOL) : topN;
+
   let embedding: number[];
   try {
     embedding = await deps.embeddings.embed(query);
@@ -132,7 +180,7 @@ export async function searchChunks(
   }
   let rows: RetrievedChunkRow[];
   try {
-    rows = await deps.chunks.searchByVector(embedding, { threshold, limit });
+    rows = await deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
   } catch (cause) {
     return err(new ExternalServiceError('Vector search failed', cause));
   }
@@ -140,9 +188,13 @@ export async function searchChunks(
     return ok([]);
   }
 
+  const capped = deps.reranker
+    ? await rerankRows(query, rows, topN, deps.reranker)
+    : sortBySimilarity(rows).slice(0, topN);
+
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'
-      ? await resolveWindow(rows, deps)
-      : await resolveParents(rows, deps);
+      ? await resolveWindow(capped, deps)
+      : await resolveParents(capped, deps);
   return ok(resolved);
 }

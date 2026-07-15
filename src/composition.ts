@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
-import { MAX_LIST_LIMIT } from '../config/constants';
+import { MAX_LIST_LIMIT, RERANKER_PROVIDER } from '../config/constants';
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -75,7 +75,13 @@ const ingestDeps: IngestDeps = {
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
 };
-const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
+const searchDeps: SearchDeps = {
+  chunks: chunkRepo,
+  embeddings: embeddingService,
+  // Session 6: second-stage reranker. Provider selected by RERANKER_PROVIDER
+  // (`local` on-device cross-encoder by default, `cohere` for the hosted API).
+  reranker: Llm.getReranker(RERANKER_PROVIDER),
+};
 function createRateLimiter(): RateLimiter {
   if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();
   return Auth.lruRateLimiter;

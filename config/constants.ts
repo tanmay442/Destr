@@ -23,5 +23,10 @@ export const CHILD_CHUNK_SIZE = Number(process.env.CHILD_CHUNK_SIZE ?? 400);
 export const PARENT_CHILD_MODE = (process.env.PARENT_CHILD_MODE ?? 'parent') as 'parent' | 'window';
 export const PARENT_CHILD_WINDOW = Number(process.env.PARENT_CHILD_WINDOW ?? 2);
 export const RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Reranking (Session 6). A broad candidate pool is retrieved by vector search,
+// then a second-stage reranker reorders it and keeps the top `RERANK_TOP_N`.
+export const CANDIDATE_POOL = Number(process.env.CANDIDATE_POOL ?? 30);
+export const RERANK_TOP_N = Number(process.env.RERANK_TOP_N ?? DEFAULT_SEARCH_LIMIT);
+export const RERANKER_PROVIDER = (process.env.RERANKER_PROVIDER ?? 'local') as 'local' | 'cohere';
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;

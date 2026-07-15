@@ -278,6 +278,29 @@ export interface EmbeddingService {
   embedBatch(values: string[]): Promise<number[][]>;
 }
 
+/** A single reranked document: its position in the input `documents` array and
+ *  the reranker's relevance score for the query (higher = more relevant). */
+export interface RankedDocument {
+  index: number;
+  relevanceScore: number;
+}
+
+/**
+ * Second-stage reranker (Session 6). Reorders an initial pool of retrieval
+ * candidates by true query–document relevance. Unlike bi-encoder cosine
+ * (pgvector), cross-encoders / hosted rerankers attend to the query and each
+ * document jointly, giving markedly better precision on noisy corpora.
+ *
+ * `rank` receives the query and the candidate document texts and returns one
+ * `RankedDocument` per input, each carrying the original `index` and a
+ * `relevanceScore`. Implementations must not assume the results are sorted —
+ * callers sort by `relevanceScore`. Implemented in infrastructure as
+ * provider-agnostic adapters (local cross-encoder or hosted Cohere).
+ */
+export interface Reranker {
+  rank(query: string, documents: string[]): Promise<RankedDocument[]>;
+}
+
 /**
  * Generates a short document title + summary used to prepend a contextual
  * header to every chunk before embedding (Contextual Chunk Headers, Session 3).
