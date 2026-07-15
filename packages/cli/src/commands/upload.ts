@@ -128,20 +128,23 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
           countChunksForDocuments: Db.countChunksForDocuments,
           countChunksForAll: Db.countChunksForAll,
         },
-        chunks: {
-          insertMany: (rows: Array<{
-            documentId: number; content: string; embedding: number[];
-            chunkIndex?: number; page?: number | null; sectionTitle?: string | null;
-            source?: string | null; parentChunkId?: number | null;
-            kind?: 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
-          }>) => Db.insertChunks(rows),
-          deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
-          countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
-          countForAll: () => Db.countChunksForAll(),
-          countForDocument: (id: number) => Db.countChunksForDocument(id),
-          recountAll: () => Db.recountChunksForAll(),
-          searchByVector: (embedding: number[], o: { threshold: number; limit: number; filter?: { documentId?: number } }) => Db.searchChunksByVector(embedding, o),
-        },
+          chunks: {
+            insertMany: (rows: Array<{
+              documentId: number; content: string; embedding: number[];
+              chunkIndex?: number; page?: number | null; sectionTitle?: string | null;
+              source?: string | null; parentChunkId?: number | null;
+              kind?: 'parent' | 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
+            }>) => Db.insertChunks(rows),
+            deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
+            getByIds: (ids: number[]) => Db.getChunksByIds(ids),
+            getByDocAndRange: (documentId: number, start: number, end: number) =>
+              Db.getChunksByDocAndRange(documentId, start, end),
+            countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
+            countForAll: () => Db.countChunksForAll(),
+            countForDocument: (id: number) => Db.countChunksForDocument(id),
+            recountAll: () => Db.recountChunksForAll(),
+            searchByVector: (embedding: number[], o: { threshold: number; limit: number; filter?: { documentId?: number } }) => Db.searchChunksByVector(embedding, o),
+          },
         embeddings: Llm.getEmbeddingService(),
         hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
         blobStorage: Storage.createBlobStorage(),

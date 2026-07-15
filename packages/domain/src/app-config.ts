@@ -80,11 +80,23 @@ export const appConfigSchema = z.object({
   prefetchFirstTurn: z.boolean().default(false),
   /** Chunking strategy used at ingest (Session 4). `document-aware` is the
    *  default and produces `sectionTitle` provenance; override via the
-   *  `CHUNKING_STRATEGY` env var. `pre-chunked` is handled by the dedicated
-   *  pre-chunked ingest path and is intentionally not selectable here. */
+   *  `CHUNKING_STRATEGY` env var. `parent-child` (Session 5) emits small
+   *  children for retrieval + larger parent blocks for context. `pre-chunked`
+   *  is handled by the dedicated pre-chunked ingest path and is intentionally
+   *  not selectable here. */
   chunkingStrategy: z
-    .enum(['document-aware', 'recursive-adaptive', 'semantic'])
+    .enum(['document-aware', 'recursive-adaptive', 'semantic', 'parent-child'])
     .default('document-aware'),
+  /** Parent block size (chars) for the `parent-child` strategy (Session 5). */
+  parentChunkSize: z.coerce.number().int().positive().default(1800),
+  /** Child chunk size (chars) for the `parent-child` strategy (Session 5). */
+  childChunkSize: z.coerce.number().int().positive().default(400),
+  /** Parent-child resolution mode used by `searchChunks` (Session 5).
+   *  `parent` returns the parent block for each child hit; `window` pads
+   *  each hit with its `±N` neighbouring chunks. */
+  parentChildMode: z.enum(['parent', 'window']).default('parent'),
+  /** Neighbour radius (in chunk_index units) used by the `window` mode. */
+  parentChildWindow: z.coerce.number().int().nonnegative().default(2),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

@@ -1,5 +1,68 @@
 import type { EmbeddingService } from '@app/domain';
 
+export interface Section {
+  title: string | null;
+  text: string;
+}
+
+/** Heuristic heading detection used to split a page into titled sections. */
+export function isHeadingLine(line: string, avgLen: number): boolean {
+  const t = line.trim();
+  if (t.length === 0 || t.length > 120) return false;
+  if (/^#{1,6}\s+/.test(t)) return true;
+  if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
+  const letters = t.replace(/[^A-Za-z]/g, '');
+  if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;
+  if (t.length < Math.max(15, avgLen * 0.4)) return true;
+  return false;
+}
+
+/** Split a single page's text into titled sections at heading boundaries. */
+export function buildSections(text: string): Section[] {
+  const lines = text.split(/\r?\n/);
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const avgLen = nonEmpty.length
+    ? nonEmpty.reduce((a, l) => a + l.trim().length, 0) / nonEmpty.length
+    : 0;
+  const sections: Section[] = [];
+  let currentTitle: string | null = null;
+  let currentLines: string[] = [];
+  const flush = () => {
+    const body = currentLines.join('\n').trim();
+    if (body.length > 0) sections.push({ title: currentTitle, text: body });
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.length === 0) {
+      currentLines.push('');
+      continue;
+    }
+    if (isHeadingLine(line, avgLen)) {
+      flush();
+      currentTitle = t.replace(/^#+\s+/, '').replace(/:\s*$/, '').trim() || null;
+      currentLines = [];
+    } else {
+      currentLines.push(line);
+    }
+  }
+  flush();
+  return sections;
+}
+
+/** Merge consecutive sections shorter than `minLen` into the previous one. */
+export function mergeShortSections(sections: Section[], minLen: number): Section[] {
+  const out: Section[] = [];
+  for (const s of sections) {
+    const last = out[out.length - 1];
+    if (s.text.length < minLen && last) {
+      last.text = (last.text + '\n\n' + (s.title ? s.title + '\n' : '') + s.text).trim();
+    } else {
+      out.push({ ...s });
+    }
+  }
+  return out;
+}
+
 export interface PageSpan {
   text: string;
   start: number;

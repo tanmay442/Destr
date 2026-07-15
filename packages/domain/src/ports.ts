@@ -87,8 +87,28 @@ export interface DocumentChunk {
   summary?: string | null; // CCH (Session 3)
   parentChunkId?: number | null; // parent-child (Session 5)
   sourceChunkId?: number | null; // proposition back-ref (future)
+  /** Kind of chunk. `parent` = large block returned for context; `child` =
+   *  small block embedded for precise retrieval; `summary` = LLM-generated
+   *  summary (optional variant, Session 5). Defaults to `child`. */
+  kind?: 'parent' | 'child' | 'summary';
   embeddingModel?: string | null;
   contentHash?: string | null;
+}
+
+/** Shape returned by vector/lookup queries: provenance + similarity. Shared by
+ *  `searchByVector`, `getByIds`, and `getByDocAndRange` so resolution logic in
+ *  the application layer can treat them uniformly. */
+export interface RetrievedChunkRow {
+  id: number;
+  documentId: number;
+  fileName: string | null;
+  page: number | null;
+  sectionTitle: string | null;
+  source: string | null;
+  content: string;
+  similarity: number;
+  parentChunkId: number | null;
+  chunkIndex: number;
 }
 
 /** Parses raw content (e.g. PDF buffer) into structured pages. */
@@ -106,18 +126,19 @@ export interface ChunkRepository {
   searchByVector(
     embedding: number[],
     opts: { threshold: number; limit: number; filter?: { documentId?: number } },
-  ): Promise<
-    Array<{
-      id: number;
-      documentId: number;
-      fileName: string | null;
-      page: number | null;
-      sectionTitle: string | null;
-      source: string | null;
-      content: string;
-      similarity: number;
-    }>
-  >;
+  ): Promise<RetrievedChunkRow[]>;
+  /** Fetch chunks by their (surrogate) ids. Returns `RetrievedChunkRow`s with
+   *  `similarity` left as a placeholder (the caller overrides it) — used to
+   *  resolve child hits to their parent blocks (Session 5 parent-child). */
+  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  /** Fetch chunks of a document whose `chunkIndex` lies in `[start, end]`
+   *  (inclusive). Used by the `window` parent-child mode to pad a hit with its
+   *  neighbours (Session 5). */
+  getByDocAndRange(
+    documentId: number,
+    start: number,
+    end: number,
+  ): Promise<RetrievedChunkRow[]>;
   insertMany(
     rows: Array<{
       documentId: number;
@@ -128,7 +149,7 @@ export interface ChunkRepository {
       sectionTitle?: string | null;
       source?: string | null;
       parentChunkId?: number | null;
-      kind?: 'child' | 'summary';
+      kind?: 'parent' | 'child' | 'summary';
       embeddingModel?: string | null;
       contentHash?: string | null;
     }>,

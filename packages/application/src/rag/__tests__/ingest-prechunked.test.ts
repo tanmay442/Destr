@@ -30,6 +30,8 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
       insertMany,
       deleteByDocumentId: vi.fn().mockResolvedValue(undefined),
       searchByVector: vi.fn(),
+      getByIds: vi.fn().mockResolvedValue([]),
+      getByDocAndRange: vi.fn().mockResolvedValue([]),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
       countForDocument: vi.fn(),

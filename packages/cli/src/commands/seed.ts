@@ -88,9 +88,12 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
               documentId: number; content: string; embedding: number[];
               chunkIndex?: number; page?: number | null; sectionTitle?: string | null;
               source?: string | null; parentChunkId?: number | null;
-              kind?: 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
+              kind?: 'parent' | 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
             }>) => Db.insertChunks(rows),
             deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
+            getByIds: (ids: number[]) => Db.getChunksByIds(ids),
+            getByDocAndRange: (documentId: number, start: number, end: number) =>
+              Db.getChunksByDocAndRange(documentId, start, end),
             countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
             countForAll: () => Db.countChunksForAll(),
             countForDocument: (id: number) => Db.countChunksForDocument(id),

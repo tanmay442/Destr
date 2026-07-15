@@ -69,6 +69,8 @@ const ingestDeps: IngestDeps = {
   contentParser: Pdf.unpdfParser,
   chunkingStrategy: Chunking.getChunkingStrategy(appConfig.chunkingStrategy, {
     embeddings: embeddingService,
+    parentSize: appConfig.parentChunkSize,
+    childSize: appConfig.childChunkSize,
   }),
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,

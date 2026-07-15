@@ -49,7 +49,7 @@ export interface PreparedChunk {
   title?: string | null;
   summary?: string | null;
   parentChunkId?: number | null;
-  kind?: 'child' | 'summary';
+  kind?: 'parent' | 'child' | 'summary';
   embeddingModel?: string | null;
   contentHash?: string | null;
 }
@@ -122,6 +122,7 @@ function toPreparedRows(
     title: c.title ?? null,
     summary: c.summary ?? null,
     parentChunkId: c.parentChunkId ?? null,
+    kind: c.kind ?? 'child',
     embeddingModel: c.embeddingModel ?? null,
     contentHash: c.contentHash ?? null,
   }));

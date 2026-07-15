@@ -106,7 +106,17 @@ const config: AppConfig = {
   // Chunking strategy at ingest (Session 4). Override with the
   // CHUNKING_STRATEGY env var. Default `document-aware` yields
   // per-section `sectionTitle` provenance for richer citations.
+  // `parent-child` (Session 5) emits small children + large parent blocks.
   chunkingStrategy: (process.env.CHUNKING_STRATEGY ?? 'document-aware') as AppConfig['chunkingStrategy'],
+
+  // Parent-child indexing (Session 5). Only used when
+  // `chunkingStrategy === 'parent-child'`. Sizes are in characters.
+  parentChunkSize: Number(process.env.PARENT_CHUNK_SIZE ?? 1800),
+  childChunkSize: Number(process.env.CHILD_CHUNK_SIZE ?? 400),
+  // How `searchChunks` resolves a child hit to context: `parent` returns the
+  // parent block; `window` pads the hit with its ±N neighbours.
+  parentChildMode: (process.env.PARENT_CHILD_MODE ?? 'parent') as AppConfig['parentChildMode'],
+  parentChildWindow: Number(process.env.PARENT_CHILD_WINDOW ?? 2),
 };
 
 export default config;
