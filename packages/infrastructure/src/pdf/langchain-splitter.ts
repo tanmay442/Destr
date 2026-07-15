@@ -1,10 +1,12 @@
-// Chunk size/overlap match the legacy ingestFile production settings.
+// Chunk size/overlap are config-driven (Session 3): defaults 800/80 but
+// overridable via INGEST_CHUNK_SIZE / INGEST_CHUNK_OVERLAP env vars.
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import type { TextSplitter } from '@app/domain';
+import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '../../../../config/constants';
 
 const splitter = new RecursiveCharacterTextSplitter({
-  chunkSize: 350,
-  chunkOverlap: 50,
+  chunkSize: INGEST_CHUNK_SIZE,
+  chunkOverlap: INGEST_CHUNK_OVERLAP,
 });
 
 export const langchainSplitter: TextSplitter = {

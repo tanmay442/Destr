@@ -257,6 +257,16 @@ export interface EmbeddingService {
   embedBatch(values: string[]): Promise<number[][]>;
 }
 
+/**
+ * Generates a short document title + summary used to prepend a contextual
+ * header to every chunk before embedding (Contextual Chunk Headers, Session 3).
+ * Implemented in infrastructure as a provider-agnostic adapter built on top of
+ * the configured chat model. The application layer depends only on this port.
+ */
+export interface DocSummarizer {
+  generateDocContext(text: string): Promise<{ title: string; summary: string }>;
+}
+
 
 export interface BlobStorage {
   put(key: string, body: Buffer, contentType: string): Promise<void>;

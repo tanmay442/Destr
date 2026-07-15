@@ -2,8 +2,10 @@ import { err, ok, type Result, ValidationError, ExternalServiceError } from '@ap
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, BlobStorage, TransactionRunner, ParsedChunk, MarkdownParser,
+  DocSummarizer,
 } from '@app/domain';
 import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
+import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
 /** Sanitize a filename for use inside a blob-storage key (mirrors seed.ts). */
 function safeBlobName(name: string): string {
@@ -31,6 +33,8 @@ export interface PrechunkedIngestDeps {
   blobStorage?: BlobStorage;
   /** Optional: makes the upsert + chunk-replace sequence atomic. */
   runner?: TransactionRunner;
+  /** Optional Contextual-Chunk-Header summarizer (Session 3). */
+  summarizer?: DocSummarizer;
 }
 
 /**
@@ -58,17 +62,34 @@ export async function ingestPrechunked(
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
 
+  // Contextual Chunk Header (Session 3): one title+summary per document,
+  // prepended to every chunk before embedding so retrieval matches.
+  let header = '';
+  let title: string | null = null;
+  let summary: string | null = null;
+  if (deps.summarizer && CCH_ENABLED) {
+    const ctx = await deps.summarizer.generateDocContext(
+      chunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
+    );
+    title = ctx.title?.trim() || null;
+    summary = ctx.summary?.trim() || null;
+    if (title) header = `Document: ${title}\nSummary: ${summary ?? ''}\n\n`;
+  }
+  const headerChunks = header
+    ? chunks.map((c) => ({ ...c, content: header + c.content }))
+    : chunks;
+
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(chunks.map((c) => c.content));
+    embeddings = await deps.embeddings.embedBatch(headerChunks.map((c) => c.content));
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
-  if (embeddings.length !== chunks.length) {
+  if (embeddings.length !== headerChunks.length) {
     return err(new ExternalServiceError('Embedding count mismatch'));
   }
 
-  const rows: PreparedChunk[] = chunks.map((c, i) => ({
+  const rows: PreparedChunk[] = headerChunks.map((c, i) => ({
     documentId: 0,
     content: c.content,
     embedding: embeddings[i]!,
@@ -76,8 +97,8 @@ export async function ingestPrechunked(
     page: c.page ?? null,
     sectionTitle: c.sectionTitle ?? null,
     source: c.source ?? null,
-    title: null,
-    summary: null,
+    title,
+    summary,
     parentChunkId: null,
     embeddingModel: null,
     contentHash: null,

@@ -65,6 +65,7 @@ const ingestDeps: IngestDeps = {
   embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   runner: Db.transactionRunner,
+  summarizer: Llm.docSummarizer,
 };
 const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
 function createRateLimiter(): RateLimiter {
@@ -134,6 +135,7 @@ function createComposition() {
         blobStorage,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
+        summarizer: Llm.docSummarizer,
       }),
     /** Drain a queued ingest: called by the /api/admin/ingest-worker
      *  route on a QStash callback. Loads the doc, reads the PDF from the blob
@@ -164,7 +166,7 @@ function createComposition() {
       }
       const prepared = await prepareIngest(
         { documentId, fileName: doc.fileName, buffer },
-        { embeddings: embeddingService, pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter },
+        { embeddings: embeddingService, pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter, summarizer: Llm.docSummarizer },
       );
       if (!prepared.ok) {
         await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});

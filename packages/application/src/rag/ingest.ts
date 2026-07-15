@@ -2,8 +2,9 @@ import { err, ok, type Result, ValidationError, ExternalServiceError } from '@ap
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, PdfParser, TextSplitter, TransactionRunner,
-  ContentParser, ChunkingStrategy, DocumentChunk,
+  ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
 } from '@app/domain';
+import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
 interface IngestFileInput {
   fileName: string;
@@ -29,6 +30,8 @@ export interface IngestDeps {
    *  until then so the existing ingest path is never broken. */
   contentParser?: ContentParser;
   chunkingStrategy?: ChunkingStrategy;
+  /** Optional Contextual-Chunk-Header summarizer (Session 3). */
+  summarizer?: DocSummarizer;
   /** Optional transaction runner used to make the upsert+replace-chunks
    *  sequence atomic. When absent (e.g. unit tests), the legacy direct
    *  writes are used. */
@@ -52,12 +55,54 @@ export interface PreparedChunk {
 }
 
 /** Deps needed to parse + split + embed. Shared by `parseAndEmbed`/`prepareIngest`. */
-interface ParseDeps {
+export interface ParseDeps {
   embeddings: EmbeddingService;
   pdfParser: PdfParser;
   textSplitter: TextSplitter;
   contentParser?: ContentParser;
   chunkingStrategy?: ChunkingStrategy;
+  /** Optional Contextual-Chunk-Header summarizer (Session 3). When present
+   *  (and `CCH_ENABLED`), one title+summary is generated per document and
+   *  prepended to every chunk before embedding. */
+  summarizer?: DocSummarizer;
+}
+
+/**
+ * Generate the Contextual Chunk Header (CCH) for a document, once.
+ * Returns the header string to prepend and the title/summary metadata.
+ * Returns empty/falsy values when CCH is disabled or no summarizer is wired,
+ * so callers can safely prepend (no-op) without branching.
+ */
+async function buildCchHeader(
+  deps: ParseDeps,
+  sourceText: string,
+): Promise<{ header: string; title: string | null; summary: string | null }> {
+  if (!deps.summarizer || !CCH_ENABLED) {
+    return { header: '', title: null, summary: null };
+  }
+  const ctx = await deps.summarizer.generateDocContext(sourceText.slice(0, CCH_CONTEXT_CHARS));
+  const title = ctx.title?.trim() || null;
+  const summary = ctx.summary?.trim() || null;
+  // Only prepend a header when we got a usable title; the metadata is still
+  // recorded regardless so downstream retrieval can see provenance.
+  const header = title ? `Document: ${title}\nSummary: ${summary ?? ''}\n\n` : '';
+  return { header, title, summary };
+}
+
+/** Prepend a CCH header to every chunk (when present) and always stamp the
+ *  title/summary metadata so retrieval/provenance can use it. */
+function applyCchHeader(
+  docChunks: DocumentChunk[],
+  header: string,
+  title: string | null,
+  summary: string | null,
+): DocumentChunk[] {
+  return docChunks.map((c) => ({
+    ...c,
+    content: header ? header + c.content : c.content,
+    title: c.title ?? title,
+    summary: c.summary ?? summary,
+  }));
 }
 
 /** Turn parsed/split chunks into fully-populated PreparedChunk rows (no DB writes). */
@@ -88,10 +133,12 @@ export async function parseAndEmbed(
   deps: ParseDeps,
 ): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
   let docChunks: DocumentChunk[];
+  let sourceText = '';
   if (deps.contentParser && deps.chunkingStrategy) {
     // New strategy path (wired in Session 4). Yields per-page provenance.
     const pages = await deps.contentParser.extractPages(input.buffer);
     docChunks = await deps.chunkingStrategy.splitPages(pages);
+    sourceText = pages.map((p) => p.text).join('\n\n');
   } else {
     // Legacy path: whole-document text → TextSplitter.
     let text: string;
@@ -100,9 +147,15 @@ export async function parseAndEmbed(
     } catch (cause) {
       return err(new ExternalServiceError('PDF parsing failed', cause));
     }
+    sourceText = text;
     const texts = await deps.textSplitter.splitText(text);
     docChunks = texts.map((t, i) => ({ content: t, chunkIndex: i }));
   }
+
+  // Contextual Chunk Header (Session 3): one title+summary per document,
+  // prepended to every chunk before embedding so retrieval scores match.
+  const { header, title, summary } = await buildCchHeader(deps, sourceText);
+  docChunks = applyCchHeader(docChunks, header, title, summary);
 
   if (docChunks.length === 0) {
     return err(new ValidationError(`No extractable text in ${input.fileName}`));

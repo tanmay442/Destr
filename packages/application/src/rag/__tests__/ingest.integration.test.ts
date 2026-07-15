@@ -186,4 +186,33 @@ describe('ingestFile', () => {
       expect(result.error.message).toMatch(/Embedding API failed/);
     }
   });
+
+  it('prepends the CCH header to each stored chunk and records title/summary metadata', async () => {
+    const deps = makeDeps({
+      summarizer: {
+        generateDocContext: vi.fn().mockResolvedValue({ title: 'Quarterly Report', summary: 'Q2 financials.' }),
+      },
+    });
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(deps.chunks.insertMany).toHaveBeenCalledWith([
+      {
+        documentId: 1,
+        content: 'Document: Quarterly Report\nSummary: Q2 financials.\n\nSample PDF text content.',
+        embedding: [0.1, 0.2, 0.3],
+        chunkIndex: 0,
+        page: null,
+        sectionTitle: null,
+        source: null,
+        parentChunkId: null,
+        kind: 'child',
+        embeddingModel: null,
+        contentHash: null,
+      },
+    ]);
+  });
 });
