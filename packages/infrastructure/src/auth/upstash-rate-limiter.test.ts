@@ -25,7 +25,8 @@ describe('createUpstashRateLimiter', () => {
   });
 
   it('throws when env vars are missing', () => {
-    vi.unstubAllEnvs();
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
     expect(() => createUpstashRateLimiter()).toThrow('UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be set.');
   });
 

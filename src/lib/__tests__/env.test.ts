@@ -112,6 +112,9 @@ describe('validateEnv', () => {
 
   it('requires QStash signing keys when QSTASH_TOKEN is set', () => {
     vi.stubEnv('QSTASH_TOKEN', 'test-token');
+    vi.stubEnv('QSTASH_CURRENT_SIGNING_KEY', '');
+    vi.stubEnv('QSTASH_NEXT_SIGNING_KEY', '');
+    vi.stubEnv('QSTASH_INGEST_WORKER_URL', '');
 
     const result = validateEnv();
     expect(result.ok).toBe(false);

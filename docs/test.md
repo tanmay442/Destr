@@ -29,8 +29,7 @@
 - `src/proxy.test.ts` — middleware route gating (public / signed-in /
   admin)
 - `packages/application/src/rag/__tests__/search.test.ts` —
-  vector search error propagation and success path
-- `packages/application/src/rag/__tests__/ingest.integration.test.ts` —
+  vector search error propagation and success path- `packages/application/src/rag/__tests__/ingest.integration.test.ts` —
   PDF ingest pipeline: chunk insertion, hash dedup, transactional
   document replacement (insert-before-delete with TransactionRunner),
   empty-text and API-failure error paths
@@ -84,6 +83,36 @@ config/
 └── constants.ts            # Centralised business-logic constants
 scripts/                    # setup, seed, migration scripts
 ```
+
+## Running tests with real credentials present
+
+Some unit tests assert a "missing env var" / "should throw when absent"
+path (e.g. the Upstash query-stats / rate-limiter "throws when env vars
+are missing" tests, and `validateEnv` requiring QStash signing keys when
+`QSTASH_TOKEN` is set). These tests are **environment-sensitive**: they only
+pass when the relevant vars are genuinely absent.
+
+`vi.unstubAllEnvs()` only removes stubs that vitest itself created — it does
+**not** remove real `process.env` values loaded from
+`.env.realCredentials.local` or an already-populated dev shell. When real
+`UPSTASH_REDIS_*` / `QSTASH_*` credentials are present, the guard rails never
+trigger and those assertions invert (the test expects a throw / a "missing"
+report and gets neither).
+
+These tests were made **self-isolating** (no behavior change, test files
+only) by explicitly stubbing the relevant vars to `''` inside the affected
+assertions, so the suite is green in any environment:
+
+- `packages/infrastructure/src/auth/upstash-query-stats.test.ts`
+- `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
+- `src/lib/__tests__/env.test.ts`
+
+After this fix the full suite passes **257/257** even when
+`.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
+
+If you add a new test that asserts "missing var" behavior, stub the var to
+`''` (not just `vi.unstubAllEnvs()`) so it does not depend on the ambient
+environment.
 
 ## CI
 

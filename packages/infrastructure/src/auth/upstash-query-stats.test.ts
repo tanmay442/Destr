@@ -26,7 +26,8 @@ describe('createUpstashQueryStats', () => {
   });
 
   it('throws when env vars are missing', () => {
-    vi.unstubAllEnvs();
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
     expect(() => createUpstashQueryStats()).toThrow('UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be set.');
   });
 
