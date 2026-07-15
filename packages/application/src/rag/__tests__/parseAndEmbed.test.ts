@@ -112,6 +112,37 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(result.value.rows[0]!.summary).toBe('loose summary');
   });
 
+  it('stores a zero-vector placeholder for parent blocks and skips their embedding call (S5 Option C)', async () => {
+    const contentParser: ContentParser = {
+      extractPages: vi.fn().mockResolvedValue([{ page: 1, text: 'Parent block body. Child one. Child two.' }]),
+      extractText: vi.fn(),
+    };
+    const chunkingStrategy: ChunkingStrategy = {
+      splitPages: vi.fn().mockResolvedValue([
+        { content: 'Parent block body.', chunkIndex: 0, page: 1, parentChunkId: null, kind: 'parent' },
+        { content: 'Child one.', chunkIndex: 1, page: 1, parentChunkId: 0, kind: 'child' },
+        { content: 'Child two.', chunkIndex: 2, page: 1, parentChunkId: 0, kind: 'child' },
+      ]),
+    };
+    const deps = makeParseDeps({ contentParser, chunkingStrategy });
+    // One embedding per embeddable chunk (children only), length 3.
+    deps.embeddings.embedBatch = vi
+      .fn()
+      .mockImplementation(async (texts: string[]) => texts.map((_, i) => [i + 1, 0, 0]));
+
+    const result = await parseAndEmbed({ fileName: 'd.pdf', buffer: Buffer.from('x') }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Parent content must NOT be sent to the embedding API (only the 2 children).
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(['Child one.', 'Child two.']);
+    const [parent, child1, child2] = result.value.rows;
+    expect(parent!.kind).toBe('parent');
+    expect(parent!.embedding).toEqual([0, 0, 0]);
+    expect(child1!.embedding).toEqual([1, 0, 0]);
+    expect(child2!.embedding).toEqual([2, 0, 0]);
+  });
+
   it('composes the CCH header with the strategy path, carrying sectionTitle + source', async () => {
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),

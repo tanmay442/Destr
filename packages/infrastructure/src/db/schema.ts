@@ -40,7 +40,12 @@ export const chunks = pgTable('chunks', {
   // Full-text-search vector: STORED generated from `content`, used by Session 7 hybrid retrieval.
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
-  index('embedding_idx').using('hnsw', sql`${table.embedding} vector_cosine_ops`),
+  // Partial HNSW index: parent blocks carry a constant placeholder vector
+  // (Session 5, Option C) and are filtered out of every vector query, so they
+  // never need to live in the ANN index. Excluding them keeps the index small.
+  index('embedding_idx')
+    .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
+    .where(sql`${table.kind} <> 'parent'`),
   index('chunks_document_id_idx').on(table.documentId),
   index('chunks_tsv_idx').using('gin', sql`${table.tsv}`),
   foreignKey({

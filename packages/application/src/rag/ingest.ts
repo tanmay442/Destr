@@ -162,6 +162,35 @@ export async function parseAndEmbed(
     return err(new ValidationError(`No extractable text in ${input.fileName}`));
   }
 
+  // Session 5 (Option C): parent blocks are returned by reference and are
+  // filtered out of every vector query (`searchChunksByVector` uses
+  // `kind <> 'parent'`), so embedding them is wasted API spend + index bloat.
+  // Skip the embedding call for `kind='parent'` chunks and store a constant
+  // placeholder vector (same dim as the real embeddings) instead. Children and
+  // summaries are embedded normally.
+  const hasParents = docChunks.some((c) => c.kind === 'parent');
+  const embeddable = docChunks.filter((c) => c.kind !== 'parent');
+  if (hasParents && embeddable.length > 0) {
+    let embedEmbeddings: number[][];
+    try {
+      embedEmbeddings = await deps.embeddings.embedBatch(embeddable.map((c) => c.content));
+    } catch (cause) {
+      return err(new ExternalServiceError('Embedding API failed', cause));
+    }
+    if (embedEmbeddings.length !== embeddable.length) {
+      return err(new ExternalServiceError('Embedding count mismatch'));
+    }
+    const dim = embedEmbeddings[0]?.length ?? 0;
+    const placeholder = dim > 0 ? new Array<number>(dim).fill(0) : [];
+    const embByIndex = new Map<number, number[]>();
+    embeddable.forEach((c, i) => embByIndex.set(c.chunkIndex, embedEmbeddings[i]!));
+    const embeddings = docChunks.map((c) =>
+      c.kind === 'parent' ? placeholder : embByIndex.get(c.chunkIndex)!,
+    );
+    return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
+  }
+
+  // Default path (no parents): embed every chunk.
   let embeddings: number[][];
   try {
     embeddings = await deps.embeddings.embedBatch(docChunks.map((c) => c.content));
