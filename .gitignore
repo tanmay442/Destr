@@ -65,3 +65,6 @@ OUTSTANDING_ISSUES.md
 
 # Execution plan (transient agent planning artifacts — never commit)
 docs/execution-plan/
+
+# RAG execution plan transient context (never commit)
+docs/rag-execution-plan/context/

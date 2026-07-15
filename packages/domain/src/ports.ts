@@ -58,12 +58,63 @@ export interface DocumentRepository {
   countChunksForAll(): Promise<number>;
 }
 
+/** A chunk produced by a chunking strategy, before embedding. */
+export interface DocumentChunk {
+  content: string;
+  chunkIndex: number;
+  page?: number | null;
+  sectionTitle?: string | null;
+  source?: string | null;
+  title?: string | null; // CCH (Session 3)
+  summary?: string | null; // CCH (Session 3)
+  parentChunkId?: number | null; // parent-child (Session 5)
+  sourceChunkId?: number | null; // proposition back-ref (future)
+  embeddingModel?: string | null;
+  contentHash?: string | null;
+}
+
+/** Parses raw content (e.g. PDF buffer) into structured pages. */
+export interface ContentParser {
+  extractPages(buffer: Buffer): Promise<Array<{ page: number; text: string }>>;
+  extractText(buffer: Buffer): Promise<string>; // legacy fallback
+}
+
+/** A chunking strategy that turns structured pages into DocumentChunk[]. */
+export interface ChunkingStrategy {
+  splitPages(pages: Array<{ page: number; text: string }>): Promise<DocumentChunk[]>;
+}
+
 export interface ChunkRepository {
   searchByVector(
     embedding: number[],
-    opts: { threshold: number; limit: number },
-  ): Promise<Array<{ content: string; similarity: number }>>;
-  insertMany(rows: Array<{ documentId: number; content: string; embedding: number[] }>): Promise<void>;
+    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+  ): Promise<
+    Array<{
+      id: number;
+      documentId: number;
+      fileName: string | null;
+      page: number | null;
+      sectionTitle: string | null;
+      source: string | null;
+      content: string;
+      similarity: number;
+    }>
+  >;
+  insertMany(
+    rows: Array<{
+      documentId: number;
+      content: string;
+      embedding: number[];
+      chunkIndex?: number;
+      page?: number | null;
+      sectionTitle?: string | null;
+      source?: string | null;
+      parentChunkId?: number | null;
+      kind?: 'child' | 'summary';
+      embeddingModel?: string | null;
+      contentHash?: string | null;
+    }>,
+  ): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
   countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countForAll(): Promise<number>;

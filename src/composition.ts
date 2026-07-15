@@ -63,6 +63,7 @@ const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
+  runner: Db.transactionRunner,
 };
 const searchDeps: SearchDeps = { chunks: chunkRepo, embeddings: embeddingService };
 function createRateLimiter(): RateLimiter {

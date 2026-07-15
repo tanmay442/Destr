@@ -97,9 +97,20 @@ export async function restoreDocument(id: number, client: Client = db): Promise<
 
 export async function searchChunksByVector(
   embedding: number[],
-  opts: { threshold: number; limit: number },
+  opts: { threshold: number; limit: number; filter?: { documentId?: number } },
   client: Client = db,
-): Promise<Array<{ content: string; similarity: number }>> {
+): Promise<
+  Array<{
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    similarity: number;
+  }>
+> {
   if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every((v) => Number.isFinite(v))) {
     throw new Error('Invalid embedding: must be a non-empty array of finite numbers');
   }
@@ -109,24 +120,63 @@ export async function searchChunksByVector(
   const vectorLiteral = `[${embedding.join(',')}]`;
   const result = await client.execute(sql`
     WITH matches AS (
-      SELECT c.content AS content, 1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
+      SELECT
+        c.id AS id,
+        c.document_id AS "documentId",
+        d.file_name AS "fileName",
+        c.page AS page,
+        c.section_title AS "sectionTitle",
+        c.source AS source,
+        c.content AS content,
+        1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
       FROM chunks c
       JOIN documents d ON d.id = c.document_id
       WHERE d.deleted_at IS NULL
+      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     )
-    SELECT content, similarity
+    SELECT id, "documentId", "fileName", page, "sectionTitle", source, content, similarity
     FROM matches
     WHERE similarity > ${opts.threshold}
     ORDER BY similarity DESC
     LIMIT ${opts.limit}
   `);
-  const rows = (result as unknown as { rows?: Array<{ content: string; similarity: number }> })
-    .rows ?? [];
-  return rows.map((r) => ({ content: r.content, similarity: Number(r.similarity) }));
+  type RawRow = {
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    similarity: number;
+  };
+  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
+  return rows.map((r) => ({
+    id: Number(r.id),
+    documentId: Number(r.documentId),
+    fileName: r.fileName ?? null,
+    page: r.page != null ? Number(r.page) : null,
+    sectionTitle: r.sectionTitle ?? null,
+    source: r.source ?? null,
+    content: r.content,
+    similarity: Number(r.similarity),
+  }));
 }
 
 export async function insertChunks(
-  rows: Array<{ documentId: number; content: string; embedding: number[] }>,
+  rows: Array<{
+    documentId: number;
+    content: string;
+    embedding: number[];
+    chunkIndex?: number;
+    page?: number | null;
+    sectionTitle?: string | null;
+    source?: string | null;
+    parentChunkId?: number | null;
+    kind?: 'child' | 'summary';
+    embeddingModel?: string | null;
+    contentHash?: string | null;
+  }>,
   client: Client = db,
 ): Promise<void> {
   if (rows.length === 0) return;
@@ -137,7 +187,21 @@ export async function insertChunks(
   }
   const BATCH_SIZE = 500;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE));
+    await client.insert(chunks).values(
+      rows.slice(i, i + BATCH_SIZE).map((r) => ({
+        documentId: r.documentId,
+        content: r.content,
+        embedding: r.embedding,
+        chunkIndex: r.chunkIndex ?? 0,
+        page: r.page ?? null,
+        sectionTitle: r.sectionTitle ?? null,
+        source: r.source ?? null,
+        parentChunkId: r.parentChunkId ?? null,
+        kind: r.kind ?? 'child',
+        embeddingModel: r.embeddingModel ?? null,
+        contentHash: r.contentHash ?? null,
+      })),
+    );
   }
 }
 

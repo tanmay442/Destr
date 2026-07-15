@@ -332,6 +332,14 @@ export async function replacePdf(
             documentId: row.id,
             content: r.content,
             embedding: r.embedding,
+            chunkIndex: r.chunkIndex,
+            page: r.page,
+            sectionTitle: r.sectionTitle,
+            source: r.source,
+            parentChunkId: r.parentChunkId,
+            kind: r.kind,
+            embeddingModel: r.embeddingModel,
+            contentHash: r.contentHash,
           })),
         );
       }

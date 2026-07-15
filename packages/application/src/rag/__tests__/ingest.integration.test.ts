@@ -53,7 +53,19 @@ describe('ingestFile', () => {
       expect(result.value.chunks).toBe(1);
     }
     expect(deps.chunks.insertMany).toHaveBeenCalledWith([
-      { documentId: 1, content: 'Sample PDF text content.', embedding: [0.1, 0.2, 0.3] },
+      {
+        documentId: 1,
+        content: 'Sample PDF text content.',
+        embedding: [0.1, 0.2, 0.3],
+        chunkIndex: 0,
+        page: null,
+        sectionTitle: null,
+        source: null,
+        parentChunkId: null,
+        kind: 'child',
+        embeddingModel: null,
+        contentHash: null,
+      },
     ]);
   });
 
@@ -100,7 +112,19 @@ describe('ingestFile', () => {
     expect(deleteByDocumentId).toHaveBeenCalledWith(1);
     expect(deleteByDocumentId).toHaveBeenCalledBefore(insertMany);
     expect(insertMany).toHaveBeenCalledWith([
-      { documentId: 1, content: 'Sample PDF text content.', embedding: [0.1, 0.2, 0.3] },
+      {
+        documentId: 1,
+        content: 'Sample PDF text content.',
+        embedding: [0.1, 0.2, 0.3],
+        chunkIndex: 0,
+        page: null,
+        sectionTitle: null,
+        source: null,
+        parentChunkId: null,
+        kind: 'child',
+        embeddingModel: null,
+        contentHash: null,
+      },
     ]);
   });
 

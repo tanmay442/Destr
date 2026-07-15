@@ -1,10 +1,10 @@
 // `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
   pgTable, serial, text, timestamp, integer,
-  index, check,
+  index, check, foreignKey,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { vector } from './schema-vector';
+import { vector, tsvector } from './schema-vector';
 import { byteaBlob } from '../storage/bytea-blob';
 import type { IngestStatus } from '@app/domain';
 
@@ -28,9 +28,26 @@ export const chunks = pgTable('chunks', {
   documentId: integer('document_id').references(() => documents.id, { onDelete: 'cascade' }).notNull(),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
+  // --- Metadata + provenance (Session 1, additive) ---
+  chunkIndex: integer('chunk_index').notNull().default(0),
+  page: integer('page'),
+  sectionTitle: text('section_title'),
+  source: text('source'),
+  parentChunkId: integer('parent_chunk_id'),
+  kind: text('kind').notNull().default('child'),
+  embeddingModel: text('embedding_model'),
+  contentHash: text('content_hash'),
+  // Full-text-search vector: STORED generated from `content`, used by Session 7 hybrid retrieval.
+  tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
   index('embedding_idx').using('hnsw', sql`${table.embedding} vector_cosine_ops`),
   index('chunks_document_id_idx').on(table.documentId),
+  index('chunks_tsv_idx').using('gin', sql`${table.tsv}`),
+  foreignKey({
+    columns: [table.parentChunkId],
+    foreignColumns: [table.id],
+    name: 'chunks_parent_chunk_id_fk',
+  }),
 ]);
 
 export const tickets = pgTable('tickets', {

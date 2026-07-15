@@ -7,7 +7,18 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
     chunks: {
       insertMany: vi.fn(),
       deleteByDocumentId: vi.fn(),
-      searchByVector: vi.fn().mockResolvedValue([{ content: 'test', similarity: 0.9 }]),
+      searchByVector: vi.fn().mockResolvedValue([
+        {
+          id: 1,
+          documentId: 1,
+          fileName: 'test.pdf',
+          page: null,
+          sectionTitle: null,
+          source: null,
+          content: 'test',
+          similarity: 0.9,
+        },
+      ]),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
       countForDocument: vi.fn(),
@@ -59,7 +70,18 @@ describe('searchChunks', () => {
     const result = await searchChunks('test', {}, deps);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual([{ content: 'test', similarity: 0.9 }]);
+      expect(result.value).toEqual([
+        {
+          id: 1,
+          documentId: 1,
+          fileName: 'test.pdf',
+          page: null,
+          sectionTitle: null,
+          source: null,
+          content: 'test',
+          similarity: 0.9,
+        },
+      ]);
     }
   });
 });

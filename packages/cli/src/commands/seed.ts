@@ -81,13 +81,18 @@ export async function runSeed(opts: SeedOptions = {}): Promise<void> {
             countChunksForAll: Db.countChunksForAll,
           },
           chunks: {
-            insertMany: (rows: Array<{ documentId: number; content: string; embedding: number[] }>) => Db.insertChunks(rows),
+            insertMany: (rows: Array<{
+              documentId: number; content: string; embedding: number[];
+              chunkIndex?: number; page?: number | null; sectionTitle?: string | null;
+              source?: string | null; parentChunkId?: number | null;
+              kind?: 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
+            }>) => Db.insertChunks(rows),
             deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
             countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
             countForAll: () => Db.countChunksForAll(),
             countForDocument: (id: number) => Db.countChunksForDocument(id),
             recountAll: () => Db.recountChunksForAll(),
-            searchByVector: (embedding: number[], opts: { threshold: number; limit: number }) => Db.searchChunksByVector(embedding, opts),
+            searchByVector: (embedding: number[], opts: { threshold: number; limit: number; filter?: { documentId?: number } }) => Db.searchChunksByVector(embedding, opts),
           },
           embeddings: Llm.getEmbeddingService(),
           hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },

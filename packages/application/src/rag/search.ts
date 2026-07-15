@@ -6,6 +6,12 @@ import { sanitizePagination } from '../service-result';
 const MAX_SEARCH_LIMIT = 50;
 
 export interface RetrievedChunk {
+  id: number;
+  documentId: number;
+  fileName: string | null;
+  page: number | null;
+  sectionTitle: string | null;
+  source: string | null;
   content: string;
   similarity: number;
 }
@@ -43,6 +49,15 @@ export async function searchChunks(
     return err(new ExternalServiceError('Vector search failed', cause));
   }
   return ok(
-    rows.map((r) => ({ content: r.content, similarity: Number(r.similarity) })),
+    rows.map((r) => ({
+      id: r.id,
+      documentId: r.documentId,
+      fileName: r.fileName,
+      page: r.page,
+      sectionTitle: r.sectionTitle,
+      source: r.source,
+      content: r.content,
+      similarity: Number(r.similarity),
+    })),
   );
 }
