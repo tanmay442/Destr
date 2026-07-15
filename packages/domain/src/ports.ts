@@ -58,6 +58,24 @@ export interface DocumentRepository {
   countChunksForAll(): Promise<number>;
 }
 
+/**
+ * A single pre-split chunk parsed from user-supplied Markdown. Produced by a
+ * `MarkdownParser` adapter; maps onto `DocumentChunk`/`chunks` metadata columns
+ * by the pre-chunked ingest use-case (Session 2). Kept in the domain so the
+ * application + API layers can consume it without importing infrastructure.
+ */
+export interface ParsedChunk {
+  content: string;
+  page?: number | null;
+  sectionTitle?: string | null;
+  source?: string | null;
+}
+
+/** Parses pre-chunked Markdown (delimiter-separated, optional YAML-ish meta). */
+export interface MarkdownParser {
+  parseChunkedMarkdown(text: string, delimiter?: string): ParsedChunk[];
+}
+
 /** A chunk produced by a chunking strategy, before embedding. */
 export interface DocumentChunk {
   content: string;

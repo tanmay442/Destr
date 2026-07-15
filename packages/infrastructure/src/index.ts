@@ -4,3 +4,4 @@ export * as Pdf from './pdf/index';
 export * as Auth from './auth/index';
 export * as Storage from './storage/blob-storage-factory';
 export * as Queue from './queue/index';
+export * as Markdown from './markdown';

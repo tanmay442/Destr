@@ -15,6 +15,7 @@ Commands:
   init               Interactive setup (same as \`pnpm configure\`).
   setup              One-command interactive first-run wizard.
   seed [--dir=...]   Ingest every PDF in the given dir.
+  upload --md=FILE   Upload pre-chunked Markdown (see --help in the upload module).
   db-migrate [args]  Run drizzle-kit push (or other migration command).
 `);
 }
@@ -43,6 +44,14 @@ async function main(): Promise<void> {
           ...(userId ? { SEED_USER_ID: userId } : {}),
         },
       });
+      process.exit(result.status ?? 0);
+    }
+    case 'upload': {
+      const result = spawnSync(
+        'pnpm',
+        ['exec', 'tsx', 'packages/cli/src/commands/upload.ts', ...rest],
+        { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env } },
+      );
       process.exit(result.status ?? 0);
     }
     case 'db-migrate': {

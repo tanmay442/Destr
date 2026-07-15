@@ -121,8 +121,10 @@ export async function parseAndEmbed(
   return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
 }
 
-/** Write the upsert-then-replace-chunks sequence against the given repos/tx. */
-async function writeChunks(
+/** Write the upsert-then-replace-chunks sequence against the given repos/tx.
+ *  Exported so other ingest paths (pre-chunked Markdown) can reuse the
+ *  identical atomic insert + chunk-replace behaviour. */
+export async function writeChunks(
   documents: DocumentRepository,
   chunks: ChunkRepository,
   input: { fileName: string; fileHash: string; uploadedBy: string },

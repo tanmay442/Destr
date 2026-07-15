@@ -7,6 +7,7 @@
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CITATION_SNIPPET_MAX = 150;
 export const DEFAULT_SEARCH_LIMIT = 3;
+export const MD_CHUNK_DELIMITER = process.env.MD_CHUNK_DELIMITER ?? '---chunk---';
 export const EMBEDDING_BATCH_CONCURRENCY = 3;
 export const EMBEDDING_BATCH_SIZE = 50;
 export const MAX_AUDIT_LIMIT = 200;

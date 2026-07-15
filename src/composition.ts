@@ -10,9 +10,10 @@ import {
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, listAudit,
   prepareIngest,
+  uploadPrechunkedMarkdown,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf, Storage, Queue } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown } from '@app/infrastructure';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
@@ -113,6 +114,27 @@ function createComposition() {
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
       bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
+    /** Ingest pre-chunked Markdown (Session 2). Parses via the injected
+      * MarkdownParser adapter (infrastructure), then embeds + writes the
+      * chunks with their page/section/source metadata. An optional companion
+      * PDF is stored as the document blob for preview/download. */
+    uploadChunkedMarkdown: (input: {
+      fileName: string;
+      mdText: string;
+      delimiter?: string;
+      uploadedBy: string;
+      pdfBuffer?: Buffer;
+      pdfFileName?: string;
+    }) =>
+      bind(uploadPrechunkedMarkdown, input, {
+        documents: documentRepo,
+        chunks: chunkRepo,
+        embeddings: embeddingService,
+        hasher: systemHasher,
+        blobStorage,
+        runner: txRunner,
+        markdownParser: Markdown.markdownParser,
+      }),
     /** Drain a queued ingest: called by the /api/admin/ingest-worker
      *  route on a QStash callback. Loads the doc, reads the PDF from the blob
      *  store, parses+embeds it, then claims the job and inserts chunks + flips

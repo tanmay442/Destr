@@ -10,7 +10,8 @@
     "./db": "./src/db/index.ts",
     "./llm": "./src/llm/index.ts",
     "./auth": "./src/auth/index.ts",
-    "./pdf": "./src/pdf/index.ts"
+    "./pdf": "./src/pdf/index.ts",
+    "./markdown": "./src/markdown/index.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.83",
