@@ -11,6 +11,7 @@ import {
   getAnalyticsSummary, listAudit,
   prepareIngest,
   uploadPrechunkedMarkdown,
+  reingestAll,
   agenticSearch,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
   type AgenticDeps,
@@ -256,6 +257,7 @@ function createComposition() {
     },
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
+    reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
     getAnalyticsSummary: () =>
       bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, auditDeps),

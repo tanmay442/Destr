@@ -15,6 +15,7 @@ import {
   Users,
   BarChart,
   ScrollText,
+  Settings,
   Menu,
   X,
   LogOut,
@@ -40,6 +41,7 @@ const ADMIN_LINKS = [
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart },
   { href: '/admin/audit', label: 'Audit Log', icon: ScrollText },
+  { href: '/admin/settings', label: 'Settings', icon: Settings },
 ] as const;
 
 export type AppRole = 'admin' | 'user';
