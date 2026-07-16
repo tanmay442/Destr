@@ -172,6 +172,75 @@ export async function searchChunksByVector(
   }));
 }
 
+export async function searchChunksByLexical(
+  query: string,
+  opts: { limit: number; filter?: { documentId?: number } },
+  client: Client = db,
+): Promise<
+  Array<{
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    similarity: number;
+    parentChunkId: number | null;
+    chunkIndex: number;
+  }>
+> {
+  if (!query.trim()) return [];
+  const escaped = query.replace(/'/g, "''");
+  const lexQuery = sql.raw(`plainto_tsquery('english', '${escaped}')`);
+  const result = await client.execute(sql`
+    SELECT
+      c.id AS id,
+      c.document_id AS "documentId",
+      d.file_name AS "fileName",
+      c.page AS page,
+      c.section_title AS "sectionTitle",
+      c.source AS source,
+      c.content AS content,
+      c.parent_chunk_id AS "parentChunkId",
+      c.chunk_index AS "chunkIndex",
+      ts_rank(c.tsv, ${lexQuery}) AS similarity
+    FROM chunks c
+    JOIN documents d ON d.id = c.document_id
+    WHERE d.deleted_at IS NULL
+      AND c.kind <> 'parent'
+      AND c.tsv @@ ${lexQuery}
+      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
+    ORDER BY similarity DESC
+    LIMIT ${opts.limit}
+  `);
+  type RawRow = {
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    parentChunkId: number | null;
+    chunkIndex: number;
+    similarity: number;
+  };
+  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
+  return rows.map((r) => ({
+    id: Number(r.id),
+    documentId: Number(r.documentId),
+    fileName: r.fileName ?? null,
+    page: r.page != null ? Number(r.page) : null,
+    sectionTitle: r.sectionTitle ?? null,
+    source: r.source ?? null,
+    content: r.content,
+    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
+    chunkIndex: Number(r.chunkIndex),
+    similarity: Number(r.similarity),
+  }));
+}
+
 /** Map a prepared chunk row to its `chunks` insert values. */
 function toChunkValues(r: {
   documentId: number;
@@ -724,6 +793,7 @@ export function createDocumentRepo(client: Client): DocumentRepository {
 export function createChunkRepo(client: Client): ChunkRepository {
   return {
     searchByVector: (embedding, opts) => searchChunksByVector(embedding, opts, client),
+    searchByLexical: (query, opts) => searchChunksByLexical(query, opts, client),
     getByIds: (ids) => getChunksByIds(ids, client),
     getByDocAndRange: (documentId, start, end) => getChunksByDocAndRange(documentId, start, end, client),
     insertMany: (rows) => insertChunks(rows, client),

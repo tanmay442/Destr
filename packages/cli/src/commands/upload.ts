@@ -144,6 +144,7 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
             countForDocument: (id: number) => Db.countChunksForDocument(id),
             recountAll: () => Db.recountChunksForAll(),
             searchByVector: (embedding: number[], o: { threshold: number; limit: number; filter?: { documentId?: number } }) => Db.searchChunksByVector(embedding, o),
+            searchByLexical: (query: string, o: { limit: number; filter?: { documentId?: number } }) => Db.searchChunksByLexical(query, o),
           },
         embeddings: Llm.getEmbeddingService(),
         hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },

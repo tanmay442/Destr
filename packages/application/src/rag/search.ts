@@ -6,6 +6,9 @@ import {
   PARENT_CHILD_WINDOW,
   CANDIDATE_POOL,
   RERANK_TOP_N,
+  HYBRID_ENABLED,
+  RRF_K,
+  LEXICAL_WEIGHT,
 } from '../../../../config/constants';
 import { sanitizePagination } from '../service-result';
 
@@ -157,6 +160,34 @@ function sortBySimilarity(rows: RetrievedChunkRow[]): RetrievedChunkRow[] {
   return [...rows].sort((a, b) => b.similarity - a.similarity);
 }
 
+/**
+ * Fuse two ranked candidate lists via Reciprocal Rank Fusion:
+ * `score = Σ boost / (K + rank)`, where rank is 1-based. Both branches are
+ * ranked independently (vector by cosine similarity, lexical by ts_rank); the
+ * fused score rewards chunks that rank well in either modality. `boost`
+ * upweights a branch (e.g. `LEXICAL_WEIGHT`). Returns rows ordered by fused
+ * score, capped to `limit`.
+ */
+function reciprocalRankFusion(
+  vectorRows: RetrievedChunkRow[],
+  lexicalRows: RetrievedChunkRow[],
+  limit: number,
+): RetrievedChunkRow[] {
+  const fused = new Map<number, { row: RetrievedChunkRow; score: number }>();
+  const add = (rows: RetrievedChunkRow[], boost: number) => {
+    rows.forEach((row, rank) => {
+      const prev = fused.get(row.id)?.score ?? 0;
+      fused.set(row.id, { row, score: prev + boost / (RRF_K + rank + 1) });
+    });
+  };
+  add(vectorRows, 1);
+  add(lexicalRows, LEXICAL_WEIGHT);
+  return [...fused.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.row);
+}
+
 export async function searchChunks(
   query: string,
   opts: SearchOpts,
@@ -178,16 +209,45 @@ export async function searchChunks(
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
-  let rows: RetrievedChunkRow[];
+
+  let vectorRows: RetrievedChunkRow[];
   try {
-    rows = await deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
+    vectorRows = await deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
   } catch (cause) {
     return err(new ExternalServiceError('Vector search failed', cause));
   }
-  if (rows.length === 0) {
+
+  if (!HYBRID_ENABLED || !deps.chunks.searchByLexical) {
+    return capAndResolve(vectorRows, query, topN, opts, deps);
+  }
+
+  let lexicalRows: RetrievedChunkRow[];
+  try {
+    lexicalRows = await deps.chunks.searchByLexical(query, { limit: candidateLimit });
+  } catch (cause) {
+    console.warn('Lexical search failed; falling back to vector-only', { error: String(cause) });
+    return capAndResolve(vectorRows, query, topN, opts, deps);
+  }
+
+  if (vectorRows.length === 0 && lexicalRows.length === 0) {
     return ok([]);
   }
 
+  const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit);
+  return capAndResolve(fused, query, topN, opts, deps);
+}
+
+/**
+ * Apply the optional reranker (Session 6) and parent/window resolution, then
+ * cap to `topN`. Shared by the vector-only and hybrid fusion paths.
+ */
+async function capAndResolve(
+  rows: RetrievedChunkRow[],
+  query: string,
+  topN: number,
+  opts: SearchOpts,
+  deps: SearchDeps,
+): Promise<Result<RetrievedChunk[]>> {
   const capped = deps.reranker
     ? await rerankRows(query, rows, topN, deps.reranker)
     : sortBySimilarity(rows).slice(0, topN);

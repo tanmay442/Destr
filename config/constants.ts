@@ -35,5 +35,11 @@ export const RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const RERANKER_PROVIDER = (process.env.RERANKER_PROVIDER ?? 'cosine') as 'cosine' | 'local' | 'cohere';
 export const CANDIDATE_POOL = Number(process.env.CANDIDATE_POOL ?? 30);
 export const RERANK_TOP_N = Number(process.env.RERANK_TOP_N ?? DEFAULT_SEARCH_LIMIT);
+// Hybrid retrieval (Session 7): fuse vector + BM25 lexical via Reciprocal Rank
+// Fusion. `HYBRID_ENABLED` toggles the lexical branch; `RRF_K` is the rank
+// damping constant; `LEXICAL_WEIGHT` boosts the lexical branch's RRF score.
+export const HYBRID_ENABLED = process.env.HYBRID_ENABLED !== 'false';
+export const RRF_K = Number(process.env.RRF_K ?? 60);
+export const LEXICAL_WEIGHT = Number(process.env.LEXICAL_WEIGHT ?? 1);
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;

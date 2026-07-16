@@ -13,19 +13,23 @@ import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT } from '../../.
 function emitCitations(
   chunks: RetrievedChunk[],
   snippetMax = CITATION_SNIPPET_MAX,
-): Array<{ similarity: number; snippet: string }> {
+): Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> {
   return chunks.map((m) => ({
     similarity: m.similarity,
     snippet:
       m.content.length > snippetMax
         ? m.content.slice(0, snippetMax) + '\u2026'
         : m.content,
+    fileName: m.fileName,
+    page: m.page,
+    sectionTitle: m.sectionTitle,
+    source: m.source,
   }));
 }
 
 function buildChatTools(deps: {
   searchChunks: Composition['searchChunks'];
-  capturedCitations: Array<{ similarity: number; snippet: string }>;
+  capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
   createTicket: Composition['createTicket'];
   userId: string;
 }) {
@@ -172,7 +176,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
     void comp.recordQuery(userId, lastUserText).catch(() => {});
   }
 
-  const capturedCitations: Array<{ similarity: number; snippet: string }> = [];
+  const capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> = [];
 
   const isFirstTurn = messages.length <= 1;
   let prefetch: RetrievedChunk[] | null = null;

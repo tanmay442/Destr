@@ -127,6 +127,14 @@ export interface ChunkRepository {
     embedding: number[],
     opts: { threshold: number; limit: number; filter?: { documentId?: number } },
   ): Promise<RetrievedChunkRow[]>;
+  /** Lexical (BM25 / `tsvector`) retrieval. Returns chunks whose generated
+   *  `tsv` matches the query, ranked by `ts_rank`, with `similarity` set to the
+   *  (padded) rank score. Used by Session 7 hybrid retrieval alongside the
+   *  vector branch; fused via Reciprocal Rank Fusion in `searchChunks`. */
+  searchByLexical(
+    query: string,
+    opts: { limit: number; filter?: { documentId?: number } },
+  ): Promise<RetrievedChunkRow[]>;
   /** Fetch chunks by their (surrogate) ids. Returns `RetrievedChunkRow`s with
    *  `similarity` left as a placeholder (the caller overrides it) — used to
    *  resolve child hits to their parent blocks (Session 5 parent-child). */
