@@ -104,7 +104,7 @@ function buildChatTools(deps: {
           ),
         email: z
           .string()
-          .email()
+          .regex(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/)
           .describe(
             "Ignored by the server \u2014 the signed-in user's email is used instead.",
           ),
