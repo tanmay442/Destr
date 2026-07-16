@@ -14,30 +14,31 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
+import { ArrowUpIcon, SquareIcon } from 'lucide-react';
+
+/** Single breathing circle — like chatgpt.com's "thinking" indicator. */
+function ThinkingDot() {
+  return (
+    <span
+      aria-label="Generating response"
+      className="relative flex size-5 items-center justify-center"
+      data-testid="chat-thinking"
+    >
+      <span className="absolute size-2 rounded-full bg-primary/40 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite]" />
+      <span className="absolute size-2 rounded-full bg-primary/70 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite_reverse]" />
+    </span>
+  );
+}
 
 const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
-  {
-    label: 'Reset password',
-    text: 'How do I change my password?',
-  },
-  {
-    label: 'Add teammate',
-    text: 'How do I invite a teammate to my workspace?',
-  },
-  {
-    label: 'API rate limit',
-    text: "What's the API rate limit on the Team plan?",
-  },
-  {
-    label: 'Open a ticket',
-    text: "I'd like to open a support ticket.",
-  },
+  { label: 'Reset password', text: 'How do I change my password?' },
+  { label: 'Invite teammate', text: 'How do I invite a teammate to my workspace?' },
+  { label: 'API rate limit', text: "What's the API rate limit on the Team plan?" },
+  { label: 'Open a ticket', text: "I'd like to open a support ticket." },
 ];
 
 export function ChatInterface() {
@@ -76,25 +77,18 @@ export function ChatInterface() {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
-  // Throttle auto-scroll to avoid excessive scrolling during rapid streaming.
-  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
-  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Auto-scroll: follow the stream, settle smoothly when idle.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-    scrollTimeoutRef.current = setTimeout(() => {
-      const el = messagesScrollRef.current;
-      if (!(el instanceof HTMLElement)) return;
-      if (!el.isConnected) return;
-      if (typeof el.scrollTo !== 'function') return;
-      el.scrollTo({
-        top: el.scrollHeight,
-        behavior: status === 'streaming' ? 'auto' : 'smooth',
-      });
-    }, 100);
-    return () => {
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-    };
-  }, [messages, status]);
+    const container = scrollRef.current;
+    if (!container) return;
+    const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nearBottom = distance < 160;
+    if ((nearBottom || isStreaming) && typeof anchorRef.current?.scrollIntoView === 'function') {
+      anchorRef.current.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+    }
+  }, [messages, status, isStreaming]);
 
   useEffect(() => {
     if (!error) return;
@@ -108,334 +102,204 @@ export function ChatInterface() {
   }, [error]);
 
   return (
-    <Card
-      data-testid="chat-frame"
-      className="flex h-[600px] md:h-[700px] max-h-full w-full min-h-0 flex-col gap-0 overflow-hidden rounded-2xl border-border-subtle bg-card/40 p-0"
-    >
-      <div
-        ref={messagesScrollRef}
-        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6"
-        data-testid="chat-messages"
-      >
-        {messages.length === 0 && (
-          <div
-            className="mx-auto mt-4 flex w-full max-w-xl flex-col gap-8 px-1 py-2"
-            data-testid="chat-intro"
-          >
-            <div className="flex flex-col items-start gap-4">
-              <span
-                aria-hidden
-                className="inline-flex size-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="size-4"
-                >
-                  <path d="M4 4h16v12H7l-3 4V4z" />
-                </svg>
-              </span>
-              <div className="flex flex-col gap-2 break-words">
-                <p className="text-[15px] font-semibold text-foreground">
-                  Hi! I&apos;m the support assistant.
-                </p>
-                <p className="text-sm leading-relaxed text-muted-foreground">
-                  Ask a question about your docs and I&apos;ll search the
-                  official documentation and cite the source I used.
-                </p>
-                <p className="text-sm leading-relaxed text-muted-foreground">
-                  If I can&apos;t find an answer, just ask me to file a support
-                  ticket and I&apos;ll get one started for you.
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" data-testid="chat-scroll">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center gap-8 text-center mt-[22vh]">
+              <div className="flex flex-col gap-3">
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                  Answers grounded in your docs
+                </h1>
+                <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+                  I&apos;ll answer from the official documentation and cite the
+                  source I used — or raise a ticket if I can&apos;t help.
                 </p>
               </div>
-            </div>
 
-            <div className="flex flex-col gap-3">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
-                Try one of these
-              </span>
-              <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+              <div className="grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
                 {QUICK_PROMPTS.map((q) => (
                   <button
                     key={q.label}
                     type="button"
-                    onClick={() => {
-                      setInput(q.text);
-                      composerRef.current?.focus();
-                    }}
-                    className="group flex h-auto w-full cursor-pointer items-start justify-between gap-4 overflow-hidden rounded-xl border border-border-subtle bg-card/70 p-4 text-left text-sm text-muted-foreground transition-all duration-150 ease-out-quart hover:border-primary/40 hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 sm:p-5"
+                    onClick={() => submit(q.text)}
+                    className="flex h-auto items-start justify-between gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                     data-testid="chat-quick-prompt"
                   >
-                    <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">
-                        {q.label}
-                      </span>
-                      <span className="text-[13.5px] leading-relaxed text-muted-foreground group-hover:text-foreground [overflow-wrap:anywhere]">
-                        {q.text}
-                      </span>
-                    </span>
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="mt-0.5 size-4 shrink-0 text-foreground-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
-                      aria-hidden
-                    >
-                      <path d="M5 12h14" />
-                      <path d="m12 5 7 7-7 7" />
-                    </svg>
+                    <span className="text-[13.5px] leading-relaxed">{q.text}</span>
                   </button>
                 ))}
               </div>
             </div>
-          </div>
-        )}
-
-        {messages.map((m) => {
-          const isUser = m.role === 'user';
-          const textParts = m.parts.filter((p) => p.type === 'text');
-          const citations = m.parts.filter(
-            (p) => p.type === 'data-citation',
-          ) as Array<{
-            type: 'data-citation';
-            data: { similarity: number; snippet: string };
-          }>;
-          return (
-            <div
-              key={m.id}
-              className={cn(
-                isUser
-                  ? 'flex flex-col items-end gap-2'
-                  : 'flex flex-col items-start gap-2.5',
-              )}
-              data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
-            >
-              <span
-                className={cn(
-                  isUser
-                    ? 'text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground-subtle'
-                    : 'text-[10px] font-semibold uppercase tracking-[0.14em] text-primary',
-                )}
-              >
-                {isUser ? 'You' : 'Assistant'}
-              </span>
-              {textParts.map((part, i) => {
-                if (part.type === 'text') {
-                   return isUser ? (
-                    <div
-                      key={i}
-                      className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm"
-                      data-testid="chat-text"
-                    >
-                      {part.text}
-                    </div>
-                  ) : (
-                    <Card
-                      key={i}
-                      className={cn(
-                        'chat-markdown flex w-fit max-w-[90%] flex-col gap-0 rounded-2xl rounded-bl-md border-border-subtle bg-secondary/80 px-4 py-3 text-[14.5px] leading-relaxed text-foreground shadow-sm',
-                      )}
-                      data-testid="chat-text"
-                    >
-                      <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
-                    </Card>
-                  );
-                }
-                return null;
-              })}
-              {citations.length > 0 && !isUser && (
+          ) : (
+            messages.map((m) => {
+              const isUser = m.role === 'user';
+              const textParts = m.parts.filter((p) => p.type === 'text');
+              const citations = m.parts.filter(
+                (p) => p.type === 'data-citation',
+              ) as Array<{
+                type: 'data-citation';
+                data: { similarity: number; snippet: string };
+              }>;
+              return (
                 <div
-                  className="-mx-1 flex w-full max-w-[90%] snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
-                  data-testid="chat-citations"
+                  key={m.id}
+                  className={cn(
+                    'flex flex-col gap-2.5',
+                    isUser ? 'items-end' : 'items-start',
+                  )}
+                  data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
                 >
-                  {citations.map((c, i) => {
-                    const sim = c.data.similarity;
-                    const simPct = Math.round(sim * 100);
-                    const simTone =
-                      sim >= 0.8
-                        ? 'var(--success)'
-                        : sim >= 0.6
-                          ? 'var(--primary)'
-                          : 'var(--warning)';
-                    return (
-                      <Card
-                        key={i}
-                        className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border-border-subtle bg-surface-sunken/70 p-3 shadow-sm"
-                        data-testid="chat-citation"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                                className="size-3"
-                              aria-hidden
-                            >
-                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                              <polyline points="14 2 14 8 20 8" />
-                            </svg>
-                            Source {i + 1}
-                          </span>
-                          <Badge
-                            variant="outline"
-                            className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
-                            style={{
-                              color: simTone,
-                              background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
-                            }}
-                            title="Cosine similarity to your question"
-                          >
-                            {simPct}% match
-                          </Badge>
-                        </div>
+                  {textParts.map((part, i) =>
+                    part.type === 'text' ? (
+                      isUser ? (
                         <div
-                          className="h-1 w-full overflow-hidden rounded-full bg-surface-elevated"
-                          aria-hidden
+                          key={i}
+                          className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground"
+                          data-testid="chat-text"
                         >
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${simPct}%`,
-                              background: 'var(--success)',
-                            }}
-                          />
+                          {part.text}
                         </div>
-                        <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
-                          {c.data.snippet}
-                        </p>
-                      </Card>
-                    );
-                  })}
+                      ) : (
+                        <div
+                          key={i}
+                          className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
+                          data-testid="chat-text"
+                        >
+                          <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
+                        </div>
+                      )
+                    ) : null,
+                  )}
+
+                  {citations.length > 0 && !isUser && (
+                    <div
+                      className="-mx-1 flex w-full max-w-none snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
+                      data-testid="chat-citations"
+                    >
+                      {citations.map((c, i) => {
+                        const sim = c.data.similarity;
+                        const simPct = Math.round(sim * 100);
+                        const simTone =
+                          sim >= 0.8
+                            ? 'var(--success)'
+                            : sim >= 0.6
+                              ? 'var(--primary)'
+                              : 'var(--warning)';
+                        return (
+                          <div
+                            key={i}
+                            className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/70 p-3"
+                            data-testid="chat-citation"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
+                                Source {i + 1}
+                              </span>
+                              <span
+                                className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
+                                style={{
+                                  color: simTone,
+                                  background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
+                                }}
+                                title="Cosine similarity to your question"
+                              >
+                                {simPct}% match
+                              </span>
+                            </div>
+                            <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                              {c.data.snippet}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+              );
+            })
+          )}
 
-        {isStreaming && (
-          <div
-            className="flex items-center gap-2 self-start rounded-full border border-border-subtle bg-card/80 px-2.5 py-1 text-xs text-muted-foreground"
-            data-testid="chat-streaming"
-          >
-            <span className="flex gap-1" aria-hidden>
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
-            </span>
-            <span>Generating</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              onClick={() => stop()}
-              className="ml-1 px-1.5 py-0.5 text-[11px] font-medium text-foreground-subtle transition-colors hover:bg-surface-elevated hover:text-foreground"
-            >
-              Stop
-            </Button>
-          </div>
-        )}
+          {isStreaming &&
+            (() => {
+              const last = messages[messages.length - 1];
+              const lastHasText =
+                last?.role === 'assistant' &&
+                last.parts.some((p) => p.type === 'text' && p.text.length > 0);
+              if (lastHasText) return null;
+              return (
+                <div
+                  key="thinking"
+                  className="flex items-center gap-3"
+                  data-testid="chat-message-assistant"
+                >
+                  <ThinkingDot />
+                  <span className="text-sm text-muted-foreground">Thinking…</span>
+                </div>
+              );
+            })()}
 
-        {error && (
-          <Alert
-            variant="destructive"
-            className="flex items-start gap-2.5 rounded-xl border-destructive/30 bg-destructive/10 p-3 text-destructive"
-            data-testid="chat-error"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="mt-0.5 shrink-0"
-              aria-hidden
+          <div ref={anchorRef} />
+
+          {error && (
+            <Alert
+              variant="destructive"
+              className="flex items-start gap-2.5 rounded-xl border-destructive/30 bg-destructive/10 p-3 text-destructive"
+              data-testid="chat-error"
             >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <div className="flex flex-col gap-0.5">
-              <AlertTitle className="font-medium">
-                {error instanceof Error
-                  ? error.name === 'AbortError'
-                    ? 'Request was aborted.'
-                    : error.message || 'Something went wrong.'
-                  : 'Something went wrong.'}
-              </AlertTitle>
-              <AlertDescription className="text-[12px] text-destructive/80">
-                {error instanceof Error && error.name === 'AbortError'
-                  ? ''
-                  : 'Try again in a moment.'}
-              </AlertDescription>
-            </div>
-          </Alert>
-        )}
+              <div className="flex flex-col gap-0.5">
+                <AlertTitle className="font-medium">
+                  {error instanceof Error
+                    ? error.name === 'AbortError'
+                      ? 'Request was aborted.'
+                      : error.message || 'Something went wrong.'
+                    : 'Something went wrong.'}
+                </AlertTitle>
+                <AlertDescription className="text-[12px] text-destructive/80">
+                  {error instanceof Error && error.name === 'AbortError'
+                    ? ''
+                    : 'Try again in a moment.'}
+                </AlertDescription>
+              </div>
+            </Alert>
+          )}
+        </div>
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        className="group/composer flex shrink-0 items-end gap-2 border-t border-border-subtle bg-card/60 p-2 backdrop-blur-md transition-colors duration-150 focus-within:border-primary/60"
-        data-testid="chat-composer"
-      >
-        <Textarea
-          ref={composerRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={isStreaming}
-          placeholder="Type your question…"
-          rows={1}
-          className="min-h-[40px] max-h-[160px] flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus-visible:ring-0 disabled:opacity-60"
-          data-testid="chat-input"
-        />
-        <Button
-          type={isStreaming ? 'button' : 'submit'}
-          disabled={!isStreaming && !input.trim()}
-          aria-label={isStreaming ? 'Stop generating' : 'Send message'}
-          onClick={isStreaming ? () => stop() : undefined}
-          className="h-10 w-10 shrink-0 rounded-xl transition-all duration-150 ease-out-quart hover:bg-primary active:bg-primary/80 disabled:cursor-not-allowed disabled:opacity-40"
-          data-testid="chat-send"
+      <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+        <form
+          onSubmit={onSubmit}
+          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-border-subtle bg-card/70 p-2 backdrop-blur-md transition-colors focus-within:border-primary/50"
+          data-testid="chat-composer"
         >
-          {isStreaming ? (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <rect x="6" y="6" width="12" height="12" rx="1" />
-            </svg>
-          ) : (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M12 19V5" />
-              <path d="m5 12 7-7 7 7" />
-            </svg>
-          )}
-        </Button>
-      </form>
-    </Card>
+          <Textarea
+            ref={composerRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={isStreaming}
+            placeholder="Message the support assistant…"
+            rows={1}
+            className="min-h-[24px] max-h-[200px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus-visible:ring-0 disabled:opacity-60"
+            data-testid="chat-input"
+          />
+          <Button
+            type={isStreaming ? 'button' : 'submit'}
+            disabled={!isStreaming && !input.trim()}
+            aria-label={isStreaming ? 'Stop generating' : 'Send message'}
+            onClick={isStreaming ? () => stop() : undefined}
+            size="icon"
+            className="size-9 shrink-0 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            data-testid="chat-send"
+          >
+            {isStreaming ? (
+              <SquareIcon data-icon="inline" className="size-4" />
+            ) : (
+              <ArrowUpIcon data-icon="inline" className="size-4" />
+            )}
+          </Button>
+        </form>
+      </div>
+    </div>
   );
 }

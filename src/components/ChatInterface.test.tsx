@@ -45,18 +45,26 @@ describe('ChatInterface', () => {
   it('renders a welcome intro when there are no messages', () => {
     setupChat();
     render(<ChatInterface />);
-    // Assert inside intro's testid to avoid colliding with the quick-prompt "open a ticket" copy.
-    const intro = screen.getByTestId('chat-intro');
-    expect(intro).toBeInTheDocument();
+    expect(screen.getByText(/Answers grounded in your docs/i)).toBeInTheDocument();
     expect(
-      within(intro).getByText(/support assistant/i),
+      screen.getByText(/answer from the official documentation/i),
     ).toBeInTheDocument();
     expect(
-      within(intro).getByText(/file a support ticket/i),
-    ).toBeInTheDocument();
-    expect(
-      within(intro).getAllByTestId('chat-quick-prompt').length,
+      screen.getAllByTestId('chat-quick-prompt').length,
     ).toBeGreaterThan(0);
+  });
+
+  it('shows a breathing thinking indicator while the assistant is generating with no text yet', () => {
+    useChatMock.mockReturnValue({
+      messages: [],
+      sendMessage: vi.fn(),
+      status: 'submitted',
+      error: undefined,
+      stop: vi.fn(),
+    });
+    render(<ChatInterface />);
+    expect(screen.getByTestId('chat-thinking')).toBeInTheDocument();
+    expect(screen.getByText(/Thinking/i)).toBeInTheDocument();
   });
 
   it('renders citation cards for data-citation parts', () => {
@@ -128,7 +136,7 @@ describe('ChatInterface', () => {
     setupChat();
     render(<ChatInterface />);
     // flex-1 + min-h-0 give the flex column height; assert on className (jsdom no layout).
-    const container = screen.getByTestId('chat-messages');
+    const container = screen.getByTestId('chat-scroll');
     const cls = container.className;
     expect(cls).toContain('flex-1');
     expect(cls).toContain('min-h-0');

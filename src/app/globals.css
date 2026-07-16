@@ -188,3 +188,15 @@
   .chat-markdown th, .chat-markdown td { @apply border border-border-subtle px-2 py-1 text-left; }
   .chat-markdown th { @apply bg-surface-sunken font-semibold; }
 }
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(0.55);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
