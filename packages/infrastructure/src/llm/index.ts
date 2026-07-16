@@ -1,4 +1,10 @@
-import type { EmbeddingService, Reranker } from '@app/domain';
+import type {
+  EmbeddingService,
+  Reranker,
+  QueryRewriter,
+  DocumentGrader,
+  HallucinationGrader,
+} from '@app/domain';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { googleEmbeddingService } from './google-embedding-service-port';
 import { openAIEmbeddingService } from './openai-embedding-service';
@@ -9,6 +15,11 @@ import { getOllamaChatModel } from './ollama-chat-service';
 import { docSummarizer } from './doc-summarizer';
 import { localReranker } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
+import {
+  queryRewriter,
+  documentGrader,
+  hallucinationGrader,
+} from './graders';
 
 export function getEmbeddingService(): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
@@ -70,8 +81,36 @@ export function getReranker(provider?: string): Reranker | undefined {
   }
 }
 
+/**
+ * Return the Session 8 agentic-loop graders, or `undefined` for each when the
+ * loop is disabled (`AGENTIC_ENABLED=false`). Adapters reuse the chat model
+ * (cheap `GRADE_MODEL` override when set) and degrade safely on failure.
+ */
+export function getGraders(enabled?: boolean): {
+  queryRewriter: QueryRewriter | undefined;
+  documentGrader: DocumentGrader | undefined;
+  hallucinationGrader: HallucinationGrader | undefined;
+} {
+  const on = enabled ?? process.env.AGENTIC_ENABLED !== 'false';
+  if (!on) {
+    return {
+      queryRewriter: undefined,
+      documentGrader: undefined,
+      hallucinationGrader: undefined,
+    };
+  }
+  return { queryRewriter, documentGrader, hallucinationGrader };
+}
+
 export { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
-export { docSummarizer, localReranker, cohereReranker };
+export {
+  docSummarizer,
+  localReranker,
+  cohereReranker,
+  queryRewriter,
+  documentGrader,
+  hallucinationGrader,
+};
 
 /** Resolve the resolved embedding model id string for the active provider.
  *  Used to stamp `DocumentChunk.embeddingModel` metadata from within

@@ -310,6 +310,33 @@ export interface Reranker {
 }
 
 /**
+ * Rewrites a vague user query into a tighter, more retrievable phrase
+ * (Session 8 agentic loop). Provider-agnostic; adapters reuse the chat model
+ * with structured output. The application layer depends only on this port.
+ */
+export interface QueryRewriter {
+  rewrite(query: string): Promise<string>;
+}
+
+/**
+ * Binary relevance grader for a single retrieved document against a question
+ * (Session 8 agentic loop). Returns `'yes'` when the document helps answer the
+ * question, `'no'` otherwise. Adapters reuse the chat model.
+ */
+export interface DocumentGrader {
+  grade(question: string, document: string): Promise<'yes' | 'no'>;
+}
+
+/**
+ * Hallucination grader: given the retrieved `documents` text and a `generation`,
+ * returns `'yes'` when the answer is grounded in the documents, `'no'` when it
+ * is not (Session 8 agentic loop). Adapters reuse the chat model.
+ */
+export interface HallucinationGrader {
+  grade(documents: string, generation: string): Promise<'yes' | 'no'>;
+}
+
+/**
  * Generates a short document title + summary used to prepend a contextual
  * header to every chunk before embedding (Contextual Chunk Headers, Session 3).
  * Implemented in infrastructure as a provider-agnostic adapter built on top of

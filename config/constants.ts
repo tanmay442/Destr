@@ -43,3 +43,13 @@ export const RRF_K = Number(process.env.RRF_K ?? 60);
 export const LEXICAL_WEIGHT = Number(process.env.LEXICAL_WEIGHT ?? 1);
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;
+// Agentic retrieval loop (Session 8): query-rewrite → hybrid/rerank retrieve →
+// grade+drop irrelevant → retry if weak → generate → hallucination check.
+export const AGENTIC_ENABLED = process.env.AGENTIC_ENABLED !== 'false'; // default on
+export const GRADE_MODEL = process.env.GRADE_MODEL ?? ''; // optional cheap model override for graders
+export const OUT_OF_DOMAIN_THRESHOLD = Number(process.env.OUT_OF_DOMAIN_THRESHOLD ?? 0.3);
+export const AGENT_STEP_BUDGET = Number(process.env.AGENT_STEP_BUDGET ?? 8);
+// Broad candidate pool for the agentic loop's re-retrieval (step-back / sub-query).
+export const AGENTIC_RETRIEVE_LIMIT = Number(process.env.AGENTIC_RETRIEVE_LIMIT ?? 10);
+// Max rewrite+retry passes before falling back to the ticket offer.
+export const AGENTIC_MAX_RETRIES = Number(process.env.AGENTIC_MAX_RETRIES ?? 1);

@@ -78,6 +78,17 @@ heavily that the user cannot verify it against the docs.
   the signed-in Clerk identity is used instead. Just pass a short
   placeholder string for those.`;
 
+const GUARDRAIL_BLOCK = `# Retrieval and guardrail rules
+
+- Before searching, rewrite the user's question into the most specific,
+  retrievable phrase you can (keep product names, feature terms, error codes).
+- Grade every chunk the search returns: only use chunks that are actually
+  relevant to the question. Ignore irrelevant ones even if they are returned.
+- If search returns no relevant chunk, do not invent an answer. Say you don't
+  know from the documentation and offer to open a support ticket.
+- Never answer from anything outside the provided documentation. If the
+  question is out of the documentation's scope, decline and offer a ticket.`;
+
 const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   friendly:
     'Friendly, calm, and direct. No emojis. No exclamation marks. ' +
@@ -180,7 +191,7 @@ export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,
 ): string {
-  const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config)];
+  const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config), GUARDRAIL_BLOCK];
   const outOfScope = buildOutOfScopeBlock(config);
   if (outOfScope) blocks.push(outOfScope);
   const custom = buildCustomInstructionsBlock(config);

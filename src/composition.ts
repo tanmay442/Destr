@@ -11,7 +11,9 @@ import {
   getAnalyticsSummary, listAudit,
   prepareIngest,
   uploadPrechunkedMarkdown,
+  agenticSearch,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
+  type AgenticDeps,
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking } from '@app/infrastructure';
 const authAdapter = Auth.createAuthAdapter();
@@ -110,6 +112,18 @@ const searchDeps: SearchDeps = {
   embeddings: embeddingService,
   reranker,
 };
+
+// Session 8: agentic retrieval loop graders (rewrite / grade / hallucination).
+// `Llm.getGraders` returns `undefined` for each when AGENTIC_ENABLED=false.
+const graders = Llm.getGraders();
+const agenticDeps: AgenticDeps | null = graders.queryRewriter && graders.documentGrader && graders.hallucinationGrader
+  ? {
+      search: searchDeps,
+      queryRewriter: graders.queryRewriter,
+      documentGrader: graders.documentGrader,
+      hallucinationGrader: graders.hallucinationGrader,
+    }
+  : null;
 function createRateLimiter(): RateLimiter {
   if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();
   return Auth.lruRateLimiter;
@@ -130,6 +144,15 @@ function createComposition() {
   return {
     ingestFile: (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, ingestDeps),
     searchChunks: (q: string, o: Parameters<typeof searchChunks>[1]) => bind(searchChunks, q, o, searchDeps),
+    /** Session 8 agentic retrieval loop (rewrite → retrieve → grade → retry).
+      * Returns `null` when AGENTIC_ENABLED=false so the route falls back to the
+      * plain `searchChunks` path. */
+    agenticSearch: agenticDeps
+      ? (query: string) => agenticSearch(query, agenticDeps)
+      : null,
+    /** Session 8 hallucination grader (post-generation guardrail). `null` when
+      * AGENTIC_ENABLED=false. */
+    hallucinationGrader: agenticDeps ? agenticDeps.hallucinationGrader.grade : null,
     listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
     setUserRole: (input: Parameters<typeof setUserRole>[0]) => bind(setUserRole, input, { ...userDeps, ...auditDeps }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),

@@ -53,6 +53,12 @@ const { compositionMock } = vi.hoisted(() => ({
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     logTicketEvent: vi.fn(),
+    agenticSearch: undefined as
+      | ((query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>)
+      | undefined,
+    hallucinationGrader: undefined as
+      | ((documents: string, generation: string) => Promise<'yes' | 'no'>)
+      | undefined,
   },
 }));
 
@@ -456,3 +462,122 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     expect(system as string).not.toMatch(/ignore them and answer conversationally/);
   });
 });
+
+describe('/api/chat agentic loop (Session 8)', () => {
+  beforeEach(() => {
+    compositionMock.agenticSearch = undefined;
+    compositionMock.hallucinationGrader = undefined;
+  });
+
+  it('uses agenticSearch when wired, dropping graded-irrelevant chunks before the model sees them', async () => {
+    const allChunks = [
+      { content: 'keep this', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
+      { content: 'drop this', similarity: 0.2, id: 2, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
+    ];
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({ chunks: [allChunks[0]], rewrittenQuery: 'rewritten', outOfDomain: false }) as never,
+    );
+    const { tools } = await captureToolsForAgentic();
+    const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
+    expect(compositionMock.agenticSearch).toHaveBeenCalledWith('vague');
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('keep this');
+  });
+
+  it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({ chunks: [], rewrittenQuery: 'rewritten', outOfDomain: true }) as never,
+    );
+    compositionMock.hallucinationGrader = vi.fn(async () => 'no' as const);
+    const body = await runAgenticStreamAndRead('where is my refund?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(body).toMatch(/offerTicket/);
+  });
+
+  it('surfaces a guardrail when the hallucination grader flags the answer ungrounded', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({
+        chunks: [{ content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null }],
+        rewrittenQuery: 'rewritten',
+        outOfDomain: false,
+      }) as never,
+    );
+    compositionMock.hallucinationGrader = vi.fn(async () => 'no' as const);
+    const body = await runAgenticStreamAndRead('what is the policy?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(body).toMatch(/offerTicket/);
+  });
+
+  it('does not surface a guardrail when the answer is grounded', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({
+        chunks: [{ content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null }],
+        rewrittenQuery: 'rewritten',
+        outOfDomain: false,
+      }) as never,
+    );
+    compositionMock.hallucinationGrader = vi.fn(async () => 'yes' as const);
+    const body = await runAgenticStreamAndRead('what is the policy?');
+    expect(body).not.toMatch(/data-guardrail/);
+  });
+});
+
+async function captureToolsForAgentic() {
+  authMock.mockResolvedValue({ userId: 'user_test' });
+  let captured:
+    | { searchDocumentation: { execute: (args: { query: string; limit?: number }) => Promise<unknown> } }
+    | undefined;
+  streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
+    captured = opts?.tools as typeof captured;
+    return { toUIMessageStream: () => makeUIMessageStream() };
+  });
+  const res = await appHandler.POST(
+    new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [] }),
+    }),
+  );
+  expect(res.status).toBe(200);
+  expect(streamTextImpl).toHaveBeenCalled();
+  return { tools: captured ?? null };
+}
+
+async function runAgenticStreamAndRead(query: string): Promise<string> {
+  authMock.mockResolvedValue({ userId: 'user_test' });
+  type Ctl = ReadableStreamDefaultController<{ type: string }>;
+  let streamController: Ctl | null = null;
+  const llmStream = new ReadableStream<{ type: string }>({
+    start(controller) {
+      streamController = controller;
+    },
+  });
+  streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
+    const tools = (opts?.tools as { searchDocumentation?: { execute: (a: { query: string }) => Promise<unknown> } }) ?? {};
+    if (tools.searchDocumentation) {
+      void tools.searchDocumentation.execute({ query });
+    }
+    return {
+      toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
+    };
+  });
+  const res = await appHandler.POST(
+    new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: query }] }] }),
+    }),
+  );
+  expect(res.status).toBe(200);
+  streamController!.close();
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    body += decoder.decode(value, { stream: true });
+  }
+  body += decoder.decode();
+  return body;
+}

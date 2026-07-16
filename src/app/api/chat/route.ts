@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT } from '../../../../config/constants';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, AGENT_STEP_BUDGET, AGENTIC_ENABLED } from '../../../../config/constants';
 
 function emitCitations(
   chunks: RetrievedChunk[],
@@ -29,15 +29,18 @@ function emitCitations(
 
 function buildChatTools(deps: {
   searchChunks: Composition['searchChunks'];
+  agenticSearch: Composition['agenticSearch'];
   capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
   createTicket: Composition['createTicket'];
   userId: string;
+  /** Set to true by the agentic loop when retrieval found nothing relevant. */
+  outOfDomainRef: { value: boolean };
 }) {
-  const { searchChunks: searchFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid } = deps;
+  const { searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef } = deps;
   return {
     searchDocumentation: tool({
       description:
-        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; the full chunk is still available, but only the top 3 results are returned by default. Do NOT call this for non-documentation questions (medical, legal, personal).",
+        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; the full chunk is still available, but only the top chunks are returned by default. Do NOT call this for non-documentation questions (medical, legal, personal).",
       inputSchema: z.object({
         query: z
           .string()
@@ -57,12 +60,23 @@ function buildChatTools(deps: {
           ),
       }),
       execute: async ({ query, limit }) => {
-        const r = await searchFn(query, { limit });
-        if (!r.ok) {
-          logger.error('RAG retrieval failed', { error: r.error });
-          return [];
+        let matches: RetrievedChunk[];
+        if (agenticFn) {
+          const r = await agenticFn(query);
+          if (!r.ok) {
+            logger.error('Agentic retrieval failed', { error: r.error });
+            return [];
+          }
+          outOfDomainRef.value = r.value.outOfDomain;
+          matches = r.value.chunks;
+        } else {
+          const r = await searchFn(query, { limit });
+          if (!r.ok) {
+            logger.error('RAG retrieval failed', { error: r.error });
+            return [];
+          }
+          matches = r.value;
         }
-        const matches = r.value;
         const capped = matches.map((m) => ({
           content:
             m.content.length > TOOL_CONTENT_CAP
@@ -193,17 +207,21 @@ async function streamChatResponse(req: Request): Promise<Response> {
     }
   }
 
+  const outOfDomainRef = { value: false };
+
   const result = streamText({
     model: comp.getChatModel(),
     system: buildSystemPrompt(appConfig, prefetch),
     messages: await convertToModelMessages(messages),
-    stopWhen: stepCountIs(5),
+    stopWhen: stepCountIs(AGENTIC_ENABLED ? AGENT_STEP_BUDGET : 5),
     abortSignal: req.signal,
     tools: buildChatTools({
       searchChunks: comp.searchChunks,
+      agenticSearch: comp.agenticSearch,
       capturedCitations,
       createTicket: comp.createTicket,
       userId,
+      outOfDomainRef,
     }),
   });
 
@@ -225,6 +243,13 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
+          await runHallucinationCheck({
+            controller,
+            result,
+            capturedCitations,
+            hallucinationGrader: comp.hallucinationGrader,
+            outOfDomain: outOfDomainRef.value,
+          });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(err);
@@ -236,6 +261,41 @@ async function streamChatResponse(req: Request): Promise<Response> {
   });
 
   return createUIMessageStreamResponse({ stream: citationStream });
+}
+
+/**
+ * Post-generation guardrail (Session 8, plan step 7): if the agentic loop is on
+ * and retrieval was out-of-domain, or the grounded-grader flags the answer as
+ * not supported by the docs, nudge the client toward a support ticket. Never
+ * blocks or rewrites the streamed answer — it only appends a control hint.
+ */
+async function runHallucinationCheck(opts: {
+  controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
+  result: { text: PromiseLike<string> };
+  capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
+  hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  outOfDomain: boolean;
+}): Promise<void> {
+  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
+  if (!hallucinationGrader) return;
+
+  let ungrounded = outOfDomain;
+  if (!ungrounded && capturedCitations.length > 0) {
+    try {
+      const generation = await result.text;
+      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
+      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
+    } catch (err) {
+      logger.error('Hallucination check failed', { error: err });
+    }
+  }
+
+  if (ungrounded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain, offerTicket: true },
+    } as InferUIMessageChunk<MyUIMessage>);
+  }
 }
 
 export async function POST(req: Request) {
