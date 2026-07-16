@@ -2,7 +2,13 @@ import { z } from 'zod';
 
 const MAX_TEXT_LENGTH = 50_000;
 
-const ALLOWED_PART_TYPE = /^(text|reasoning|file|tool-[a-zA-Z0-9_-]+|data-[a-zA-Z0-9_-]+)$/;
+// Allowlist of UI message part `type` values the AI SDK v3 `useChat` client
+// may round-trip back to us. The agentic loop emits `step-start`, tool
+// invocations emit `tool-*` (incl. dynamic tools and approval/input/output
+// phases), and grounded answers may include `source-url`/`source-document`.
+// `data-*` covers our custom citation/guardrail control parts.
+const ALLOWED_PART_TYPE =
+  /^(text|reasoning|file|step-start|dynamic-tool|source-url|source-document|tool-[a-zA-Z0-9_-]+|data-[a-zA-Z0-9_-]+)$/;
 
 const MessagePartSchema = z.union([
   z.object({ type: z.literal('text'), text: z.string().max(MAX_TEXT_LENGTH) }),

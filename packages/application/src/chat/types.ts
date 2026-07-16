@@ -20,5 +20,9 @@ export type MyUIMessage = UIMessage<
       sectionTitle?: string | null;
       source?: string | null;
     };
+    guardrail: {
+      outOfDomain: boolean;
+      offerTicket: boolean;
+    };
   }
 >;
