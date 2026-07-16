@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok } from '@app/domain';
+import { ok, unwrap } from '@app/domain';
 import { agenticSearch, type AgenticDeps } from './agentic-search';
 
 const { searchChunksMock, rewriterMock, graderMock } = vi.hoisted(() => ({
@@ -49,7 +49,7 @@ describe('agenticSearch', () => {
     );
     const res = await agenticSearch('vague question', makeDeps());
     expect(res.ok).toBe(true);
-    const r = res.value;
+    const r = unwrap(res);
     expect(rewriterMock).toHaveBeenCalledWith('vague question');
     expect(r.chunks).toHaveLength(1);
     expect(r.chunks[0].content).toBe('relevant doc');
@@ -62,8 +62,8 @@ describe('agenticSearch', () => {
     graderMock.mockResolvedValue('no');
     const res = await agenticSearch('anything', makeDeps());
     expect(res.ok).toBe(true);
-    expect(res.value.chunks).toHaveLength(0);
-    expect(res.value.outOfDomain).toBe(true);
+    expect(unwrap(res).chunks).toHaveLength(0);
+    expect(unwrap(res).outOfDomain).toBe(true);
   });
 
   it('retries with the original query when the first pass keeps nothing', async () => {
@@ -77,15 +77,15 @@ describe('agenticSearch', () => {
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
     expect(rewriterMock).toHaveBeenCalledWith('the question');
-    expect(res.value.chunks).toHaveLength(1);
-    expect(res.value.chunks[0].content).toBe('strong match');
+    expect(unwrap(res).chunks).toHaveLength(1);
+    expect(unwrap(res).chunks[0].content).toBe('strong match');
   });
 
   it('returns empty + out-of-domain for an empty query', async () => {
     const res = await agenticSearch('   ', makeDeps());
     expect(res.ok).toBe(true);
-    expect(res.value.chunks).toHaveLength(0);
-    expect(res.value.outOfDomain).toBe(true);
+    expect(unwrap(res).chunks).toHaveLength(0);
+    expect(unwrap(res).outOfDomain).toBe(true);
     expect(searchChunksMock).not.toHaveBeenCalled();
   });
 
@@ -95,6 +95,6 @@ describe('agenticSearch', () => {
     graderMock.mockResolvedValue('yes');
     const res = await agenticSearch('original wording', makeDeps());
     expect(res.ok).toBe(true);
-    expect(res.value.rewrittenQuery).toBe('original wording');
+    expect(unwrap(res).rewrittenQuery).toBe('original wording');
   });
 });

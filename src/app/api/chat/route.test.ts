@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ok, err } from '@app/domain';
+import type { Composition } from '@/composition';
 
 const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = vi.hoisted(() => ({
   searchValue: [
@@ -44,7 +45,25 @@ vi.mock('@clerk/nextjs/server', () => ({
   currentUser: currentUserMock,
 }));
 
-const { compositionMock } = vi.hoisted(() => ({
+type MockComposition = {
+  rateLimit: () => typeof rateLimitResult;
+  searchChunks: ReturnType<typeof vi.fn>;
+  createTicket: ReturnType<typeof vi.fn>;
+  recordQuery: ReturnType<typeof vi.fn>;
+  getChatModel: ReturnType<typeof vi.fn>;
+  getEmbeddingModel: ReturnType<typeof vi.fn>;
+  getEmbeddingModelId: ReturnType<typeof vi.fn>;
+  answerCacheKey: ReturnType<typeof vi.fn>;
+  answerCache: {
+    get: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+  };
+  logTicketEvent: ReturnType<typeof vi.fn>;
+  agenticSearch?: (query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
+  hallucinationGrader?: (documents: string, generation: string) => Promise<'yes' | 'no'>;
+};
+
+const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => ({
   compositionMock: {
     rateLimit: () => rateLimitResult,
     searchChunks: vi.fn(async () => ok(searchValue) as never),
@@ -55,21 +74,17 @@ const { compositionMock } = vi.hoisted(() => ({
     getEmbeddingModelId: vi.fn(() => 'mock-embed'),
     answerCacheKey: vi.fn((query: string) => `rag:answer:${Buffer.from(query).toString('hex').slice(0, 32)}`),
     answerCache: {
-      get: vi.fn<[string], Promise<string | null>>(async () => null),
-      set: vi.fn<[string, string, number], Promise<void>>(async () => undefined),
+      get: vi.fn(async () => null),
+      set: vi.fn(async (_key: string, _answer: string, _ttlSec: number) => undefined),
     },
     logTicketEvent: vi.fn(),
-    agenticSearch: undefined as
-      | ((query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>)
-      | undefined,
-    hallucinationGrader: undefined as
-      | ((documents: string, generation: string) => Promise<'yes' | 'no'>)
-      | undefined,
+    agenticSearch: undefined,
+    hallucinationGrader: undefined,
   },
 }));
 
 vi.mock('@/composition', () => ({
-  getComposition: () => compositionMock,
+  getComposition: () => compositionMock as unknown as Composition,
   appConfig: appConfigMock,
 }));
 

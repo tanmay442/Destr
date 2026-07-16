@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { insertChunks } from '../repositories';
-import type { Client } from '../client';
+
+type Client = Parameters<typeof insertChunks>[1];
 
 type TestRow = {
   documentId: number;

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { settingsMock } = vi.hoisted(() => ({
+const { settingsMock, isUnauthorized } = vi.hoisted(() => ({
   settingsMock: vi.fn(),
+  isUnauthorized: { value: false },
 }));
 
 vi.mock('@/composition', () => ({
   requireAdminRoute: async () => {
-    if (settingsMock.__unauthorized) {
+    if (isUnauthorized.value) {
       return { ok: false, response: new Response('Unauthorized', { status: 401 }) };
     }
     return { ok: true, session: {}, comp: {} };
@@ -25,13 +26,13 @@ import * as route from './route';
 
 beforeEach(() => {
   settingsMock.mockReset();
-  settingsMock.__unauthorized = false;
+  isUnauthorized.value = false;
   process.env.EMBEDDING_PROVIDER = 'google';
 });
 
 describe('GET /api/admin/settings', () => {
   it('returns 401 when not authenticated', async () => {
-    settingsMock.__unauthorized = true;
+    isUnauthorized.value = true;
     const res = await route.GET();
     expect(res.status).toBe(401);
   });
