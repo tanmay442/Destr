@@ -41,15 +41,32 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
 /** Select the second-stage reranker adapter (Session 6). `local` runs an
  *  on-device cross-encoder (no key required); `cohere` uses the hosted Rerank
  *  API (requires `COHERE_API_KEY`). Defaults to `local`. */
-export function getReranker(provider?: string): Reranker {
-  const selected = provider ?? process.env.RERANKER_PROVIDER ?? 'local';
+/**
+ * Select the second-stage reranker adapter (Session 6).
+ *
+ * `RERANKER_PROVIDER` chooses between three modes:
+ *   - 'cosine' : the original pre-Session-6 bi-encoder ordering. No reranker is
+ *               loaded — returns `undefined`, so `searchChunks` keeps its OG
+ *               vector behaviour. This is the safe serverless default.
+ *   - 'local'  : on-device Xenova cross-encoder (`localReranker`), no API key.
+ *   - 'cohere' : hosted Cohere Rerank API (`cohereReranker`). If `COHERE_API_KEY`
+ *               is missing, returns `undefined` (→ cosine) instead of attempting a
+ *               call that would fail — a clean switch rather than a thrown error.
+ *
+ * In every case, if the chosen reranker later fails at runtime (model won't load,
+ * API error, etc.), `searchChunks` automatically falls back to cosine ordering.
+ */
+export function getReranker(provider?: string): Reranker | undefined {
+  const selected = provider ?? process.env.RERANKER_PROVIDER ?? 'cosine';
   switch (selected) {
     case 'local':
       return localReranker;
     case 'cohere':
-      return cohereReranker;
+      // No key → don't attempt a doomed call; behave as cosine.
+      return process.env.COHERE_API_KEY ? cohereReranker : undefined;
+    case 'cosine':
     default:
-      throw new Error(`Unknown RERANKER_PROVIDER: ${selected}`);
+      return undefined;
   }
 }
 

@@ -337,4 +337,19 @@ describe('searchChunks reranking', () => {
     // Highest cosine similarity first.
     expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
   });
+
+  it('uses the original cosine path when no reranker is configured (default cosine mode)', async () => {
+    const rows = [
+      flatRow(1, 'a', 0.3),
+      flatRow(2, 'b', 0.9),
+      flatRow(3, 'c', 0.6),
+    ];
+    // No `reranker` key — equivalent to RERANKER_PROVIDER=cosine (default).
+    const deps = rerankDeps(rows, undefined);
+    const result = await searchChunks('q', { limit: 3 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Original pre-S6 bi-encoder ordering (highest similarity first), no rerank call.
+    expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
+  });
 });

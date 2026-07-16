@@ -75,24 +75,35 @@ const ingestDeps: IngestDeps = {
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
 };
-// Session 6: second-stage reranker. Provider selected by RERANKER_PROVIDER
-// (`local` on-device cross-encoder by default, `cohere` for the hosted API).
-// The default `local` path runs the Xenova cross-encoder with no API key —
-// great for local/Docker. On Vercel serverless the native onnxruntime (~137 MB)
-// plus the runtime model download can exceed the function size limit or fail on a
-// read-only FS; when that happens the adapter throws and `searchChunks` falls
-// back to cosine ordering. We warn loudly so the silent disable is visible.
+// Session 6: second-stage reranker. `RERANKER_PROVIDER` selects one of
+// three modes (see config/constants.ts): 'cosine' (OG vector ordering, default,
+// no reranker loaded), 'local' (on-device Xenova cross-encoder, no key),
+// 'cohere' (hosted API, needs COHERE_API_KEY). getReranker() returns
+// `undefined` for 'cosine' or for 'cohere' without a key, so searchChunks
+// keeps its original behaviour. When a chosen reranker fails at runtime,
+// searchChunks automatically falls back to cosine ordering.
 const reranker = Llm.getReranker(RERANKER_PROVIDER);
-if (RERANKER_PROVIDER === 'local' && process.env.VERCEL) {
-  logger.warn(
-    'RERANKER_PROVIDER=local on Vercel serverless: the on-device cross-encoder ' +
-      'needs native onnxruntime and a model download, which may exceed the function ' +
-      'size limit or fail on a read-only FS. If it fails to load, searchChunks ' +
-      'falls back to cosine ordering (reranking is effectively disabled on this ' +
-      'deployment). To keep reranking on serverless, pre-bake the model into ' +
-      'TRANSFORMERS_CACHE in the build, or set RERANKER_PROVIDER=cohere with ' +
-      'COHERE_API_KEY (opt-in hosted reranker).',
-  );
+if (RERANKER_PROVIDER !== 'cosine') {
+  if (RERANKER_PROVIDER === 'local' && process.env.VERCEL) {
+    // Native onnxruntime (~137 MB) + model download can exceed the serverless
+    // function cap or fail on a read-only FS — fall back to cosine if so.
+    logger.warn(
+      'RERANKER_PROVIDER=local on Vercel serverless: the on-device ' +
+        'cross-encoder needs native onnxruntime and a model download, which may ' +
+        'exceed the function size limit or fail on a read-only FS. If it fails ' +
+        'to load, searchChunks falls back to cosine ordering (reranking is ' +
+        'effectively disabled on this deployment). To keep reranking on ' +
+        'serverless, pre-bake the model into TRANSFORMERS_CACHE in the build.',
+    );
+  } else if (RERANKER_PROVIDER === 'cohere' && !process.env.COHERE_API_KEY) {
+    // getReranker already returns undefined here, but log it so the operator
+    // understands why reranking is not active.
+    logger.warn(
+      'RERANKER_PROVIDER=cohere but COHERE_API_KEY is not set — searchChunks ' +
+        'will use cosine ordering (reranking disabled). Set COHERE_API_KEY to ' +
+        'enable the hosted reranker.',
+    );
+  }
 }
 const searchDeps: SearchDeps = {
   chunks: chunkRepo,

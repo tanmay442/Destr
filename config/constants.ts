@@ -24,9 +24,16 @@ export const PARENT_CHILD_MODE = (process.env.PARENT_CHILD_MODE ?? 'parent') as 
 export const PARENT_CHILD_WINDOW = Number(process.env.PARENT_CHILD_WINDOW ?? 2);
 export const RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // Reranking (Session 6). A broad candidate pool is retrieved by vector search,
-// then a second-stage reranker reorders it and keeps the top `RERANK_TOP_N`.
+// then an optional second-stage reranker reorders it and keeps the top
+// `RERANK_TOP_N`. `RERANKER_PROVIDER` selects the reranker:
+//   - 'cosine'  : the original pre-Session-6 bi-encoder ordering. No reranker
+//                   is loaded — the safe serverless-default (zero native deps).
+//   - 'local'   : on-device Xenova cross-encoder (no API key). Opt-in.
+//   - 'cohere'  : hosted Cohere Rerank API (needs COHERE_API_KEY). Opt-in.
+// When 'local'/'cohere' fail to load/call, `searchChunks` automatically
+// falls back to cosine ordering.
+export const RERANKER_PROVIDER = (process.env.RERANKER_PROVIDER ?? 'cosine') as 'cosine' | 'local' | 'cohere';
 export const CANDIDATE_POOL = Number(process.env.CANDIDATE_POOL ?? 30);
 export const RERANK_TOP_N = Number(process.env.RERANK_TOP_N ?? DEFAULT_SEARCH_LIMIT);
-export const RERANKER_PROVIDER = (process.env.RERANKER_PROVIDER ?? 'local') as 'local' | 'cohere';
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;
