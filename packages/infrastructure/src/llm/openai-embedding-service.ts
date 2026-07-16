@@ -12,7 +12,10 @@ export function getOpenAIEmbeddingModel(): EmbeddingModelV3 {
       'OPENAI_EMBEDDING_API_KEY and OPENAI_EMBEDDING_BASE_URL must be set (or CUSTOM_LLM_API_KEY/CUSTOM_LLM_BASE_URL).',
     );
   }
-  const provider = createOpenAI({ apiKey, baseURL });
+  // Normalize base URL: the SDK appends the endpoint path (/embeddings),
+  // so strip any trailing path beyond /v1 to avoid double-pathing.
+  const normalizedBaseURL = baseURL.replace(/\/v1\/?.+$/, '/v1');
+  const provider = createOpenAI({ apiKey, baseURL: normalizedBaseURL });
   const modelId = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
   return provider.textEmbedding(modelId) as EmbeddingModelV3;
 }

@@ -7,7 +7,10 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
   if (!apiKey || !baseURL) {
     throw new Error('CUSTOM_LLM_API_KEY and CUSTOM_LLM_BASE_URL must be set.');
   }
-  const provider = createOpenAI({ apiKey, baseURL });
+  // Normalize base URL: the SDK appends /chat/completions, so strip any
+  // trailing path beyond /v1 (e.g., /v1/responses) to avoid double-pathing.
+  const normalizedBaseURL = baseURL.replace(/\/v1\/?.+$/, '/v1');
+  const provider = createOpenAI({ apiKey, baseURL: normalizedBaseURL });
   const resolved = modelId ?? process.env.LLM_MODEL ?? 'custom-chat-model';
   return provider.chat(resolved) as LanguageModelV3;
 }
