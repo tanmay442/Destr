@@ -280,6 +280,19 @@ export interface QueryStats {
   top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
+/**
+ * Short-lived cache for final, query-keyed answers (Session 10). Sits in front
+ * of generation so repeat questions skip the LLM entirely. Because an answer is
+ * tied to a specific embedding + chat model, callers MUST pin the model ids
+ * into the cache key, otherwise a model swap silently serves stale text. The
+ * adapter owns the transport (Upstash Redis / in-memory); the port never
+ * encodes a key format.
+ */
+export interface AnswerCache {
+  get(key: string): Promise<string | null>;
+  set(key: string, answer: string, ttlSec: number): Promise<void>;
+}
+
 
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;

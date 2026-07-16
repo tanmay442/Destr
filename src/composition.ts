@@ -16,7 +16,7 @@ import {
   type IngestDeps, type SearchDeps, type RateLimitDeps,
   type AgenticDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking, answerCacheKey } from '@app/infrastructure';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
@@ -133,6 +133,20 @@ function createRateLimiter(): RateLimiter {
 function createQueryStats(): QueryStats {
   if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashQueryStats();
   return Auth.inMemoryQueryStats;
+}
+
+// Session 10: answer cache reuses the same Upstash Redis as the rate-limiter
+// and query stats (no second connection). Falls back to an in-memory cache when
+// Redis is not configured, so the cache toggle works in local/dev + tests.
+function createAnswerCache() {
+  if (process.env.UPSTASH_REDIS_REST_URL) {
+    try {
+      return Auth.createUpstashAnswerCache();
+    } catch {
+      return Auth.createInMemoryAnswerCache();
+    }
+  }
+  return Auth.createInMemoryAnswerCache();
 }
 
 const rateLimitDeps: RateLimitDeps = { limiter: createRateLimiter() };
@@ -266,6 +280,9 @@ function createComposition() {
     blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
+    getEmbeddingModelId: Llm.getEmbeddingModelId,
+    answerCacheKey,
+    answerCache: createAnswerCache(),
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
       createRateLimiter().check(key, opts),

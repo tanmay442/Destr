@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ok, err } from '@app/domain';
 
 const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = vi.hoisted(() => ({
@@ -52,6 +52,12 @@ const { compositionMock } = vi.hoisted(() => ({
     recordQuery: vi.fn(() => Promise.resolve()),
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
+    getEmbeddingModelId: vi.fn(() => 'mock-embed'),
+    answerCacheKey: vi.fn((query: string) => `rag:answer:${Buffer.from(query).toString('hex').slice(0, 32)}`),
+    answerCache: {
+      get: vi.fn<[string], Promise<string | null>>(async () => null),
+      set: vi.fn<[string, string, number], Promise<void>>(async () => undefined),
+    },
     logTicketEvent: vi.fn(),
     agenticSearch: undefined as
       | ((query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>)
@@ -581,3 +587,96 @@ async function runAgenticStreamAndRead(query: string): Promise<string> {
   body += decoder.decode();
   return body;
 }
+
+describe('/api/chat answer cache (Session 10)', () => {
+  const CACHED = 'This is a cached answer from a previous generation.';
+  const QUESTION = 'How do I reset my password?';
+
+  function readBody(res: Response): Promise<string> {
+    return new Promise(async (resolve) => {
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let body = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        body += decoder.decode(value, { stream: true });
+      }
+      body += decoder.decode();
+      resolve(body);
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('ANSWER_CACHE_ENABLED', 'true');
+    compositionMock.answerCache.get.mockReset();
+    compositionMock.answerCache.set.mockReset();
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    compositionMock.answerCache.set.mockResolvedValue(undefined);
+    streamTextImpl.mockReset();
+    streamTextImpl.mockImplementation(() => ({
+      toUIMessageStream: () => makeUIMessageStream(),
+      text: Promise.resolve('freshly generated answer'),
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('short-circuits generation on a cache hit (no streamText call)', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(CACHED);
+    authMock.mockResolvedValue({ userId: 'user_cache' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(streamTextImpl).not.toHaveBeenCalled();
+    const body = await readBody(res);
+    expect(body).toContain(CACHED);
+  });
+
+  it('writes a freshly-generated first-turn answer to the cache on miss', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    authMock.mockResolvedValue({ userId: 'user_miss' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(streamTextImpl).toHaveBeenCalled();
+    await readBody(res);
+    expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
+    const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0];
+    expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
+    expect(value).toBe('freshly generated answer');
+    expect(ttl).toBe(3600);
+  });
+
+  it('does not write to cache on a follow-up turn (conversation state)', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    authMock.mockResolvedValue({ userId: 'user_followup' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi!' }] },
+            { id: 'u2', role: 'user', parts: [{ type: 'text', text: QUESTION }] },
+          ],
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    await readBody(res);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+});

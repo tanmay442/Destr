@@ -53,3 +53,14 @@ export const AGENT_STEP_BUDGET = Number(process.env.AGENT_STEP_BUDGET ?? 8);
 export const AGENTIC_RETRIEVE_LIMIT = Number(process.env.AGENTIC_RETRIEVE_LIMIT ?? 10);
 // Max rewrite+retry passes before falling back to the ticket offer.
 export const AGENTIC_MAX_RETRIES = Number(process.env.AGENTIC_MAX_RETRIES ?? 1);
+// Answer cache (Session 10): keyed on normalised query + embedding/chat model
+// ids, stored in the same Upstash Redis as the rate-limiter. TTL bounds how long
+// a (possibly model-pinned) answer stays served without regeneration.
+export const ANSWER_CACHE_ENABLED = process.env.ANSWER_CACHE_ENABLED !== 'false'; // default on
+export const ANSWER_CACHE_TTL_SEC = Number(process.env.ANSWER_CACHE_TTL_SEC ?? 3600);
+// Tracing spans (Session 10): emit structured `logger.info('rag.*')` spans
+// around retrieval + agentic steps. Off by default to avoid log noise.
+export const TRACE_ENABLED = process.env.TRACE_ENABLED === 'true';
+// Eval harness (Session 10): CI gate — fail when mean faithfulness/relevancy
+// drops below this. The harness itself is opt-in (not run in unit CI by default).
+export const EVAL_FAITHFULNESS_THRESHOLD = Number(process.env.EVAL_FAITHFULNESS_THRESHOLD ?? 0.7);

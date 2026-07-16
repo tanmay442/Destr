@@ -1,4 +1,4 @@
-import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, type InferUIMessageChunk } from 'ai';
+import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, createUIMessageStream, type InferUIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, appConfig, type MyUIMessage, type Composition } from '@/composition';
@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, AGENT_STEP_BUDGET, AGENTIC_ENABLED } from '../../../../config/constants';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, AGENT_STEP_BUDGET, AGENTIC_ENABLED, ANSWER_CACHE_ENABLED, ANSWER_CACHE_TTL_SEC, TRACE_ENABLED } from '../../../../config/constants';
 
 function emitCitations(
   chunks: RetrievedChunk[],
@@ -61,12 +61,14 @@ function buildChatTools(deps: {
       }),
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
+        const t0 = TRACE_ENABLED ? performance.now() : 0;
         if (agenticFn) {
           const r = await agenticFn(query);
           if (!r.ok) {
             logger.error('Agentic retrieval failed', { error: r.error });
             return [];
           }
+          if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           outOfDomainRef.value = r.value.outOfDomain;
           matches = r.value.chunks;
         } else {
@@ -75,6 +77,7 @@ function buildChatTools(deps: {
             logger.error('RAG retrieval failed', { error: r.error });
             return [];
           }
+          if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'vector', query, ms: performance.now() - t0, hits: r.value.length });
           matches = r.value;
         }
         const capped = matches.map((m) => ({
@@ -193,6 +196,34 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> = [];
 
   const isFirstTurn = messages.length <= 1;
+
+  // Session 10: answer cache. Only first-turn, query-keyed answers are cached —
+  // follow-up turns carry conversation state and must not be served stale. The key
+  // pins the embedding + chat model ids so a model swap never serves a stale text.
+  const cacheable = ANSWER_CACHE_ENABLED && isFirstTurn && lastUserText.trim() !== '';
+  const cacheKey = cacheable
+    ? comp.answerCacheKey(lastUserText, {
+        embeddingModel: comp.getEmbeddingModelId(),
+        chatModel: (comp.getChatModel() as { modelId?: string })?.modelId ?? 'unknown',
+      })
+    : null;
+  if (cacheKey) {
+    if (TRACE_ENABLED) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
+    const cached = await comp.answerCache.get(cacheKey).catch(() => null);
+    if (cached) {
+      if (TRACE_ENABLED) logger.info('rag.cache.hit', { key: cacheKey });
+      const stream = createUIMessageStream({
+        execute: ({ writer }) => {
+          writer.write({ type: 'text-start', id: 'cached' });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cached });
+          writer.write({ type: 'text-end', id: 'cached' });
+        },
+      });
+      return createUIMessageStreamResponse({ stream });
+    }
+    if (TRACE_ENABLED) logger.info('rag.cache.miss', { key: cacheKey });
+  }
+
   let prefetch: RetrievedChunk[] | null = null;
   if (appConfig.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchResult = await comp.searchChunks(lastUserText, {});
@@ -250,6 +281,18 @@ async function streamChatResponse(req: Request): Promise<Response> {
             hallucinationGrader: comp.hallucinationGrader,
             outOfDomain: outOfDomainRef.value,
           });
+          // Session 10: write the freshly-generated first-turn answer to the cache.
+          if (cacheKey) {
+            try {
+              const finalAnswer = await result.text;
+              if (finalAnswer && finalAnswer.trim() !== '') {
+                if (TRACE_ENABLED) logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
+                await comp.answerCache.set(cacheKey, finalAnswer, ANSWER_CACHE_TTL_SEC);
+              }
+            } catch (err) {
+              logger.warn('Answer cache write skipped', { error: String(err) });
+            }
+          }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(err);
