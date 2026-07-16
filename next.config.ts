@@ -76,7 +76,7 @@ const nextConfig: NextConfig = {
   },
   // unpdf pulls in pdfjs-dist (ESM worker code) — keep it external to the
   // Next server bundle so it isn't mis-transformed at build time.
-  serverExternalPackages: ['unpdf', 'pdfjs-dist'],
+  serverExternalPackages: ['unpdf', 'pdfjs-dist', '@xenova/transformers', 'onnxruntime-node', 'sharp'],
 };
 
 export default nextConfig;

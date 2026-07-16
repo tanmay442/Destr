@@ -1,3 +1,5 @@
+import path from 'node:path';
+import os from 'node:os';
 import type { RankedDocument, Reranker } from '@app/domain';
 
 /**
@@ -14,6 +16,11 @@ import type { RankedDocument, Reranker } from '@app/domain';
  * actually called. `@xenova/transformers` is an optional dependency; if it is
  * unavailable the adapter throws, and `searchChunks` falls back to cosine
  * ordering.
+ *
+ * The model weights download from the HuggingFace hub on first load and are
+ * cached under `TRANSFORMERS_CACHE` (defaulting to a temp dir). On read-only
+ * filesystems (Docker/serverless root) point `TRANSFORMERS_CACHE` at a
+ * writable location (e.g. `/tmp/xenova-cache`) so the download does not fail.
  */
 
 type CrossEncoder = {
@@ -23,6 +30,17 @@ type CrossEncoder = {
   ) => Promise<Record<string, unknown>>;
   model: (inputs: Record<string, unknown>) => Promise<{ logits: { data: ArrayLike<number> } }>;
 };
+
+// Point the transformers cache at a writable dir before anything loads. The
+// default project FS is read-only on Docker/serverless except /tmp, so a fixed
+// cache path avoids download failures there.
+try {
+  const { env } = await import('@xenova/transformers');
+  env.cacheDir = process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'xenova-cache');
+} catch {
+  // The package is optional; if it cannot be imported we leave the default and
+  // let the lazy loader surface the failure to the caller (cosine fallback).
+}
 
 let encoderPromise: Promise<CrossEncoder> | null = null;
 

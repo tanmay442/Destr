@@ -75,12 +75,29 @@ const ingestDeps: IngestDeps = {
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
 };
+// Session 6: second-stage reranker. Provider selected by RERANKER_PROVIDER
+// (`local` on-device cross-encoder by default, `cohere` for the hosted API).
+// The default `local` path runs the Xenova cross-encoder with no API key —
+// great for local/Docker. On Vercel serverless the native onnxruntime (~137 MB)
+// plus the runtime model download can exceed the function size limit or fail on a
+// read-only FS; when that happens the adapter throws and `searchChunks` falls
+// back to cosine ordering. We warn loudly so the silent disable is visible.
+const reranker = Llm.getReranker(RERANKER_PROVIDER);
+if (RERANKER_PROVIDER === 'local' && process.env.VERCEL) {
+  logger.warn(
+    'RERANKER_PROVIDER=local on Vercel serverless: the on-device cross-encoder ' +
+      'needs native onnxruntime and a model download, which may exceed the function ' +
+      'size limit or fail on a read-only FS. If it fails to load, searchChunks ' +
+      'falls back to cosine ordering (reranking is effectively disabled on this ' +
+      'deployment). To keep reranking on serverless, pre-bake the model into ' +
+      'TRANSFORMERS_CACHE in the build, or set RERANKER_PROVIDER=cohere with ' +
+      'COHERE_API_KEY (opt-in hosted reranker).',
+  );
+}
 const searchDeps: SearchDeps = {
   chunks: chunkRepo,
   embeddings: embeddingService,
-  // Session 6: second-stage reranker. Provider selected by RERANKER_PROVIDER
-  // (`local` on-device cross-encoder by default, `cohere` for the hosted API).
-  reranker: Llm.getReranker(RERANKER_PROVIDER),
+  reranker,
 };
 function createRateLimiter(): RateLimiter {
   if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();

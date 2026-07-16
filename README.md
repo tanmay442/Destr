@@ -44,6 +44,15 @@ pnpm dev
    "Getting your API keys" section below for where to get each one.
 4. Deploy. Migrations run automatically during `pnpm build`.
 
+> **Reranking on Vercel:** the default reranker (`RERANKER_PROVIDER=local`)
+> runs the on-device Xenova cross-encoder, which needs native `onnxruntime`
+> (~137 MB) plus a runtime model download and is **not reliable on serverless**
+> (250 MB function cap, read-only FS). When it fails to load, `searchChunks`
+> falls back to cosine ordering automatically (a warning is logged). To keep
+> reranking on Vercel, pre-bake the model into `TRANSFORMERS_CACHE` in the
+> build, or set `RERANKER_PROVIDER=cohere` with `COHERE_API_KEY` (hosted,
+> serverless-native). See the reranking block in `.env.example`.
+
 ### Getting your API keys
 
 Every service the app needs is listed below, with where to sign up,
