@@ -12,7 +12,7 @@ Ollama replaces the LLM providers.
 | Google AI Studio | Prod embeddings | https://aistudio.google.com/apikey | Yes — free embeddings |
 | OpenAI-compatible chat | Prod chat | Your provider (OpenAI, OpenRouter, Groq, etc.) | Varies |
 | Cloudflare R2 | Prod blob storage | https://dash.cloudflare.com → R2 | Yes — 10 GB, zero egress |
-| Upstash Redis | Prod rate limiting | https://console.upstash.com | Yes — 10k commands/day |
+| Upstash Redis | Prod rate limiting + query stats + answer cache | https://console.upstash.com | Yes — 10k commands/day |
 | Upstash QStash | Async ingest (optional) | https://console.upstash.com → QStash | Yes — 500 msgs/day |
 
 ## Clerk (auth — always required, even locally)
@@ -108,7 +108,7 @@ local LM Studio, etc.).
    or `img-src`, add `https://*.r2.dev` (or your custom R2 domain) to
    those directives.
 
-## Upstash Redis (prod rate limiting + query stats)
+## Upstash Redis (prod rate limiting + query stats + answer cache)
 
 1. Go to https://console.upstash.com → **Create Database**.
 2. Name it, select the **same region** as your Vercel deployment
@@ -118,7 +118,23 @@ local LM Studio, etc.).
    - `UPSTASH_REDIS_REST_TOKEN` — the REST token
 4. Without these, the app falls back to in-memory rate limiting — fine
    for local dev, but on Vercel each instance gets its own limit (N×
-   the intended budget). Set these for any multi-instance deploy.
+   the intended budget). Set these for any multi-instance deploy. The
+   **answer cache** (Session 10) shares this same Redis instance (no
+   second connection); without it, caching falls back to an in-memory
+   store that is lost on restart.
+
+### Session 10 env vars (answer cache, tracing, eval)
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `ANSWER_CACHE_ENABLED` | `true` | Toggle the first-turn answer cache |
+| `ANSWER_CACHE_TTL_SEC` | `3600` | Cache TTL in seconds |
+| `TRACE_ENABLED` | `false` | Emit `rag.*` tracing spans via the logger |
+| `EVAL_FAITHFULNESS_THRESHOLD` | `0.7` | `pnpm eval` CI gate (mean faithfulness) |
+
+All four are optional and default safely; no key is required to run
+locally. `pnpm eval` runs a mock harness with zero external deps; set
+`EVAL_REAL=1` to grade against a keyed provider.
 
 ## Upstash QStash (async ingest — optional)
 

@@ -170,6 +170,12 @@ for detailed sign-up links and per-service walkthroughs.
 - **`/admin/audit`** — Full audit log filterable by document id or
   ticket id. Document audit events: upload, replace, delete, restore.
   Ticket audit events: create, assign, status_change, note, impersonation, role_change.
+- **`/admin/settings`** — Read-only view of the current `CHUNKING_STRATEGY`,
+  embedding model, parent/child chunk sizes, and a **Re-ingest All** button
+  (`POST /api/admin/reingest`). The strategy/model are env-driven (read at
+  startup + redeploy), so the dropdown is disabled and the copy tells the
+  operator to edit the env var, redeploy, then run "Re-ingest All" to
+  re-embed every document under the new config.
 
 ### Rate limit
 
@@ -201,13 +207,16 @@ this for an Upstash hash; the call sites do not need to change.
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | Vitest unit + integration suite |
 | `pnpm test:ui` | Vitest with the interactive UI |
-| `pnpm test:ci` | Provision a Neon test branch + run vitest. Neon branch provisioning is skipped when `NEON_API_KEY`/`NEON_PROJECT_ID` are absent; vitest still runs against `DATABASE_URL`. |
+| `pnpm test:ci` | Provision a local test DB via `scripts/setup-test-db.ts` + run vitest, tearing the DB down after. Neon branch provisioning is attempted only when `NEON_API_KEY`/`NEON_PROJECT_ID` are present; otherwise the suite runs against whatever `DATABASE_URL` points to. |
 | `pnpm db:push` | Apply the Drizzle schema to the configured DB (interactive) |
 | `pnpm db:generate` | Generate SQL migrations from `packages/infrastructure/src/db/schema.ts` |
 | `pnpm db:studio` | Drizzle Studio |
 | `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
+| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top` |
+| `pnpm seed` | Seed the configured DB from `./documents/` (`tsx scripts/seed-docs.ts`) |
+| `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
 | `pnpm cli init` | Interactive first-time setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts` and re-seeds. |
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
@@ -249,7 +258,7 @@ instantiates the Clerk auth adapter for route gating. Routes import from
 |------------------|-------------------------------------------|-------------------------------|
 | `domain`         | zod                                       | application, infrastructure, cli, src/, drizzle, @ai-sdk, unpdf, next, node: built-ins |
 | `application`    | domain, config/constants                  | infrastructure, src/app, src/components, drizzle, @ai-sdk, unpdf, next |
-| `infrastructure` | domain, drizzle, @ai-sdk, clerk, unpdf, pg | application, src/app, src/components, next |
+| `infrastructure` | domain, drizzle, @ai-sdk, clerk, unpdf, pg | application, src/app, src/components, next (except the Clerk `auth/` adapter may import `next/server` for `NextResponse`/request types) |
 | `src/app`, `src/components` | application, domain, src/lib/http, src/lib/config, `@ai-sdk/react`, `next`, `@clerk/nextjs` | drizzle-orm, pg, unpdf, @app/infrastructure |
 | `cli`            | application, infrastructure, dotenv       | src/app, src/components |
 
