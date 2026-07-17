@@ -11,6 +11,7 @@ import { ForbiddenError, UnauthorizedError } from '@app/domain';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
+import { isAdminEmail } from './clerk-shared';
 import type { AuthAdapter } from './auth-factory';
 
 export type AppRole = 'admin' | 'user';
@@ -23,18 +24,6 @@ export interface AppSessionFull {
     imageUrl: string | null;
     role: AppRole;
   };
-}
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter((e) => e && EMAIL_RE.test(e));
-
-function isAdminEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return ADMIN_EMAILS.includes(email.toLowerCase());
 }
 
 async function findUserByClerkId(clerkUserId: string) {
@@ -139,17 +128,8 @@ const isAdminRoute = createRouteMatcher([
 
 async function resolveRole(
   userId: string,
-  sessionClaims: unknown,
+  _sessionClaims: unknown,
 ): Promise<'admin' | 'user'> {
-  if (sessionClaims && typeof sessionClaims === 'object') {
-    const claims = sessionClaims as
-      | { metadata?: { role?: unknown } }
-      | undefined;
-    const fromClaims = claims?.metadata?.role;
-    if (fromClaims === 'admin' || fromClaims === 'user') {
-      return fromClaims;
-    }
-  }
   try {
     const client = await clerkClient();
     const user = await client.users.getUser(userId);

@@ -31,24 +31,21 @@ type CrossEncoder = {
   model: (inputs: Record<string, unknown>) => Promise<{ logits: { data: ArrayLike<number> } }>;
 };
 
-// Point the transformers cache at a writable dir before anything loads. The
-// default project FS is read-only on Docker/serverless except /tmp, so a fixed
-// cache path avoids download failures there.
-try {
-  const { env } = await import('@xenova/transformers');
-  env.cacheDir = process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'xenova-cache');
-} catch {
-  // The package is optional; if it cannot be imported we leave the default and
-  // let the lazy loader surface the failure to the caller (cosine fallback).
-}
-
 let encoderPromise: Promise<CrossEncoder> | null = null;
 
 async function getEncoder(): Promise<CrossEncoder> {
   if (!encoderPromise) {
     encoderPromise = (async () => {
+      // Point the transformers cache at a writable dir before anything loads.
+      // The default project FS is read-only on Docker/serverless except /tmp,
+      // so a fixed cache path avoids download failures there. The package is
+      // optional; if it cannot be imported the failure surfaces to the caller
+      // (cosine fallback).
+      const transformers = await import('@xenova/transformers');
+      transformers.env.cacheDir =
+        process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'xenova-cache');
       const modelId = process.env.LOCAL_RERANK_MODEL || 'Xenova/ms-marco-MiniLM-L-6-v2';
-      const { AutoTokenizer, AutoModelForSequenceClassification } = await import('@xenova/transformers');
+      const { AutoTokenizer, AutoModelForSequenceClassification } = transformers;
       const [tokenizer, model] = await Promise.all([
         AutoTokenizer.from_pretrained(modelId),
         AutoModelForSequenceClassification.from_pretrained(modelId),

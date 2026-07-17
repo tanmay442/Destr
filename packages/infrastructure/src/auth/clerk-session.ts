@@ -5,16 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import type { SessionStore } from '@app/domain';
-
-const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter((e) => e);
-
-function isAdminEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return ADMIN_EMAILS.includes(email.toLowerCase());
-}
+import { isAdminEmail } from './clerk-shared';
 
 export const clerkSessionStore: SessionStore = {
   async getSession() {

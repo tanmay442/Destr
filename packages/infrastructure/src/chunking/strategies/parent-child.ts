@@ -1,5 +1,5 @@
-import type { ChunkingStrategy, DocumentChunk } from '@app/domain';
-import { chunkBySentences, buildSections, mergeShortSections, type Section } from '../shared';
+import type { ChunkingStrategy } from '@app/domain';
+import { chunkBySentences, buildSections, mergeShortSections, makeDocumentChunk, type Section } from '../shared';
 
 const DEFAULT_PARENT_SIZE = 1800;
 const DEFAULT_CHILD_SIZE = 400;
@@ -57,7 +57,7 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
 
   return {
     async splitPages(pages) {
-      const chunks: DocumentChunk[] = [];
+      const chunks = [];
       let chunkIndex = 0;
       for (const { page, text } of pages) {
         let sections = buildSections(text);
@@ -70,32 +70,36 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
           const parentSource = parentTitle ? `Page ${page} — ${parentTitle}` : `Page ${page}`;
           // Emit the parent block (returned for context, not used for retrieval
           // filtering — `searchByVector` excludes `kind = 'parent'`).
-          chunks.push({
-            content: parent.text,
-            chunkIndex: parentIndex,
-            page,
-            sectionTitle: parentTitle,
-            source: parentSource,
-            parentChunkId: null,
-            kind: 'parent',
-            embeddingModel: modelId,
-          });
+          chunks.push(
+            makeDocumentChunk({
+              content: parent.text,
+              chunkIndex: parentIndex,
+              page,
+              modelId,
+              sectionTitle: parentTitle,
+              source: parentSource,
+              parentChunkId: null,
+              kind: 'parent',
+            }),
+          );
           const children =
             parent.text.length > childSize
               ? chunkBySentences(parent.text, childSize, overlap)
               : [parent.text];
           for (const child of children) {
             const childSource = parentTitle ? `Page ${page} — ${parentTitle}` : `Page ${page}`;
-            chunks.push({
-              content: child,
-              chunkIndex: chunkIndex++,
-              page,
-              sectionTitle: parentTitle,
-              source: childSource,
-              parentChunkId: parentIndex,
-              kind: 'child',
-              embeddingModel: modelId,
-            });
+            chunks.push(
+              makeDocumentChunk({
+                content: child,
+                chunkIndex: chunkIndex++,
+                page,
+                modelId,
+                sectionTitle: parentTitle,
+                source: childSource,
+                parentChunkId: parentIndex,
+                kind: 'child',
+              }),
+            );
           }
         }
       }

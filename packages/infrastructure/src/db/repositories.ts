@@ -52,7 +52,7 @@ export async function insertDocument(
     .values(input)
     .onConflictDoUpdate({
       target: documents.fileName,
-      set: { fileHash: input.fileHash, uploadedBy: input.uploadedBy, deletedAt: null },
+      set: { fileHash: input.fileHash, uploadedBy: input.uploadedBy },
     })
     .returning();
   if (!row) throw new Error('Failed to insert document');
@@ -191,8 +191,7 @@ export async function searchChunksByLexical(
   }>
 > {
   if (!query.trim()) return [];
-  const escaped = query.replace(/'/g, "''");
-  const lexQuery = sql.raw(`plainto_tsquery('english', '${escaped}')`);
+  const lexQuery = sql`plainto_tsquery('english', ${query})`;
   const result = await client.execute(sql`
     SELECT
       c.id AS id,
@@ -305,6 +304,14 @@ export async function insertChunks(
       await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE).map(toChunkValues));
     }
     return;
+  }
+
+  const parentIndices = parents.map((r) => r.chunkIndex ?? 0);
+  const uniqueIndices = new Set(parentIndices);
+  if (uniqueIndices.size !== parentIndices.length) {
+    throw new Error(
+      'insertChunks: parent chunkIndex values must be unique within a batch for self-FK resolution',
+    );
   }
 
   const indexToId = new Map<number, number>();

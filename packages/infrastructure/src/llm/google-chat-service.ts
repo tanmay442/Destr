@@ -7,5 +7,5 @@ export function getGoogleChatModel(modelId?: string): LanguageModelV3 {
     throw new Error('AI_STUDIO_KEY is not set.');
   }
   const google = createGoogleGenerativeAI({ apiKey });
-  return google.chat(modelId ?? 'gemini-1.5-flash') as LanguageModelV3;
+  return google.chat(modelId ?? 'gemini-2.0-flash') as LanguageModelV3;
 }

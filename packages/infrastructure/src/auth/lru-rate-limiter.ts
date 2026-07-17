@@ -3,12 +3,12 @@ import type { RateLimiter } from '@app/domain';
 
 const MAX_KEYS = 5_000;
 
-interface Bucket { timestamps: number[]; lastTouched: number; }
+interface Bucket { timestamps: number[]; }
 const buckets = new Map<string, Bucket>();
 
 function evictOldest() {
   // Map iterates in insertion order; the first key is the
-  // least-recently-used. Stop once back at or below the cap.
+  // least-recently-used. Delete until back at or below the cap.
   for (const k of buckets.keys()) {
     if (buckets.size <= MAX_KEYS) break;
     buckets.delete(k);
@@ -21,11 +21,10 @@ export const lruRateLimiter: RateLimiter = {
     const cutoff = now - opts.windowMs;
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { timestamps: [], lastTouched: now };
+      bucket = { timestamps: [] };
       buckets.set(key, bucket);
     }
     bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
-    bucket.lastTouched = now;
     // Re-insert to move the key to the most-recently-used position.
     buckets.set(key, bucket);
 

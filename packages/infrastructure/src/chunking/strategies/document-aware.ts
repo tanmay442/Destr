@@ -1,5 +1,5 @@
-import type { ChunkingStrategy, DocumentChunk } from '@app/domain';
-import { chunkBySentences, buildSections, mergeShortSections } from '../shared';
+import type { ChunkingStrategy } from '@app/domain';
+import { chunkBySentences, buildSections, mergeShortSections, makeDocumentChunk } from '../shared';
 
 const SECTION_SPLIT_MAX = 800;
 const SECTION_MERGE_MAX = 50;
@@ -8,7 +8,7 @@ const OVERLAP = 100;
 export function documentAwareSplitter(modelId: string): ChunkingStrategy {
   return {
     async splitPages(pages) {
-      const chunks: DocumentChunk[] = [];
+      const chunks = [];
       let chunkIndex = 0;
       for (const { page, text } of pages) {
         let sections = buildSections(text);
@@ -22,14 +22,16 @@ export function documentAwareSplitter(modelId: string): ChunkingStrategy {
               : [section.text];
           for (const piece of pieces) {
             const source = title ? `Page ${page} — ${title}` : `Page ${page}`;
-            chunks.push({
-              content: piece,
-              chunkIndex: chunkIndex++,
-              page,
-              sectionTitle: title,
-              source,
-              embeddingModel: modelId,
-            });
+            chunks.push(
+              makeDocumentChunk({
+                content: piece,
+                chunkIndex: chunkIndex++,
+                page,
+                modelId,
+                sectionTitle: title,
+                source,
+              }),
+            );
           }
         }
       }

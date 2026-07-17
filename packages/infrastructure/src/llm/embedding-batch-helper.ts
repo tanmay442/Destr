@@ -25,33 +25,30 @@ async function processBatch(
     if (r.status === 'fulfilled') {
       embeddings[j] = r.value;
     } else {
-      console.error(`Embedding failed for chunk ${batchOffset + j}:`, r.reason);
       failedIndices.push(j);
     }
   }
 
   if (failedIndices.length > 0) {
-    console.warn(
-      `Retrying ${failedIndices.length} failed embedding(s) from batch at offset ${batchOffset}`,
-    );
     const retryResults = await Promise.allSettled(failedIndices.map((idx) => embedOne(batch[idx])));
     for (let j = 0; j < failedIndices.length; j++) {
       const rr = retryResults[j];
       if (rr.status === 'fulfilled') {
         embeddings[failedIndices[j]] = rr.value;
-      } else {
-        console.error(`Embedding retry failed for chunk ${failedIndices[j]}:`, rr.reason);
       }
     }
   }
 
-  const filtered = embeddings.filter((e): e is number[] => e !== null);
-  if (filtered.length !== batch.length) {
+  if (embeddings.some((e) => e === null)) {
+    const remaining = embeddings
+      .map((e, idx) => (e === null ? batchOffset + idx : -1))
+      .filter((idx) => idx >= 0);
     throw new Error(
-      `Embedding batch incomplete: ${filtered.length}/${batch.length} succeeded at offset ${batchOffset}`,
+      `Embedding failed for ${remaining.length} chunk(s) at offset ${batchOffset}: [${remaining.join(', ')}]`,
     );
   }
-  return filtered;
+
+  return embeddings as number[][];
 }
 
 export async function embedBatchWithModel(

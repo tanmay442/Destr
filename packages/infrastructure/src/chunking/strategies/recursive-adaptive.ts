@@ -1,7 +1,7 @@
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
-import type { ChunkingStrategy, DocumentChunk } from '@app/domain';
+import type { ChunkingStrategy } from '@app/domain';
 import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '../../../../../config/constants';
-import { buildPageSpans, mergeShortParagraphs, pageForOffset } from '../shared';
+import { buildPageSpans, mergeShortParagraphs, pageForOffset, makeDocumentChunk } from '../shared';
 
 const MIN_PARAGRAPH = 200;
 
@@ -25,21 +25,22 @@ export function adaptiveRecursiveSplitter(modelId: string): ChunkingStrategy {
         chunkOverlap: INGEST_CHUNK_OVERLAP,
       });
 
-      const chunks: DocumentChunk[] = [];
+      const chunks = [];
       let idx = 0;
       for (const para of merged2) {
         const pieces =
           para.text.length > INGEST_CHUNK_SIZE ? await splitter.splitText(para.text) : [para.text];
         const page = pageForOffset(spans, para.start);
         for (const piece of pieces) {
-          chunks.push({
-            content: piece,
-            chunkIndex: idx++,
-            page,
-            sectionTitle: null,
-            source: `Page ${page}`,
-            embeddingModel: modelId,
-          });
+          chunks.push(
+            makeDocumentChunk({
+              content: piece,
+              chunkIndex: idx++,
+              page,
+              modelId,
+              source: `Page ${page}`,
+            }),
+          );
         }
       }
       return chunks;

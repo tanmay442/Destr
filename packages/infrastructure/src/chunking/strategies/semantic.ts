@@ -1,10 +1,11 @@
-import type { ChunkingStrategy, DocumentChunk, EmbeddingService } from '@app/domain';
+import type { ChunkingStrategy, EmbeddingService } from '@app/domain';
 import {
   buildPageSpans,
   cosineSimilarity,
   embedSentences,
   pageForOffset,
   splitSentences,
+  makeDocumentChunk,
 } from '../shared';
 
 const TOPIC_THRESHOLD = 0.3;
@@ -32,7 +33,7 @@ export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: stri
       }
       if (current.length > 0) segments.push(current);
 
-      const chunks: DocumentChunk[] = [];
+      const chunks = [];
       let idx = 0;
       for (const seg of segments) {
         let buffer = '';
@@ -46,14 +47,15 @@ export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: stri
             buffer.length >= MIN_CHUNK
           ) {
             const page = pageForOffset(spans, segStart);
-            chunks.push({
-              content: buffer,
-              chunkIndex: idx++,
-              page,
-              sectionTitle: null,
-              source: `Page ${page}`,
-              embeddingModel: modelId,
-            });
+            chunks.push(
+              makeDocumentChunk({
+                content: buffer,
+                chunkIndex: idx++,
+                page,
+                modelId,
+                source: `Page ${page}`,
+              }),
+            );
             buffer = s.text;
           } else {
             buffer = buffer ? buffer + ' ' + s.text : s.text;
@@ -62,14 +64,15 @@ export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: stri
         if (buffer) {
           const start = segStart === -1 ? 0 : segStart;
           const page = pageForOffset(spans, start);
-          chunks.push({
-            content: buffer,
-            chunkIndex: idx++,
-            page,
-            sectionTitle: null,
-            source: `Page ${page}`,
-            embeddingModel: modelId,
-          });
+          chunks.push(
+            makeDocumentChunk({
+              content: buffer,
+              chunkIndex: idx++,
+              page,
+              modelId,
+              source: `Page ${page}`,
+            }),
+          );
         }
       }
       return chunks;
