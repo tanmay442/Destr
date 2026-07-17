@@ -155,16 +155,17 @@ export async function main() {
   console.log(`[setup-test-db] Wrote DATABASE_URL to ${envPath}`);
 
   try {
+    // Migrations are the source of truth: apply-migration.mjs replays every
+    // Drizzle file plus the idempotent ADD_COLUMN statements. We intentionally
+    // do NOT also run `drizzle-kit push --force` here — that is a destructive,
+    // schema-overwriting command that can drop columns and must never run
+    // automatically as part of test-DB provisioning.
     execFileSync('node', ['scripts/apply-migration.mjs'], {
       stdio: 'inherit',
       env: { ...process.env, DATABASE_URL: connectionString },
     });
-    execFileSync('pnpm', ['db:push', '--force'], {
-      stdio: 'inherit',
-      env: { ...process.env, DATABASE_URL: connectionString },
-    });
   } catch (err) {
-    console.error('[setup-test-db] migration/push failed', err);
+    console.error('[setup-test-db] migration failed', err);
     process.exit(1);
   }
 

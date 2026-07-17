@@ -6,7 +6,7 @@
 # during an image build. For non-Vercel deploys, run migrations
 # separately against the production DB (e.g. a one-off `pnpm db:migrate`
 # job from a build-stage image).
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -22,7 +22,7 @@ ENV DOCKER_BUILD=1
 RUN pnpm next build
 
 # Stage 2: Runtime
-FROM node:20-slim AS runner
+FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { markdownParser } from '@app/infrastructure/markdown';
 import { MD_CHUNK_DELIMITER } from '../../../../config/constants';
+import { markdownParser } from '@app/infrastructure/markdown';
 import { warn } from './common';
+import { buildUploadDeps } from './deps';
 
 export interface UploadParseResult {
   md?: string;
@@ -111,46 +112,7 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
     opts.upload ??
     (async (input: { fileName: string; mdText: string; delimiter?: string; uploadedBy: string; pdfBuffer?: Buffer }) => {
       const { uploadPrechunkedMarkdown } = await import('@app/application/rag/ingest-prechunked');
-      const { Db, Llm, Storage } = await import('@app/infrastructure');
-      const { createHash } = await import('node:crypto');
-      const deps = {
-        documents: {
-          findByName: (n: string) => Db.findDocumentByName(n),
-          findById: (id: number) => Db.findDocumentById(id),
-          setStorageKey: (id: number, key: string) => Db.setDocumentStorageKey(id, key),
-          updateIngestStatus: (id: number, status: 'queued' | 'ingesting' | 'done' | 'failed') => Db.updateDocumentIngestStatus(id, status),
-          claimIngest: (id: number) => Db.claimDocumentIngest(id),
-          insert: (i: { fileName: string; fileHash: string; uploadedBy: string }) => Db.insertDocument(i),
-          deleteById: (id: number) => Db.deleteDocumentById(id),
-          softDelete: (id: number, at: Date) => Db.softDeleteDocument(id, at),
-          restore: (id: number) => Db.restoreDocument(id),
-          list: Db.listDocuments,
-          countChunksForDocuments: Db.countChunksForDocuments,
-          countChunksForAll: Db.countChunksForAll,
-        },
-          chunks: {
-            insertMany: (rows: Array<{
-              documentId: number; content: string; embedding: number[];
-              chunkIndex?: number; page?: number | null; sectionTitle?: string | null;
-              source?: string | null; parentChunkId?: number | null;
-              kind?: 'parent' | 'child' | 'summary'; embeddingModel?: string | null; contentHash?: string | null;
-            }>) => Db.insertChunks(rows),
-            deleteByDocumentId: (documentId: number) => Db.deleteChunksByDocumentId(documentId),
-            getByIds: (ids: number[]) => Db.getChunksByIds(ids),
-            getByDocAndRange: (documentId: number, start: number, end: number) =>
-              Db.getChunksByDocAndRange(documentId, start, end),
-            countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
-            countForAll: () => Db.countChunksForAll(),
-            countForDocument: (id: number) => Db.countChunksForDocument(id),
-            recountAll: () => Db.recountChunksForAll(),
-            searchByVector: (embedding: number[], o: { threshold: number; limit: number; filter?: { documentId?: number } }) => Db.searchChunksByVector(embedding, o),
-            searchByLexical: (query: string, o: { limit: number; filter?: { documentId?: number } }) => Db.searchChunksByLexical(query, o),
-          },
-        embeddings: Llm.getEmbeddingService(),
-        hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
-        blobStorage: Storage.createBlobStorage(),
-        markdownParser,
-      };
+      const deps = await buildUploadDeps();
       const r = await uploadPrechunkedMarkdown(
         { fileName: input.fileName, mdText: input.mdText, delimiter: input.delimiter, uploadedBy: input.uploadedBy, pdfBuffer: input.pdfBuffer },
         deps,

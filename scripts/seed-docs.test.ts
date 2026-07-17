@@ -29,7 +29,8 @@ vi.mock('drizzle-orm', () => ({
 
 vi.mock('dotenv/config', () => ({}));
 
-import { runSeed, parseArgs } from './seed-docs';
+import { parseArgs } from './seed-docs';
+import { runSeed } from '../packages/cli/src/commands/seed';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';

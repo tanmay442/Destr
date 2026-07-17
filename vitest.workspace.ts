@@ -24,6 +24,15 @@ const workspace = [
       setupFiles: ['./vitest.setup.ts'],
     },
   },
+  {
+    test: {
+      name: 'scripts',
+      include: ['scripts/**/*.test.{ts,tsx}'],
+      environment: 'node',
+      globals: true,
+      setupFiles: ['./vitest.setup.ts'],
+    },
+  },
 ];
 
 export default workspace;

@@ -103,7 +103,7 @@ describe('isBenignError', () => {
     ['42P06', { code: '42P06', message: 'dup schema' }, true],
     ['42P10', { code: '42P10', message: 'dup obj' }, true],
     ['already exists msg', new Error('foo already exists'), true],
-    ['does not exist msg', new Error('role does not exist'), true],
+    ['does not exist msg', new Error('role does not exist'), false],
     ['unknown error', new Error('connection refused'), false],
     ['null', null, false],
   ];

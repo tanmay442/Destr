@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -58,7 +58,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # ---- 3. Unit + integration tests ----------------------------------
+      # ---- 3. Architecture gate (dependency-cruiser) --------------------
+      - name: Architecture gate
+        run: pnpm arch
+
+      # ---- 4. Unit + integration tests ----------------------------------
       - name: Unit & integration tests
         run: pnpm test
 

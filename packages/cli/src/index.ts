@@ -1,6 +1,7 @@
 import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
-import { parseSeedArgs } from './commands/seed';
+import { runSeed, parseSeedArgs } from './commands/seed';
+import { runUpload, parseUploadArgs } from './commands/upload';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { askYesNo, makeRl } from './prompts/index';
@@ -35,24 +36,20 @@ async function main(): Promise<void> {
       return;
     case 'seed': {
       const { dir, userId } = parseSeedArgs(rest);
-      const result = spawnSync('pnpm', ['exec', 'tsx', 'scripts/seed-docs.ts'], {
-        cwd: REPO_ROOT,
-        stdio: 'inherit',
-        env: {
-          ...process.env,
-          SEED_DOCS_DIR: resolve(REPO_ROOT, dir),
-          ...(userId ? { SEED_USER_ID: userId } : {}),
-        },
-      });
-      process.exit(result.status ?? 0);
+      await runSeed({ userId, fixturesDir: resolve(REPO_ROOT, dir) });
+      return;
     }
     case 'upload': {
-      const result = spawnSync(
-        'pnpm',
-        ['exec', 'tsx', 'packages/cli/src/commands/upload.ts', ...rest],
-        { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env } },
-      );
-      process.exit(result.status ?? 0);
+      const args = parseUploadArgs(rest);
+      await runUpload({
+        md: args.md,
+        pdf: args.pdf,
+        name: args.name,
+        user: args.user,
+        delimiter: args.delimiter,
+        dryRun: args.dryRun,
+      });
+      return;
     }
     case 'db-migrate': {
       // apply-migration first: enables pgvector + pending SQL migrations

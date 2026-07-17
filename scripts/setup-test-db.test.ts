@@ -79,8 +79,8 @@ describe('setup-test-db', () => {
 
     await runSetup();
     expect(execFileSyncMock).toHaveBeenCalledWith(
-      'pnpm',
-      ['db:push', '--force'],
+      'node',
+      ['scripts/apply-migration.mjs'],
       expect.objectContaining({ stdio: 'inherit' }),
     );
     expect(spawnSyncMock).toHaveBeenCalledWith(

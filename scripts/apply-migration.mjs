@@ -37,8 +37,15 @@ function isBenignError(err) {
   ) {
     return true;
   }
-  const msg = err.message ?? '';
-  return msg.includes('already exists') || msg.includes('does not exist');
+  const msg = (err.message ?? '').toLowerCase();
+  // Only known "already applied" duplicate-object messages are benign.
+  // A broad "does not exist" match is intentionally avoided: it can mask
+  // real errors such as a typo'd table/column/role or a missing extension.
+  return (
+    msg.includes('already exists') ||
+    msg.includes('duplicate') ||
+    msg.includes('multiple primary keys')
+  );
 }
 
 async function safeQuery(pool, sql, logger) {

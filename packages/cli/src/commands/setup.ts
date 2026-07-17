@@ -90,28 +90,34 @@ async function askSecret(rl: Interface, question: string, existing: string): Pro
   return new Promise<string>((resolve) => {
     let value = '';
     const onData = (buf: Buffer) => {
-      const chunk = buf.toString('utf8');
-      for (const ch of chunk) {
-        if (ch === '\n' || ch === '\r' || ch === '\u0004') {
-          stdin.setRawMode?.(false);
-          stdin.removeListener('data', onData);
-          rl.resume();
-          process.stdout.write('\n');
-          resolve(value === '' ? existing : value);
-          return;
+      const restore = () => {
+        stdin.setRawMode?.(false);
+        stdin.removeListener('data', onData);
+        rl.resume();
+      };
+      try {
+        const chunk = buf.toString('utf8');
+        for (const ch of chunk) {
+          if (ch === '\n' || ch === '\r' || ch === '\u0004') {
+            restore();
+            process.stdout.write('\n');
+            resolve(value === '' ? existing : value);
+            return;
+          }
+          if (ch === '\u0003') {
+            restore();
+            process.stdout.write('\n');
+            process.exit(1);
+          }
+          if (ch === '\u007f' || ch === '\b') {
+            value = value.slice(0, -1);
+            continue;
+          }
+          value += ch;
         }
-        if (ch === '\u0003') {
-          stdin.setRawMode?.(false);
-          stdin.removeListener('data', onData);
-          rl.resume();
-          process.stdout.write('\n');
-          process.exit(1);
-        }
-        if (ch === '\u007f' || ch === '\b') {
-          value = value.slice(0, -1);
-          continue;
-        }
-        value += ch;
+      } catch (err) {
+        restore();
+        throw err;
       }
     };
     stdin.on('data', onData);
@@ -153,10 +159,7 @@ function dbSslOptions(url: string): { rejectUnauthorized: boolean } {
     return { rejectUnauthorized: true };
   }
   const isLocal =
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '::1' ||
-    process.env.NODE_ENV === 'development';
+    hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
   return isLocal ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
 }
 
