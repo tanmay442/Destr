@@ -75,7 +75,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     answerCacheKey: vi.fn((query: string) => `rag:answer:${Buffer.from(query).toString('hex').slice(0, 32)}`),
     answerCache: {
       get: vi.fn(async () => null),
-      set: vi.fn(async (_key: string, _answer: string, _ttlSec: number) => undefined),
+      set: vi.fn(async () => undefined),
     },
     logTicketEvent: vi.fn(),
     agenticSearch: undefined,

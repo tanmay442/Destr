@@ -128,7 +128,6 @@ const isAdminRoute = createRouteMatcher([
 
 async function resolveRole(
   userId: string,
-  _sessionClaims: unknown,
 ): Promise<'admin' | 'user'> {
   try {
     const client = await clerkClient();
@@ -145,9 +144,9 @@ function createMiddleware(): AuthAdapter['middleware'] {
   return clerkMiddleware(async (auth, req) => {
     if (isPublicRoute(req)) return NextResponse.next();
     if (isProtectedRoute(req)) {
-      const { userId, sessionClaims } = await auth.protect();
+      const { userId } = await auth.protect();
       if (isAdminRoute(req)) {
-        const role = await resolveRole(userId, sessionClaims);
+        const role = await resolveRole(userId);
         if (role !== 'admin') {
           if (req.nextUrl.pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
