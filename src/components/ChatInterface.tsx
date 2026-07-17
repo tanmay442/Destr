@@ -12,6 +12,7 @@ import {
 } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,20 @@ function ThinkingDot() {
       <span className="absolute size-2 rounded-full bg-primary/40 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite]" />
       <span className="absolute size-2 rounded-full bg-primary/70 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite_reverse]" />
     </span>
+  );
+}
+
+// Renders markdown links safely: forces a new tab with noopener, and
+// neutralises javascript:/data: URLs to avoid phishing / XSS surface.
+function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
+  const url = typeof href === 'string' ? href.trim() : '';
+  if (/^(javascript:|data:)/i.test(url)) {
+    return <span {...props}>{children}</span>;
+  }
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+      {children}
+    </a>
   );
 }
 
@@ -166,7 +181,7 @@ export function ChatInterface() {
                           className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
                           data-testid="chat-text"
                         >
-                          <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
+                          <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>{part.text}</Markdown>
                         </div>
                       )
                     ) : null,

@@ -25,7 +25,7 @@ export default async function AuditPage({
   const page = parsePageParam(params.page);
   const offset = (page - 1) * PAGE_SIZE;
   const documentIdRaw = params.documentId ? Number(params.documentId) : undefined;
-  const documentId = Number.isFinite(documentIdRaw) ? documentIdRaw : undefined;
+  const documentId = Number.isInteger(documentIdRaw) ? documentIdRaw : undefined;
   const ticketId = params.ticketId;
   const result = unwrap(await getComposition().listAudit({
     documentId,

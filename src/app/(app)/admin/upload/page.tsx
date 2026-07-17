@@ -15,18 +15,16 @@ export default function UploadPage() {
   const [dragOver, setDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<number | null>(null);
-  const [prevUploadStatus, setPrevUploadStatus] = useState(state.status);
-  if (state.status !== prevUploadStatus) {
-    setPrevUploadStatus(state.status);
+  useEffect(() => {
+    if (state.status && inputRef.current) inputRef.current.value = '';
+  }, [state.status]);
+
+  function handleSubmit() {
     if (state.status) {
       setFileName(null);
       setFileSize(null);
     }
   }
-
-  useEffect(() => {
-    if (state.status && inputRef.current) inputRef.current.value = '';
-  }, [state.status]);
 
   useEffect(() => {
     if (state.error) toast.error(state.error);
@@ -88,7 +86,7 @@ export default function UploadPage() {
       <p className="text-sm text-muted-foreground">
         Drop a PDF and we&apos;ll chunk, embed, and index it for RAG search.
       </p>
-      <form action={formAction} className="flex flex-col gap-3">
+      <form action={formAction} onSubmit={handleSubmit} className="flex flex-col gap-3">
         <Card
           className={cn(
             'cursor-pointer border-2 border-dashed transition-colors',

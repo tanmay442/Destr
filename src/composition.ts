@@ -310,8 +310,8 @@ export async function requireAdminRoute(): Promise<
     const session = await requireAdmin();
     return { ok: true, session, comp: getComposition() };
   } catch (err) {
-    if (err instanceof UnauthorizedError) return { ok: false, response: new Response('Unauthorized', { status: 401 }) };
-    if (err instanceof ForbiddenError) return { ok: false, response: new Response('Forbidden', { status: 403 }) };
+    if (err instanceof UnauthorizedError) return { ok: false, response: respond(new UnauthorizedError()) };
+    if (err instanceof ForbiddenError) return { ok: false, response: respond(new ForbiddenError()) };
     logger.error('requireAdminRoute failed', { error: err });
     return { ok: false, response: new Response('Service Unavailable', { status: 503 }) };
   }

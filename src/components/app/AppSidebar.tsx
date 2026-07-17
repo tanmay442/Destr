@@ -62,21 +62,14 @@ export function AppSidebar({
   const pathname = usePathname();
   const { signOut } = useClerk();
 
-  // Open by default on /admin/* so deep links show context; collapses but reopens next visit.
+  // Open by default on /admin/* so deep links show context.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminOpen, setAdminOpen] = useState<boolean>(onAdmin);
-  const [prevOnAdmin, setPrevOnAdmin] = useState<boolean>(onAdmin);
-  if (onAdmin !== prevOnAdmin) {
-    setPrevOnAdmin(onAdmin);
-    if (onAdmin) setAdminOpen(true);
-  }
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
-  const [prevPathname, setPrevPathname] = useState(pathname);
-  if (pathname !== prevPathname) {
-    setPrevPathname(pathname);
+  const handleNavigate = () => {
     setMobileOpen(false);
-  }
+  };
 
   const toggleAdmin = () => {
     setAdminOpen((open) => !open);
@@ -128,6 +121,7 @@ export function AppSidebar({
           adminOpen={adminOpen}
           toggleAdmin={toggleAdmin}
           isActive={isActive}
+          onNavigate={handleNavigate}
           onSignOut={() => signOut({ redirectUrl: '/' })}
         />
       </aside>
@@ -168,6 +162,7 @@ export function AppSidebar({
               adminOpen={adminOpen}
               toggleAdmin={toggleAdmin}
               isActive={isActive}
+              onNavigate={handleNavigate}
               onSignOut={() => signOut({ redirectUrl: '/' })}
             />
           </div>
@@ -183,6 +178,7 @@ function SidebarBody({
   adminOpen,
   toggleAdmin,
   isActive,
+  onNavigate,
   onSignOut,
 }: {
   user: AppSidebarUser | null;
@@ -190,6 +186,7 @@ function SidebarBody({
   adminOpen: boolean;
   toggleAdmin: () => void;
   isActive: (href: string) => boolean;
+  onNavigate: () => void;
   onSignOut: () => void;
 }) {
   return (
@@ -212,6 +209,7 @@ function SidebarBody({
           icon={MessageSquare}
           active={isActive('/chat')}
           testId="app-sidebar-chat"
+          onNavigate={onNavigate}
         />
 
         {role === 'admin' ? (
@@ -264,7 +262,7 @@ function SidebarBody({
                           .toLowerCase()
                           .replace(/\s+/g, '-')}`}
                       >
-                        <Link href={link.href}>
+                        <Link href={link.href} onClick={() => { setAdminOpen(true); onNavigate(); }}>
                             <Icon
                               className="shrink-0 text-foreground-subtle"
                               aria-hidden
@@ -328,12 +326,14 @@ function NavItem({
   icon: Icon,
   active,
   testId,
+  onNavigate,
 }: {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   active: boolean;
   testId?: string;
+  onNavigate: () => void;
 }) {
   return (
     <Button
@@ -349,7 +349,7 @@ function NavItem({
       data-testid={testId}
       aria-current={active ? 'page' : undefined}
     >
-      <Link href={href}>
+      <Link href={href} onClick={onNavigate}>
         <Icon className="shrink-0" aria-hidden />
         <span>{label}</span>
       </Link>

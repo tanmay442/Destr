@@ -48,13 +48,8 @@ export function TicketDrawer({
   const [note, setNote] = useState('');
   const [currentStatus, setCurrentStatus] = useState(status);
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
-  const [prevStatus, setPrevStatus] = useState(status);
   const [prevAssignee, setPrevAssignee] = useState(assignedTo ?? '');
 
-  if (status !== prevStatus) {
-    setPrevStatus(status);
-    setCurrentStatus(status);
-  }
   if ((assignedTo ?? '') !== prevAssignee) {
     setPrevAssignee(assignedTo ?? '');
     setCurrentAssignee(assignedTo ?? '');
@@ -95,10 +90,9 @@ export function TicketDrawer({
               id={`ticket-status-${ticketId}`}
               data-testid={`ticket-status-${ticketId}`}
             >
-              <SelectValue />
+              <SelectValue placeholder={currentStatus} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={currentStatus}>{currentStatus}</SelectItem>
               {VALID_TRANSITIONS[currentStatus as TicketStatus]?.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
