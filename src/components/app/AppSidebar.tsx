@@ -119,6 +119,7 @@ export function AppSidebar({
           user={user}
           role={role}
           adminOpen={adminOpen}
+          setAdminOpen={setAdminOpen}
           toggleAdmin={toggleAdmin}
           isActive={isActive}
           onNavigate={handleNavigate}
@@ -160,6 +161,7 @@ export function AppSidebar({
               user={user}
               role={role}
               adminOpen={adminOpen}
+              setAdminOpen={setAdminOpen}
               toggleAdmin={toggleAdmin}
               isActive={isActive}
               onNavigate={handleNavigate}
@@ -176,6 +178,7 @@ function SidebarBody({
   user,
   role,
   adminOpen,
+  setAdminOpen,
   toggleAdmin,
   isActive,
   onNavigate,
@@ -184,6 +187,7 @@ function SidebarBody({
   user: AppSidebarUser | null;
   role: AppRole;
   adminOpen: boolean;
+  setAdminOpen: (open: boolean) => void;
   toggleAdmin: () => void;
   isActive: (href: string) => boolean;
   onNavigate: () => void;
@@ -263,10 +267,10 @@ function SidebarBody({
                           .replace(/\s+/g, '-')}`}
                       >
                         <Link href={link.href} onClick={() => { setAdminOpen(true); onNavigate(); }}>
-                            <Icon
-                              className="shrink-0 text-foreground-subtle"
-                              aria-hidden
-                            />
+                          <Icon
+                            className="shrink-0 text-foreground-subtle"
+                            aria-hidden
+                          />
                           <span>{link.label}</span>
                         </Link>
                       </Button>
