@@ -125,8 +125,8 @@ const ENV_VARS: EnvVarSpec[] = [
   },
   {
     name: 'QSTASH_INGEST_WORKER_URL',
-    required: true,
-    description: 'Public URL for ingest worker',
+    required: false,
+    description: 'Public URL for ingest worker (auto-derived from NEXT_PUBLIC_APP_URL / VERCEL_URL when unset)',
     condition: () => !!process.env.QSTASH_TOKEN,
   },
 ];

@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ok, err, ExternalServiceError } from '@app/domain';
 
-const { generateTextMock, generateObjectMock, getChatModelMock } = vi.hoisted(() => ({
+const { generateTextMock, getChatModelMock } = vi.hoisted(() => ({
   generateTextMock: vi.fn(),
-  generateObjectMock: vi.fn(),
   getChatModelMock: vi.fn(() => ({ modelId: 'mock-grade' })),
 }));
 
@@ -12,7 +11,6 @@ vi.mock('ai', async () => {
   return {
     ...actual,
     generateText: generateTextMock,
-    generateObject: generateObjectMock,
   };
 });
 
@@ -26,7 +24,6 @@ import { getGraders } from './index';
 
 beforeEach(() => {
   generateTextMock.mockReset();
-  generateObjectMock.mockReset();
   getChatModelMock.mockReturnValue({ modelId: 'mock-grade' });
 });
 
@@ -49,34 +46,34 @@ describe('queryRewriter', () => {
 
 describe('documentGrader', () => {
   it('returns yes when the model grades relevant', async () => {
-    generateObjectMock.mockResolvedValue({ object: { relevant: 'yes' } });
+    generateTextMock.mockResolvedValue({ text: 'yes' });
     expect(await documentGrader.grade('q', 'doc')).toBe('yes');
   });
 
   it('returns no when the model grades irrelevant', async () => {
-    generateObjectMock.mockResolvedValue({ object: { relevant: 'no' } });
+    generateTextMock.mockResolvedValue({ text: 'no' });
     expect(await documentGrader.grade('q', 'doc')).toBe('no');
   });
 
   it('defaults to yes when the model call throws', async () => {
-    generateObjectMock.mockRejectedValue(new Error('boom'));
+    generateTextMock.mockRejectedValue(new Error('boom'));
     expect(await documentGrader.grade('q', 'doc')).toBe('yes');
   });
 });
 
 describe('hallucinationGrader', () => {
   it('returns yes when the answer is grounded', async () => {
-    generateObjectMock.mockResolvedValue({ object: { grounded: 'yes' } });
+    generateTextMock.mockResolvedValue({ text: 'yes' });
     expect(await hallucinationGrader.grade('docs', 'answer')).toBe('yes');
   });
 
   it('returns no when the answer is not grounded', async () => {
-    generateObjectMock.mockResolvedValue({ object: { grounded: 'no' } });
+    generateTextMock.mockResolvedValue({ text: 'no' });
     expect(await hallucinationGrader.grade('docs', 'answer')).toBe('no');
   });
 
   it('defaults to yes (grounded) when the model call throws', async () => {
-    generateObjectMock.mockRejectedValue(new Error('boom'));
+    generateTextMock.mockRejectedValue(new Error('boom'));
     expect(await hallucinationGrader.grade('docs', 'answer')).toBe('yes');
   });
 });

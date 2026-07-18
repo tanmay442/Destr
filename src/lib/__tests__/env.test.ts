@@ -114,14 +114,12 @@ describe('validateEnv', () => {
     vi.stubEnv('QSTASH_TOKEN', 'test-token');
     vi.stubEnv('QSTASH_CURRENT_SIGNING_KEY', '');
     vi.stubEnv('QSTASH_NEXT_SIGNING_KEY', '');
-    vi.stubEnv('QSTASH_INGEST_WORKER_URL', '');
 
     const result = validateEnv();
     expect(result.ok).toBe(false);
     const names = result.missing.map((m) => m.name);
     expect(names).toContain('QSTASH_CURRENT_SIGNING_KEY');
     expect(names).toContain('QSTASH_NEXT_SIGNING_KEY');
-    expect(names).toContain('QSTASH_INGEST_WORKER_URL');
   });
 
   it('does not require QStash signing keys when QSTASH_TOKEN is unset', () => {

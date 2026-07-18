@@ -36,9 +36,11 @@ describe('Ingest queue factory dispatch', () => {
     expect(q.isNoOp()).toBe(false);
   });
 
-  it('throws from the QStash adapter when QSTASH_TOKEN is set but the worker URL is missing', async () => {
+  it('throws from the QStash adapter when no worker URL can be resolved', async () => {
     process.env.QSTASH_TOKEN = 'test-token';
     delete process.env.QSTASH_INGEST_WORKER_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.VERCEL_URL;
     const q = Queue.createIngestQueue();
     await expect(q.enqueue({ documentId: 3 })).rejects.toThrow(/QSTASH_INGEST_WORKER_URL/);
   });
