@@ -42,7 +42,7 @@ pnpm dev
 2. Import the repo in Vercel.
 3. Add environment variables from `.env.example` — see the
    "Getting your API keys" section below for where to get each one.
-4. Deploy. Migrations run automatically during `pnpm build`.
+4. Deploy. `pnpm build` runs migrations then builds, unless `NEXT_SKIP_MIGRATIONS=1` is set (CI sets this and migrates in a separate, `main`-only step).
 
 > **Reranking on Vercel:** `RERANKER_PROVIDER` is a **3-way feature flag**
 > (`cosine` | `local` | `cohere`). **Default is `cosine`** — the original
@@ -203,7 +203,7 @@ this for an Upstash hash; the call sites do not need to change.
 | --- | --- |
 | `pnpm configure` | One-command interactive setup wizard (prompts for env vars, migrates DB, seeds docs, runs smoke test) |
 | `pnpm dev` | Run Next.js in dev mode |
-| `pnpm build` | Run migrations then production build |
+| `pnpm build` | Run migrations then production build (set `NEXT_SKIP_MIGRATIONS=1` to build without migrating) |
 | `pnpm start` | Run the production build |
 | `pnpm lint` | ESLint |
 | `pnpm typecheck` | `tsc --noEmit` |

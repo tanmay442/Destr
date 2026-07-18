@@ -68,11 +68,20 @@ jobs:
 
       # ---- 4. Production build ------------------------------------------
       - name: Build
-        run: pnpm build
+        run: NEXT_SKIP_MIGRATIONS=1 pnpm build
         env:
           # The build doesn't actually need these (the runtime
           # fetches them on first request) but the env-validation
           # step in next.config fails if they're missing.
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # ---- 4b. Migrate DB (main only, explicit & separately gated) -----
+      - name: Migrate database
+        if: github.ref == 'refs/heads/main'
+        run: pnpm build
+        env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

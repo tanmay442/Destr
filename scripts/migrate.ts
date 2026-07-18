@@ -1,5 +1,10 @@
 import 'dotenv/config';
 
+if (process.env.NEXT_SKIP_MIGRATIONS === '1') {
+  console.log('NEXT_SKIP_MIGRATIONS=1 set; skipping migrations.');
+  process.exit(0);
+}
+
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   console.warn('DATABASE_URL is not set. Skipping migrations.');
