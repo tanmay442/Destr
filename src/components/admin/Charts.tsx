@@ -17,6 +17,11 @@ export function DonutChart({
   const total = segments.reduce((sum, s) => sum + s.value, 0);
   const radius = (size - thickness) / 2;
   const circumference = 2 * Math.PI * radius;
+  const label =
+    `Donut chart: ` +
+    segments
+      .map((s) => `${s.label} ${total > 0 ? Math.round((s.value / total) * 100) : 0}%`)
+      .join(', ');
   let offset = 0;
 
   return (
@@ -24,7 +29,14 @@ export function DonutChart({
       className="relative inline-flex items-center justify-center"
       style={{ width: size, height: size }}
     >
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        className="block"
+        role="img"
+        aria-label={label}
+      >
         <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
           <circle
             cx={size / 2}
@@ -56,6 +68,13 @@ export function DonutChart({
             })}
         </g>
       </svg>
+      <ul className="sr-only">
+        {segments.map((seg) => (
+          <li key={seg.label}>
+            {seg.label}: {seg.value}
+          </li>
+        ))}
+      </ul>
       {children ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
           {children}
@@ -105,8 +124,15 @@ export function ActivityBars({
   buckets: { label: string; value: number }[];
 }) {
   const max = Math.max(1, ...buckets.map((b) => b.value));
+  const label =
+    `Activity chart: ` +
+    buckets.map((b) => `${b.label} ${b.value}`).join(', ');
   return (
-    <div className="flex h-44 items-end gap-2">
+    <div
+      className="flex h-44 items-end gap-2"
+      role="img"
+      aria-label={label}
+    >
       {buckets.map((bucket, i) => (
         <div key={i} className="flex h-full flex-1 flex-col items-center gap-2">
           <div className="flex w-full flex-1 items-end">
@@ -116,7 +142,6 @@ export function ActivityBars({
                 height: `${(bucket.value / max) * 100}%`,
                 minHeight: bucket.value > 0 ? "3px" : "0px",
               }}
-              title={`${bucket.label}: ${bucket.value}`}
             />
           </div>
           <span className="text-[10px] tabular-nums text-muted-foreground">
@@ -124,6 +149,13 @@ export function ActivityBars({
           </span>
         </div>
       ))}
+      <ul className="sr-only">
+        {buckets.map((bucket) => (
+          <li key={bucket.label}>
+            {bucket.label}: {bucket.value}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

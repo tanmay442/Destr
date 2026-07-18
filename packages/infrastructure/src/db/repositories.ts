@@ -816,6 +816,14 @@ export const userRepo = {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(users);
     return row?.count ?? 0;
   },
+  async countAdmins(client: Client = db): Promise<number> {
+    const [row] = await client
+      .select({ count: sql<number>`count(*)::int` })
+      .from(users)
+      .where(eq(users.role, 'admin'));
+    return row?.count ?? 0;
+  },
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature matches other repo methods; not needed for Clerk metadata update
   async syncClerkRole(clerkUserId: string, role: 'admin' | 'user', _client: Client = db): Promise<void> {
     const { clerkClient } = await import('../auth');
     const clerk = await clerkClient();
@@ -983,6 +991,7 @@ function createUserRepo(client: Client): UserRepository {
     touchLastSeen: (clerkUserId) => userRepo.touchLastSeen(clerkUserId, client),
     list: (opts) => userRepo.list(opts, client),
     countAll: () => userRepo.countAll(client),
+    countAdmins: () => userRepo.countAdmins(client),
     syncClerkRole: (clerkUserId, role) => userRepo.syncClerkRole(clerkUserId, role, client),
   };
 }

@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { useClerk } from '@clerk/nextjs';
-import { Dialog as SheetPrimitive } from 'radix-ui';
 import {
   MessageSquare,
   ChevronRight,
@@ -25,8 +24,9 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import {
   Sheet,
+  SheetOverlay,
+  SheetContent,
   SheetTrigger,
-  SheetPortal,
   SheetTitle,
   SheetDescription,
   SheetClose,
@@ -62,9 +62,11 @@ export function AppSidebar({
   const pathname = usePathname();
   const { signOut } = useClerk();
 
-  // Open by default on /admin/* so deep links show context.
+  // Open by default on /admin/* so deep links show context, and
+  // stay open when navigated to client-side. Remains toggdleable off-admin.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
-  const [adminOpen, setAdminOpen] = useState<boolean>(onAdmin);
+  const [adminToggled, setAdminToggled] = useState<boolean>(false);
+  const adminOpen = onAdmin || adminToggled;
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
   const handleNavigate = () => {
@@ -72,7 +74,7 @@ export function AppSidebar({
   };
 
   const toggleAdmin = () => {
-    setAdminOpen((open) => !open);
+    setAdminToggled((open) => !open);
   };
 
   const isActive = (href: string) => {
@@ -119,7 +121,7 @@ export function AppSidebar({
           user={user}
           role={role}
           adminOpen={adminOpen}
-          setAdminOpen={setAdminOpen}
+          setAdminOpen={setAdminToggled}
           toggleAdmin={toggleAdmin}
           isActive={isActive}
           onNavigate={handleNavigate}
@@ -127,15 +129,13 @@ export function AppSidebar({
         />
       </aside>
 
-      <SheetPortal>
-        <div
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 md:hidden"
-          data-slot="sheet-overlay"
-        />
-        <SheetPrimitive.Content
-          className="fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-card p-4 shadow-2xl outline-none data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=closed]:slide-out-to-left data-[state=open]:animate-in data-[state=open]:duration-500 data-[state=open]:slide-in-from-left md:hidden"
-          data-testid="app-mobile-drawer"
-        >
+      <SheetOverlay className="bg-black/60 backdrop-blur-sm md:hidden" />
+      <SheetContent
+        side="left"
+        showCloseButton={false}
+        className="fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-card p-4 shadow-2xl outline-none data-[state=closed]:duration-300 data-[state=open]:duration-500 md:hidden"
+        data-testid="app-mobile-drawer"
+      >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SheetDescription className="sr-only">
             Primary navigation menu
@@ -161,15 +161,14 @@ export function AppSidebar({
               user={user}
               role={role}
               adminOpen={adminOpen}
-              setAdminOpen={setAdminOpen}
+              setAdminOpen={setAdminToggled}
               toggleAdmin={toggleAdmin}
               isActive={isActive}
               onNavigate={handleNavigate}
               onSignOut={() => signOut({ redirectUrl: '/' })}
             />
           </div>
-        </SheetPrimitive.Content>
-      </SheetPortal>
+        </SheetContent>
     </Sheet>
   );
 }

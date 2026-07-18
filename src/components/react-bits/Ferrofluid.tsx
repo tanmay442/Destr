@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Renderer, Program, Mesh, Triangle, Geometry } from 'ogl';
 
 export interface FerrofluidProps {
@@ -241,6 +241,8 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
   const lastTimeRef = useRef(0);
   const isVisibleRef = useRef(true);
 
+  const colorsKey = useMemo(() => colors.join('|'), [colors]);
+
   const [reduced, setReduced] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia
       ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -435,11 +437,12 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
       meshRef.current = null;
       rendererRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- colorsKey intentionally replaces colors so fresh literals don't re-init WebGL
   }, [
     dpr,
     paused,
     reduced,
-    colors,
+    colorsKey,
     speed,
     scale,
     turbulence,

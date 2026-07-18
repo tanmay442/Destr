@@ -16,6 +16,7 @@ function makeDeps(overrides?: {
       touchLastSeen: vi.fn(),
       list: vi.fn(),
       countAll: vi.fn(),
+      countAdmins: vi.fn().mockResolvedValue(2),
       syncClerkRole: vi.fn().mockResolvedValue(undefined),
       ...overrides?.users,
     } as UserRepository,
@@ -91,6 +92,23 @@ describe('setUserRole', () => {
     });
     const result = await setUserRole(
       { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_2' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ForbiddenError);
+    }
+  });
+
+  it('rejects demoting the last admin', async () => {
+    const deps = makeDeps({
+      users: {
+        countAdmins: vi.fn().mockResolvedValue(1),
+        findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'admin' }),
+      },
+    });
+    const result = await setUserRole(
+      { clerkUserId: 'admin_1', role: 'user', actorId: 'actor_1' },
       deps as Parameters<typeof setUserRole>[1],
     );
     expect(result.ok).toBe(false);

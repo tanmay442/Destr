@@ -36,6 +36,12 @@ export async function setUserRole(
     }
     const target = await deps.users.findByClerkId(input.clerkUserId);
     if (!target) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
+    if (target.role === 'admin' && input.role === 'user') {
+      const adminCount = await deps.users.countAdmins();
+      if (adminCount <= 1) {
+        return err(new ForbiddenError('Cannot demote the last admin'));
+      }
+    }
     try {
       await deps.users.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {

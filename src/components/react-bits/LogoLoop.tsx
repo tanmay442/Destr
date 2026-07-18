@@ -66,7 +66,8 @@ const useResizeObserver = (callback: () => void, elements: React.RefObject<HTMLE
     return () => {
       observers.forEach(observer => observer?.disconnect());
     };
-  }, [callback, elements, dependencies]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spreading elements/dependencies avoids re-running on every render from fresh array literals
+  }, [callback, ...elements, ...dependencies]);
 };
 
 const useImageLoader = (seqRef: React.RefObject<HTMLElement | null>, onLoad: () => void, dependencies: React.DependencyList) => {
@@ -96,7 +97,8 @@ const useImageLoader = (seqRef: React.RefObject<HTMLElement | null>, onLoad: () 
         img.removeEventListener('error', handleImageLoad);
       });
     };
-  }, [onLoad, seqRef, dependencies]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spreading dependencies avoids re-running on every render from fresh array literals
+  }, [onLoad, seqRef, ...dependencies]);
 };
 
 const useAnimationLoop = (
