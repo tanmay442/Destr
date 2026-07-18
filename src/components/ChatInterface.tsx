@@ -100,25 +100,27 @@ export function ChatInterface() {
     if (!container) return;
     const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
     const nearBottom = distance < 160;
-    if ((nearBottom || isStreaming) && typeof anchorRef.current?.scrollIntoView === 'function') {
+    if (nearBottom && typeof anchorRef.current?.scrollIntoView === 'function') {
       anchorRef.current.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
     }
   }, [messages, status, isStreaming]);
 
   useEffect(() => {
-    if (!error) return;
+    if (!error || (error instanceof Error && error.name === 'AbortError')) return;
     const message =
-      error instanceof Error
-        ? error.name === 'AbortError'
-          ? 'Request was aborted.'
-          : error.message || 'Something went wrong.'
-        : 'Something went wrong.';
+      error instanceof Error ? error.message || 'Something went wrong.' : 'Something went wrong.';
     toast.error(message);
   }, [error]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" data-testid="chat-scroll">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        data-testid="chat-scroll"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center gap-8 text-center mt-[22vh]">
@@ -133,11 +135,12 @@ export function ChatInterface() {
               </div>
 
               <div className="grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
-                {QUICK_PROMPTS.map((q) => (
-                  <button
-                    key={q.label}
-                    type="button"
-                    onClick={() => submit(q.text)}
+          {QUICK_PROMPTS.map((q) => (
+            <button
+              key={q.label}
+              type="button"
+              disabled={isStreaming}
+              onClick={() => submit(q.text)}
                     className="flex h-auto items-start justify-between gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                     data-testid="chat-quick-prompt"
                   >
@@ -256,7 +259,7 @@ export function ChatInterface() {
 
           <div ref={anchorRef} />
 
-          {error && (
+          {error && !(error instanceof Error && error.name === 'AbortError') && (
             <Alert
               variant="destructive"
               className="flex items-start gap-2.5 rounded-xl border-destructive/30 bg-destructive/10 p-3 text-destructive"
@@ -264,16 +267,10 @@ export function ChatInterface() {
             >
               <div className="flex flex-col gap-0.5">
                 <AlertTitle className="font-medium">
-                  {error instanceof Error
-                    ? error.name === 'AbortError'
-                      ? 'Request was aborted.'
-                      : error.message || 'Something went wrong.'
-                    : 'Something went wrong.'}
+                  {error instanceof Error ? error.message || 'Something went wrong.' : 'Something went wrong.'}
                 </AlertTitle>
                 <AlertDescription className="text-[12px] text-destructive/80">
-                  {error instanceof Error && error.name === 'AbortError'
-                    ? ''
-                    : 'Try again in a moment.'}
+                  Try again in a moment.
                 </AlertDescription>
               </div>
             </Alert>
