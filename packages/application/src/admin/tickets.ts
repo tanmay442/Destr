@@ -10,6 +10,7 @@ import type { TicketRepository, AuditLog, TicketRow, UserRepository } from '@app
 import { randomUUID } from 'node:crypto';
 import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '../../../../config/constants';
 import { requireAdminActor } from './authz';
+import { safeAudit } from '../audit-reliability';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -97,11 +98,13 @@ export async function updateTicket(
     if (input.assignedTo !== undefined) auditActions.push('assign');
     if (note) auditActions.push('note');
     for (const action of auditActions) {
-      void deps.audit
-        .logTicketEvent({ action, ticketId: input.ticketId, actorId: input.actorId })
-        .catch((auditErr) => {
-          console.error(`Audit logging failed (action=${action}, ticket=${input.ticketId}):`, auditErr);
-        });
+      const event = { action, ticketId: input.ticketId, actorId: input.actorId };
+      void safeAudit(
+        () => deps.audit.logTicketEvent(event),
+        (payload, error) => deps.audit.recordDeadLetter({ kind: 'ticket', payload, error }),
+        event,
+        'ticket',
+      );
     }
     return ok(updated);
   } catch (e) {
@@ -132,15 +135,13 @@ export async function createTicket(
         email: input.email,
         issue: input.issue,
       });
-      void deps.audit
-        .logTicketEvent({
-          action: 'create',
-          ticketId: row.ticketId,
-          actorId: input.userId,
-        })
-        .catch((auditErr) => {
-          console.error(`Audit logging failed (action=create, ticket=${row.ticketId}):`, auditErr);
-        });
+      const event = { action: 'create' as const, ticketId: row.ticketId, actorId: input.userId };
+      void safeAudit(
+        () => deps.audit.logTicketEvent(event),
+        (payload, error) => deps.audit.recordDeadLetter({ kind: 'ticket', payload, error }),
+        event,
+        'ticket',
+      );
       return ok({ ticketId: row.ticketId, status: 'created' as const });
     } catch (e) {
       lastErr = e;

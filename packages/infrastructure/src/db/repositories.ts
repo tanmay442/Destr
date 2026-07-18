@@ -9,9 +9,10 @@ import {
   documentAudit,
   ticketAudit,
   userAudit,
+  auditDeadLetter,
   type Document,
 } from './schema';
-import type { TicketRow, UserRow } from '@app/domain';
+import type { TicketRow, UserRow, IngestStatus } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -76,6 +77,16 @@ export async function insertDocument(
   }
   const [row] = await client.insert(documents).values(input).returning();
   if (!row) throw new Error('Failed to insert document');
+  return row as Document;
+}
+
+export async function updateDocument(
+  id: number,
+  patch: { fileName?: string; fileHash?: string; uploadedBy?: string; ingestStatus?: IngestStatus },
+  client: Client = db,
+): Promise<Document> {
+  const [row] = await client.update(documents).set(patch).where(eq(documents.id, id)).returning();
+  if (!row) throw new Error(`Failed to update document ${id}`);
   return row as Document;
 }
 
@@ -888,6 +899,16 @@ export const auditRepo = {
     }));
     return { events, total };
   },
+  async recordDeadLetter(
+    input: { kind: 'document' | 'ticket' | 'user'; payload: unknown; error: string },
+    client: Client = db,
+  ): Promise<void> {
+    await client.insert(auditDeadLetter).values({
+      kind: input.kind,
+      payload: input.payload,
+      error: input.error,
+    });
+  },
 };
 
 import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRepository, AuditLog, TicketRepository, UserRepository } from '@app/domain';
@@ -900,6 +921,7 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     updateIngestStatus: (id, status) => updateDocumentIngestStatus(id, status, client),
     claimIngest: (id) => claimDocumentIngest(id, client),
     insert: (input) => insertDocument(input, client),
+    update: (id, patch) => updateDocument(id, patch, client),
     deleteById: (id) => deleteDocumentById(id, client),
     softDelete: (id, at) => softDeleteDocument(id, at, client),
     restore: (id) => restoreDocument(id, client),
@@ -931,6 +953,7 @@ function createAuditRepo(client: Client): AuditLog {
     logTicketEvent: (input) => auditRepo.logTicketEvent(input, client),
     logUserEvent: (input) => auditRepo.logUserEvent(input, client),
     list: (input) => auditRepo.list(input, client),
+    recordDeadLetter: (input) => auditRepo.recordDeadLetter(input, client),
   };
 }
 

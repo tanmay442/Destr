@@ -172,12 +172,29 @@ for detailed sign-up links and per-service walkthroughs.
 - **`/admin/audit`** — Full audit log filterable by document id or
   ticket id. Document audit events: upload, replace, delete, restore.
   Ticket audit events: create, assign, status_change, note, impersonation, role_change.
+
+  Audit writes are **best-effort for availability**: a failed audit write
+  never fails the underlying operation (e.g. a role change or ticket update
+  still succeeds). Instead of being silently dropped, a failed audit event
+  is captured to the `audit_dead_letter` table (kind + JSON payload + error
+  message) so compliance gaps are durable and replayable. Query that table
+  to find and replay missed events; a logging outage is visible there rather
+  than only in server logs. (Document-upload/delete audit events are written
+  inside the same DB transaction as the operation, so they fail loudly with
+  the operation rather than being dead-lettered.)
 - **`/admin/settings`** — Read-only view of the current `CHUNKING_STRATEGY`,
   embedding model, parent/child chunk sizes, and a **Re-ingest All** button
   (`POST /api/admin/reingest`). The strategy/model are env-driven (read at
   startup + redeploy), so the dropdown is disabled and the copy tells the
   operator to edit the env var, redeploy, then run "Re-ingest All" to
   re-embed every document under the new config.
+
+  The **Re-ingest All** endpoint (`POST /api/admin/reingest`) refuses to run
+  when the ingest queue is a no-op (i.e. no `QSTASH_TOKEN`/inline worker is
+  wired), returning HTTP 502 rather than a misleading "success" — a no-op
+  queue would discard every enqueued document. Set `QSTASH_TOKEN` (and
+  `QSTASH_INGEST_WORKER_URL`) so re-ingest actually re-embeds. When a sync
+  inline queue is wired (local dev), each document is re-ingested inline.
 
 ### Rate limit
 

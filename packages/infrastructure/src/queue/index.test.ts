@@ -27,6 +27,15 @@ describe('Ingest queue factory dispatch', () => {
     await expect(q.enqueue({ documentId: 2 })).resolves.toBeUndefined();
   });
 
+  it('reports isNoOp true when no inline ingest is wired (no-op queue)', () => {
+    expect(createSyncQueue().isNoOp()).toBe(true);
+  });
+
+  it('reports isNoOp false when an inline ingest is wired (sync inline queue)', () => {
+    const q = createSyncQueue({ ingest: async () => {} });
+    expect(q.isNoOp()).toBe(false);
+  });
+
   it('throws from the QStash adapter when QSTASH_TOKEN is set but the worker URL is missing', async () => {
     process.env.QSTASH_TOKEN = 'test-token';
     delete process.env.QSTASH_INGEST_WORKER_URL;

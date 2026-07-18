@@ -16,5 +16,8 @@ export function createQstashQueue(): IngestQueue {
         retries: 3,
       });
     },
+    isNoOp() {
+      return false;
+    },
   };
 }

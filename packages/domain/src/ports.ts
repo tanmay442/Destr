@@ -45,6 +45,11 @@ export interface DocumentRepository {
   /** Atomically flip `queued`→`ingesting`; returns true iff this caller won the claim. */
   claimIngest(id: number): Promise<boolean>;
   insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
+  /** Update mutable metadata of an existing row in place (keeps its id). */
+  update(
+    id: number,
+    patch: { fileName?: string; fileHash?: string; uploadedBy?: string; ingestStatus?: IngestStatus },
+  ): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
   restore(id: number): Promise<DocumentRow | null>;
@@ -253,6 +258,12 @@ export interface AuditLog {
     fromRole: 'admin' | 'user';
     toRole: 'admin' | 'user';
   }): Promise<void>;
+  /** Persist an audit event whose primary write failed, for later replay. */
+  recordDeadLetter(input: {
+    kind: 'document' | 'ticket' | 'user';
+    payload: unknown;
+    error: string;
+  }): Promise<void>;
   list(input: {
     documentId?: number;
     ticketId?: string;
@@ -377,6 +388,8 @@ export interface BlobStorage {
 
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
+  /** True when enqueued documents are discarded (no worker wired). Re-ingest refuses to run against it. */
+  isNoOp(): boolean;
 }
 
 

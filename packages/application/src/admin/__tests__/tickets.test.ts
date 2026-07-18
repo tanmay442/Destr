@@ -18,6 +18,7 @@ function makeMockRepos(overrides: { tickets?: Partial<TicketRepository>; audit?:
     logTicketEvent: vi.fn().mockResolvedValue(undefined),
     logDocumentEvent: vi.fn().mockResolvedValue(undefined),
     logUserEvent: vi.fn().mockResolvedValue(undefined),
+    recordDeadLetter: vi.fn().mockResolvedValue(undefined),
     ...overrides.audit,
   } as AuditLog;
   return { tickets, audit };

@@ -20,6 +20,14 @@ export interface ReingestSummary {
  * embed → atomic chunk replace — this use-case holds no ingest logic.
  */
 export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSummary>> {
+  if (deps.queue.isNoOp()) {
+    return err(
+      new ExternalServiceError(
+        'Re-ingest refused: the ingest queue is a no-op (no QStash worker wired). ' +
+          'Set QSTASH_TOKEN (and QSTASH_INGEST_WORKER_URL) so documents are actually re-ingested.',
+      ),
+    );
+  }
   try {
     const documentIds: number[] = [];
     let offset = 0;

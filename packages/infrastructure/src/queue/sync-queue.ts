@@ -25,5 +25,8 @@ export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
           'Set QSTASH_TOKEN to enable async ingest.',
       );
     },
+    isNoOp() {
+      return !opts.ingest;
+    },
   };
 }

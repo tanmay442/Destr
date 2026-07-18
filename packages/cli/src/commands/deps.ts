@@ -18,6 +18,7 @@ async function buildDbDeps() {
       Db.updateDocumentIngestStatus(id, status),
     claimIngest: (id: number) => Db.claimDocumentIngest(id),
     insert: (i: { fileName: string; fileHash: string; uploadedBy: string }) => Db.insertDocument(i),
+    update: (id: number, patch: { fileName?: string; fileHash?: string; uploadedBy?: string; ingestStatus?: 'queued' | 'ingesting' | 'done' | 'failed' }) => Db.updateDocument(id, patch),
     deleteById: (id: number) => Db.deleteDocumentById(id),
     softDelete: (id: number, at: Date) => Db.softDeleteDocument(id, at),
     restore: (id: number) => Db.restoreDocument(id),

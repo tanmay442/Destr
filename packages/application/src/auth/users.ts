@@ -4,6 +4,7 @@ import type { AuditLog } from '@app/domain';
 import { MAX_LIST_LIMIT } from '../../../../config/constants';
 import { sanitizePagination } from '../service-result';
 import { logUserRoleChange } from './audit';
+import { safeAudit } from '../audit-reliability';
 
 export async function listUsers(
   input: { search?: string; limit?: number; offset?: number },
@@ -40,12 +41,15 @@ export async function setUserRole(
     void deps.users.syncClerkRole(input.clerkUserId, input.role).catch((err) => {
       console.error(`Failed to sync Clerk role for ${input.clerkUserId}:`, err);
     });
-    void logUserRoleChange(
-      { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role },
-      { audit: deps.audit },
-    ).then((r) => {
-      if (!r.ok) console.error(`Failed to log role change audit for ${input.clerkUserId}:`, r.error);
-    });
+    const event = { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role };
+    void safeAudit(
+      () => logUserRoleChange(event, { audit: deps.audit }).then((r) => {
+        if (!r.ok) throw r.error;
+      }),
+      (payload, error) => deps.audit.recordDeadLetter({ kind: 'user', payload, error }),
+      event,
+      'user',
+    );
     return ok({ user: { clerkUserId: row.clerkUserId, role: row.role } });
   } catch (e) {
     return err(new ExternalServiceError('Failed to set user role', e));

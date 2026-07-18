@@ -1,6 +1,6 @@
 // `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
-  pgTable, serial, text, timestamp, integer,
+  pgTable, serial, text, timestamp, integer, jsonb, boolean,
   index, check, foreignKey, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -116,6 +116,20 @@ export const userAudit = pgTable('user_audit', {
 }, (table) => [
   check('user_audit_role_check', sql`${table.fromRole} IN ('admin','user') AND ${table.toRole} IN ('admin','user')`),
 ]);
+
+/**
+ * Dead-letter store for audit events whose primary write failed. Keeps the
+ * main operation available (we never block on audit) while preserving a
+ * durable, queryable record of the gap for compliance replay.
+ */
+export const auditDeadLetter = pgTable('audit_dead_letter', {
+  id: serial('id').primaryKey(),
+  kind: text('kind').notNull(),
+  payload: jsonb('payload').notNull(),
+  error: text('error').notNull(),
+  attemptedAt: timestamp('attempted_at').defaultNow().notNull(),
+  replayed: boolean('replayed').notNull().default(false),
+});
 
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;

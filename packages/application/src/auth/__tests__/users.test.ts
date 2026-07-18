@@ -24,6 +24,7 @@ function makeDeps(overrides?: {
       logTicketEvent,
       logUserEvent: vi.fn(),
       list: vi.fn(),
+      recordDeadLetter: vi.fn().mockResolvedValue(undefined),
       ...overrides?.audit,
     } as AuditLog,
   };

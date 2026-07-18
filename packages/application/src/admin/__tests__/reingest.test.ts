@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { reingestAll } from '../reingest';
+import { ExternalServiceError } from '@app/domain';
 import type { DocumentRepository, IngestQueue } from '@app/domain';
 
 function makeDoc(id: number) {
@@ -26,7 +27,7 @@ describe('reingestAll', () => {
     const documents = {
       list: vi.fn().mockResolvedValue(listPage([1, 2, 3])),
     } as unknown as DocumentRepository;
-    const queue = { enqueue } as unknown as IngestQueue;
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
@@ -50,7 +51,7 @@ describe('reingestAll', () => {
         return { documents: [makeDoc(5)], total: 5 };
       }),
     } as unknown as DocumentRepository;
-    const queue = { enqueue } as unknown as IngestQueue;
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
@@ -65,7 +66,7 @@ describe('reingestAll', () => {
     const documents = {
       list: vi.fn().mockResolvedValue({ documents: [], total: 0 }),
     } as unknown as DocumentRepository;
-    const queue = { enqueue } as unknown as IngestQueue;
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
@@ -79,11 +80,26 @@ describe('reingestAll', () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const list = vi.fn().mockResolvedValue(listPage([9]));
     const documents = { list } as unknown as DocumentRepository;
-    const queue = { enqueue } as unknown as IngestQueue;
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     await reingestAll({ documents, queue });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ includeDeleted: false }),
     );
+  });
+
+  it('refuses to re-ingest when the queue is a no-op (no worker wired)', async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const list = vi.fn().mockResolvedValue(listPage([1, 2, 3]));
+    const documents = { list } as unknown as DocumentRepository;
+    const queue = { enqueue, isNoOp: () => true } as unknown as IngestQueue;
+
+    const result = await reingestAll({ documents, queue });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ExternalServiceError);
+    }
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
   });
 });
