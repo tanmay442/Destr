@@ -1,54 +1,33 @@
-import { embed } from 'ai';
+import { embedMany } from 'ai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
-import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '../../../../config/constants';
+import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '@app/domain';
 
-type ProviderOptions = NonNullable<Parameters<typeof embed>[0]['providerOptions']>;
+type ProviderOptions = NonNullable<Parameters<typeof embedMany>[0]['providerOptions']>;
 
-async function processBatch(
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function embedManyWithRetry(
   batch: string[],
-  batchOffset: number,
   model: EmbeddingModelV3,
   providerOptions?: ProviderOptions,
 ): Promise<number[][]> {
-  const embedOne = (value: string) =>
-    embed({ model, value, ...(providerOptions ? { providerOptions } : {}) }).then(
-      ({ embedding }) => embedding,
-    );
-
-  const results = await Promise.allSettled(batch.map(embedOne));
-
-  const embeddings: (number[] | null)[] = new Array(batch.length).fill(null);
-  const failedIndices: number[] = [];
-
-  for (let j = 0; j < results.length; j++) {
-    const r = results[j];
-    if (r.status === 'fulfilled') {
-      embeddings[j] = r.value;
-    } else {
-      failedIndices.push(j);
-    }
-  }
-
-  if (failedIndices.length > 0) {
-    const retryResults = await Promise.allSettled(failedIndices.map((idx) => embedOne(batch[idx])));
-    for (let j = 0; j < failedIndices.length; j++) {
-      const rr = retryResults[j];
-      if (rr.status === 'fulfilled') {
-        embeddings[failedIndices[j]] = rr.value;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { embeddings } = await embedMany({
+        model,
+        values: batch,
+        ...(providerOptions ? { providerOptions } : {}),
+      });
+      return embeddings;
+    } catch (err) {
+      if (attempt === 0) {
+        await sleep(500);
+        continue;
       }
+      throw err;
     }
   }
-
-  if (embeddings.some((e) => e === null)) {
-    const remaining = embeddings
-      .map((e, idx) => (e === null ? batchOffset + idx : -1))
-      .filter((idx) => idx >= 0);
-    throw new Error(
-      `Embedding failed for ${remaining.length} chunk(s) at offset ${batchOffset}: [${remaining.join(', ')}]`,
-    );
-  }
-
-  return embeddings as number[][];
+  throw new Error('Unreachable retry loop');
 }
 
 export async function embedBatchWithModel(
@@ -66,11 +45,20 @@ export async function embedBatchWithModel(
     const chunk = batches.slice(i, i + EMBEDDING_BATCH_CONCURRENCY);
     const results = await Promise.all(
       chunk.map((batch, idx) =>
-        processBatch(batch, (i + idx) * EMBEDDING_BATCH_SIZE, model, providerOptions),
+        embedManyWithRetry(batch, model, providerOptions).then((embs) => ({
+          embs,
+          expected: batch.length,
+          offset: (i + idx) * EMBEDDING_BATCH_SIZE,
+        })),
       ),
     );
     for (const result of results) {
-      out.push(...result);
+      if (result.embs.length !== result.expected) {
+        throw new Error(
+          `Embedding failed for batch at offset ${result.offset}: expected ${result.expected}, got ${result.embs.length}`,
+        );
+      }
+      out.push(...result.embs);
     }
   }
   return out;

@@ -29,8 +29,8 @@ needed for local development.
 ```bash
 docker compose --profile ollama up -d   # Postgres + Ollama
 # Pull the models (first time only):
-docker compose exec ollama ollama pull embeddinggemma:latest
-docker compose exec ollama ollama pull gemma4:e2b
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull gemma2:2b
 pnpm install
 pnpm db:push                            # Create tables in local DB
 pnpm dev
@@ -209,7 +209,7 @@ this for an Upstash hash; the call sites do not need to change.
 
 | File | Purpose |
 | --- | --- |
-| `config/constants.ts` | Centralised business-logic constants (rate limits, thresholds, batch sizes) |
+| `@app/domain` (`packages/domain/src/constants.ts`) | Centralised business-logic constants (rate limits, thresholds, batch sizes). `config/constants.ts` re-exports it for legacy call sites. |
 | `src/lib/sanitize.ts` | `escapeHtml()` and `sanitizeText()` for user-supplied free-text fields |
 | `src/lib/logger.ts` | Lightweight structured JSON logger with `LOG_LEVEL` env gate (replace with pino for richer features) |
 | `src/lib/http.ts` | `respond()`, `respondResult()`, `toSafeError()`, `toActionResult()`, and `isActionError()` for consistent error mapping |

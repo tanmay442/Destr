@@ -38,6 +38,7 @@ export const cohereReranker: Reranker = {
         accept: 'application/json',
       },
       body: JSON.stringify({ model, query, documents, top_n: documents.length }),
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!res.ok) {

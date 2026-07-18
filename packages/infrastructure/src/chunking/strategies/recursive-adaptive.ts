@@ -1,6 +1,6 @@
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import type { ChunkingStrategy } from '@app/domain';
-import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '../../../../../config/constants';
+import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '@app/domain';
 import { buildPageSpans, mergeShortParagraphs, pageForOffset, makeDocumentChunk } from '../shared';
 
 const MIN_PARAGRAPH = 200;

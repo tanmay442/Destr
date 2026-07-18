@@ -10,7 +10,7 @@ function resolveEmbeddingModelId(): string {
     case 'openai':
       return process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
     case 'ollama':
-      return process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
+      return process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
     default:
       return 'unknown';
   }
