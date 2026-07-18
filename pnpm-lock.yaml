@@ -175,9 +175,6 @@ importers:
       '@app/domain':
         specifier: workspace:*
         version: link:../domain
-      ai:
-        specifier: ^6.0.208
-        version: 6.0.208(zod@4.4.3)
 
   packages/cli:
     dependencies:
