@@ -26,6 +26,7 @@ export async function GET(req: Request) {
     ticketId: ticketIdFilter,
     limit,
     offset,
+    actorId: auth.session.user.id,
   });
   return respondResult(result);
 }

@@ -18,7 +18,7 @@ const { requireAdminMock, listAuditMock, requireAdminRouteMock, requireAdminGetM
   const requireAdminGetMock = vi.fn(async (req: Request) => {
     const auth = await requireAdminRouteMock();
     if (!auth.ok) return auth;
-    return { ok: true as const, comp: auth.comp, url: new URL(req.url) };
+    return { ok: true as const, session: auth.session, comp: auth.comp, url: new URL(req.url) };
   });
   return { requireAdminMock, listAuditMock, requireAdminRouteMock, requireAdminGetMock };
 });
@@ -120,6 +120,7 @@ describe('GET /api/admin/audit', () => {
       ticketId: 'TKT-1001',
       limit: 25,
       offset: 10,
+      actorId: 'admin_1',
     });
   });
 

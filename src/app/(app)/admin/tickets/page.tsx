@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getComposition, TICKET_STATUSES, unwrap, parsePageParam } from '@/composition';
+import { getComposition, getAppSession, TICKET_STATUSES, unwrap, parsePageParam } from '@/composition';
 import { TicketOverlay, type TicketRow } from './ticket-overlay';
 import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
@@ -34,6 +34,8 @@ export default async function TicketsPage({
   const page = parsePageParam(params.page);
   const offset = (page - 1) * PAGE_SIZE;
   const comp = getComposition();
+  const session = await getAppSession();
+  const actorId = session?.user.id ?? '';
   const [result, userList] = await Promise.all([
     comp.listTickets({
       status: status ?? undefined,
@@ -41,6 +43,7 @@ export default async function TicketsPage({
       search,
       limit: PAGE_SIZE,
       offset,
+      actorId,
     }),
     comp.listUsers({ limit: 100 }),
   ]).then(([t, u]) => [unwrap(t), unwrap(u)] as const);

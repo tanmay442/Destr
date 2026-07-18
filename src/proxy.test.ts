@@ -5,14 +5,16 @@ const {
   redirectMock,
   nextMock,
   jsonMock,
-  getClerkUserMock,
+  ADMIN_EMAILS,
 } = vi.hoisted(() => ({
   protectMock: vi.fn(),
   redirectMock: vi.fn(),
   nextMock: vi.fn(),
   jsonMock: vi.fn(),
-  getClerkUserMock: vi.fn(),
+  ADMIN_EMAILS: ['admin@example.com'],
 }));
+
+process.env.ADMIN_EMAILS = ADMIN_EMAILS.join(',');
 
 vi.mock('@clerk/nextjs/server', () => ({
   clerkMiddleware: (handler: (auth: unknown, req: unknown) => unknown) => {
@@ -27,7 +29,7 @@ vi.mock('@clerk/nextjs/server', () => ({
   },
   clerkClient: () =>
     Promise.resolve({
-      users: { getUser: getClerkUserMock },
+      users: { getUser: vi.fn() },
     }),
   createRouteMatcher: (routes: string[]) => {
     // Simplified path matcher. The proxy uses (.*) at the end of each
@@ -63,7 +65,7 @@ vi.mock('next/server', () => ({
 }));
 
 vi.mock('@app/infrastructure/auth', async () => {
-  const { clerkMiddleware, createRouteMatcher, clerkClient } = await import('@clerk/nextjs/server');
+  const { clerkMiddleware, createRouteMatcher } = await import('@clerk/nextjs/server');
   const { NextResponse } = await import('next/server');
 
   const isPublicRoute = createRouteMatcher([
@@ -92,22 +94,11 @@ vi.mock('@app/infrastructure/auth', async () => {
     userId: string,
     sessionClaims: unknown,
   ): Promise<'admin' | 'user'> {
-    if (sessionClaims && typeof sessionClaims === 'object') {
-      const claims = sessionClaims as
-        | { metadata?: { role?: unknown } }
-        | undefined;
-      const fromClaims = claims?.metadata?.role;
-      if (fromClaims === 'admin' || fromClaims === 'user') {
-        return fromClaims;
-      }
-    }
-    try {
-      const client = await clerkClient();
-      const user = await client.users.getUser(userId);
-      const role = (user.publicMetadata as { role?: unknown } | null)?.role;
-      if (role === 'admin' || role === 'user') return role;
-    } catch (err) {
-      console.error('proxy: failed to read user from Clerk', err);
+    const claims = sessionClaims as { metadata?: { role?: unknown }; email?: unknown } | undefined;
+    const fromClaims = claims?.metadata?.role;
+    if (fromClaims === 'admin' || fromClaims === 'user') return fromClaims;
+    if (claims?.email && typeof claims.email === 'string' && ADMIN_EMAILS.includes(claims.email.toLowerCase())) {
+      return 'admin';
     }
     return 'user';
   }
@@ -118,15 +109,15 @@ vi.mock('@app/infrastructure/auth', async () => {
         if (isPublicRoute(req)) return NextResponse.next();
         if (isProtectedRoute(req)) {
           const { userId, sessionClaims } = await auth.protect();
-        if (isAdminRoute(req)) {
-          const role = await resolveRole(userId, sessionClaims);
-          if (role !== 'admin') {
-            if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
-              return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+          if (isAdminRoute(req)) {
+            const role = await resolveRole(userId, sessionClaims);
+            if (role !== 'admin') {
+              if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
+                return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+              }
+              return NextResponse.redirect(new URL('/chat', (req as { url: string }).url));
             }
-            return NextResponse.redirect(new URL('/chat', (req as { url: string }).url));
           }
-        }
           return NextResponse.next();
         }
         if ((req as { nextUrl: { pathname: string } }).nextUrl.pathname.startsWith('/api/')) {
@@ -149,9 +140,6 @@ beforeEach(() => {
   redirectMock.mockReset();
   nextMock.mockReset();
   jsonMock.mockReset();
-  getClerkUserMock.mockReset();
-  // Default: Clerk user lookup returns no role.
-  getClerkUserMock.mockResolvedValue({ publicMetadata: {} });
 });
 
 function makeReq(pathname: string) {
@@ -161,10 +149,10 @@ function makeReq(pathname: string) {
   };
 }
 
-function makeAuth(userId: string | null, role: string | null) {
+function makeAuth(userId: string | null, role: string | null, email?: string) {
   return {
     userId,
-    sessionClaims: { metadata: { role } },
+    sessionClaims: { metadata: { role }, email },
   };
 }
 
@@ -217,21 +205,15 @@ describe('proxy.ts (auth adapter)', () => {
     expect(nextMock).toHaveBeenCalled();
   });
 
-  it('falls back to Clerk publicMetadata when JWT has no role', async () => {
-    protectMock.mockResolvedValue(makeAuth('user_admin', null));
-    getClerkUserMock.mockResolvedValue({
-      publicMetadata: { role: 'admin' },
-    });
+  it('admits admin-email user to /admin even when JWT has no role', async () => {
+    protectMock.mockResolvedValue(makeAuth('user_admin', null, 'admin@example.com'));
     await proxyHandler(makeReq('/admin'));
     expect(redirectMock).not.toHaveBeenCalled();
     expect(nextMock).toHaveBeenCalled();
   });
 
-  it('redirects to /chat when fallback Clerk user is not admin', async () => {
-    protectMock.mockResolvedValue(makeAuth('user_1', null));
-    getClerkUserMock.mockResolvedValue({
-      publicMetadata: { role: 'user' },
-    });
+  it('redirects non-admin-email user on /admin when JWT has no role', async () => {
+    protectMock.mockResolvedValue(makeAuth('user_1', null, 'user@example.com'));
     await proxyHandler(makeReq('/admin'));
     expect(redirectMock).toHaveBeenCalled();
   });

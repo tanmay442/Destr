@@ -109,28 +109,30 @@ for detailed sign-up links and per-service walkthroughs.
   `<SignUp />` components. Email+password and Google are enabled in the
   Clerk dashboard; the app is provider-agnostic.
 - **Role model:** Every Clerk user carries a role of `admin` or `user`.
-  The local `users` table holds the role, and any email listed in
-  `ADMIN_EMAILS` is also treated as admin (so a listed email stays admin
-  even if locally demoted). Clerk's `publicMetadata` mirrors the role
-  for fast JWT-based middleware checks.
+  The local `users` table holds the role, and any **verified** email
+  listed in `ADMIN_EMAILS` is also treated as admin (so a listed email
+  stays admin even if locally demoted). Clerk's `publicMetadata` mirrors
+  the role for fast JWT-based middleware checks. Auto-promotion only
+  happens once Clerk reports the email address as verified.
 - **Bootstrap:** `ADMIN_EMAILS` is a comma-separated env var. The first
-  time a user with one of those emails signs in, they are auto-promoted
-  to `admin` in the local DB. After that, admins promote others from
-  `/admin/users`. (The role is read by the API/SSR path directly from
-  `ADMIN_EMAILS` or the local row; ensure the JWT template below projects
-  `metadata.role` so middleware gating also sees it.)
+  time a user whose email is **verified** and listed in `ADMIN_EMAILS`
+  signs in, they are auto-promoted to `admin` in the local DB. After
+  that, admins promote others from `/admin/users`. A verified
+  `ADMIN_EMAILS` user reaches `/admin` directly even before promotion,
+  because middleware also admits verified admin-email addresses.
 - **Route gating:** `src/proxy.ts` runs `clerkMiddleware`. `/chat(.*)`,
   `/admin(.*)`, `/api/chat(.*)`, and `/api/admin(.*)` require a signed-in
   user; `/admin(.*)` and `/api/admin(.*)` additionally require
   `role === 'admin'`. Non-admin page routes redirect to `/chat`;
   non-admin `/api/admin` requests return HTTP 403.
-- **JWT template:** To enable fast role checks in middleware without
-  hitting the Clerk Backend SDK on every request, configure a JWT
-  template in the Clerk Dashboard (Sessions → Customize session token):
-  `{ "metadata": "{{user.public_metadata}}" }`. This projects
-  `publicMetadata.role` into the session token's `metadata.role` claim,
-  which `src/proxy.ts` reads as its fast path. Without this template,
-  the middleware falls back to a Backend SDK call on every request.
+- **JWT template:** Middleware resolves the role from the **signed**
+  session token (`metadata.role`) with no Clerk Backend SDK call, then
+  falls back to the local `users` row, then to a verified `ADMIN_EMAILS`
+  match. Configure a JWT template in the Clerk Dashboard (Sessions →
+  Customize session token): `{ "metadata": "{{user.public_metadata}}" }`.
+  This projects `publicMetadata.role` into the session token's
+  `metadata.role` claim, which `src/proxy.ts` reads as its fast path.
+  This template is required for correct middleware gating.
 - **Action gating:** Every admin server action and API route calls
   `requireAdmin()` as its second line. Server actions return
   `{ error: 'Forbidden' }`; API routes return HTTP 403.

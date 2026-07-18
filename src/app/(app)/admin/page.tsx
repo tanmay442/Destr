@@ -1,4 +1,4 @@
-import { getComposition, unwrap } from '@/composition';
+import { getComposition, getAppSession, unwrap } from '@/composition';
 import { StatCard } from '@/components/admin/StatCard';
 import { AuditEventList } from '@/components/admin/AuditEventList';
 import {
@@ -18,9 +18,11 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminOverviewPage() {
   const comp = getComposition();
+  const session = await getAppSession();
+  const actorId = session?.user.id ?? '';
   const [summaryRes, auditRes] = await Promise.all([
-    comp.getAnalyticsSummary(),
-    comp.listAudit({ limit: 10 }),
+    comp.getAnalyticsSummary({ actorId }),
+    comp.listAudit({ limit: 10, actorId }),
   ]);
   const summary = unwrap(summaryRes);
   const audit = unwrap(auditRes);

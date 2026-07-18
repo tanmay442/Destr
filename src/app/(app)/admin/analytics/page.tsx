@@ -1,4 +1,4 @@
-import { getComposition, unwrap } from '@/composition';
+import { getComposition, getAppSession, unwrap } from '@/composition';
 import { StatCard } from '@/components/admin/StatCard';
 import { AuditEventList } from '@/components/admin/AuditEventList';
 import {
@@ -47,9 +47,11 @@ function bucketByDay(
 
 export default async function AnalyticsPage() {
   const comp = getComposition();
+  const session = await getAppSession();
+  const actorId = session?.user.id ?? '';
   const [summaryRes, auditRes] = await Promise.all([
-    comp.getAnalyticsSummary(),
-    comp.listAudit({ limit: 20 }),
+    comp.getAnalyticsSummary({ actorId }),
+    comp.listAudit({ limit: 20, actorId }),
   ]);
   const summary = unwrap(summaryRes);
   const audit = unwrap(auditRes);

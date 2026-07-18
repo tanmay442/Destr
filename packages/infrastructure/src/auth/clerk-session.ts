@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import type { SessionStore } from '@app/domain';
-import { isAdminEmail } from './clerk-shared';
+import { isVerifiedAdminEmail } from './clerk-shared';
 
 export const clerkSessionStore: SessionStore = {
   async getSession() {
@@ -16,7 +16,8 @@ export const clerkSessionStore: SessionStore = {
     const local = await db.query.users.findFirst({ where: eq(users.clerkUserId, userId) });
     const email = user.emailAddresses[0]?.emailAddress ?? '';
     const localRole = (local?.role as 'admin' | 'user') ?? 'user';
-    const role: 'admin' | 'user' = localRole === 'admin' || isAdminEmail(email) ? 'admin' : 'user';
+    const verifiedAdmin = Boolean(isVerifiedAdminEmail(user.emailAddresses));
+    const role: 'admin' | 'user' = localRole === 'admin' || verifiedAdmin ? 'admin' : 'user';
     return {
       user: {
         id: userId,

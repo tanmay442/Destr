@@ -1,4 +1,4 @@
-import { ok, type Result, ExternalServiceError } from '@app/domain';
+import { ok, err, type Result, ExternalServiceError } from '@app/domain';
 import type {
   QueryRewriter,
   DocumentGrader,
@@ -61,27 +61,31 @@ export async function agenticSearch(
     return ok({ chunks: [], rewrittenQuery: originalQuery, outOfDomain: true });
   }
 
-  let rewritten: string;
   try {
-    rewritten = await deps.queryRewriter.rewrite(originalQuery);
-  } catch {
-    rewritten = originalQuery;
-  }
-
-  let pass = await retrieveAndGrade(rewritten, deps);
-
-  if (pass.chunks.length === 0) {
-    for (let attempt = 0; attempt < AGENTIC_MAX_RETRIES && pass.chunks.length === 0; attempt++) {
-      pass = await retrieveAndGrade(originalQuery, deps);
+    let rewritten: string;
+    try {
+      rewritten = await deps.queryRewriter.rewrite(originalQuery);
+    } catch {
+      rewritten = originalQuery;
     }
+
+    let pass = await retrieveAndGrade(rewritten, deps);
+
+    if (pass.chunks.length === 0) {
+      for (let attempt = 0; attempt < AGENTIC_MAX_RETRIES && pass.chunks.length === 0; attempt++) {
+        pass = await retrieveAndGrade(originalQuery, deps);
+      }
+    }
+
+    const outOfDomain =
+      pass.chunks.length === 0 && pass.maxSimilarity < OUT_OF_DOMAIN_THRESHOLD;
+
+    return ok({
+      chunks: pass.chunks,
+      rewrittenQuery: rewritten,
+      outOfDomain,
+    });
+  } catch (e) {
+    return err(new ExternalServiceError('Agentic search failed', e));
   }
-
-  const outOfDomain =
-    pass.chunks.length === 0 && pass.maxSimilarity < OUT_OF_DOMAIN_THRESHOLD;
-
-  return ok({
-    chunks: pass.chunks,
-    rewrittenQuery: rewritten,
-    outOfDomain,
-  });
 }

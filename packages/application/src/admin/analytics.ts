@@ -1,5 +1,6 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type { DocumentRepository, ChunkRepository, TicketRepository, UserRepository, QueryStats } from '@app/domain';
+import { requireAdminActor } from './authz';
 
 export interface AnalyticsSummary {
   documentCount: number;
@@ -12,6 +13,7 @@ export interface AnalyticsSummary {
 }
 
 export async function getAnalyticsSummary(
+  input: { actorId: string },
   deps: {
     documents: DocumentRepository;
     chunks: ChunkRepository;
@@ -20,6 +22,8 @@ export async function getAnalyticsSummary(
     stats: QueryStats;
   },
 ): Promise<Result<AnalyticsSummary>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   try {
     const [docCount, chunkCount, ticketCount, openTicketCount, usersCount] = await Promise.all([
       deps.documents.list({ limit: 1, offset: 0 }).then((r) => r.total),

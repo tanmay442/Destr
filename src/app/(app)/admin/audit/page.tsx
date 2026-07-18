@@ -1,4 +1,4 @@
-import { getComposition, unwrap, parsePageParam } from '@/composition';
+import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
 import { Pagination } from '@/components/admin/Pagination';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,11 +27,14 @@ export default async function AuditPage({
   const documentIdRaw = params.documentId ? Number(params.documentId) : undefined;
   const documentId = Number.isInteger(documentIdRaw) ? documentIdRaw : undefined;
   const ticketId = params.ticketId;
+  const session = await getAppSession();
+  const actorId = session?.user.id ?? '';
   const result = unwrap(await getComposition().listAudit({
     documentId,
     ticketId,
     limit: PAGE_SIZE,
     offset,
+    actorId,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   return (

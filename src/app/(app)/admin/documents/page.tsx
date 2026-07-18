@@ -1,4 +1,4 @@
-import { getComposition, unwrap, parsePageParam } from '@/composition';
+import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
 import { DocumentRowActions } from './document-row-actions';
 import { RecountAllButton } from './recount-all-button';
 import { IngestStatusPoller } from './ingest-status-poller';
@@ -65,11 +65,14 @@ export default async function DocumentsPage({
     !Number.isNaN(recountedDocs) &&
     recountedTotal !== null &&
     !Number.isNaN(recountedTotal);
+  const session = await getAppSession();
+  const actorId = session?.user.id ?? '';
   const result = unwrap(await getComposition().listDocuments({
     search: search || undefined,
     includeDeleted: true,
     limit: PAGE_SIZE,
     offset,
+    actorId,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   const hasPendingIngest = result.documents.some(

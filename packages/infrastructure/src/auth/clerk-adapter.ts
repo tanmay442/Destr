@@ -11,7 +11,7 @@ import { ForbiddenError, UnauthorizedError } from '@app/domain';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
-import { isAdminEmail } from './clerk-shared';
+import { isAdminEmail, isVerifiedAdminEmail } from './clerk-shared';
 import type { AuthAdapter } from './auth-factory';
 
 export type AppRole = 'admin' | 'user';
@@ -55,6 +55,7 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
   const user = await currentUser();
   if (!user) return null;
   const email = user.emailAddresses[0]?.emailAddress ?? '';
+  const verifiedAdminEmail = isVerifiedAdminEmail(user.emailAddresses);
   let local = await findUserByClerkId(userId);
   if (!local) {
     const clerkRole = parseClerkRole(
@@ -65,9 +66,9 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       email,
       name: user.fullName ?? user.firstName ?? user.username ?? null,
       imageUrl: user.imageUrl ?? null,
-      role: clerkRole ?? (isAdminEmail(email) ? 'admin' : 'user'),
+      role: clerkRole ?? (verifiedAdminEmail ? 'admin' : 'user'),
     });
-  } else if (isAdminEmail(email) && local.role !== 'admin') {
+  } else if (verifiedAdminEmail && local.role !== 'admin') {
     local = await userRepo.upsertFromClerk({
       clerkUserId: userId,
       email,
@@ -128,15 +129,15 @@ const isAdminRoute = createRouteMatcher([
 
 async function resolveRole(
   userId: string,
+  sessionClaims: Record<string, unknown> | null | undefined,
+  email?: string,
 ): Promise<'admin' | 'user'> {
-  try {
-    const client = await clerkClient();
-    const user = await client.users.getUser(userId);
-    const role = (user.publicMetadata as { role?: unknown } | null)?.role;
-    if (role === 'admin' || role === 'user') return role;
-  } catch (err) {
-    console.error('proxy: failed to read user from Clerk', err);
-  }
+  const claims = sessionClaims as { metadata?: { role?: unknown } } | undefined;
+  const fromClaims = claims?.metadata?.role;
+  if (fromClaims === 'admin' || fromClaims === 'user') return fromClaims;
+  const local = await findUserByClerkId(userId);
+  if (local?.role === 'admin') return 'admin';
+  if (email && isAdminEmail(email)) return 'admin';
   return 'user';
 }
 
@@ -144,9 +145,11 @@ function createMiddleware(): AuthAdapter['middleware'] {
   return clerkMiddleware(async (auth, req) => {
     if (isPublicRoute(req)) return NextResponse.next();
     if (isProtectedRoute(req)) {
-      const { userId } = await auth.protect();
+      const { userId, sessionClaims } = await auth.protect();
       if (isAdminRoute(req)) {
-        const role = await resolveRole(userId);
+        const claims = sessionClaims as { email?: unknown } | undefined;
+        const email = typeof claims?.email === 'string' ? claims.email : undefined;
+        const role = await resolveRole(userId, sessionClaims, email);
         if (role !== 'admin') {
           if (req.nextUrl.pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

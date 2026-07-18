@@ -218,21 +218,21 @@ function createComposition() {
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
+      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
-      bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner }),
+      bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner }),
-    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: Db.ticketRepo }),
+    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: Db.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
       bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
-      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage }),
+      bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
     replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue }),
+      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     /** Ingest pre-chunked Markdown (Session 2). Parses via the injected
       * MarkdownParser adapter (infrastructure), then embeds + writes the
       * chunks with their page/section/source metadata. An optional companion
@@ -271,9 +271,9 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
-    getAnalyticsSummary: () =>
-      bind(getAnalyticsSummary, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
-    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, auditDeps),
+    getAnalyticsSummary: (input: { actorId: string }) =>
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
+    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,
     blobStorage,
@@ -347,12 +347,12 @@ export function parsePageParam(raw: string | undefined, fallback = 1): number {
 export async function requireAdminGet(
   req: Request,
 ): Promise<
-  | { ok: true; comp: Composition; url: URL }
+  | { ok: true; session: Awaited<ReturnType<typeof requireAdmin>>; comp: Composition; url: URL }
   | { ok: false; response: Response }
 > {
   const auth = await requireAdminRoute();
   if (!auth.ok) return auth;
-  return { ok: true, comp: auth.comp, url: new URL(req.url) };
+  return { ok: true, session: auth.session, comp: auth.comp, url: new URL(req.url) };
 }
 
 export async function requireAdminDocument(

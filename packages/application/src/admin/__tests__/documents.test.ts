@@ -47,7 +47,10 @@ function makeMockDeps(overrides: {
     delete: vi.fn().mockResolvedValue(undefined),
     ...overrides.blobStorage,
   } as unknown as import('@app/domain').BlobStorage & { delete: ReturnType<typeof vi.fn> };
-  return { documents, audit, clock, runner, blobStorage };
+  const users = {
+    findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' }),
+  } as unknown as import('@app/domain').UserRepository;
+  return { documents, audit, clock, runner, blobStorage, users };
 }
 
 beforeEach(() => {

@@ -14,6 +14,7 @@ export async function GET(req: Request) {
     search,
     limit,
     offset,
+    actorId: auth.session.user.id,
   });
   return respondResult(result);
 }

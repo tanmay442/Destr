@@ -10,3 +10,27 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return ADMIN_EMAILS.includes(email.toLowerCase());
 }
 
+export interface ClerkEmailAddress {
+  emailAddress?: string;
+  verification?: { status?: string } | Array<{ status?: string }> | null;
+}
+
+function emailVerified(email: ClerkEmailAddress | undefined): boolean {
+  if (!email) return false;
+  const v = email.verification;
+  if (Array.isArray(v)) return v.some((x) => x?.status === 'verified');
+  return v?.status === 'verified';
+}
+
+export function isVerifiedAdminEmail(
+  emailAddresses: ClerkEmailAddress[] | undefined,
+): string | null {
+  if (!emailAddresses) return null;
+  for (const e of emailAddresses) {
+    if (e.emailAddress && emailVerified(e) && isAdminEmail(e.emailAddress)) {
+      return e.emailAddress;
+    }
+  }
+  return null;
+}
+

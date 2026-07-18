@@ -6,9 +6,10 @@ import {
   NotFoundError,
   ConflictError,
 } from '@app/domain';
-import type { TicketRepository, AuditLog, TicketRow } from '@app/domain';
+import type { TicketRepository, AuditLog, TicketRow, UserRepository } from '@app/domain';
 import { randomUUID } from 'node:crypto';
 import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '../../../../config/constants';
+import { requireAdminActor } from './authz';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -36,9 +37,12 @@ export async function listTickets(
     search?: string;
     limit?: number;
     offset?: number;
+    actorId: string;
   },
-  deps: { tickets: TicketRepository },
+  deps: { tickets: TicketRepository; users: UserRepository },
 ): Promise<Result<{ tickets: TicketRow[]; total: number }>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   try {
     const limit = Math.min(Math.max(Math.floor(input.limit ?? 25), 1), MAX_LIST_LIMIT);
     const offset = Math.max(Math.floor(input.offset ?? 0), 0);

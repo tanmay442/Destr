@@ -23,6 +23,7 @@ import { ingestFile, parseAndEmbed } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
+import { requireAdminActor } from './authz';
 
 /** Object-storage key, unique per upload so renames/duplicates never collide. */
 function newBlobKey(fileName: string): string {
@@ -47,7 +48,7 @@ interface ListDocumentsInput {
 }
 
 export async function listDocuments(
-  input: ListDocumentsInput,
+  input: ListDocumentsInput & { actorId: string },
   deps: {
     documents: DocumentRepository;
     chunks: ChunkRepository;
@@ -71,6 +72,8 @@ export async function listDocuments(
     total: number;
   }>
 > {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
     const { documents, total } = await deps.documents.list({
@@ -111,8 +114,10 @@ function asyncIngestEnabled(): boolean {
 
 export async function uploadPdf(
   input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository },
 ): Promise<Result<IngestResult>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled()) {
       return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
@@ -210,8 +215,10 @@ async function queuePdfForIngest(
 
 export async function softDeleteDocument(
   input: { documentId: number; actorId: string },
-  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner },
+  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; users: UserRepository },
 ): Promise<Result<void>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     const check = await ensureDocument(input.documentId, deps.documents);
     if (!check.ok) return check;
@@ -265,8 +272,10 @@ export async function getDocumentById(
 
 export async function hardDeleteDocument(
   input: { documentId: number; actorId: string },
-  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
+  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; users: UserRepository },
 ): Promise<Result<void>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     const existing = await deps.documents.findById(input.documentId, { includeDeleted: true });
     if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
@@ -290,8 +299,10 @@ export async function hardDeleteDocument(
 
 export async function replacePdf(
   input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository },
 ): Promise<Result<IngestResult>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
   return wrapServiceCall(async (): Promise<Result<IngestResult>> => {
     const existing = await deps.documents.findById(input.documentId);
     if (!existing) return err(new NotFoundError(`Document not found: ${input.documentId}`));
