@@ -1,9 +1,7 @@
 // Non-interactive SQL migrator. Plays every Drizzle-generated
-// migration in ./drizzle against the configured database, plus a
-// small set of `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements
-// for columns that were added to pre-existing tables after the
-// initial schema was shipped. Idempotent: known duplicate-object
-// errors are logged and skipped; anything else throws.
+// migration in ./drizzle against the configured database. Idempotent:
+// known duplicate-object errors are logged and skipped; anything else
+// throws.
 //
 // Usage:
 //   node scripts/apply-migration.mjs
@@ -12,16 +10,6 @@ import { join } from 'node:path';
 import pg from 'pg';
 
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
-
-// SQL the migrator plays in addition to the Drizzle files. These
-// are additive ALTERs that bring pre-existing tables up to the
-// current schema. All use `IF NOT EXISTS` so re-runs are safe.
-const ADD_COLUMNS = [
-  'ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "blob" "bytea";',
-  'ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp;',
-  'ALTER TABLE "tickets" ADD COLUMN IF NOT EXISTS "assigned_to" text;',
-  'ALTER TABLE "tickets" ADD COLUMN IF NOT EXISTS "notes" text;',
-];
 
 // Postgres error codes / messages that mean "this DDL is already
 // applied" and should be skipped rather than fail the run.
@@ -91,11 +79,6 @@ export async function applyMigrations({
     logger.log('-- enabling pgvector extension...');
     await safeQuery(pool, EXTENSION_SQL, logger);
 
-    for (const sql of ADD_COLUMNS) {
-      logger.log('-- add column:', sql);
-      await safeQuery(pool, sql, logger);
-    }
-
     for (const file of files) {
       const sql = readFileSync(join(dir, file), 'utf8');
       const statements = sql
@@ -122,7 +105,7 @@ export async function applyMigrations({
   logger.log('done');
 }
 
-export const __test = { isBenignError, ADD_COLUMNS };
+export const __test = { isBenignError };
 
 // CLI entry — only run when this module is the program root.
 const invokedDirectly = (() => {

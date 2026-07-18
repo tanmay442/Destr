@@ -373,7 +373,7 @@ export async function getChunksByIds(
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.deleted_at IS NULL
-      AND c.id IN ${inArray(chunks.id, ids)}
+      AND ${inArray(chunks.id, ids)}
     ORDER BY c.id
   `);
   type RawRow = {

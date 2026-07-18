@@ -11,21 +11,35 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 const configuredLevel: LogLevel =
   (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
 
+const SECRET_PATTERNS = [
+  /postgres:\/\/[^@\s]+@/gi,
+  /\bsk_[a-zA-Z0-9]+\b/g,
+  /\bpk_[a-zA-Z0-9]+\b/g,
+  /\bAuthorization:\s*[^\s]+/gi,
+  /\b[A-Za-z0-9_-]{32,}\b/g,
+];
+
+function scrubSecrets(input: string): string {
+  let out = input;
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, '[REDACTED]');
+  }
+  return out;
+}
+
 // Serialise Error values (JSON.stringify skips non-enumerable props).
 function serializeMeta(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {
     if (value instanceof Error) {
       const errObj: Record<string, unknown> = {
-        message: value.message,
-        ...(value.stack ? { stack: value.stack } : {}),
+        message: scrubSecrets(value.message),
+        ...(value.stack ? { stack: scrubSecrets(value.stack) } : {}),
       };
       const code = (value as { code?: unknown }).code;
       if (code !== undefined) errObj.code = code;
       const cause = (value as { cause?: unknown }).cause;
       if (cause !== undefined) {
-        // Avoid leaking secrets (DB connection strings, etc.) that may live in
-        // an Error's message/stack: only surface its type + code, never its text.
         errObj.cause = cause instanceof Error
           ? { name: cause.name, ...(cause as { code?: unknown }).code !== undefined ? { code: (cause as { code?: unknown }).code } : {} }
           : String(cause);
