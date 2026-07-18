@@ -1,4 +1,7 @@
 /** @type {import('dependency-cruiser').IConfiguration} */
+const BANNED_PACKAGES =
+  'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-lib|pg|@neondatabase|drizzle-kit|unpdf|ai|@upstash/qstash|@upstash/redis|@xenova/transformers|onnxruntime-node)/';
+
 module.exports = {
   forbidden: [
     // ---- DOMAIN: pure types + zod, no I/O, no node APIs ----
@@ -21,7 +24,7 @@ module.exports = {
       from: { path: '^packages/domain' },
       to: {
         dependencyTypes: ['npm'],
-        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-lib|pg|@neondatabase|drizzle-kit|ai|unpdf/)',
+        path: BANNED_PACKAGES,
       },
     },
     {
@@ -50,7 +53,7 @@ module.exports = {
       from: { path: '^packages/application' },
       to: {
         dependencyTypes: ['npm'],
-        path: 'node_modules/(drizzle-orm|@ai-sdk|@clerk|next|pdf-lib|pg|@neondatabase|drizzle-kit|unpdf/)',
+        path: BANNED_PACKAGES,
       },
     },
     {
@@ -89,13 +92,13 @@ module.exports = {
     {
       name: 'no-src-app-importing-infrastructure',
       severity: 'error',
-      from: { path: '^src/(app|components)' },
+      from: { path: '^src/(app|components|lib)' },
       to: { path: '^packages/infrastructure' },
     },
     {
       name: 'no-src-app-importing-data-packages',
       severity: 'error',
-      from: { path: '^src/(app|components)' },
+      from: { path: '^src/(app|components|lib)' },
       to: {
         dependencyTypes: ['npm'],
         path: 'node_modules/(drizzle-orm|pg|unpdf|@neondatabase|pdf-lib/)/',

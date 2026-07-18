@@ -502,7 +502,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
     const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
     expect(compositionMock.agenticSearch).toHaveBeenCalledWith('vague');
     expect(result).toHaveLength(1);
-    expect(result[0].content).toBe('keep this');
+    expect(result[0]!.content).toBe('keep this');
   });
 
   it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
@@ -669,7 +669,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(streamTextImpl).toHaveBeenCalled();
     await readBody(res);
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
-    const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0];
+    const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
     expect(value).toBe('freshly generated answer');
     expect(ttl).toBe(3600);

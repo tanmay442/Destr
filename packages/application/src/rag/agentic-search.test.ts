@@ -52,7 +52,7 @@ describe('agenticSearch', () => {
     const r = unwrap(res);
     expect(rewriterMock).toHaveBeenCalledWith('vague question');
     expect(r.chunks).toHaveLength(1);
-    expect(r.chunks[0].content).toBe('relevant doc');
+    expect(r.chunks[0]!.content).toBe('relevant doc');
     expect(r.rewrittenQuery).toBe('rewritten query');
     expect(r.outOfDomain).toBe(false);
   });
@@ -78,7 +78,7 @@ describe('agenticSearch', () => {
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
     expect(rewriterMock).toHaveBeenCalledWith('the question');
     expect(unwrap(res).chunks).toHaveLength(1);
-    expect(unwrap(res).chunks[0].content).toBe('strong match');
+    expect(unwrap(res).chunks[0]!.content).toBe('strong match');
   });
 
   it('returns empty + out-of-domain for an empty query', async () => {

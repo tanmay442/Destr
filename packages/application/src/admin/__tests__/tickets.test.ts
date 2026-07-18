@@ -191,7 +191,7 @@ describe('updateTicket', () => {
       { ticketId: 'TKT-1001', note: longNote, actorId: 'user_1' },
       deps,
     );
-    const call = vi.mocked(deps.tickets.update).mock.calls[0][1] as { notes: string };
+    const call = vi.mocked(deps.tickets.update).mock.calls[0]![1] as { notes: string };
     expect(call.notes.length).toBe(10_000);
   });
 

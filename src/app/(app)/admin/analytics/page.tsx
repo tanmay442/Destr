@@ -38,7 +38,7 @@ function bucketByDay(
     date.setHours(0, 0, 0, 0);
     const index = Math.floor((date.getTime() - start.getTime()) / 86_400_000);
     if (index >= 0 && index < days) {
-      buckets[index].value += 1;
+      buckets[index]!.value += 1;
     }
   }
 

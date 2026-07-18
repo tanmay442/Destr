@@ -142,20 +142,20 @@ describe('setup-test-db', () => {
     spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
 
     await runSetup();
-    const createCall = fetchMock.mock.calls[1];
+    const createCall = fetchMock.mock.calls[1]!;
     expect(createCall[0]).toContain('/branches');
     expect(createCall[1]?.method).toBe('POST');
     expect(JSON.parse(createCall[1]?.body as string)).toMatchObject({
       name: 'dev-test',
       parent_id: 'br-primary',
     });
-    const epCall = fetchMock.mock.calls[3];
+    const epCall = fetchMock.mock.calls[3]!;
     expect(epCall[0]).toContain('/endpoints');
     expect(epCall[1]?.method).toBe('POST');
     expect(JSON.parse(epCall[1]?.body as string)).toMatchObject({
       endpoint: { branch_id: 'br-new', type: 'read_write' },
     });
-    const uriCall = fetchMock.mock.calls[5];
+    const uriCall = fetchMock.mock.calls[5]!;
     expect(uriCall[0]).toContain('/connection_uri');
     expect(uriCall[0]).toContain('branch_id=br-new');
     expect(uriCall[0]).toContain('role_name=neondb_owner');

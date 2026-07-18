@@ -1,4 +1,10 @@
 import type { AppConfig } from '@app/domain/app-config';
+import {
+  PARENT_CHUNK_SIZE,
+  CHILD_CHUNK_SIZE,
+  PARENT_CHILD_MODE,
+  PARENT_CHILD_WINDOW,
+} from '@app/domain';
 
 // Runtime configuration for this deployment of the RAG Support Agent.
 //
@@ -111,12 +117,12 @@ const config: AppConfig = {
 
   // Parent-child indexing (Session 5). Only used when
   // `chunkingStrategy === 'parent-child'`. Sizes are in characters.
-  parentChunkSize: Number(process.env.PARENT_CHUNK_SIZE ?? 1800),
-  childChunkSize: Number(process.env.CHILD_CHUNK_SIZE ?? 400),
+  parentChunkSize: PARENT_CHUNK_SIZE,
+  childChunkSize: CHILD_CHUNK_SIZE,
   // How `searchChunks` resolves a child hit to context: `parent` returns the
   // parent block; `window` pads the hit with its ±N neighbours.
-  parentChildMode: (process.env.PARENT_CHILD_MODE ?? 'parent') as AppConfig['parentChildMode'],
-  parentChildWindow: Number(process.env.PARENT_CHILD_WINDOW ?? 2),
+  parentChildMode: PARENT_CHILD_MODE,
+  parentChildWindow: PARENT_CHILD_WINDOW,
 };
 
 export default config;

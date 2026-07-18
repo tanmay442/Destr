@@ -33,7 +33,7 @@ function parseDocContext(raw: string): { title: string; summary: string } {
 
   // Strip ```json ... ``` or ``` ... ``` fences if present.
   const fence = jsonText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fence) jsonText = fence[1].trim();
+  if (fence) jsonText = (fence[1] ?? '').trim();
 
   // Fall back to the first balanced {...} block if there is stray prose.
   if (!jsonText.startsWith('{')) {

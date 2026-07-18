@@ -13,7 +13,8 @@ export function getOllamaEmbeddingModel(): EmbeddingModelV3 {
 export const ollamaEmbeddingService: EmbeddingService = {
   async embed(value: string): Promise<number[]> {
     const embeddings = await embedBatchWithModel([value], getOllamaEmbeddingModel());
-    return embeddings[0];
+    const first = embeddings[0];
+    return first ?? [];
   },
 
   async embedBatch(values: string[]): Promise<number[][]> {

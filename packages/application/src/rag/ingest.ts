@@ -114,7 +114,7 @@ function toPreparedRows(
   return docChunks.map((c, i) => ({
     documentId,
     content: c.content,
-    embedding: embeddings[i],
+    embedding: embeddings[i] ?? [],
     chunkIndex: c.chunkIndex,
     page: c.page ?? null,
     sectionTitle: c.sectionTitle ?? null,

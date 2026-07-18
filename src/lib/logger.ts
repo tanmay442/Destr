@@ -8,8 +8,13 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   debug: 3,
 };
 
-const configuredLevel: LogLevel =
-  (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
+const VALID_LEVELS: readonly LogLevel[] = ['error', 'warn', 'info', 'debug'];
+
+const configuredLevel: LogLevel = VALID_LEVELS.includes(
+  process.env.LOG_LEVEL as LogLevel,
+)
+  ? (process.env.LOG_LEVEL as LogLevel)
+  : 'info';
 
 const SECRET_PATTERNS = [
   /postgres:\/\/[^@\s]+@/gi,

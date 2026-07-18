@@ -39,12 +39,12 @@ const prepColors = (input?: string[]) => {
   const base = (input && input.length ? input : ['#ffffff', '#ffffff', '#ffffff']).slice(0, MAX_COLORS);
   const count = base.length;
   const arr: [number, number, number][] = [];
-  for (let i = 0; i < MAX_COLORS; i++) arr.push(hexToRGB(base[Math.min(i, base.length - 1)]));
+  for (let i = 0; i < MAX_COLORS; i++) arr.push(hexToRGB(base[Math.min(i, base.length - 1)] ?? '#ffffff'));
   const avg: [number, number, number] = [0, 0, 0];
   for (let i = 0; i < count; i++) {
-    avg[0] += arr[i][0];
-    avg[1] += arr[i][1];
-    avg[2] += arr[i][2];
+    avg[0] += arr[i]![0];
+    avg[1] += arr[i]![1];
+    avg[2] += arr[i]![2];
   }
   avg[0] /= count;
   avg[1] /= count;
@@ -361,8 +361,8 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
         if (factor > 1) factor = 1;
         const target = mouseTargetRef.current;
         const cur = uniforms.iMouse.value as number[];
-        cur[0] += (target[0] - cur[0]) * factor;
-        cur[1] += (target[1] - cur[1]) * factor;
+        cur[0]! += ((target[0] ?? 0) - cur[0]!) * factor;
+        cur[1]! += ((target[1] ?? 0) - cur[1]!) * factor;
       } else {
         lastTimeRef.current = t;
       }

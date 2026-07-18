@@ -56,9 +56,9 @@ describe('createUpstashRateLimiter', () => {
     let clock = 10_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock);
     redisMock.eval.mockImplementation(async (_lua: string, _keys: string[], args: number[]) => {
-      const now = args[0];
-      const windowMs = args[1];
-      const limit = args[2];
+      const now = args[0] ?? 0;
+      const windowMs = args[1] ?? 0;
+      const limit = args[2] ?? 0;
       for (const ts of Array.from(members.keys())) {
         if (ts < now - windowMs) members.delete(ts);
       }
