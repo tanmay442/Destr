@@ -6,40 +6,57 @@ function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
 
+const BATCH_SIZE = 100;
+
 async function main() {
   const blobStorage = Storage.createBlobStorage();
   const { db, schema, setDocumentStorageKey } = Db;
   const documents = schema.documents;
 
-  const rows = await db.query.documents.findMany({
+  let migrated = 0;
+  let skipped = 0;
+  let offset = 0;
+  let batch = await db.query.documents.findMany({
     where: and(isNull(documents.storageKey), isNotNull(documents.blob)),
+    limit: BATCH_SIZE,
+    offset,
   });
-
-  if (rows.length === 0) {
+  if (batch.length === 0) {
     console.log('backfill: no documents to migrate.');
     return;
   }
-  console.log(`backfill: ${rows.length} document(s) to migrate.`);
+  console.log(`backfill: migrating documents in batches of ${BATCH_SIZE}.`);
 
-  let migrated = 0;
-  let skipped = 0;
-  for (const row of rows) {
-    const buffer = row.blob;
-    if (!buffer || buffer.length === 0) {
-      console.log(`  skip doc ${row.id} (${row.fileName}): empty blob`);
-      skipped++;
-      continue;
+  while (batch.length > 0) {
+    for (const row of batch) {
+      const buffer = row.blob;
+      if (!buffer || buffer.length === 0) {
+        console.log(`  skip doc ${row.id} (${row.fileName}): empty blob`);
+        skipped++;
+        continue;
+      }
+      const key = `docs/${row.id}/${safeName(row.fileName)}`;
+      try {
+        await blobStorage.put(key, buffer, 'application/pdf');
+        try {
+          await setDocumentStorageKey(row.id, key);
+        } catch (err) {
+          await blobStorage.delete(key).catch(() => {});
+          throw err;
+        }
+        console.log(`  ok doc ${row.id} -> ${key} (${buffer.length} bytes)`);
+        migrated++;
+      } catch (err) {
+        console.error(`  FAIL doc ${row.id} (${row.fileName}):`, err);
+        throw err;
+      }
     }
-    const key = `docs/${row.id}/${safeName(row.fileName)}`;
-    try {
-      await blobStorage.put(key, buffer, 'application/pdf');
-      await setDocumentStorageKey(row.id, key);
-      console.log(`  ok doc ${row.id} -> ${key} (${buffer.length} bytes)`);
-      migrated++;
-    } catch (err) {
-      console.error(`  FAIL doc ${row.id} (${row.fileName}):`, err);
-      throw err;
-    }
+    offset += BATCH_SIZE;
+    batch = await db.query.documents.findMany({
+      where: and(isNull(documents.storageKey), isNotNull(documents.blob)),
+      limit: BATCH_SIZE,
+      offset,
+    });
   }
   console.log(`backfill done: migrated=${migrated} skipped=${skipped}`);
 }

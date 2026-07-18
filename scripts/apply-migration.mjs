@@ -11,29 +11,22 @@ import pg from 'pg';
 
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 
-// Postgres error codes / messages that mean "this DDL is already
-// applied" and should be skipped rather than fail the run.
+// Postgres error codes that mean "this DDL is already applied" and should
+// be skipped rather than fail the run. Message-substring matching is
+// intentionally avoided: a real failure whose text happens to contain a
+// duplicate keyword (e.g. a constraint violation during a backfill UPDATE)
+// must not be silently swallowed.
+const BENIGN_CODES = new Set([
+  '42710', // duplicate object
+  '42P07', // duplicate table
+  '42701', // duplicate column
+  '42P06', // duplicate schema
+  '42P10', // conflicting/invalid object definition
+]);
+
 function isBenignError(err) {
   if (!err) return false;
-  const code = err.code;
-  if (
-    code === '42710' || // duplicate object
-    code === '42P07' || // duplicate table
-    code === '42701' || // duplicate column
-    code === '42P06' || // duplicate schema
-    code === '42P10'    // duplicate object
-  ) {
-    return true;
-  }
-  const msg = (err.message ?? '').toLowerCase();
-  // Only known "already applied" duplicate-object messages are benign.
-  // A broad "does not exist" match is intentionally avoided: it can mask
-  // real errors such as a typo'd table/column/role or a missing extension.
-  return (
-    msg.includes('already exists') ||
-    msg.includes('duplicate') ||
-    msg.includes('multiple primary keys')
-  );
+  return BENIGN_CODES.has(err.code);
 }
 
 async function safeQuery(pool, sql, logger) {

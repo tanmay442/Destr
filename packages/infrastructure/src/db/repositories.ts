@@ -13,6 +13,7 @@ import {
   type Document,
 } from './schema';
 import type { TicketRow, UserRow, IngestStatus } from '@app/domain';
+import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '../../../../config/constants';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -796,13 +797,15 @@ export const userRepo = {
           ilike(users.name, `%${search.replace(/[%_]/g, '\\$&')}%`),
         )
       : undefined;
+    const limit = Math.min(Math.max(opts.limit, 1), MAX_LIST_LIMIT);
+    const offset = Math.max(opts.offset, 0);
     const rows = (await client
       .select()
       .from(users)
       .where(where)
       .orderBy(users.createdAt)
-      .limit(opts.limit)
-      .offset(opts.offset)) as UserRow[];
+      .limit(limit)
+      .offset(offset)) as UserRow[];
     const [totalRow] = await client
       .select({ count: sql<number>`count(*)::int` })
       .from(users)
@@ -813,10 +816,10 @@ export const userRepo = {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(users);
     return row?.count ?? 0;
   },
-  async syncClerkRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void> {
+  async syncClerkRole(clerkUserId: string, role: 'admin' | 'user', _client: Client = db): Promise<void> {
     const { clerkClient } = await import('../auth');
-    const client = await clerkClient();
-    await client.users.updateUserMetadata(clerkUserId, {
+    const clerk = await clerkClient();
+    await clerk.users.updateUserMetadata(clerkUserId, {
       publicMetadata: { role },
     });
   },
@@ -870,6 +873,8 @@ export const auditRepo = {
       ) c
     `);
     const total = (countResult as unknown as { rows?: Array<{ count: number }> }).rows?.[0]?.count ?? 0;
+    const limit = Math.min(Math.max(input.limit, 1), MAX_AUDIT_LIMIT);
+    const offset = Math.max(input.offset, 0);
     const actorResult = await client.execute<{
       id: number; kind: string; document_id: number | null; ticket_id: string | null;
       actor_id: string; action: string; at: Date; actor_name: string | null;
@@ -883,8 +888,8 @@ export const auditRepo = {
       ) c
       LEFT JOIN users u ON u.clerk_user_id = c.actor_id
       ORDER BY c.at DESC
-      LIMIT ${input.limit}
-      OFFSET ${input.offset}
+      LIMIT ${limit}
+      OFFSET ${offset}
     `);
     const rawRows = (actorResult as unknown as { rows?: Array<{ id: number; kind: string; document_id: number | null; ticket_id: string | null; actor_id: string; action: string; at: Date; actor_name: string | null }> }).rows ?? [];
     const events = rawRows.map((r) => ({
@@ -978,7 +983,7 @@ function createUserRepo(client: Client): UserRepository {
     touchLastSeen: (clerkUserId) => userRepo.touchLastSeen(clerkUserId, client),
     list: (opts) => userRepo.list(opts, client),
     countAll: () => userRepo.countAll(client),
-    syncClerkRole: (clerkUserId, role) => userRepo.syncClerkRole(clerkUserId, role),
+    syncClerkRole: (clerkUserId, role) => userRepo.syncClerkRole(clerkUserId, role, client),
   };
 }
 

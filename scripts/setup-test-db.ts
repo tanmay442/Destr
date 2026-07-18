@@ -32,34 +32,42 @@ export async function main() {
         ...(primary ? { parent_id: primary.id } : {}),
       }),
     });
-    if (!create.ok) {
-      throw new Error(`Failed to create branch: ${create.status} ${await create.text()}`);
+    if (create.status === 409) {
+      const retried = await fetchBranches(PROJECT_ID, TEST_BRANCH, API_KEY);
+      branch = retried.find((b) => b.name === TEST_BRANCH);
     }
-    const created = (await create.json()) as {
-      branch: { id: string; name: string; current_state: string };
-      operations?: Array<{ id: string; action: string; status: string }>;
-    };
-    branch = created.branch;
-    console.log(`[setup-test-db] Created branch ${branch.name} (${branch.id})`);
-    // 423 until branch ready; poll ≤60s
-    {
-      const deadline = Date.now() + 60_000;
-      let state = created.branch.current_state;
-      while (state !== 'ready' && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const poll = await fetch(api(`/branches/${created.branch.id}`), { headers });
-        if (poll.ok) {
-          const polled = (await poll.json()) as {
-            branch: { current_state: string };
-          };
-          state = polled.branch.current_state;
+    if (!branch) {
+      if (!create.ok) {
+        throw new Error(`Failed to create branch: ${create.status} ${await create.text()}`);
+      }
+      const created = (await create.json()) as {
+        branch: { id: string; name: string; current_state: string };
+        operations?: Array<{ id: string; action: string; status: string }>;
+      };
+      branch = created.branch;
+      console.log(`[setup-test-db] Created branch ${branch.name} (${branch.id})`);
+      // 423 until branch ready; poll ≤60s
+      {
+        const deadline = Date.now() + 60_000;
+        let state = created.branch.current_state;
+        while (state !== 'ready' && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const poll = await fetch(api(`/branches/${created.branch.id}`), { headers });
+          if (poll.ok) {
+            const polled = (await poll.json()) as {
+              branch: { current_state: string };
+            };
+            state = polled.branch.current_state;
+          }
+        }
+        if (state !== 'ready') {
+          throw new Error(
+            `Branch ${created.branch.id} did not become ready in time (state=${state}).`,
+          );
         }
       }
-      if (state !== 'ready') {
-        throw new Error(
-          `Branch ${created.branch.id} did not become ready in time (state=${state}).`,
-        );
-      }
+    } else {
+      console.log(`[setup-test-db] Reusing branch created by concurrent job ${branch.name} (${branch.id})`);
     }
   } else {
     console.log(`[setup-test-db] Reusing existing branch ${branch.name} (${branch.id})`);

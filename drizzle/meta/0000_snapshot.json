@@ -256,7 +256,7 @@
       "checkConstraints": {
         "ticket_audit_action_check": {
           "name": "ticket_audit_action_check",
-          "value": "\"ticket_audit\".\"action\" IN ('create','assign','status_change','note','impersonation')"
+          "value": "\"ticket_audit\".\"action\" IN ('create','assign','status_change','note','impersonation','role_change')"
         }
       },
       "isRLSEnabled": false

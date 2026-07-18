@@ -30,18 +30,32 @@
       "tag": "0003_deep_crystal",
       "breakpoints": true
     },
-    {
+      {
       "idx": 4,
       "version": "7",
       "when": 1784106413795,
       "tag": "0004_first_dark_phoenix",
       "breakpoints": true
     },
-      {
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784106413796,
+      "tag": "0005_nostalgic_zuras",
+      "breakpoints": true
+    },
+    {
       "idx": 6,
       "version": "7",
       "when": 1784115975982,
       "tag": "0006_wary_lord_haw",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784115975983,
+      "tag": "0007_audit_dead_letter",
       "breakpoints": true
     }
   ]

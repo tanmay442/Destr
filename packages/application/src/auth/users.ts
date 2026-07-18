@@ -36,11 +36,13 @@ export async function setUserRole(
     }
     const target = await deps.users.findByClerkId(input.clerkUserId);
     if (!target) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
+    try {
+      await deps.users.syncClerkRole(input.clerkUserId, input.role);
+    } catch (e) {
+      return err(new ExternalServiceError('Failed to sync Clerk role', e));
+    }
     const row = await deps.users.setRole(input.clerkUserId, input.role);
     if (!row) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
-    void deps.users.syncClerkRole(input.clerkUserId, input.role).catch((err) => {
-      console.error(`Failed to sync Clerk role for ${input.clerkUserId}:`, err);
-    });
     const event = { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role };
     void safeAudit(
       () => logUserRoleChange(event, { audit: deps.audit }).then((r) => {

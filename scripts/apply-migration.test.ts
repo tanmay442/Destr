@@ -70,15 +70,6 @@ describe('applyMigrations', () => {
     ).rejects.toThrow(/connection refused/);
   });
 
-  it('skips statements whose message contains "already exists"', async () => {
-    const { query, factory } = makePoolFactory();
-    query.mockRejectedValueOnce(new Error('relation "x" already exists'));
-    query.mockResolvedValue({ rows: [] });
-    await expect(
-      applyMigrations({ dir: tmp, poolFactory: factory, logger: silent }),
-    ).resolves.toBeUndefined();
-  });
-
   it('ends the pool even when a statement throws', async () => {
     const { query, end, factory } = makePoolFactory();
     query.mockRejectedValue(new Error('boom'));
@@ -96,7 +87,7 @@ describe('isBenignError', () => {
     ['42701', { code: '42701', message: 'dup col' }, true],
     ['42P06', { code: '42P06', message: 'dup schema' }, true],
     ['42P10', { code: '42P10', message: 'dup obj' }, true],
-    ['already exists msg', new Error('foo already exists'), true],
+    ['already exists msg', new Error('foo already exists'), false],
     ['does not exist msg', new Error('role does not exist'), false],
     ['unknown error', new Error('connection refused'), false],
     ['null', null, false],
