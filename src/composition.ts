@@ -58,10 +58,48 @@ if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER 
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
 }
 
-// Async ingest queue. QStash-backed when QSTASH_TOKEN is set; a no-op
-// (sync mode) otherwise. The upload use-cases enqueue large PDFs here
-// and the /api/admin/ingest-worker route drains them.
-const ingestQueue: IngestQueue = Queue.createIngestQueue();
+const ingestQueue: IngestQueue = Queue.createIngestQueue({
+  ingest: async (documentId: number) => {
+    const result = await ingestQueuedDocumentStandalone(documentId);
+    if (!result.ok) throw new Error(`Inline ingest failed for document ${documentId}: ${result.error.message}`);
+  },
+});
+
+async function ingestQueuedDocumentStandalone(
+  documentId: number,
+): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
+  const doc = await documentRepo.findById(documentId);
+  if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
+  if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
+  if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
+  if (!doc.storageKey) return err(new NotFoundError(`Document ${documentId} has no stored blob`));
+  let buffer: Buffer;
+  try {
+    buffer = await blobStorage.get(doc.storageKey);
+  } catch (e) {
+    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    return err(new ExternalServiceError('Blob read failed', e));
+  }
+  const prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, ingestDeps);
+  if (!prepared.ok) {
+    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    return prepared;
+  }
+  try {
+    const outcome = await Db.transactionRunner.run(async (tx) => {
+      const claimed = await tx.documents.claimIngest(documentId);
+      if (!claimed) return { claimed: false } as const;
+      await tx.chunks.insertMany(prepared.value.rows);
+      await tx.documents.updateIngestStatus(documentId, 'done');
+      return { claimed: true, chunks: prepared.value.chunks } as const;
+    });
+    if (!outcome.claimed) return ok({ status: 'busy', chunks: 0 });
+    return ok({ status: 'done', chunks: outcome.chunks });
+  } catch (e) {
+    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    return err(new ExternalServiceError('Chunk insert failed', e));
+  }
+}
 
 const ingestDeps: IngestDeps = {
   documents: documentRepo, chunks: chunkRepo,
@@ -229,46 +267,7 @@ function createComposition() {
      *  NOTE: a crash after a successful claim leaves the doc stuck in
      *  `ingesting`; there is no auto-recovery scan — a future job should
      *  periodically re-queue (or time-out) stuck `ingesting` rows. */
-    ingestQueuedDocument: async (documentId: number): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> => {
-      const doc = await documentRepo.findById(documentId);
-      if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
-      if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
-      if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
-      if (!doc.storageKey) {
-        return err(new NotFoundError(`Document ${documentId} has no stored blob`));
-      }
-      let buffer: Buffer;
-      try {
-        buffer = await blobStorage.get(doc.storageKey);
-      } catch (e) {
-        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
-        return err(new ExternalServiceError('Blob read failed', e));
-      }
-      const prepared = await prepareIngest(
-        { documentId, fileName: doc.fileName, buffer },
-        ingestDeps,
-      );
-      if (!prepared.ok) {
-        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
-        return prepared;
-      }
-      try {
-        const outcome = await Db.transactionRunner.run(async (tx) => {
-          // Atomic conditional claim: only the caller that flips
-          // queued→ingesting wins; a concurrent/replayed worker gets false.
-          const claimed = await tx.documents.claimIngest(documentId);
-          if (!claimed) return { claimed: false } as const;
-          await tx.chunks.insertMany(prepared.value.rows);
-          await tx.documents.updateIngestStatus(documentId, 'done');
-          return { claimed: true, chunks: prepared.value.chunks } as const;
-        });
-        if (!outcome.claimed) return ok({ status: 'busy', chunks: 0 });
-        return ok({ status: 'done', chunks: outcome.chunks });
-      } catch (e) {
-        await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
-        return err(new ExternalServiceError('Chunk insert failed', e));
-      }
-    },
+    ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
@@ -300,6 +299,15 @@ let _composition: Composition | null = null;
 export function getComposition(): Composition {
   if (!_composition) _composition = createComposition();
   return _composition;
+}
+
+let _vectorCheckStarted = false;
+export function startVectorDimensionCheck(): void {
+  if (_vectorCheckStarted) return;
+  _vectorCheckStarted = true;
+  Db.validateVectorDimension().catch((e: unknown) => {
+    logger.error('Embedding dimension validation failed at startup', { error: e });
+  });
 }
 
 export async function requireAdminRoute(): Promise<

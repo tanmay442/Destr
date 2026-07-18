@@ -47,14 +47,34 @@ export async function insertDocument(
   input: { fileName: string; fileHash: string; uploadedBy: string },
   client: Client = db,
 ): Promise<Document> {
-  const [row] = await client
-    .insert(documents)
-    .values(input)
-    .onConflictDoUpdate({
-      target: documents.fileName,
-      set: { fileHash: input.fileHash, uploadedBy: input.uploadedBy },
-    })
-    .returning();
+  const existing = await client.query.documents.findFirst({
+    where: eq(documents.fileName, input.fileName),
+  });
+  if (existing && existing.deletedAt == null) {
+    const [row] = await client
+      .update(documents)
+      .set({ fileHash: input.fileHash, uploadedBy: input.uploadedBy })
+      .where(eq(documents.id, existing.id))
+      .returning();
+    if (!row) throw new Error('Failed to insert document');
+    return row as Document;
+  }
+  if (existing && existing.deletedAt != null) {
+    await client.delete(chunks).where(eq(chunks.documentId, existing.id));
+    const [row] = await client
+      .update(documents)
+      .set({
+        fileHash: input.fileHash,
+        uploadedBy: input.uploadedBy,
+        deletedAt: null,
+        ingestStatus: 'done',
+      })
+      .where(eq(documents.id, existing.id))
+      .returning();
+    if (!row) throw new Error('Failed to insert document');
+    return row as Document;
+  }
+  const [row] = await client.insert(documents).values(input).returning();
   if (!row) throw new Error('Failed to insert document');
   return row as Document;
 }
@@ -120,28 +140,33 @@ export async function searchChunksByVector(
     throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${embedding.length}`);
   }
   const vectorLiteral = `[${embedding.join(',')}]`;
+  const candidatePool = Math.max(opts.limit * 10, 50);
   const result = await client.execute(sql`
-    WITH matches AS (
-      SELECT
-        c.id AS id,
-        c.document_id AS "documentId",
-        d.file_name AS "fileName",
-        c.page AS page,
-        c.section_title AS "sectionTitle",
-        c.source AS source,
-        c.content AS content,
-        c.parent_chunk_id AS "parentChunkId",
-        c.chunk_index AS "chunkIndex",
-        1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
-      FROM chunks c
-      JOIN documents d ON d.id = c.document_id
-      WHERE d.deleted_at IS NULL
-        AND c.kind <> 'parent'
-      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
+    WITH candidates AS (
+      SELECT id
+      FROM chunks
+      WHERE kind <> 'parent'
+      ORDER BY embedding <=> ${vectorLiteral}::vector
+      LIMIT ${candidatePool}
     )
-    SELECT id, "documentId", "fileName", page, "sectionTitle", source, content, "parentChunkId", "chunkIndex", similarity
-    FROM matches
-    WHERE similarity > ${opts.threshold}
+    SELECT
+      c.id AS id,
+      c.document_id AS "documentId",
+      d.file_name AS "fileName",
+      c.page AS page,
+      c.section_title AS "sectionTitle",
+      c.source AS source,
+      c.content AS content,
+      c.parent_chunk_id AS "parentChunkId",
+      c.chunk_index AS "chunkIndex",
+      1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
+    FROM chunks c
+    JOIN documents d ON d.id = c.document_id
+    JOIN candidates cand ON cand.id = c.id
+    WHERE d.deleted_at IS NULL
+      AND c.kind <> 'parent'
+      AND (1 - (c.embedding <=> ${vectorLiteral}::vector)) > ${opts.threshold}
+      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     ORDER BY similarity DESC
     LIMIT ${opts.limit}
   `);

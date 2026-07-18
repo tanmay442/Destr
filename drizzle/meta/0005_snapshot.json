@@ -329,6 +329,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "documents_file_name_unique": {
+          "name": "documents_file_name_unique",
+          "columns": [
+            {
+              "expression": "file_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {},
+          "where": "(deleted_at IS NULL)"
         }
       },
       "foreignKeys": {},

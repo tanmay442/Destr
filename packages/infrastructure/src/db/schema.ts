@@ -1,7 +1,7 @@
 // `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
   pgTable, serial, text, timestamp, integer,
-  index, check, foreignKey,
+  index, check, foreignKey, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { vector, tsvector } from './schema-vector';
@@ -10,7 +10,7 @@ import type { IngestStatus } from '@app/domain';
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
-  fileName: text('file_name').notNull().unique(),
+  fileName: text('file_name').notNull(),
   fileHash: text('file_hash').notNull(),
   uploadedBy: text('uploaded_by').notNull(),
   uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
@@ -19,6 +19,9 @@ export const documents = pgTable('documents', {
   ingestStatus: text('ingest_status').notNull().default('done').$type<IngestStatus>(),
   deletedAt: timestamp('deleted_at'),
 }, (table) => [
+  uniqueIndex('documents_file_name_unique')
+    .on(table.fileName)
+    .where(sql`${table.deletedAt} IS NULL`),
   index('documents_deleted_at_idx').on(table.deletedAt),
   index('documents_uploaded_at_idx').on(table.uploadedAt.desc()),
 ]);
