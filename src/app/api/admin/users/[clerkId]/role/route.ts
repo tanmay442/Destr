@@ -10,7 +10,7 @@ export async function POST(
   req: Request,
   context: { params: Promise<{ clerkId: string }> },
 ) {
-  const auth = await requireAdminRoute();
+  const auth = await requireAdminRoute(req);
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
   const { clerkId } = await context.params;

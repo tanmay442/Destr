@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, AGENT_STEP_BUDGET, AGENTIC_ENABLED, ANSWER_CACHE_ENABLED, ANSWER_CACHE_TTL_SEC, TRACE_ENABLED } from '../../../../config/constants';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT,   AGENT_STEP_BUDGET, AGENTIC_ENABLED, ANSWER_CACHE_ENABLED, ANSWER_CACHE_TTL_SEC, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
 
 function emitCitations(
   chunks: RetrievedChunk[],
@@ -159,7 +159,10 @@ async function streamChatResponse(req: Request): Promise<Response> {
   if (!contentType?.includes('application/json')) {
     return new Response('Content-Type must be application/json', { status: 415 });
   }
-  // Body size enforced at framework level (next.config.ts), not a spoofable header.
+  const contentLength = Number(req.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength > CHAT_MAX_BODY_BYTES) {
+    return new Response('Payload too large', { status: 413 });
+  }
   const comp = getComposition();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {

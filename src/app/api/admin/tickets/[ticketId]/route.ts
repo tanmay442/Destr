@@ -12,7 +12,7 @@ export async function PATCH(
   req: Request,
   context: { params: Promise<{ ticketId: string }> },
 ) {
-  const auth = await requireAdminRoute();
+  const auth = await requireAdminRoute(req);
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
   const { ticketId } = await context.params;

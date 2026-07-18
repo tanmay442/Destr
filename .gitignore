@@ -45,6 +45,9 @@ next-env.d.ts
 # Seed PDFs dropped by `pnpm configure` or uploaded via the admin console.
 /documents/
 
+# Local blob storage (PDFs) written by default filesystem provider.
+/.blobs/
+
 # Workspace package build outputs
 /dist/
 /packages/*/dist/

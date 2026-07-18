@@ -2,10 +2,10 @@ import { requireAdminRoute, respond } from '@/composition';
 import { ValidationError } from '@app/domain';
 
 export async function POST(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const auth = await requireAdminRoute();
+  const auth = await requireAdminRoute(req);
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
   const { id } = await context.params;

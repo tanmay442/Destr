@@ -131,13 +131,14 @@ async function resolveRole(
   userId: string,
   sessionClaims: Record<string, unknown> | null | undefined,
   email?: string,
+  emailVerified?: boolean,
 ): Promise<'admin' | 'user'> {
   const claims = sessionClaims as { metadata?: { role?: unknown } } | undefined;
   const fromClaims = claims?.metadata?.role;
   if (fromClaims === 'admin' || fromClaims === 'user') return fromClaims;
   const local = await findUserByClerkId(userId);
   if (local?.role === 'admin') return 'admin';
-  if (email && isAdminEmail(email)) return 'admin';
+  if (email && emailVerified && isAdminEmail(email)) return 'admin';
   return 'user';
 }
 
@@ -147,9 +148,10 @@ function createMiddleware(): AuthAdapter['middleware'] {
     if (isProtectedRoute(req)) {
       const { userId, sessionClaims } = await auth.protect();
       if (isAdminRoute(req)) {
-        const claims = sessionClaims as { email?: unknown } | undefined;
+        const claims = sessionClaims as { email?: unknown; email_verified?: unknown } | undefined;
         const email = typeof claims?.email === 'string' ? claims.email : undefined;
-        const role = await resolveRole(userId, sessionClaims, email);
+        const verified = claims?.email_verified === true;
+        const role = await resolveRole(userId, sessionClaims, email, verified);
         if (role !== 'admin') {
           if (req.nextUrl.pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

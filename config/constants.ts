@@ -5,6 +5,7 @@
 // embedding batch retry logic, and composition root wiring.
 
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
+export const CHAT_MAX_BODY_BYTES = 1_000_000; // 1 MB hard cap on chat POST body
 export const CCH_ENABLED = process.env.CCH_ENABLED !== 'false'; // default on
 export const CCH_MODEL = process.env.CCH_MODEL ?? ''; // optional cheap model override
 export const CCH_CONTEXT_CHARS = 4000; // chars of doc text fed to the summarizer

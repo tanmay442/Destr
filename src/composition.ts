@@ -310,10 +310,30 @@ export function startVectorDimensionCheck(): void {
   });
 }
 
-export async function requireAdminRoute(): Promise<
+export function assertSameOrigin(req: Request): Response | null {
+  const origin = req.headers.get('origin');
+  if (!origin) return null;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return new Response('Forbidden', { status: 403 });
+  }
+  const site = req.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin') return new Response('Forbidden', { status: 403 });
+  const reqHost = req.headers.get('host');
+  if (reqHost && originHost !== reqHost) return new Response('Forbidden', { status: 403 });
+  return null;
+}
+
+export async function requireAdminRoute(req?: Request): Promise<
   | { ok: true; session: Awaited<ReturnType<typeof requireAdmin>>; comp: Composition }
   | { ok: false; response: Response }
 > {
+  if (req) {
+    const csrf = assertSameOrigin(req);
+    if (csrf) return { ok: false, response: csrf };
+  }
   try {
     const session = await requireAdmin();
     return { ok: true, session, comp: getComposition() };
