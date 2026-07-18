@@ -29,8 +29,8 @@ needed for local development.
 ```bash
 docker compose --profile ollama up -d   # Postgres + Ollama
 # Pull the models (first time only):
-docker compose exec ollama ollama pull nomic-embed-text
-docker compose exec ollama ollama pull gemma2:2b
+docker compose exec ollama ollama pull embeddinggemma:latest
+docker compose exec ollama ollama pull gemma4:e2b
 pnpm install
 pnpm db:push                            # Create tables in local DB
 pnpm dev
