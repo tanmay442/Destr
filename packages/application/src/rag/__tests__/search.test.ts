@@ -24,6 +24,7 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
       searchByLexical: vi.fn().mockResolvedValue([]),
       getByIds: vi.fn().mockResolvedValue([]),
       getByDocAndRange: vi.fn().mockResolvedValue([]),
+      getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
       countForDocument: vi.fn(),
@@ -47,6 +48,7 @@ describe('searchChunks', () => {
         searchByLexical: vi.fn().mockResolvedValue([]),
         getByIds: vi.fn(),
         getByDocAndRange: vi.fn(),
+        getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
         countForDocuments: vi.fn(),
         countForAll: vi.fn(),
         countForDocument: vi.fn(),
@@ -104,6 +106,7 @@ describe('searchChunks parent-child resolution', () => {
         searchByLexical: vi.fn().mockResolvedValue([]),
         getByIds: vi.fn().mockResolvedValue(parents),
         getByDocAndRange: vi.fn().mockResolvedValue([]),
+        getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
         countForDocuments: vi.fn(),
         countForAll: vi.fn(),
         countForDocument: vi.fn(),
@@ -196,6 +199,57 @@ describe('searchChunks parent-child resolution', () => {
     ]);
   });
 
+  it('globally sorts resolved parents and flat hits by similarity desc', async () => {
+    const deps = parentChildDeps(
+      [
+        {
+          id: 10,
+          documentId: 1,
+          fileName: 'd.pdf',
+          page: 1,
+          sectionTitle: 'Child Sec',
+          source: 'Page 1 — Child Sec',
+          content: 'child text',
+          similarity: 0.4,
+          parentChunkId: 5,
+          chunkIndex: 3,
+        },
+        {
+          id: 7,
+          documentId: 1,
+          fileName: 'd.pdf',
+          page: 2,
+          sectionTitle: null,
+          source: null,
+          content: 'flat high',
+          similarity: 0.95,
+          parentChunkId: null,
+          chunkIndex: 9,
+        },
+      ],
+      [
+        {
+          id: 5,
+          documentId: 1,
+          fileName: 'd.pdf',
+          page: 1,
+          sectionTitle: 'Parent Sec',
+          source: 'Page 1 — Parent Sec',
+          content: 'PARENT BLOCK CONTENT',
+          similarity: 0,
+          parentChunkId: null,
+          chunkIndex: 0,
+        },
+      ],
+    );
+    const result = await searchChunks('q', {}, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([7, 5]);
+    expect(result.value[0]!.similarity).toBe(0.95);
+    expect(result.value[1]!.similarity).toBe(0.4);
+  });
+
   it('pads the hit with neighbouring chunks in window mode', async () => {
     const deps = parentChildDeps(
       [
@@ -214,11 +268,18 @@ describe('searchChunks parent-child resolution', () => {
       ],
       [],
     );
-    (deps.chunks.getByDocAndRange as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: 1, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'before', similarity: 0, parentChunkId: null, chunkIndex: 4 },
-      { id: 3, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'middle', similarity: 0, parentChunkId: null, chunkIndex: 5 },
-      { id: 5, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'after', similarity: 0, parentChunkId: null, chunkIndex: 6 },
-    ]);
+    (deps.chunks.getByDocAndRanges as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([
+        [
+          '1:3:7',
+          [
+            { id: 1, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'before', similarity: 0, parentChunkId: null, chunkIndex: 4 },
+            { id: 3, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'middle', similarity: 0, parentChunkId: null, chunkIndex: 5 },
+            { id: 5, documentId: 1, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, content: 'after', similarity: 0, parentChunkId: null, chunkIndex: 6 },
+          ],
+        ],
+      ]),
+    );
     const result = await searchChunks('q', { mode: 'window' }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -251,8 +312,9 @@ describe('searchChunks reranking', () => {
         searchByVector: vi.fn().mockResolvedValue(rows),
         searchByLexical: vi.fn().mockResolvedValue([]),
         getByIds: vi.fn().mockResolvedValue([]),
-        getByDocAndRange: vi.fn().mockResolvedValue([]),
-        countForDocuments: vi.fn(),
+      getByDocAndRange: vi.fn().mockResolvedValue([]),
+      getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
+      countForDocuments: vi.fn(),
         countForAll: vi.fn(),
         countForDocument: vi.fn(),
         recountAll: vi.fn(),
@@ -313,8 +375,9 @@ describe('searchChunks reranking', () => {
         searchByVector,
         searchByLexical: vi.fn().mockResolvedValue([]),
         getByIds: vi.fn().mockResolvedValue([]),
-        getByDocAndRange: vi.fn().mockResolvedValue([]),
-        countForDocuments: vi.fn(),
+      getByDocAndRange: vi.fn().mockResolvedValue([]),
+      getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
+      countForDocuments: vi.fn(),
         countForAll: vi.fn(),
         countForDocument: vi.fn(),
         recountAll: vi.fn(),
@@ -383,8 +446,9 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
         searchByVector: vi.fn().mockResolvedValue(vectorRows),
         searchByLexical: vi.fn().mockResolvedValue(lexicalRows),
         getByIds: vi.fn().mockResolvedValue([]),
-        getByDocAndRange: vi.fn().mockResolvedValue([]),
-        countForDocuments: vi.fn(),
+      getByDocAndRange: vi.fn().mockResolvedValue([]),
+      getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
+      countForDocuments: vi.fn(),
         countForAll: vi.fn(),
         countForDocument: vi.fn(),
         recountAll: vi.fn(),

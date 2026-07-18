@@ -33,6 +33,7 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
       searchByLexical: vi.fn().mockResolvedValue([]),
       getByIds: vi.fn().mockResolvedValue([]),
       getByDocAndRange: vi.fn().mockResolvedValue([]),
+      getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
       countForDocuments: vi.fn(),
       countForAll: vi.fn(),
       countForDocument: vi.fn(),

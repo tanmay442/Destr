@@ -495,6 +495,93 @@ export async function getChunksByDocAndRange(
   }));
 }
 
+export async function getChunksByDocAndRanges(
+  ranges: Array<{ documentId: number; start: number; end: number }>,
+  client: Client = db,
+): Promise<Map<string, Array<{
+  id: number;
+  documentId: number;
+  fileName: string | null;
+  page: number | null;
+  sectionTitle: string | null;
+  source: string | null;
+  content: string;
+  similarity: number;
+  parentChunkId: number | null;
+  chunkIndex: number;
+}>>> {
+  const map = new Map<string, Array<{
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    similarity: number;
+    parentChunkId: number | null;
+    chunkIndex: number;
+  }>>();
+  if (ranges.length === 0) return map;
+  const conditions = ranges.map((r) =>
+    and(eq(chunks.documentId, r.documentId), sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
+  );
+  const result = await client.execute(sql`
+    SELECT
+      c.id AS id,
+      c.document_id AS "documentId",
+      d.file_name AS "fileName",
+      c.page AS page,
+      c.section_title AS "sectionTitle",
+      c.source AS source,
+      c.content AS content,
+      c.parent_chunk_id AS "parentChunkId",
+      c.chunk_index AS "chunkIndex",
+      0 AS similarity
+    FROM chunks c
+    JOIN documents d ON d.id = c.document_id
+    WHERE d.deleted_at IS NULL
+      AND (${or(...conditions)})
+    ORDER BY c.document_id, c.chunk_index
+  `);
+  type RawRow = {
+    id: number;
+    documentId: number;
+    fileName: string | null;
+    page: number | null;
+    sectionTitle: string | null;
+    source: string | null;
+    content: string;
+    parentChunkId: number | null;
+    chunkIndex: number;
+    similarity: number;
+  };
+  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
+  const parsed = rows.map((r) => ({
+    id: Number(r.id),
+    documentId: Number(r.documentId),
+    fileName: r.fileName ?? null,
+    page: r.page != null ? Number(r.page) : null,
+    sectionTitle: r.sectionTitle ?? null,
+    source: r.source ?? null,
+    content: r.content,
+    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
+    chunkIndex: Number(r.chunkIndex),
+    similarity: Number(r.similarity),
+  }));
+  for (const r of parsed) {
+    for (const range of ranges) {
+      if (r.documentId === range.documentId && r.chunkIndex >= range.start && r.chunkIndex <= range.end) {
+        const key = `${range.documentId}:${range.start}:${range.end}`;
+        const arr = map.get(key);
+        if (arr) arr.push(r);
+        else map.set(key, [r]);
+      }
+    }
+  }
+  return map;
+}
+
 export async function deleteChunksByDocumentId(documentId: number, client: Client = db): Promise<void> {
   await client.delete(chunks).where(eq(chunks.documentId, documentId));
 }
@@ -828,6 +915,7 @@ export function createChunkRepo(client: Client): ChunkRepository {
     searchByLexical: (query, opts) => searchChunksByLexical(query, opts, client),
     getByIds: (ids) => getChunksByIds(ids, client),
     getByDocAndRange: (documentId, start, end) => getChunksByDocAndRange(documentId, start, end, client),
+    getByDocAndRanges: (ranges) => getChunksByDocAndRanges(ranges, client),
     insertMany: (rows) => insertChunks(rows, client),
     deleteByDocumentId: (documentId) => deleteChunksByDocumentId(documentId, client),
     countForDocuments: (ids) => countChunksForDocuments(ids, client),

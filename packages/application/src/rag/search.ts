@@ -104,20 +104,23 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
     })
     .sort((a, b) => b.similarity - a.similarity);
 
-  return [...resolved, ...flatHits.map(toRetrievedChunk)];
+  return [...resolved, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
 }
 
 /**
  * Pad each hit with its `±N` neighbouring chunks (Session 5, `window` mode).
  * Keeps the hit's id/citation but concatenates neighbour content for context.
+ * Neighbours for every hit are fetched in a single batched round-trip.
  */
 async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
   const radius = PARENT_CHILD_WINDOW;
-  const out: RetrievedChunk[] = [];
-  for (const h of hits) {
-    const neighbours = await deps.chunks.getByDocAndRange(h.documentId, h.chunkIndex - radius, h.chunkIndex + radius);
+  const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - radius, end: h.chunkIndex + radius }));
+  const ranged = await deps.chunks.getByDocAndRanges(ranges);
+  return hits.map((h) => {
+    const key = `${h.documentId}:${h.chunkIndex - radius}:${h.chunkIndex + radius}`;
+    const neighbours = ranged.get(key) ?? [];
     const ordered = [...neighbours].sort((a, b) => a.chunkIndex - b.chunkIndex);
-    out.push({
+    return {
       id: h.id,
       documentId: h.documentId,
       fileName: h.fileName,
@@ -126,9 +129,8 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
       source: h.source,
       content: ordered.map((n) => n.content).join('\n\n'),
       similarity: h.similarity,
-    });
-  }
-  return out;
+    };
+  });
 }
 
 /**

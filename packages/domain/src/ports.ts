@@ -147,6 +147,12 @@ export interface ChunkRepository {
     start: number,
     end: number,
   ): Promise<RetrievedChunkRow[]>;
+  /** Batched variant of `getByDocAndRange` for window mode: one round-trip
+   *  fetches neighbours for every `(documentId, start, end)` triple. Returns a
+   *  map keyed by `documentId:start:end`. */
+  getByDocAndRanges(
+    ranges: Array<{ documentId: number; start: number; end: number }>,
+  ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(
     rows: Array<{
       documentId: number;

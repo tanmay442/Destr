@@ -9,6 +9,7 @@ export function createUpstashQueryStats(): QueryStats {
   }
   const redis = new Redis({ url, token });
   const ZSET_KEY = 'query:global';
+  const userZset = (userId: string) => `query:user:${userId}`;
 
   return {
     async record(userId, query) {
@@ -16,6 +17,7 @@ export function createUpstashQueryStats(): QueryStats {
       if (!text) return;
       try {
         await redis.zincrby(ZSET_KEY, 1, text);
+        await redis.zincrby(userZset(userId), 1, text);
       } catch {
         // Best-effort analytics; never fail the request path.
       }

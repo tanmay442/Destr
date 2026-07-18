@@ -36,6 +36,7 @@ async function buildDbDeps() {
     getByIds: (ids: number[]) => Db.getChunksByIds(ids),
     getByDocAndRange: (documentId: number, start: number, end: number) =>
       Db.getChunksByDocAndRange(documentId, start, end),
+    getByDocAndRanges: (ranges: Array<{ documentId: number; start: number; end: number }>) => Db.getChunksByDocAndRanges(ranges),
     countForDocuments: (ids: number[]) => Db.countChunksForDocuments(ids),
     countForAll: () => Db.countChunksForAll(),
     countForDocument: (id: number) => Db.countChunksForDocument(id),
