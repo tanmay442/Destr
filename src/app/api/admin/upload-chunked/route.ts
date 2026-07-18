@@ -1,6 +1,6 @@
 import { requireAdminRoute, respond } from '@/composition';
 import { ValidationError } from '@app/domain';
-import { MD_CHUNK_DELIMITER } from '../../../../../config/constants';
+import { MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '../../../../../config/constants';
 
 export const runtime = 'nodejs';
 
@@ -22,6 +22,10 @@ export async function POST(req: Request) {
   if (!auth.ok) return auth.response;
   const { session, comp } = auth;
 
+  if (req.headers.get('content-length') && Number(req.headers.get('content-length')) > UPLOAD_CHUNKED_MAX_MD_BYTES + UPLOAD_CHUNKED_MAX_PDF_BYTES) {
+    return respond(new ValidationError('Upload exceeds maximum size'));
+  }
+
   let form: FormData;
   try {
     form = await req.formData();
@@ -32,6 +36,9 @@ export async function POST(req: Request) {
   const mdFile = form.get('md');
   if (!(mdFile instanceof File) || mdFile.size === 0) {
     return respond(new ValidationError('Missing required "md" file field'));
+  }
+  if (mdFile.size > UPLOAD_CHUNKED_MAX_MD_BYTES) {
+    return respond(new ValidationError(`Markdown exceeds ${UPLOAD_CHUNKED_MAX_MD_BYTES} bytes`));
   }
 
   const mdText = await mdFile.text();
@@ -45,6 +52,9 @@ export async function POST(req: Request) {
   let pdfBuffer: Buffer | undefined;
   let pdfFileName: string | undefined;
   if (pdfFile instanceof File && pdfFile.size > 0) {
+    if (pdfFile.size > UPLOAD_CHUNKED_MAX_PDF_BYTES) {
+      return respond(new ValidationError(`PDF exceeds ${UPLOAD_CHUNKED_MAX_PDF_BYTES} bytes`));
+    }
     const arr = new Uint8Array(await pdfFile.arrayBuffer());
     pdfBuffer = Buffer.from(arr);
     pdfFileName = (pdfFile.name || `${name}.pdf`).replace(/[\\/]/g, '_').slice(0, 200);

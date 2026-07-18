@@ -72,3 +72,22 @@ export class ExternalServiceError extends DomainError {
     super(message, { cause });
   }
 }
+
+/** Raised when a document (e.g. PDF) cannot be parsed: distinguishes a bad
+ *  source file (encrypted/malformed) from a transient I/O or external error. */
+export class ParseError extends DomainError {
+  readonly code = 'parse_error';
+  readonly status = 422;
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+  }
+}
+
+/** Raised when a blob exceeds the configured size guard (e.g. on get()). */
+export class PayloadTooLargeError extends DomainError {
+  readonly code = 'payload_too_large';
+  readonly status = 413;
+  constructor(message: string, readonly size?: number, readonly limit?: number) {
+    super(message);
+  }
+}

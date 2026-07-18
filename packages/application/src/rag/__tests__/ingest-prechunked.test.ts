@@ -93,11 +93,11 @@ describe('ingestPrechunked', () => {
       deps,
     );
     expect(deps.blobStorage!.put).toHaveBeenCalledWith(
-      expect.stringContaining('docs/1/doc.pdf'),
+      expect.stringContaining('doc.pdf'),
       pdf,
       'application/pdf',
     );
-    expect(deps.documents.setStorageKey).toHaveBeenCalledWith(1, expect.stringContaining('docs/1/doc.pdf'));
+    expect(deps.documents.setStorageKey).toHaveBeenCalledWith(1, expect.stringContaining('doc.pdf'));
 
     const depsNoPdf = makeDeps();
     await ingestPrechunked({ fileName: 'doc2.md', chunks: CHUNKS, uploadedBy: 'user' }, depsNoPdf);

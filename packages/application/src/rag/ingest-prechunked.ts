@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { err, ok, type Result, ValidationError, ExternalServiceError } from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
@@ -104,18 +105,18 @@ export async function ingestPrechunked(
     contentHash: null,
   }));
 
-  const outcome = deps.runner
-    ? await deps.runner.run((ctx) =>
-        writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy }, rows),
-      )
-    : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy }, rows);
-
-  // Persist the companion PDF only after the row commits, then link it.
-  if (pdfBuffer && deps.blobStorage && outcome.documentId) {
-    const key = `docs/${outcome.documentId}/${safeBlobName(pdfFileName ?? fileName)}`;
-    await deps.blobStorage.put(key, pdfBuffer, 'application/pdf');
-    await deps.documents.setStorageKey(outcome.documentId, key);
+  // Upload blob before the tx (matching documents.ts) so a rolled-back tx never
+  // orphans a blob a committed row points at; link key inside the tx atomically.
+  const blobKey = pdfBuffer && deps.blobStorage
+    ? `docs/${randomUUID()}/${safeBlobName(pdfFileName ?? fileName)}`
+    : undefined;
+  if (pdfBuffer && deps.blobStorage && blobKey) {
+    await deps.blobStorage.put(blobKey, pdfBuffer, 'application/pdf');
   }
+
+  const outcome = deps.runner
+    ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows))
+    : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows);
 
   return ok({
     documentId: outcome.documentId,

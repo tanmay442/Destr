@@ -9,6 +9,12 @@ export function finiteOrDefault(value: string | undefined, fallback: number): nu
 
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000; // 1 MB hard cap on chat POST body
+export const BLOB_GET_MAX_BYTES = finiteOrDefault(process.env.BLOB_GET_MAX_BYTES, 50_000_000); // 50 MB cap on get()
+export const UPLOAD_CHUNKED_MAX_MD_BYTES = finiteOrDefault(process.env.UPLOAD_CHUNKED_MAX_MD_BYTES, 25_000_000); // 25 MB cap on chunked md
+export const UPLOAD_CHUNKED_MAX_PDF_BYTES = finiteOrDefault(process.env.UPLOAD_CHUNKED_MAX_PDF_BYTES, 100_000_000); // 100 MB cap on chunked pdf
+export const PDF_PARSE_MAX_BYTES = finiteOrDefault(process.env.PDF_PARSE_MAX_BYTES, 100_000_000); // 100 MB cap before PDF parse
+export const PDF_PARSE_MAX_PAGES = finiteOrDefault(process.env.PDF_PARSE_MAX_PAGES, 5000);
+export const PDF_PARSE_MAX_CHARS = finiteOrDefault(process.env.PDF_PARSE_MAX_CHARS, 50_000_000); // 50 MB of extracted text
 export const CCH_ENABLED = process.env.CCH_ENABLED !== 'false'; // default on
 export const CCH_MODEL = process.env.CCH_MODEL ?? ''; // optional cheap model override
 export const CCH_CONTEXT_CHARS = 4000; // chars of doc text fed to the summarizer

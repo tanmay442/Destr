@@ -3,9 +3,10 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { BlobStorage } from '@app/domain';
+import { BLOB_GET_MAX_BYTES, PayloadTooLargeError, type BlobStorage } from '@app/domain';
 
 export function createR2BlobStorage(): BlobStorage {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -27,6 +28,11 @@ export function createR2BlobStorage(): BlobStorage {
       );
     },
     async get(key) {
+      const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      const size = head.ContentLength ?? 0;
+      if (size > BLOB_GET_MAX_BYTES) {
+        throw new PayloadTooLargeError(`Blob ${key} is ${size} bytes (> ${BLOB_GET_MAX_BYTES})`, size, BLOB_GET_MAX_BYTES);
+      }
       const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
       return Buffer.from(await resp.Body!.transformToByteArray());
     },

@@ -7,6 +7,7 @@ export function createQstashQueue(): IngestQueue {
   if (!token) throw new Error('QSTASH_TOKEN is not set.');
   const client = new Client({ token });
   const baseUrl = process.env.QSTASH_INGEST_WORKER_URL ?? '';
+  const dlqUrl = process.env.QSTASH_DLQ_URL ?? '';
   return {
     async enqueue({ documentId }) {
       if (!baseUrl) throw new Error('QSTASH_INGEST_WORKER_URL is not set.');
@@ -14,6 +15,7 @@ export function createQstashQueue(): IngestQueue {
         url: `${baseUrl}/api/admin/ingest-worker`,
         body: { documentId },
         retries: 3,
+        ...(dlqUrl ? { dlq: dlqUrl } : {}),
       });
     },
     isNoOp() {

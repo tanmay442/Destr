@@ -210,10 +210,11 @@ export async function parseAndEmbed(
 export async function writeChunks(
   documents: DocumentRepository,
   chunks: ChunkRepository,
-  input: { fileName: string; fileHash: string; uploadedBy: string },
+  input: { fileName: string; fileHash: string; uploadedBy: string; storageKey?: string | null },
   rows: PreparedChunk[],
 ): Promise<{ documentId: number }> {
   const row = await documents.insert({ fileName: input.fileName, fileHash: input.fileHash, uploadedBy: input.uploadedBy });
+  if (input.storageKey) await documents.setStorageKey(row.id, input.storageKey);
   await chunks.deleteByDocumentId(row.id);
   await chunks.insertMany(
     rows.map((r) => ({
