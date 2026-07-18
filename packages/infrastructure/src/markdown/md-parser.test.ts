@@ -113,4 +113,28 @@ B`;
   it('uses the default delimiter constant', () => {
     expect(DEFAULT_MD_CHUNK_DELIMITER).toBe('---chunk---');
   });
+
+  it('does not split on a delimiter line inside a fenced code block', () => {
+    const md = `---chunk---
+title: A
+page: 1
+
+\`\`\`
+---chunk---
+code inside fence
+\`\`\`
+
+Body A
+---chunk---
+title: B
+page: 2
+
+Body B`;
+    const chunks = markdownParser.parseChunkedMarkdown(md);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]!.sectionTitle).toBe('A');
+    expect(chunks[0]!.content).toContain('---chunk---');
+    expect(chunks[0]!.content).toContain('code inside fence');
+    expect(chunks[1]!.sectionTitle).toBe('B');
+  });
 });

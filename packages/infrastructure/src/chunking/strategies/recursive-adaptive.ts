@@ -12,12 +12,17 @@ export function adaptiveRecursiveSplitter(modelId: string): ChunkingStrategy {
       const merged = spans.map((s) => s.text).join('\n\n');
 
       const paragraphs: Array<{ text: string; start: number }> = [];
+      const sepRe = /\n{2,}/g;
+      const sepEnds: number[] = [];
+      let mm: RegExpExecArray | null;
+      while ((mm = sepRe.exec(merged)) !== null) sepEnds.push(mm.index + mm[0].length);
+      const blocks = merged.split(/\n{2,}/);
       let pos = 0;
-      for (const block of merged.split(/\n{2,}/)) {
+      blocks.forEach((block, i) => {
         const text = block.trim();
         if (text.length > 0) paragraphs.push({ text, start: pos });
-        pos += block.length + 2;
-      }
+        pos = sepEnds[i] ?? merged.length;
+      });
       const merged2 = mergeShortParagraphs(paragraphs, MIN_PARAGRAPH);
 
       const splitter = new RecursiveCharacterTextSplitter({

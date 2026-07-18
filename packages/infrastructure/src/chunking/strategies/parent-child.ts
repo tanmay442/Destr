@@ -1,5 +1,12 @@
 import type { ChunkingStrategy } from '@app/domain';
-import { chunkBySentences, buildSections, mergeShortSections, makeDocumentChunk, type Section } from '../shared';
+import {
+  chunkBySentences,
+  buildSections,
+  mergeShortSections,
+  makeDocumentChunk,
+  CHILD_TOKEN_CAP,
+  type Section,
+} from '../shared';
 
 const DEFAULT_PARENT_SIZE = 1800;
 const DEFAULT_CHILD_SIZE = 400;
@@ -84,7 +91,7 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
           );
           const children =
             parent.text.length > childSize
-              ? chunkBySentences(parent.text, childSize, overlap)
+              ? chunkBySentences(parent.text, childSize, overlap, modelId, CHILD_TOKEN_CAP)
               : [parent.text];
           for (const child of children) {
             const childSource = parentTitle ? `Page ${page} — ${parentTitle}` : `Page ${page}`;

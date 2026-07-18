@@ -21,6 +21,17 @@ export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: stri
       if (sentences.length === 0) return [];
 
       const vectors = await embedSentences(embeddings, sentences);
+      if (vectors.length !== sentences.length) {
+        throw new Error(
+          `embedding count mismatch: got ${vectors.length} vectors for ${sentences.length} sentences`,
+        );
+      }
+      const dim = vectors[0]?.length ?? 0;
+      for (const v of vectors) {
+        if (!Array.isArray(v) || v.length === 0 || v.length !== dim) {
+          throw new Error('embedding model returned empty or mismatched-dimension vectors');
+        }
+      }
 
       const segments: number[][] = [];
       let current: number[] = [];

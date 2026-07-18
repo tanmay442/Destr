@@ -91,6 +91,19 @@ describe('recursive-adaptive strategy', () => {
     expect(chunks.every((c, i) => c.chunkIndex === i)).toBe(true);
     expect(chunks.some((c) => c.page === 2)).toBe(true);
   });
+
+  it('keeps correct page mapping past runs of 3+ blank lines', async () => {
+    const s = getChunkingStrategy('recursive-adaptive', { embeddings: mockEmbeddings() });
+    const long =
+      'This paragraph is deliberately long enough to stay separate from the merge threshold and represents page one content that should be mapped to page one by the offset logic after several blank lines separate the next paragraph.';
+    const chunks = await s.splitPages([
+      { page: 1, text: long },
+      { page: 2, text: '\n\n\n\n' + long },
+    ]);
+    const p2 = chunks.find((c) => c.page === 2);
+    expect(p2).toBeDefined();
+    expect(p2!.content).toContain('page one content');
+  });
 });
 
 describe('semantic strategy', () => {
@@ -101,6 +114,15 @@ describe('semantic strategy', () => {
     expect(chunks.every((c) => c.sectionTitle === null)).toBe(true);
     const lengths = chunks.map((c) => c.content.length);
     expect(new Set(lengths).size).toBeGreaterThan(1);
+  });
+
+  it('throws when the embedding service returns fewer vectors than sentences', async () => {
+    const shortEmbeddings = {
+      embed: vi.fn(),
+      embedBatch: vi.fn().mockResolvedValue([]),
+    };
+    const s = getChunkingStrategy('semantic', { embeddings: shortEmbeddings });
+    await expect(s.splitPages(pages)).rejects.toThrow(/embedding count mismatch/);
   });
 });
 

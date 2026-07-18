@@ -31,24 +31,19 @@ export function makeDocumentChunk(init: DocumentChunkInit) {
 }
 
 /** Heuristic heading detection used to split a page into titled sections. */
-export function isHeadingLine(line: string, avgLen: number): boolean {
+export function isHeadingLine(line: string): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 120) return false;
   if (/^#{1,6}\s+/.test(t)) return true;
   if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;
-  if (t.length < Math.max(15, avgLen * 0.4)) return true;
   return false;
 }
 
 /** Split a single page's text into titled sections at heading boundaries. */
 export function buildSections(text: string): Section[] {
   const lines = text.split(/\r?\n/);
-  const nonEmpty = lines.filter((l) => l.trim().length > 0);
-  const avgLen = nonEmpty.length
-    ? nonEmpty.reduce((a, l) => a + l.trim().length, 0) / nonEmpty.length
-    : 0;
   const sections: Section[] = [];
   let currentTitle: string | null = null;
   let currentLines: string[] = [];
@@ -62,7 +57,7 @@ export function buildSections(text: string): Section[] {
       currentLines.push('');
       continue;
     }
-    if (isHeadingLine(line, avgLen)) {
+    if (isHeadingLine(line)) {
       flush();
       currentTitle = t.replace(/^#+\s+/, '').replace(/:\s*$/, '').trim() || null;
       currentLines = [];
@@ -94,25 +89,67 @@ export interface PageSpan {
   page: number;
 }
 
-/** Split text into sentences, returning each with its start offset (for page mapping). */
-export function splitSentences(text: string): Array<{ text: string; start: number }> {
+const ABBREVIATIONS = /\b(?:dr|mr|mrs|ms|prof|sr|jr|st|vs|etc|inc|ltd|co|e\.g|i\.e|no)\.?$/i;
+
+/** Split into sentences at ASCII/CJK terminators (.!?。！？), guarding
+ *  abbreviation endings and hard-splitting overlong runs at word boundaries. */
+export function splitSentences(
+  text: string,
+  maxLen = 600,
+): Array<{ text: string; start: number }> {
   const out: Array<{ text: string; start: number }> = [];
-  const re = /[^.!?]+[.!?]+/g;
+  const re = /[^.!?。！？]+[.!?。！？]+/g;
   let m: RegExpExecArray | null;
   let lastEnd = 0;
+  let buf = '';
+  let bufStart = 0;
   while ((m = re.exec(text)) !== null) {
-    const t = m[0].trim();
-    if (t.length > 0) out.push({ text: t, start: m.index });
-    lastEnd = m.index + m[0].length;
+    const piece = m[0];
+    const start = buf.length === 0 ? m.index : bufStart;
+    buf += piece;
+    if (!ABBREVIATIONS.test(buf.trim())) {
+      out.push({ text: buf.trim(), start });
+      buf = '';
+      bufStart = m.index + piece.length;
+    }
+    lastEnd = m.index + piece.length;
   }
-  const tail = text.slice(lastEnd).trim();
-  if (tail.length > 0) out.push({ text: tail, start: lastEnd });
-  return out;
+  const tail = text.slice(lastEnd);
+  if (tail.trim().length > 0) buf += tail;
+  if (buf.trim().length > 0) out.push({ text: buf.trim(), start: bufStart });
+
+  const hardSplit = (s: { text: string; start: number }): Array<{ text: string; start: number }> => {
+    if (s.text.length <= maxLen) return [s];
+    const parts: Array<{ text: string; start: number }> = [];
+    const words = s.text.split(/(\s+)/);
+    let cur = '';
+    let curStart = s.start;
+    for (const w of words) {
+      if (cur.length + w.length > maxLen && cur.trim().length > 0) {
+        parts.push({ text: cur.trim(), start: curStart });
+        cur = w;
+        curStart = s.start + s.text.indexOf(w.trim(), curStart - s.start);
+      } else {
+        cur += w;
+      }
+    }
+    if (cur.trim().length > 0) parts.push({ text: cur.trim(), start: curStart });
+    return parts;
+  };
+  return out.flatMap(hardSplit);
 }
 
-/** Greedily group sentences into chunks no larger than `maxSize`, carrying a
- *  trailing `overlap`-char suffix of the previous chunk into the next. */
-export function chunkBySentences(text: string, maxSize: number, overlap: number): string[] {
+/** Group sentences into chunks no larger than `maxSize` chars (or `tokenCap`
+ *  tokens when `modelId` is given), carrying an `overlap`-char suffix over. */
+export function chunkBySentences(
+  text: string,
+  maxSize: number,
+  overlap: number,
+  modelId?: string,
+  tokenCap?: number,
+): string[] {
+  const fits = (s: string): boolean =>
+    modelId && tokenCap ? estimateTokens(s, modelId) <= tokenCap : s.length <= maxSize;
   const sentences = splitSentences(text).map((s) => s.text);
   if (sentences.length <= 1) {
     const trimmed = text.trim();
@@ -122,17 +159,38 @@ export function chunkBySentences(text: string, maxSize: number, overlap: number)
   let current = sentences[0]!;
   for (let i = 1; i < sentences.length; i++) {
     const next = sentences[i]!;
-    if ((current + ' ' + next).length <= maxSize) {
+    if (fits(current + ' ' + next)) {
       current = current + ' ' + next;
     } else {
       chunks.push(current);
-      const carry = current.length <= overlap ? current : current.slice(current.length - overlap);
-      current = carry + ' ' + next;
+      const carryLen = Math.min(overlap, current.length);
+      const carry = carryLen > 0 ? current.slice(current.length - carryLen) : '';
+      current = carry ? carry + ' ' + next : next;
     }
   }
   chunks.push(current);
   return chunks;
 }
+
+/** Tokens per char per embedding model; defaults to 1 (CJK ≈ 1 token/char),
+ *  ~0.25 for English-heavy OpenAI models. Gates child size on tokens. */
+const TOKENS_PER_CHAR: Record<string, number> = {
+  'text-embedding-3-small': 0.25,
+  'text-embedding-3-large': 0.25,
+  'text-embedding-ada-002': 0.25,
+};
+
+export function tokensPerChar(modelId: string): number {
+  return TOKENS_PER_CHAR[modelId] ?? 1;
+}
+
+export function estimateTokens(text: string, modelId: string): number {
+  return Math.ceil(text.length * tokensPerChar(modelId));
+}
+
+/** Default hard token cap applied to child chunks (keeps well under typical
+ *  512/768-token embedding limits once overlap and metadata are added). */
+export const CHILD_TOKEN_CAP = 400;
 
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;

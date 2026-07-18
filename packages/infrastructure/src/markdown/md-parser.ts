@@ -46,11 +46,50 @@ function extractMetaAndContent(segment: string): { meta: ChunkMeta; content: str
   return { meta, content };
 }
 
+const FENCE_RE = /^( {0,3})(`{3,}|~{3,})/;
+
+function isFenceOpener(line: string): { marker: string } | null {
+  const m = line.match(FENCE_RE);
+  if (!m) return null;
+  return { marker: m[2]! };
+}
+
+/** Split text at delimiter lines, ignoring lines that appear inside fenced
+ *  code blocks so documented delimiters are not treated as segment breaks. */
+export function splitOutsideFences(text: string, delimiter: string): string[] {
+  const fenceRe = new RegExp(`^${escapeRegExp(delimiter)}\\s*$`);
+  const lines = text.split(/\r?\n/);
+  const segments: string[] = [];
+  let buf: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    if (fence === null) {
+      const open = isFenceOpener(line);
+      if (open) {
+        fence = open.marker[0]!.repeat(3);
+        buf.push(line);
+        continue;
+      }
+      if (fenceRe.test(line)) {
+        segments.push(buf.join('\n'));
+        buf = [];
+        continue;
+      }
+      buf.push(line);
+    } else {
+      buf.push(line);
+      const close = line.match(FENCE_RE);
+      if (close && close[2]![0] === fence[0]) fence = null;
+    }
+  }
+  segments.push(buf.join('\n'));
+  return segments;
+}
+
 export const markdownParser: MarkdownParser = {
   parseChunkedMarkdown(text: string, delimiter?: string): ParsedChunk[] {
     const delim = delimiter ?? DEFAULT_MD_CHUNK_DELIMITER;
-    const re = new RegExp(`^${escapeRegExp(delim)}\\s*$`, 'm');
-    const segments = text.split(re);
+    const segments = splitOutsideFences(text, delim);
     const chunks: ParsedChunk[] = [];
     for (const segment of segments) {
       const trimmed = segment.trim();
