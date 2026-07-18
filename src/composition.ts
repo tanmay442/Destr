@@ -163,15 +163,11 @@ const agenticDeps: AgenticDeps | null = graders.queryRewriter && graders.documen
       hallucinationGrader: graders.hallucinationGrader,
     }
   : null;
-function createRateLimiter(): RateLimiter {
-  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashRateLimiter();
-  return Auth.lruRateLimiter;
-}
+const rateLimiter: RateLimiter =
+  process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashRateLimiter() : Auth.lruRateLimiter;
 
-function createQueryStats(): QueryStats {
-  if (process.env.UPSTASH_REDIS_REST_URL) return Auth.createUpstashQueryStats();
-  return Auth.inMemoryQueryStats;
-}
+const queryStats: QueryStats =
+  process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashQueryStats() : Auth.inMemoryQueryStats;
 
 // Session 10: answer cache reuses the same Upstash Redis as the rate-limiter
 // and query stats (no second connection). Falls back to an in-memory cache when
@@ -187,7 +183,7 @@ function createAnswerCache() {
   return Auth.createInMemoryAnswerCache();
 }
 
-const rateLimitDeps: RateLimitDeps = { limiter: createRateLimiter() };
+const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 
 function createComposition() {
   const auditDeps = { audit: Db.auditRepo };
@@ -212,8 +208,8 @@ function createComposition() {
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: createQueryStats() }),
-    getTopQueries: (limit: number) => getTopQueries(limit, { stats: createQueryStats() }),
+    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: queryStats }),
+    getTopQueries: (limit: number) => getTopQueries(limit, { stats: queryStats }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
@@ -272,7 +268,7 @@ function createComposition() {
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
     getAnalyticsSummary: (input: { actorId: string }) =>
-      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: createQueryStats() }),
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: queryStats }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,
@@ -284,7 +280,7 @@ function createComposition() {
     answerCache: createAnswerCache(),
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
-      createRateLimiter().check(key, opts),
+      rateLimiter.check(key, opts),
   };
 }
 

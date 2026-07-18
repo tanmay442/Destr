@@ -9,30 +9,38 @@ export function createUpstashRateLimiter(): RateLimiter {
   }
   const redis = new Redis({ url, token });
 
+  const lua = `
+    local key = KEYS[1]
+    local now = tonumber(ARGV[1])
+    local window = tonumber(ARGV[2])
+    local limit = tonumber(ARGV[3])
+    local cutoff = now - window
+    redis.call('zremrangebyscore', key, '-inf', cutoff)
+    local count = redis.call('zcard', key)
+    if count >= limit then
+      local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')[2]
+      return {0, oldest}
+    end
+    redis.call('zadd', key, now, now)
+    redis.call('pexpire', key, window)
+    return {1, limit - count - 1}
+  `;
+
   return {
     async check(key, opts) {
-      const ttlSeconds = Math.ceil(opts.windowMs / 1000);
       const redisKey = `ratelimit:${key}`;
-      // Fixed-window limiter: atomic INCR + EXPIRE keeps the count and TTL in
-      // one command so the key can never persist without a TTL, and the window
-      // is anchored to the first request rather than a wall-clock boundary.
-      const count = (await redis.eval(
-        `local c = redis.call('incr', KEYS[1])
-         if c == 1 then redis.call('expire', KEYS[1], ARGV[1]) end
-         return c`,
+      const now = Date.now();
+      const windowMs = opts.windowMs;
+      const [ok, second] = (await redis.eval(
+        lua,
         [redisKey],
-        [ttlSeconds],
-      )) as number;
-      if (count > opts.limit) {
-        const pttl = (redis as unknown as { pttl?: (k: string) => Promise<number> }).pttl;
-        const ttlMs = pttl ? ((await pttl.call(redis, redisKey)) as number) : -1;
-        return { ok: false, retryAfterMs: ttlMs > 0 ? ttlMs : opts.windowMs };
+        [now, windowMs, opts.limit],
+      )) as [number, number];
+      if (ok === 1) {
+        return { ok: true, remaining: Math.max(0, second), resetMs: windowMs };
       }
-      return {
-        ok: true,
-        remaining: opts.limit - count,
-        resetMs: opts.windowMs,
-      };
+      const oldest = second || now;
+      return { ok: false, retryAfterMs: Math.max(0, oldest + windowMs - now) };
     },
   };
 }

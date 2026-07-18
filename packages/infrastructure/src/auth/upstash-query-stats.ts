@@ -9,6 +9,8 @@ export function createUpstashQueryStats(): QueryStats {
   }
   const redis = new Redis({ url, token });
   const ZSET_KEY = 'query:global';
+  const MAX_MEMBERS = 5_000;
+  const TTL_SEC = 60 * 60 * 24 * 30;
   const userZset = (userId: string) => `query:user:${userId}`;
 
   return {
@@ -18,6 +20,9 @@ export function createUpstashQueryStats(): QueryStats {
       try {
         await redis.zincrby(ZSET_KEY, 1, text);
         await redis.zincrby(userZset(userId), 1, text);
+        await redis.zremrangebyrank(ZSET_KEY, 0, -(MAX_MEMBERS + 1));
+        await redis.expire(ZSET_KEY, TTL_SEC);
+        await redis.expire(userZset(userId), TTL_SEC);
       } catch {
         // Best-effort analytics; never fail the request path.
       }

@@ -203,7 +203,8 @@ in-memory sliding-window limiter keyed by `chat:${userId}`. Default budget:
 30 requests / 60 s, max 5 000 keys. When the 5 000-key cap is exceeded,
 the least-recently-used keys are evicted (LRU). The 31st request returns HTTP 429 with a
 `Retry-After` header. When the app moves to a multi-region deployment, swap
-this for an Upstash hash; the call sites do not need to change.
+this for the Upstash sliding-window limiter (`upstash-rate-limiter.ts`,
+also backed by a sorted set); the call sites do not need to change.
 
 ### Shared utilities
 

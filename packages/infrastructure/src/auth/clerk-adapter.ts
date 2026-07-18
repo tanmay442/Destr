@@ -49,10 +49,37 @@ function parseClerkRole(value: unknown): AppRole | null {
   return null;
 }
 
+const ROLE_TTL_MS = 30_000;
+const roleCache = new Map<string, { role: 'admin' | 'user'; expiresAt: number }>();
+
+const USER_TTL_MS = 30_000;
+const userCache = new Map<string, { user: Awaited<ReturnType<typeof currentUser>>; expiresAt: number }>();
+
+async function getCurrentUserCached(userId: string) {
+  const cached = userCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.user;
+  const user = await currentUser();
+  if (user) userCache.set(userId, { user, expiresAt: Date.now() + USER_TTL_MS });
+  return user;
+}
+
+async function resolveRoleCached(
+  userId: string,
+  sessionClaims: Record<string, unknown> | null | undefined,
+  email?: string,
+  emailVerified?: boolean,
+): Promise<'admin' | 'user'> {
+  const cached = roleCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.role;
+  const role = await resolveRole(userId, sessionClaims, email, emailVerified);
+  roleCache.set(userId, { role, expiresAt: Date.now() + ROLE_TTL_MS });
+  return role;
+}
+
 export async function getAppSession(): Promise<AppSessionFull | null> {
   const { userId } = await auth();
   if (!userId) return null;
-  const user = await currentUser();
+  const user = await getCurrentUserCached(userId);
   if (!user) return null;
   const email = user.emailAddresses[0]?.emailAddress ?? '';
   const verifiedAdminEmail = isVerifiedAdminEmail(user.emailAddresses);
@@ -77,7 +104,10 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       role: 'admin',
     });
     const client = await clerkClient();
-    client.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } }).catch(() => {});
+    await client.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } })
+      .catch((e: unknown) => {
+        console.warn('[clerk] failed to write-back role=admin to Clerk publicMetadata', { userId, error: e });
+      });
   }
   void touchLastSeen(userId).catch(() => {});
   return {
@@ -151,7 +181,7 @@ function createMiddleware(): AuthAdapter['middleware'] {
         const claims = sessionClaims as { email?: unknown; email_verified?: unknown } | undefined;
         const email = typeof claims?.email === 'string' ? claims.email : undefined;
         const verified = claims?.email_verified === true;
-        const role = await resolveRole(userId, sessionClaims, email, verified);
+        const role = await resolveRoleCached(userId, sessionClaims, email, verified);
         if (role !== 'admin') {
           if (req.nextUrl.pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
