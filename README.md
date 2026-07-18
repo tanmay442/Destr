@@ -220,7 +220,7 @@ this for an Upstash hash; the call sites do not need to change.
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
 | `pnpm cli init` | Interactive first-time setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts` and re-seeds. |
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
-| `pnpm cli db-migrate` | Apply the Drizzle schema + enable pgvector + add-column migrations. Prompts for confirmation before the destructive `drizzle-kit push`; pass `--force` to skip the prompt |
+| `pnpm cli db-migrate` | Apply the Drizzle migrations + enable pgvector. Prompts for confirmation before the destructive `drizzle-kit push`; pass `--force` to skip the prompt |
 | `pnpm arch` | Architecture boundary check via dependency-cruiser |
 
 ### Tests
