@@ -23,7 +23,7 @@ const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
 import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats } from '@app/domain';
-import { type MyUIMessage } from '@app/application/chat';
+import type { MyUIMessage } from '@/chat/types';
 import type { DocumentRow } from '@app/domain';
 import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';

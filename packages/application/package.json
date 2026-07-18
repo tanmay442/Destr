@@ -20,11 +20,9 @@
     "./admin/documents": "./src/admin/documents.ts",
     "./admin/tickets": "./src/admin/tickets.ts",
     "./prompt": "./src/prompt/index.ts",
-    "./prompt/build-system-prompt": "./src/prompt/build-system-prompt.ts",
-    "./chat": "./src/chat/types.ts"
+    "./prompt/build-system-prompt": "./src/prompt/build-system-prompt.ts"
   },
   "dependencies": {
-    "@app/domain": "workspace:*",
-    "ai": "^6.0.208"
+    "@app/domain": "workspace:*"
   }
 }
