@@ -5,6 +5,7 @@ import type {
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
 } from '@app/domain';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
+import { stripThinkTraces } from '@app/domain/sanitize-think';
 
 interface IngestFileInput {
   fileName: string;
@@ -152,7 +153,8 @@ export async function parseAndEmbed(
     const texts = await deps.textSplitter.splitText(text);
     docChunks = texts.map((t, i) => ({ content: t, chunkIndex: i }));
   }
-
+  docChunks = docChunks.map((c) => ({ ...c, content: stripThinkTraces(c.content) }));
+  sourceText = stripThinkTraces(sourceText);
   // Contextual Chunk Header (Session 3): one title+summary per document,
   // prepended to every chunk before embedding so retrieval scores match.
   const { header, title, summary } = await buildCchHeader(deps, sourceText);

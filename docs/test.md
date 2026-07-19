@@ -2,7 +2,7 @@
 
 ## Unit + integration (Vitest)
 
-360 tests across 45 files. Run with `pnpm test` (single run) or
+366 tests across 46 files. Run with `pnpm test` (single run) or
 `pnpm test:ui` (interactive). Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
@@ -59,6 +59,8 @@
 - `packages/application/src/__tests__/result.test.ts` — `Result<T,E>`
   helpers (`ok`/`err`/`unwrap`)
 - `packages/cli/src/__tests__/init.test.ts` — CLI `init` command
+- `packages/domain/src/sanitize-think.test.ts` — `stripThinkTraces`
+  removes `<think>` reasoning blocks before ingest
 - `packages/infrastructure/src/chunking/shared.test.ts` — sentence
   splitting (ASCII + CJK `。！？` terminators, abbreviation guard,
   max-length hard-split fallback), overlap-capped/space-safe
@@ -156,7 +158,7 @@ assertions, so the suite is green in any environment:
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes **360/360** even when
+After this fix the full suite passes **366/366** even when
 `.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to

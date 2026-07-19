@@ -6,6 +6,7 @@ import type {
   DocSummarizer,
 } from '@app/domain';
 import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
+import { stripThinkTraces } from '@app/domain/sanitize-think';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
 /** Sanitize a filename for use inside a blob-storage key (mirrors seed.ts). */
@@ -68,17 +69,18 @@ export async function ingestPrechunked(
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;
+  const cleanChunks = chunks.map((c) => ({ ...c, content: stripThinkTraces(c.content) }));
   if (deps.summarizer && CCH_ENABLED) {
     const ctx = await deps.summarizer.generateDocContext(
-      chunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
+      cleanChunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
     );
     title = ctx.title?.trim() || null;
     summary = ctx.summary?.trim() || null;
     if (title) header = `Document: ${title}\nSummary: ${summary ?? ''}\n\n`;
   }
   const headerChunks = header
-    ? chunks.map((c) => ({ ...c, content: header + c.content }))
-    : chunks;
+    ? cleanChunks.map((c) => ({ ...c, content: header + c.content }))
+    : cleanChunks;
 
   let embeddings: number[][];
   try {

@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./result": "./src/result.ts",
     "./errors": "./src/errors.ts",
-    "./app-config": "./src/app-config.ts"
+    "./app-config": "./src/app-config.ts",
+    "./sanitize-think": "./src/sanitize-think.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"
