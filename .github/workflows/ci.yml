@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 # One job, fast feedback. Order matches the developer mental
@@ -79,7 +79,7 @@ jobs:
 
       # ---- 4b. Migrate DB (main only, explicit & separately gated) -----
       - name: Migrate database
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/master'
         run: pnpm build
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
