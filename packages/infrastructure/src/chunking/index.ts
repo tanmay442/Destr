@@ -20,6 +20,7 @@ export interface ChunkingStrategyOptions {
   parentSize?: number;
   childSize?: number;
   overlap?: number;
+  maxChunkSize?: number;
 }
 
 export function getChunkingStrategy(
@@ -29,7 +30,10 @@ export function getChunkingStrategy(
   const modelId = opts.modelId ?? getEmbeddingModelId();
   switch (name) {
     case 'document-aware':
-      return documentAwareSplitter(modelId);
+      return documentAwareSplitter(modelId, {
+        maxChunkSize: opts.maxChunkSize,
+        overlap: opts.overlap,
+      });
     case 'recursive-adaptive':
       return adaptiveRecursiveSplitter(modelId);
     case 'semantic':

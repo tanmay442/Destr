@@ -35,7 +35,7 @@ export function isHeadingLine(line: string): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 120) return false;
   if (/^#{1,6}\s+/.test(t)) return true;
-  if (/^\d+(?:\.\d+)*\s+[A-Z0-9]/.test(t)) return true;
+  if (/^\d+(?:\.\d+)*\.?\s+[A-Z0-9]/.test(t)) return true;
   if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;

@@ -79,6 +79,57 @@ describe('document-aware strategy', () => {
     ]);
     expect(chunks.some((c) => c.sectionTitle === 'OVERVIEW')).toBe(true);
   });
+
+  it('keeps an intact table within a chunk when it fits', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const table = [
+      '| Plan | Price |',
+      '| --- | --- |',
+      '| Free | $0 |',
+      '| Pro | $20 |',
+    ].join('\n');
+    const chunks = await s.splitPages([{ page: 1, text: `## Pricing\n\n${table}` }]);
+    expect(chunks.some((c) => c.content.includes('| Plan | Price |'))).toBe(true);
+    expect(chunks.some((c) => c.content.includes('| Pro | $20 |'))).toBe(true);
+  });
+
+  it('splits an oversized table while replicating the header per chunk', async () => {
+    const s = getChunkingStrategy('document-aware', {
+      embeddings: mockEmbeddings(),
+      maxChunkSize: 120,
+      overlap: 0,
+    });
+    const rows = Array.from({ length: 40 }, (_, i) => `| Row ${i} | value ${i} |`);
+    const table = ['| ID | Value |', '| --- | --- |', ...rows].join('\n');
+    const chunks = await s.splitPages([{ page: 1, text: `## Data\n\n${table}` }]);
+    // Every table chunk must carry the header.
+    const tableChunks = chunks.filter((c) => c.content.includes('| ID | Value |'));
+    expect(tableChunks.length).toBeGreaterThan(1);
+    expect(tableChunks.every((c) => c.content.includes('| ID | Value |'))).toBe(true);
+  });
+
+  it('never drops a small or single-line table block', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    // A 1-2 line "table" (no separator) and a single-row-with-separator table.
+    const oneLiner = '| Label | Value |';
+    const singleRow = ['| Plan | Price |', '| --- | --- |', '| Free | $0 |'].join('\n');
+    const chunks = await s.splitPages([
+      { page: 1, text: `## Notes\n\n${oneLiner}` },
+      { page: 2, text: `## Plans\n\n${singleRow}` },
+    ]);
+    expect(chunks.some((c) => c.content.includes('| Label | Value |'))).toBe(true);
+    expect(chunks.some((c) => c.content.includes('| Free | $0 |'))).toBe(true);
+    expect(chunks.every((c) => c.content.trim().length > 0)).toBe(true);
+  });
+
+  it('does not emit empty chunks', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: '# Heading only\n\n\n   \n#' },
+    ]);
+    expect(chunks.every((c) => c.content.trim().length > 0)).toBe(true);
+    expect(chunks.every((c, i) => c.chunkIndex === i)).toBe(true);
+  });
 });
 
 describe('recursive-adaptive strategy', () => {

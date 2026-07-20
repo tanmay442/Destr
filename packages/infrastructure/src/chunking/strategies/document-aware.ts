@@ -14,9 +14,11 @@ interface Block {
   page: number;
 }
 
-/** Split a page into structural blocks (header/list/table/paragraph). */
 function parseMarkdownBlocks(text: string, page: number): Block[] {
-  const lines = text.split(/\r?\n/);
+  const normalized = text
+    .replace(/(\.)(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z0-9])/g, '$1\n\n')
+    .replace(/([a-z0-9])\.(\d+(?:\.\d+)*\.?\s+[A-Z])/g, '$1. $2');
+  const lines = normalized.split(/\r?\n/);
   const blocks: Block[] = [];
   let current: { type: Block['type']; level: number; lines: string[] } | null = null;
 
@@ -31,7 +33,6 @@ function parseMarkdownBlocks(text: string, page: number): Block[] {
     current = null;
   };
 
-  // Treat as heading unless it's a list-item label (ends with ":") or "(RDS)".
   const isHeading = (line: string): boolean => {
     const t = line.trim();
     if (/:$/.test(t)) return false;
@@ -67,30 +68,62 @@ function parseMarkdownBlocks(text: string, page: number): Block[] {
     }
   }
   flush();
-  // Drop orphaned bullet/number artifact lines.
   return blocks
     .map((b) => ({ ...b, raw: cleanTextArtifacts(b.raw), text: cleanTextArtifacts(b.text) }))
     .filter((b) => b.raw.length > 0);
 }
 
-/** Keep a header stack reflecting the current document hierarchy. */
-function updateHeaderHierarchy(
-  headers: string[],
-  level: number,
-  text: string,
-): string[] {
+function updateHeaderHierarchy(headers: string[], level: number, text: string): string[] {
   const next = headers.slice(0, level - 1);
   next[level - 1] = text;
   return next.filter((h): h is string => Boolean(h));
 }
 
-/** Split oversized blocks on sentences (word-boundary snapped, with overlap). */
+function splitTable(raw: string, maxSize: number): string[] {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  if (lines.length < 3) {
+    const single = raw.trim();
+    return single.length > 0 ? [single] : [];
+  }
+
+  const header = lines[0]!;
+  const sepIdx = lines.findIndex((l, i) => i > 0 && /^\|?[\s:|-]+\|?$/.test(l));
+  const rows = sepIdx >= 0 ? lines.slice(sepIdx + 1) : lines.slice(1);
+  if (rows.length === 0) {
+    const single = raw.trim();
+    return single.length > 0 ? [single] : [];
+  }
+  if (header.length >= maxSize) {
+    return lines.filter((l) => l.length > 0);
+  }
+  const sep = sepIdx >= 0 ? '\n' + lines[sepIdx]! : '';
+  const out: string[] = [];
+  let current = header + sep;
+  for (const row of rows) {
+    if (row.length >= maxSize) {
+      if (current.length > header.length) out.push(current);
+      out.push(header + sep + '\n' + row);
+      current = header + sep;
+      continue;
+    }
+    if ((current + '\n' + row).length <= maxSize) {
+      current += '\n' + row;
+    } else {
+      out.push(current);
+      current = header + sep + '\n' + row;
+    }
+  }
+  if (current.length > header.length) out.push(current);
+  return out;
+}
+
 function recursiveTextSplitter(text: string, maxSize: number, overlap: number): string[] {
   if (text.length <= maxSize) return [text];
   return chunkBySentences(text, maxSize, overlap);
 }
 
-// Prepend the active section path as context for a chunk.
 function attachContext(text: string, activeHeaders: string[]): string {
   if (activeHeaders.length === 0) return text;
   const contextHeader = `> **Context:** ${activeHeaders.join(' > ')}\n\n`;
@@ -120,7 +153,6 @@ export function documentAwareSplitter(
       const flush = () => {
         if (!currentChunk.trim()) return;
         let body = currentChunk.trim();
-        // Drop a trailing header line that duplicates the active section title.
         const topHeader = activeHeaders[activeHeaders.length - 1];
         if (topHeader && body.endsWith(topHeader)) {
           body = body.slice(0, body.length - topHeader.length).replace(/\s+$/, '');
@@ -142,9 +174,9 @@ export function documentAwareSplitter(
       for (const block of blocks) {
         currentPage = block.page;
         if (block.type === 'header') {
-          // New chunk per heading so each section keeps its own title.
           flush();
           activeHeaders = updateHeaderHierarchy(activeHeaders, block.level, block.text);
+          continue;
         }
 
         const combinedLength = currentChunk.length + block.raw.length;
@@ -154,8 +186,27 @@ export function documentAwareSplitter(
         } else {
           flush();
 
-          // Oversized non-table blocks are split independently.
-          if (block.raw.length > MAX_SIZE && block.type !== 'table') {
+          if (block.type === 'table') {
+            if (block.raw.length <= MAX_SIZE) {
+              currentChunk = block.raw;
+            } else {
+              for (const piece of splitTable(block.raw, MAX_SIZE)) {
+                const source = activeHeaders[activeHeaders.length - 1]
+                  ? `Page ${block.page} — ${activeHeaders[activeHeaders.length - 1]}`
+                  : `Page ${block.page}`;
+                chunks.push(
+                  makeDocumentChunk({
+                    content: attachContext(piece, activeHeaders),
+                    chunkIndex: chunkIndex++,
+                    page: block.page,
+                    modelId,
+                    sectionTitle: activeHeaders[activeHeaders.length - 1] ?? null,
+                    source,
+                  }),
+                );
+              }
+            }
+          } else if (block.raw.length > MAX_SIZE) {
             const subPieces = recursiveTextSplitter(block.raw, MAX_SIZE, OVERLAP);
             for (const piece of subPieces) {
               const source = activeHeaders[activeHeaders.length - 1]
@@ -173,14 +224,18 @@ export function documentAwareSplitter(
               );
             }
           } else {
-            // Tables and other atomic blocks start a fresh chunk.
             currentChunk = block.raw;
           }
         }
       }
 
       flush();
-      return chunks;
+
+      const pruned = chunks.filter((c) => c.content.trim().length > 0);
+      pruned.forEach((c, i) => {
+        c.chunkIndex = i;
+      });
+      return pruned;
     },
   };
 }
