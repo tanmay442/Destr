@@ -35,10 +35,25 @@ export function isHeadingLine(line: string): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 120) return false;
   if (/^#{1,6}\s+/.test(t)) return true;
+  if (/^\d+(?:\.\d+)*\s+[A-Z0-9]/.test(t)) return true;
   if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;
   return false;
+}
+
+/** Drop orphaned bullet/number artifact lines; keep any line with a letter. */
+export function cleanTextArtifacts(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (/[a-zA-Z]/.test(trimmed)) return true;
+      const isGarbageLine = /^[0-9\s.\-◦▪•\*]+$/.test(trimmed);
+      return !isGarbageLine;
+    })
+    .join('\n')
+    .trim();
 }
 
 /** Split a single page's text into titled sections at heading boundaries. */
@@ -97,14 +112,18 @@ export function splitSentences(
   text: string,
   maxLen = 600,
 ): Array<{ text: string; start: number }> {
+  // Mask internal "x.y" dots (decimals, versions, URLs) so they aren't split as terminators.
+  const MASK = String.fromCharCode(1);
+  const masked = text.replace(/([a-z0-9])\.([a-z0-9])/gi, "$1" + MASK + "$2");
+
   const out: Array<{ text: string; start: number }> = [];
   const re = /[^.!?。！？]+[.!?。！？]+/g;
   let m: RegExpExecArray | null;
   let lastEnd = 0;
   let buf = '';
   let bufStart = 0;
-  while ((m = re.exec(text)) !== null) {
-    const piece = m[0];
+  while ((m = re.exec(masked)) !== null) {
+    const piece = m[0].split(MASK).join(".");
     const start = buf.length === 0 ? m.index : bufStart;
     buf += piece;
     if (!ABBREVIATIONS.test(buf.trim())) {
@@ -114,8 +133,8 @@ export function splitSentences(
     }
     lastEnd = m.index + piece.length;
   }
-  const tail = text.slice(lastEnd);
-  if (tail.trim().length > 0) buf += tail;
+  const tail = masked.slice(lastEnd);
+  if (tail.trim().length > 0) buf += tail.split(MASK).join(".");
   if (buf.trim().length > 0) out.push({ text: buf.trim(), start: bufStart });
 
   const hardSplit = (s: { text: string; start: number }): Array<{ text: string; start: number }> => {
@@ -164,8 +183,11 @@ export function chunkBySentences(
     } else {
       chunks.push(current);
       const carryLen = Math.min(overlap, current.length);
-      const carry = carryLen > 0 ? current.slice(current.length - carryLen) : '';
-      current = carry ? carry + ' ' + next : next;
+      let carry = carryLen > 0 ? current.slice(current.length - carryLen) : '';
+      // Snap carry to a word boundary to avoid splitting words across chunks.
+      const firstSpace = carry.indexOf(' ');
+      if (firstSpace > 0) carry = carry.slice(firstSpace);
+      current = carry.trim() ? carry.trim() + ' ' + next : next;
     }
   }
   chunks.push(current);

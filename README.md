@@ -242,6 +242,7 @@ also backed by a sorted set); the call sites do not need to change.
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
 | `pnpm cli db-migrate` | Apply the Drizzle migrations + enable pgvector. Prompts for confirmation before the destructive `drizzle-kit push`; pass `--force` to skip the prompt |
 | `pnpm arch` | Architecture boundary check via dependency-cruiser |
+| `pnpm chunks:preview <pdfPath> [--out dir] [--strategies a,b,c]` | Run every chunking strategy over a PDF and emit a Markdown preview of each into `scripts/chunk-output/`. `<pdfPath>` is required (pass any PDF to preview); all strategies run by default unless `--strategies` narrows them. |
 
 ### Tests
 

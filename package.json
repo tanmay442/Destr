@@ -23,6 +23,7 @@
     "cli": "tsx packages/cli/src/index.ts",
     "arch": "dependency-cruiser --config .dependency-cruiser.cjs packages src config scripts",
     "eval": "tsx scripts/eval/run.ts",
+    "chunks:preview": "tsx scripts/chunk-all-strategies.ts",
     "dev:db": "docker compose up -d db",
     "dev:ollama": "docker compose --profile ollama up -d ollama"
   },
