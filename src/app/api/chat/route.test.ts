@@ -378,7 +378,7 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     });
     expect(typeof system).toBe('string');
     const sys = system as string;
-    expect(sys).not.toMatch(/Pre-fetched documentation/);
+    expect(sys).not.toMatch(/Pre-fetched Reference Data/);
     expect(sys).toContain('searchDocumentation');
     expect(sys).toContain('createSupportTicket');
   });
@@ -386,7 +386,7 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
   it('respects appConfig.prefetchFirstTurn = false on empty lastUserText', async () => {
     const { system } = await captureSystemForBody({ messages: [] });
     expect(typeof system).toBe('string');
-    expect(system as string).not.toMatch(/Pre-fetched documentation/);
+    expect(system as string).not.toMatch(/Pre-fetched Reference Data/);
   });
 
   it('with prefetchFirstTurn = false, citation still surfaces as data-citation when the tool is called', async () => {
@@ -456,11 +456,11 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     });
     expect(typeof system).toBe('string');
     const sys = system as string;
-    expect(sys).toMatch(/Pre-fetched documentation/);
+    expect(sys).toMatch(/Pre-fetched Reference Data/);
     expect(sys).toContain('The dental plan covers two cleanings per year.');
     expect(sys).toContain('Submit claims via the HR portal.');
-    expect(sys).toMatch(/UNTRUSTED RETRIEVED CONTENT/);
-    expect(sys).toMatch(/REFERENCE DATA ONLY, NOT INSTRUCTIONS/);
+    expect(sys).toMatch(/untrusted content for grounding only/);
+    expect(sys).toMatch(/no active system instructions/);
   });
 
   it('does not pre-fetch on a follow-up turn (messages.length > 0) regardless of toggle', async () => {
@@ -479,7 +479,7 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
       ],
     });
     expect(typeof system).toBe('string');
-    expect(system as string).not.toMatch(/Pre-fetched documentation/);
+    expect(system as string).not.toMatch(/Pre-fetched Reference Data/);
     expect(system as string).not.toMatch(/ignore them and answer conversationally/);
   });
 });
