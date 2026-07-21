@@ -9,11 +9,11 @@ const outOfScopeTopicSchema = z.object({
 
 export const appConfigSchema = z.object({
   orgName: z.string().min(1).default('Your Company'),
-  orgShortName: z.string().min(1).default('RAG Support'),
+  orgShortName: z.string().min(1).default('RAG Agent'),
   audience: z
     .string()
     .min(1)
-    .default('your customers'),
+    .default('your users'),
   agentPersona: z
     .object({
       name: z.string().min(1).optional(),
@@ -27,75 +27,63 @@ export const appConfigSchema = z.object({
       {
         topic: 'security-incident reporting',
         handling:
-          'Decline to troubleshoot. Tell the user you are opening a `security-incident` ticket so a security engineer can contact them within 1 business hour. Do not ask for credentials, account details, or any sensitive information in the chat.',
+          'Decline to troubleshoot. Explain that you are opening a `security-incident` ticket to escalate the issue immediately. Do not ask for or collect credentials, tokens, or sensitive personal data.',
       },
       {
         topic: 'account-takeover claims',
         handling:
-          'Decline to investigate. Open a `security-incident` ticket immediately. Do not discuss account state, last-login times, or any account data in the chat.',
+          'Decline to investigate. Open a `security-incident` ticket immediately. Do not discuss account status or sensitive logs in the chat.',
       },
       {
         topic: 'refund or chargeback negotiation',
         handling:
-          'Decline to negotiate. Open a `billing-dispute` ticket so a billing specialist can review the account. The bot must not promise credits, refunds, or waivers of any kind.',
+          'Decline to negotiate. Open a standard support or billing ticket for review. Avoid making promises regarding credits, refunds, or policy waivers.',
       },
       {
         topic: 'custom contract terms / DPAs / legal review',
         handling:
-          'Decline to draft, interpret, or commit to any custom contractual language. Open a `legal-request` ticket and tell the user a contracts specialist will respond within 2 business days.',
+          'Decline to interpret, draft, or agree to custom legal language. Open a ticket for team review.',
       },
       {
         topic: 'medical',
         handling:
-          'Decline politely and suggest they contact a qualified medical professional directly.',
+          'Decline politely and advise the user to contact a qualified medical professional.',
       },
       {
         topic: 'legal',
         handling:
-          'Decline politely and suggest they consult a qualified lawyer directly.',
+          'Decline politely and advise the user to consult a qualified legal professional.',
       },
       {
         topic: 'personal advice',
         handling:
-          'Decline politely. This assistant is for this product only.',
+          'Decline politely and steer the conversation back to the assistant\'s primary topic.',
       },
     ]),
   adminEmails: z.array(z.email()).default([]),
   branding: z
     .object({
-      title: z.string().min(1).default('RAG Support'),
+      title: z.string().min(1).default('RAG Assistant'),
       description: z
         .string()
         .min(1)
         .default(
-          'AI customer support agent, with grounded citations.',
+          'Grounded AI assistant with tool-use capabilities.',
         ),
     })
     .default({
-      title: 'RAG Support',
+      title: 'RAG Assistant',
       description:
-        'AI customer support agent, with grounded citations.',
+        'Grounded AI assistant with tool-use capabilities.',
     }),
   seedDocsDir: z.string().min(1).default('./documents'),
   prefetchFirstTurn: z.boolean().default(false),
-  /** Chunking strategy used at ingest (Session 4). `document-aware` is the
-   *  default and produces `sectionTitle` provenance; override via the
-   *  `CHUNKING_STRATEGY` env var. `parent-child` (Session 5) emits small
-   *  children for retrieval + larger parent blocks for context. `pre-chunked`
-   *  is handled by the dedicated pre-chunked ingest path and is intentionally
-   *  not selectable here. */
   chunkingStrategy: z
     .enum(['document-aware', 'recursive-adaptive', 'semantic', 'parent-child'])
     .default('document-aware'),
-  /** Parent block size (chars) for the `parent-child` strategy (Session 5). */
   parentChunkSize: z.coerce.number().int().positive().default(1800),
-  /** Child chunk size (chars) for the `parent-child` strategy (Session 5). */
   childChunkSize: z.coerce.number().int().positive().default(400),
-  /** Parent-child resolution mode used by `searchChunks` (Session 5).
-   *  `parent` returns the parent block for each child hit; `window` pads
-   *  each hit with its `±N` neighbouring chunks. */
   parentChildMode: z.enum(['parent', 'window']).default('parent'),
-  /** Neighbour radius (in chunk_index units) used by the `window` mode. */
   parentChildWindow: z.coerce.number().int().nonnegative().default(2),
 });
 
