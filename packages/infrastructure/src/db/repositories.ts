@@ -13,7 +13,7 @@ import {
   type Document,
 } from './schema';
 import type { TicketRow, UserRow, IngestStatus } from '@app/domain';
-import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '../../../../config/constants';
+import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 

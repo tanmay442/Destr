@@ -235,11 +235,13 @@ also backed by a sorted set); the call sites do not need to change.
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
 | `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top` |
-| `pnpm seed` | Seed the configured DB from `./documents/` (`tsx scripts/seed-docs.ts`) |
+| `pnpm seed` | Seed the configured DB from `./documents/` (`tsx packages/cli/src/index.ts seed`) |
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
-| `pnpm cli init` | Interactive first-time setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts` and re-seeds. |
+| `pnpm cli init` | Interactive agent configuration setup: org name, agent persona, admin emails, seed PDFs. Writes `config/app.config.ts`. |
+| `pnpm cli setup` | One-command interactive setup wizard for env vars, database migration, document seeding, and smoke test (same as `pnpm configure`). |
 | `pnpm cli seed` | Ingest every PDF in `./documents/` (overridable via `SEED_DOCS_DIR` or `--dir`) |
+| `pnpm cli upload` | Upload pre-chunked Markdown documents with optional PDF blob pairing and `--dry-run` support |
 | `pnpm cli db-migrate` | Apply the Drizzle migrations + enable pgvector. Prompts for confirmation before the destructive `drizzle-kit push`; pass `--force` to skip the prompt |
 | `pnpm arch` | Architecture boundary check via dependency-cruiser |
 | `pnpm chunks:preview <pdfPath> [--out dir] [--strategies a,b,c]` | Run every chunking strategy over a PDF and emit a Markdown preview of each into `scripts/chunk-output/`. `<pdfPath>` is required (pass any PDF to preview); all strategies run by default unless `--strategies` narrows them. |

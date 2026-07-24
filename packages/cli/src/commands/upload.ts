@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MD_CHUNK_DELIMITER } from '../../../../config/constants';
+import { MD_CHUNK_DELIMITER } from '@app/domain';
 import { markdownParser } from '@app/infrastructure/markdown';
 import { warn } from './common';
 import { buildUploadDeps } from './deps';

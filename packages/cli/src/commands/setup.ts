@@ -32,7 +32,7 @@ import {
 import {
   type AppConfig,
 } from '@app/domain';
-import { Llm } from '@app/infrastructure';
+import * as Llm from '@app/infrastructure/llm';
 
 const { Pool } = pg;
 

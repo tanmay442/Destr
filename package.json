@@ -15,7 +15,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "tsx scripts/migrate.ts",
-    "seed": "tsx scripts/seed-docs.ts",
+    "seed": "tsx packages/cli/src/index.ts seed",
     "setup-test-db": "tsx scripts/setup-test-db.ts",
     "teardown-test-db": "tsx scripts/teardown-test-db.ts",
     "typecheck": "tsc --noEmit",
