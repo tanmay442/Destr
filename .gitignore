@@ -66,5 +66,5 @@ scripts/chunk-output/
 
 docs/adminplanv3.md
 
-# Session handoff context (not committed)
-docs/execution-plan/context/
+# Execution plan (kept locally, never committed/pushed)
+docs/execution-plan/
