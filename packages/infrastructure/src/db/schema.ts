@@ -86,35 +86,30 @@ export const users = pgTable('users', {
   check('users_role_check', sql`${table.role} IN ('admin','user')`),
 ]);
 
-export const documentAudit = pgTable('document_audit', {
+/**
+ * Single generic audit trail (Session 5). Replaces the former per-category
+ * `document_audit` / `ticket_audit` / `user_audit` tables. `source_ref` is a
+ * backfill-only dedup key (`<old_table>:<old_id>`) that makes the backfill
+ * migration idempotently re-runnable.
+ */
+export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
-  documentId: integer('document_id').references(() => documents.id, { onDelete: 'set null' }),
-  actorId: text('actor_id').notNull(),
+  kind: text('kind').notNull(),
   action: text('action').notNull(),
-  at: timestamp('at').defaultNow().notNull(),
-}, (table) => [
-  check('document_audit_action_check', sql`${table.action} IN ('upload','replace','delete','restore')`),
-]);
-
-export const ticketAudit = pgTable('ticket_audit', {
-  id: serial('id').primaryKey(),
-  ticketId: text('ticket_id').references(() => tickets.ticketId, { onDelete: 'set null' }),
   actorId: text('actor_id').notNull(),
-  action: text('action').notNull(),
-  at: timestamp('at').defaultNow().notNull(),
+  targetType: text('target_type'),
+  targetId: text('target_id'),
+  details: jsonb('details').notNull().default({}),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+  sourceRef: text('source_ref'),
 }, (table) => [
-  check('ticket_audit_action_check', sql`${table.action} IN ('create','assign','status_change','note','impersonation','role_change')`),
-]);
-
-export const userAudit = pgTable('user_audit', {
-  id: serial('id').primaryKey(),
-  targetUserId: text('target_user_id').notNull(),
-  actorId: text('actor_id').notNull(),
-  fromRole: text('from_role').notNull(),
-  toRole: text('to_role').notNull(),
-  at: timestamp('at').defaultNow().notNull(),
-}, (table) => [
-  check('user_audit_role_check', sql`${table.fromRole} IN ('admin','user') AND ${table.toRole} IN ('admin','user')`),
+  check('audit_events_kind_check', sql`${table.kind} IN ('document','ticket','user','settings')`),
+  index('audit_events_kind_idx').on(table.kind),
+  index('audit_events_at_idx').on(table.at.desc()),
+  index('audit_events_actor_id_idx').on(table.actorId),
+  uniqueIndex('idx_audit_events_source_ref')
+    .on(table.sourceRef)
+    .where(sql`${table.sourceRef} IS NOT NULL`),
 ]);
 
 /**

@@ -6,13 +6,11 @@ import {
   chunks,
   tickets,
   users,
-  documentAudit,
-  ticketAudit,
-  userAudit,
+  auditEvents,
   auditDeadLetter,
   type Document,
 } from './schema';
-import type { TicketRow, UserRow, IngestStatus } from '@app/domain';
+import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter } from '@app/domain';
 import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -834,86 +832,103 @@ export const userRepo = {
 };
 
 export const auditRepo = {
+  async logEvent(input: AuditEventInput, client: Client = db): Promise<void> {
+    await client.insert(auditEvents).values({
+      kind: input.kind,
+      action: input.action,
+      actorId: input.actorId,
+      targetType: input.targetType ?? null,
+      targetId: input.targetId ?? null,
+      details: input.details ?? {},
+    });
+  },
   async logDocumentEvent(
     input: { action: 'upload' | 'replace' | 'delete' | 'restore'; documentId: number; actorId: string },
     client: Client = db,
   ): Promise<void> {
-    await client.insert(documentAudit).values(input);
+    await auditRepo.logEvent(
+      { kind: 'document', action: input.action, actorId: input.actorId, targetType: 'document', targetId: String(input.documentId) },
+      client,
+    );
   },
   async logTicketEvent(
     input: { action: 'create' | 'assign' | 'status_change' | 'note' | 'impersonation' | 'role_change'; ticketId: string; actorId: string },
     client: Client = db,
   ): Promise<void> {
-    await client.insert(ticketAudit).values(input);
+    await auditRepo.logEvent(
+      { kind: 'ticket', action: input.action, actorId: input.actorId, targetType: 'ticket', targetId: input.ticketId },
+      client,
+    );
   },
   async logUserEvent(
     input: { targetUserId: string; actorId: string; fromRole: 'admin' | 'user'; toRole: 'admin' | 'user' },
     client: Client = db,
   ): Promise<void> {
-    await client.insert(userAudit).values(input);
+    await auditRepo.logEvent(
+      {
+        kind: 'user',
+        action: 'role_change',
+        actorId: input.actorId,
+        targetType: 'user',
+        targetId: input.targetUserId,
+        details: { fromRole: input.fromRole, toRole: input.toRole },
+      },
+      client,
+    );
   },
-  async list(input: { documentId?: number; ticketId?: string; limit: number; offset: number }, client: Client = db): Promise<{
-    events: Array<{
-      id: number; kind: 'document' | 'ticket';
-      documentId: number | null; ticketId: string | null;
-      actorId: string; actorName: string | null;
-      action: string; at: Date;
-    }>;
-    total: number;
-  }> {
-    const wantDoc = !input.ticketId || input.documentId !== undefined;
-    const wantTix = !input.documentId || input.ticketId !== undefined;
-    const docWhere = input.documentId
-      ? sql`WHERE document_id = ${input.documentId}`
-      : wantDoc
-        ? sql``
-        : sql`WHERE 1 = 0`;
-    const tixWhere = input.ticketId
-      ? sql`WHERE ticket_id = ${input.ticketId}`
-      : wantTix
-        ? sql``
-        : sql`WHERE 1 = 0`;
-    const countResult = await client.execute<{ count: number }>(sql`
-      SELECT count(*)::int AS count FROM (
-        SELECT id FROM document_audit ${docWhere}
-        UNION ALL
-        SELECT id FROM ticket_audit ${tixWhere}
-      ) c
-    `);
-    const total = (countResult as unknown as { rows?: Array<{ count: number }> }).rows?.[0]?.count ?? 0;
+  async list(input: AuditListFilter, client: Client = db): Promise<{ events: AuditEventRecord[]; total: number }> {
+    const parts = [] as ReturnType<typeof eq>[];
+    if (input.kind) parts.push(eq(auditEvents.kind, input.kind));
+    if (input.action) parts.push(eq(auditEvents.action, input.action));
+    if (input.actorId) parts.push(eq(auditEvents.actorId, input.actorId));
+    if (input.from) parts.push(sql`${auditEvents.at} >= ${input.from}` as unknown as ReturnType<typeof eq>);
+    if (input.to) parts.push(sql`${auditEvents.at} <= ${input.to}` as unknown as ReturnType<typeof eq>);
+    if (input.documentId !== undefined) {
+      parts.push(eq(auditEvents.kind, 'document'), eq(auditEvents.targetId, String(input.documentId)));
+    }
+    if (input.ticketId !== undefined) {
+      parts.push(eq(auditEvents.kind, 'ticket'), eq(auditEvents.targetId, input.ticketId));
+    }
+    const where = whereAnd(parts);
     const limit = Math.min(Math.max(input.limit, 1), MAX_AUDIT_LIMIT);
     const offset = Math.max(input.offset, 0);
-    const actorResult = await client.execute<{
-      id: number; kind: string; document_id: number | null; ticket_id: string | null;
-      actor_id: string; action: string; at: Date; actor_name: string | null;
-    }>(sql`
-      SELECT c.*, u.name AS actor_name FROM (
-        SELECT id, 'document' AS kind, document_id, NULL::text AS ticket_id, actor_id, action, at
-        FROM document_audit ${docWhere}
-        UNION ALL
-        SELECT id, 'ticket' AS kind, NULL::int AS document_id, ticket_id, actor_id, action, at
-        FROM ticket_audit ${tixWhere}
-      ) c
-      LEFT JOIN users u ON u.clerk_user_id = c.actor_id
-      ORDER BY c.at DESC
-      LIMIT ${limit}
-      OFFSET ${offset}
-    `);
-    const rawRows = (actorResult as unknown as { rows?: Array<{ id: number; kind: string; document_id: number | null; ticket_id: string | null; actor_id: string; action: string; at: Date; actor_name: string | null }> }).rows ?? [];
-    const events = rawRows.map((r) => ({
+    const rows = await client
+      .select({
+        id: auditEvents.id,
+        kind: auditEvents.kind,
+        action: auditEvents.action,
+        actorId: auditEvents.actorId,
+        actorName: users.name,
+        targetType: auditEvents.targetType,
+        targetId: auditEvents.targetId,
+        details: auditEvents.details,
+        at: auditEvents.at,
+      })
+      .from(auditEvents)
+      .leftJoin(users, eq(users.clerkUserId, auditEvents.actorId))
+      .where(where)
+      .orderBy(desc(auditEvents.at), desc(auditEvents.id))
+      .limit(limit)
+      .offset(offset);
+    const total = (await client
+      .select({ count: sql<number>`count(*)::int` })
+      .from(auditEvents)
+      .where(where))[0]?.count ?? 0;
+    const events = rows.map((r) => ({
       id: r.id,
-      kind: r.kind as 'document' | 'ticket',
-      documentId: r.document_id ?? null,
-      ticketId: r.ticket_id ?? null,
-      actorId: r.actor_id,
-      actorName: r.actor_name ?? null,
+      kind: r.kind as AuditKind,
       action: r.action,
+      actorId: r.actorId,
+      actorName: r.actorName ?? null,
+      targetType: r.targetType ?? null,
+      targetId: r.targetId ?? null,
+      details: (r.details ?? {}) as Record<string, unknown>,
       at: r.at instanceof Date ? r.at : new Date(r.at),
     }));
     return { events, total };
   },
   async recordDeadLetter(
-    input: { kind: 'document' | 'ticket' | 'user'; payload: unknown; error: string },
+    input: { kind: AuditKind; payload: unknown; error: string },
     client: Client = db,
   ): Promise<void> {
     await client.insert(auditDeadLetter).values({
@@ -962,6 +977,7 @@ export function createChunkRepo(client: Client): ChunkRepository {
 
 function createAuditRepo(client: Client): AuditLog {
   return {
+    logEvent: (input) => auditRepo.logEvent(input, client),
     logDocumentEvent: (input) => auditRepo.logDocumentEvent(input, client),
     logTicketEvent: (input) => auditRepo.logTicketEvent(input, client),
     logUserEvent: (input) => auditRepo.logUserEvent(input, client),

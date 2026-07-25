@@ -1,4 +1,4 @@
-type AuditKind = 'document' | 'ticket' | 'user';
+import type { AuditKind } from '@app/domain';
 
 /**
  * Write an audit event without blocking the calling operation. The primary

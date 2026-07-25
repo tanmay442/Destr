@@ -39,7 +39,7 @@ vi.mock('@/composition', () => ({
 vi.mock('@/lib/config/runtime', () => ({
   getRuntimeConfig: async () => ({
     retrievalMode: 'agentic',
-    agentStepBudget: 8,
+    agentStepBudget: state.invalidated > 0 ? 5 : 8,
     rerankerProvider: 'cosine',
     agentPersona: { name: 'Astra', tone: 'friendly' },
   }),
@@ -137,12 +137,16 @@ describe('PUT /api/admin/settings', () => {
     expect(json.version).toBe(7);
   });
 
-  it('saves, invalidates cache, logs, and returns the new version', async () => {
+  it('saves, invalidates cache, logs a settings diff, and returns the new version', async () => {
     const res = await route.PUT(putReq({ patch: { agentStepBudget: 5 }, expectedVersion: 3 }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.version).toBe(4);
     expect(state.invalidated).toBe(1);
     expect(state.logCalls).toHaveLength(1);
+    expect(state.logCalls[0]).toEqual({
+      actorId: 'admin-1',
+      changes: [{ key: 'agentStepBudget', old: 8, new: 5 }],
+    });
   });
 });

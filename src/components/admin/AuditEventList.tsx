@@ -5,10 +5,25 @@ interface AuditEvent {
   id: number;
   at: Date;
   action: string;
-  documentId: number | null;
-  ticketId: string | null;
+  targetType: string | null;
+  targetId: string | null;
   actorName: string | null;
   actorId: string;
+}
+
+export function auditTargetLabel(e: Pick<AuditEvent, 'kind' | 'targetId'>): string {
+  switch (e.kind) {
+    case 'document':
+      return `document #${e.targetId ?? '?'}`;
+    case 'ticket':
+      return `ticket ${e.targetId ?? '?'}`;
+    case 'user':
+      return `user ${e.targetId ?? '?'}`;
+    case 'settings':
+      return 'settings';
+    default:
+      return e.targetId ?? '';
+  }
 }
 
 interface AuditEventListProps {
@@ -29,11 +44,7 @@ export function AuditEventList({ events, testId }: AuditEventListProps) {
               {e.at.toISOString()}
             </span>
             <span className="font-medium">{e.action}</span>
-            <span className="text-muted-foreground">
-              {e.kind === 'document'
-                ? `document #${e.documentId}`
-                : `ticket ${e.ticketId}`}
-            </span>
+            <span className="text-muted-foreground">{auditTargetLabel(e)}</span>
             <span className="text-muted-foreground">
               by {e.actorName ?? e.actorId}
             </span>

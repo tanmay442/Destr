@@ -1,4 +1,4 @@
-ALTER TABLE "ticket_audit" DROP CONSTRAINT "ticket_audit_action_check";--> statement-breakpoint
+ALTER TABLE "ticket_audit" DROP CONSTRAINT IF EXISTS "ticket_audit_action_check";--> statement-breakpoint
 ALTER TABLE "chunks" ALTER COLUMN "document_id" SET DATA TYPE integer;--> statement-breakpoint
 ALTER TABLE "documents" ADD COLUMN "storage_key" text;--> statement-breakpoint
 CREATE INDEX "chunks_document_id_idx" ON "chunks" USING btree ("document_id");--> statement-breakpoint

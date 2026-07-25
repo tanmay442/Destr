@@ -243,7 +243,44 @@ type TicketAuditAction =
   | 'impersonation'
   | 'role_change';
 
+export type AuditKind = 'document' | 'ticket' | 'user' | 'settings';
+
+export interface AuditEventInput {
+  kind: AuditKind;
+  action: string;
+  actorId: string;
+  targetType?: string;
+  targetId?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AuditEventRecord {
+  id: number;
+  kind: AuditKind;
+  action: string;
+  actorId: string;
+  actorName: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  details: Record<string, unknown>;
+  at: Date;
+}
+
+export interface AuditListFilter {
+  kind?: AuditKind;
+  action?: string;
+  actorId?: string;
+  from?: Date;
+  to?: Date;
+  documentId?: number;
+  ticketId?: string;
+  limit: number;
+  offset: number;
+}
+
 export interface AuditLog {
+  /** Generic write into the single `audit_events` table. */
+  logEvent(input: AuditEventInput): Promise<void>;
   logDocumentEvent(input: {
     action: DocumentAuditAction;
     documentId: number;
@@ -263,26 +300,12 @@ export interface AuditLog {
   }): Promise<void>;
   /** Persist an audit event whose primary write failed, for later replay. */
   recordDeadLetter(input: {
-    kind: 'document' | 'ticket' | 'user';
+    kind: AuditKind;
     payload: unknown;
     error: string;
   }): Promise<void>;
-  list(input: {
-    documentId?: number;
-    ticketId?: string;
-    limit: number;
-    offset: number;
-  }): Promise<{
-    events: Array<{
-      id: number;
-      kind: 'document' | 'ticket';
-      documentId: number | null;
-      ticketId: string | null;
-      actorId: string;
-      actorName: string | null;
-      action: string;
-      at: Date;
-    }>;
+  list(input: AuditListFilter): Promise<{
+    events: AuditEventRecord[];
     total: number;
   }>;
 }

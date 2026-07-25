@@ -1,5 +1,12 @@
 import { type Result, serviceResult } from '../service-result';
 import type { AuditLog } from '@app/domain';
+import { safeAudit } from '../audit-reliability';
+
+export interface SettingsChange {
+  key: string;
+  old: unknown;
+  new: unknown;
+}
 
 export async function logDocumentEvent(
   input: { action: 'upload' | 'replace' | 'delete' | 'restore'; documentId: number; actorId: string },
@@ -19,11 +26,26 @@ export async function logTicketEvent(
   return serviceResult(() => deps.audit.logTicketEvent(input), 'Failed to log ticket event');
 }
 
-// TODO(session-05): persist the settings diff to the audit_events table once it exists.
+/** Persist a settings diff (`{ key, old, new }` per changed field) to `audit_events`. */
 export async function logSettingsChange(
-  input: { actorId: string; before: Record<string, unknown>; after: Record<string, unknown> },
+  input: { actorId: string; changes: SettingsChange[] },
+  deps: { audit: AuditLog },
 ): Promise<void> {
-  void input;
+  if (input.changes.length === 0) return;
+  const event = {
+    kind: 'settings' as const,
+    action: 'update',
+    actorId: input.actorId,
+    targetType: 'settings',
+    targetId: 'app',
+    details: { changes: input.changes },
+  };
+  await safeAudit(
+    () => deps.audit.logEvent(event),
+    (payload, error) => deps.audit.recordDeadLetter({ kind: 'settings', payload, error }),
+    event,
+    'settings',
+  );
 }
 
 export async function logUserRoleChange(

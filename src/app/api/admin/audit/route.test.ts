@@ -116,12 +116,94 @@ describe('GET /api/admin/audit', () => {
     await route.GET(makeReq({ documentId: '5', ticketId: 'TKT-1001', limit: '25', offset: '10' }));
 
     expect(listAuditMock).toHaveBeenCalledWith({
+      kind: undefined,
+      action: undefined,
+      actor: undefined,
+      from: undefined,
+      to: undefined,
       documentId: 5,
       ticketId: 'TKT-1001',
       limit: 25,
       offset: 10,
       actorId: 'admin_1',
     });
+  });
+
+  it('passes kind/action/actor/date filters to listAudit', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    listAuditMock.mockResolvedValue(ok({ events: [], total: 0 }) as never);
+
+    await route.GET(makeReq({
+      kind: 'settings',
+      action: 'update',
+      actor: 'user_9',
+      from: '2025-06-01',
+      to: '2025-06-30',
+    }));
+
+    expect(listAuditMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'settings',
+      action: 'update',
+      actor: 'user_9',
+      from: new Date('2025-06-01'),
+      to: new Date('2025-06-30'),
+    }));
+  });
+
+  it('returns 400 for an unknown kind', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    const res = await route.GET(makeReq({ kind: 'nope' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for an invalid date', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    const res = await route.GET(makeReq({ from: 'not-a-date' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns user and settings kinds without dropping them', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    listAuditMock.mockResolvedValue(ok({
+      events: [
+        {
+          id: 2,
+          kind: 'user',
+          action: 'role_change',
+          actorId: 'admin_1',
+          actorName: 'A',
+          targetType: 'user',
+          targetId: 'user_2',
+          details: { fromRole: 'user', toRole: 'admin' },
+          at: new Date('2025-06-02T10:00:00Z'),
+        },
+        {
+          id: 3,
+          kind: 'settings',
+          action: 'update',
+          actorId: 'admin_1',
+          actorName: 'A',
+          targetType: 'settings',
+          targetId: 'app',
+          details: { changes: [{ key: 'agentStepBudget', old: 8, new: 5 }] },
+          at: new Date('2025-06-03T10:00:00Z'),
+        },
+      ],
+      total: 2,
+    }) as never);
+
+    const res = await route.GET(makeReq());
+    const body = await res.json();
+    expect(body.events.map((e: { kind: string }) => e.kind)).toEqual(['user', 'settings']);
+    expect(body.events[1].details.changes).toEqual([{ key: 'agentStepBudget', old: 8, new: 5 }]);
   });
 
   it('returns empty events when no audit data exists', async () => {

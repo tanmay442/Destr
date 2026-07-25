@@ -3,12 +3,20 @@ import { getRuntimeConfig, invalidateRuntimeConfig, envLockedPaths } from '@/lib
 import { partialAppConfigSchema, type AppConfig } from '@app/domain/app-config';
 import {
   buildEffective,
+  deepGet,
+  flattenSchema,
   lockedPathsInPatch,
   mergePatch,
   resolveEmbeddingModelId,
 } from './descriptor';
 
 const WRITE_WINDOW_MS = 5_000;
+
+function settingsDiff(before: AppConfig, after: AppConfig) {
+  return [...flattenSchema().keys()]
+    .map((key) => ({ key, old: deepGet(before, key), new: deepGet(after, key) }))
+    .filter((c) => JSON.stringify(c.old) !== JSON.stringify(c.new));
+}
 
 export async function GET() {
   const auth = await requireAdminRoute();
@@ -95,7 +103,7 @@ export async function PUT(req: Request) {
 
   invalidateRuntimeConfig();
   const after = await getRuntimeConfig();
-  await auth.comp.logSettingsChange({ actorId, before, after });
+  await auth.comp.logSettingsChange({ actorId, changes: settingsDiff(before, after) });
 
   return Response.json({ version: result.version });
 }

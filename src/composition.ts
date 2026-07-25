@@ -225,7 +225,7 @@ function createComposition() {
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
-    logSettingsChange: (input: Parameters<typeof logSettingsChange>[0]) => logSettingsChange(input),
+    logSettingsChange: (input: Parameters<typeof logSettingsChange>[0]) => logSettingsChange(input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
     recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: queryStats }),
     getTopQueries: (limit: number) => getTopQueries(limit, { stats: queryStats }),

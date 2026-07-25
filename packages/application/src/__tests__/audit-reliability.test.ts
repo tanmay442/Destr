@@ -28,4 +28,12 @@ describe('safeAudit', () => {
     ).resolves.toBeUndefined();
     expect(recordDeadLetter).toHaveBeenCalledOnce();
   });
+
+  it('supports the settings kind for dead-letter capture', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('db down'));
+    const recordDeadLetter = vi.fn().mockResolvedValue(undefined);
+    const payload = { changes: [{ key: 'agentStepBudget', old: 8, new: 5 }] };
+    await safeAudit(write, recordDeadLetter, payload, 'settings');
+    expect(recordDeadLetter).toHaveBeenCalledWith(payload, 'db down');
+  });
 });
