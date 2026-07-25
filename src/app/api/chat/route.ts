@@ -29,8 +29,7 @@ function emitCitations(
   }));
 }
 
-/** Per-turn metrics accumulated while the tools run (Session 6). Persisted to
- *  `chat_events` after generation completes. */
+/** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
 interface TurnMetrics {
   retrieveMs: number;
   hitCount: number | null;
@@ -40,15 +39,12 @@ interface TurnMetrics {
 }
 
 function buildChatTools(deps: {
-  /** Retrieval mode for this request (canary-resolved). Gates agentic vs plain
-   *  search explicitly — never the truthiness of `agenticSearch`. */
   effectiveMode: 'agentic' | 'normal';
   searchChunks: (query: string, opts: { limit?: number }) => ReturnType<Composition['searchChunks']>;
   agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
   capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
   createTicket: Composition['createTicket'];
   userId: string;
-  /** Set to true by the agentic loop when retrieval found nothing relevant. */
   outOfDomainRef: { value: boolean };
   metrics: TurnMetrics;
 }) {
@@ -235,9 +231,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const isFirstTurn = messages.length <= 1;
 
-  // Session 10: answer cache. Only first-turn, query-keyed answers are cached —
-  // follow-up turns carry conversation state and must not be served stale. The key
-  // pins the embedding + chat model ids so a model swap never serves a stale text.
   // Canary rollout: decide once per request whether to honour the configured
   // retrieval mode or its inverse, then thread that single decision through both
   // the tool-selection gate and the step budget.
@@ -248,9 +241,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
       ? 'normal'
       : 'agentic';
 
-  // Session 6: `chat_events` uses the `agentic|vector` vocabulary — plain
-  // (`normal`) retrieval is persisted as `vector`. `query` is omitted when
-  // `captureQueryText` is disabled.
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
   const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, rewritten: false };
@@ -346,7 +336,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
             hallucinationGrader: comp.getHallucinationGrader(cfg),
             outOfDomain: outOfDomainRef.value,
           });
-          // Session 10: write the freshly-generated first-turn answer to the cache.
           if (cacheKey) {
             try {
               const finalAnswer = await result.text;
@@ -392,10 +381,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
 }
 
 /**
- * Post-generation guardrail (Session 8, plan step 7): if the agentic loop is on
- * and retrieval was out-of-domain, or the grounded-grader flags the answer as
- * not supported by the docs, nudge the client toward a support ticket. Never
- * blocks or rewrites the streamed answer — it only appends a control hint.
+ * Post-generation guardrail: if retrieval was out-of-domain or the grounded-grader
+ * flags the answer as not supported, nudge the client toward a support ticket.
  */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;

@@ -3,14 +3,12 @@ import { Receiver } from '@upstash/qstash';
 import { getComposition } from '@/composition';
 import { NotFoundError } from '@app/domain';
 
-// QStash async ingest callback; non-2xx → QStash retries; ingestQueuedDocument is idempotent.
 export async function POST(req: Request) {
   const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
   const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
   if (!currentSigningKey || !nextSigningKey) {
     return NextResponse.json({ error: 'QStash signing keys not configured' }, { status: 401 });
   }
-  // Receiver.verify needs the raw body string; req.json() consumes the stream.
   const body = await req.text();
   const signature = req.headers.get('upstash-signature') ?? '';
   const receiver = new Receiver({ currentSigningKey, nextSigningKey });

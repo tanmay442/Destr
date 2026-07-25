@@ -1,6 +1,5 @@
 'use client';
 
-// Global error boundary — must be a Client Component (Next.js requirement).
 export default function GlobalError({
   error,
   reset,
@@ -13,7 +12,6 @@ export default function GlobalError({
       <body
         className="flex min-h-screen items-center justify-center bg-background p-4 text-foreground"
         style={{
-          // Inline because globals.css may not have loaded.
           colorScheme: 'dark',
         }}
       >

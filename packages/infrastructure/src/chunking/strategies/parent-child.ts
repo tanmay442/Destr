@@ -71,7 +71,6 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
   const childSize = opts.childSize ?? DEFAULT_CHILD_SIZE;
   const overlap = opts.overlap ?? DEFAULT_OVERLAP;
 
-  /** Group a page's sections into parent blocks, splitting oversized ones. */
   function groupIntoParents(sections: Section[]): Section[] {
     const parents: Section[] = [];
     let current: Section | null = null;

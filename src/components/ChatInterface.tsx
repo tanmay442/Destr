@@ -21,7 +21,6 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { ArrowUpIcon, SquareIcon } from 'lucide-react';
 
-/** Single breathing circle — like chatgpt.com's "thinking" indicator. */
 function ThinkingDot() {
   return (
     <span
@@ -92,7 +91,6 @@ export function ChatInterface() {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
-  // Auto-scroll: follow the stream, settle smoothly when idle.
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

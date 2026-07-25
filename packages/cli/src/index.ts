@@ -58,7 +58,6 @@ async function main(): Promise<void> {
       return;
     }
     case 'db-migrate': {
-      // apply-migration first: enables pgvector + pending SQL migrations
       const pre = spawnSync('node', ['scripts/apply-migration.mjs'], {
         cwd: REPO_ROOT,
         stdio: 'inherit',

@@ -32,7 +32,6 @@ function scrubSecrets(input: string): string {
   return out;
 }
 
-// Serialise Error values (JSON.stringify skips non-enumerable props).
 function serializeMeta(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {

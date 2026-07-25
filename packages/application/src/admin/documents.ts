@@ -25,7 +25,7 @@ import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants'
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
 import { requireAdminActor } from './authz';
 
-/** Object-storage key, unique per upload so renames/duplicates never collide. */
+/** Generate a unique blob-storage key for the given filename. */
 function newBlobKey(fileName: string): string {
   const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
   return `docs/${randomUUID()}/${safe}`;
@@ -104,10 +104,10 @@ export async function listDocuments(
   }, 'Failed to list documents');
 }
 
-/** ≥4 MB uses the async QStash path (when QSTASH_TOKEN is set); matches Vercel's body limit. */
+/** ≥4 MB uses the async QStash path (when QSTASH_TOKEN is set). */
 const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
 
-/** Async ingest only when QSTASH_TOKEN is set; else every upload is synchronous. */
+/** Returns true when QSTASH_TOKEN is set. */
 function asyncIngestEnabled(): boolean {
   return Boolean(process.env.QSTASH_TOKEN);
 }
@@ -120,11 +120,8 @@ interface PreparedReplacement {
 
 /**
  * Shared blob-before-tx + dedup-by-hash logic for both upload-by-name and
- * replace-by-id. Uploads the new blob first (so a rolled-back tx never
- * orphans it), dedups identical content, and returns the new storage key plus
- * the superseded key for post-commit cleanup. The caller runs the DB write
- * and reuses the existing document id (no delete+insert) so references such
- * as bookmarks/audit/queued messages stay stable across sync/async paths.
+ * replace-by-id. Uploads the new blob first, dedups identical content, and
+ * returns the new storage key plus the superseded key for post-commit cleanup.
  */
 async function prepareReplacementBlob(
   input: { fileName: string; buffer: Buffer; actorId: string },
@@ -164,8 +161,7 @@ async function uploadPdfSync(
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
   const oldStorageKey = existing?.storageKey ?? null;
-  // Upload the blob BEFORE the DB transaction so a tx rollback can never
-  // leave the row pointing at a deleted blob.
+  // Upload blob BEFORE the DB tx so a rollback never orphans a committed row's blob.
   const key = newBlobKey(input.fileName);
   await deps.blobStorage.put(key, input.buffer, 'application/pdf');
   const r = await deps.runner.run(async (tx) => {
@@ -182,11 +178,10 @@ async function uploadPdfSync(
     });
     return res;
   });
-  // Only delete the superseded blob after the new row has committed.
+  // Delete superseded blob after the new row has committed.
   if (r.ok && oldStorageKey) {
-    await deps.blobStorage.delete(oldStorageKey).catch(() => {
-      // Orphaned blob beats failing the upload.
-    });
+    // Best-effort cleanup: orphaned blob beats failing the upload.
+    await deps.blobStorage.delete(oldStorageKey).catch(() => {});
   }
   return r;
 }
@@ -204,8 +199,7 @@ async function queuePdfForIngest(
   }
   const { fileHash, key, oldStorageKey } = prepared.value;
   const row = await deps.runner.run(async (tx) => {
-    // Reuse the existing id (upsert-in-place) so references stay stable;
-    // the QStash worker re-ingests chunks into this same row.
+    // Reuse the existing id (upsert-in-place) so references stay stable.
     const doc = existing
       ? await tx.documents.update(existing.id, { fileName: input.fileName, fileHash, uploadedBy: input.actorId })
       : await tx.documents.insert({ fileName: input.fileName, fileHash, uploadedBy: input.actorId });
@@ -216,14 +210,13 @@ async function queuePdfForIngest(
     return doc;
   });
   if (oldStorageKey) {
-    await deps.blobStorage.delete(oldStorageKey).catch(() => {
-      // Orphaned blob beats blocking the re-upload.
-    });
+    // Best-effort cleanup: orphaned blob beats blocking the re-upload.
+    await deps.blobStorage.delete(oldStorageKey).catch(() => {});
   }
   try {
     await deps.ingestQueue.enqueue({ documentId: row.id });
   } catch (e) {
-    // Commit done but QStash publish failed; mark `failed` so UI never shows forever-`queued`.
+    // QStash publish failed after commit; mark as failed so UI doesn't show forever-queued.
     await deps.documents.updateIngestStatus(row.id, 'failed').catch(() => {});
     throw e;
   }
@@ -301,9 +294,8 @@ export async function hardDeleteDocument(
       await tx.documents.deleteById(input.documentId);
     });
     if (storageKey) {
-      await deps.blobStorage.delete(storageKey).catch(() => {
-        // Orphaned blob beats failing the hard-delete.
-      });
+      // Best-effort cleanup: orphaned blob beats failing the hard-delete.
+      await deps.blobStorage.delete(storageKey).catch(() => {});
     }
     return ok(undefined);
   }, 'Failed to hard-delete document');
@@ -324,10 +316,8 @@ export async function replacePdf(
       return ok({ documentId: input.documentId, chunks: 0, status: 'unchanged' });
     }
 
-    // Resolve by documentId (never by fileName) so we never touch an unrelated
-    // document, and keep the same id across sync/async paths. Reuse the row
-    // in place instead of delete+insert so bookmarks/audit/queued references
-    // stay stable. The old blob is removed only after the tx commits.
+    // Resolve by documentId (never by fileName) and reuse the row in place
+    // so bookmarks/audit/queued references stay stable across sync/async paths.
     const oldStorageKey = existing.storageKey;
     const key = newBlobKey(input.fileName);
     await deps.blobStorage.put(key, input.buffer, 'application/pdf');
@@ -386,9 +376,8 @@ export async function replacePdf(
     }
 
     if (oldStorageKey) {
-      await deps.blobStorage.delete(oldStorageKey).catch(() => {
-        // Orphaned blob beats failing the replace.
-      });
+      // Best-effort cleanup: orphaned blob beats failing the replace.
+      await deps.blobStorage.delete(oldStorageKey).catch(() => {});
     }
 
     return ok({ documentId: rowId, chunks: parsed?.value.chunks ?? 0, status: useAsync ? 'queued' : 'updated' });

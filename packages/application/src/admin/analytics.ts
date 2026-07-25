@@ -5,8 +5,7 @@ import type {
 } from '@app/domain';
 import { requireAdminActor } from './authz';
 
-/** Rough blended token prices (USD per 1M tokens) for the estimated-cost card.
- *  Deliberately conservative order-of-magnitude figures, not a billing source. */
+/** Rough blended token prices (USD per 1M tokens) for estimated-cost card. */
 const TOKEN_COST_PER_MILLION = { input: 0.15, output: 0.6 } as const;
 
 export interface ChatAnalytics extends ChatEventMetrics {

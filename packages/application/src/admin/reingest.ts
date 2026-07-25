@@ -14,10 +14,8 @@ export interface ReingestSummary {
 
 /**
  * Re-enqueue every non-deleted document for a full re-ingest against the
- * *current* strategy/model. Pagination is driven entirely by the repository's
- * `total`, so the caller never has to guess how many pages exist. Each doc is
- * enqueued exactly once; the existing QStash worker does the parse → split →
- * embed → atomic chunk replace — this use-case holds no ingest logic.
+ * current strategy/model. Each doc is enqueued exactly once; the existing
+ * QStash worker does the parse → split → embed → atomic chunk replace.
  */
 export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSummary>> {
   if (deps.queue.isNoOp()) {

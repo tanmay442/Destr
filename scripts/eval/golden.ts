@@ -1,5 +1,5 @@
 /**
- * Golden question set for the evaluation harness (Session 10).
+ * Golden question set for the evaluation harness.
  *
  * Seeded from `QueryStats.top` (your most-asked queries). Each entry carries the
  * question plus the grading criteria: `mustMention` phrases that a faithful,

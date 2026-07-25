@@ -7,7 +7,6 @@ const middleware: (req: NextRequest) => Promise<NextResponse> = adapter.middlewa
 export default middleware;
 
 export const config = {
-  // Run on everything except static assets and the Next.js internals.
   matcher: [
     '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
     '/(api|trpc)(.*)',

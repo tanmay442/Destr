@@ -1,4 +1,3 @@
-// Composition root: wires port interfaces to infrastructure adapters.
 import {
   ingestFile, searchChunks, listUsers, setUserRole, touchLastSeen,
   getUserByClerkId, logDocumentEvent, logTicketEvent, recordQuery,
@@ -36,26 +35,18 @@ import { MAX_LIST_LIMIT } from '../config/constants';
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
 
-/** Wrap a Result-returning use-case with partially-applied deps.
- *  Returns the Result directly — the caller inspects `.ok`. */
 const bind = <Args extends unknown[], T>(
   fn: (...args: Args) => Promise<Result<T>>,
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-// Reuse the factory functions from repositories.ts instead of
-// defining duplicate adapter wrappers here.
 const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 const settingsRepo = Db.createSettingsRepo(Db.db);
-// Single shared batcher instance: the chat route and tests use this one so a
-// mocked instance never drifts from a bare module singleton (Session 6).
 const chatEventBatcher = Db.createChatEventsRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
 
-// Object storage for PDF binaries. Provider is env-swappable via
-// BLOB_STORAGE_PROVIDER (filesystem | r2 | s3). Default: filesystem.
 const blobStorage: BlobStorage = Storage.createBlobStorage();
 
 // Filesystem storage is ephemeral on serverless/edge — warn so misconfig in
@@ -116,8 +107,6 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   summarizer: Llm.docSummarizer,
 };
 
-// Session 2: chunking strategy + parent/child sizes are resolved per ingest
-// from runtime config so parent-child edits take effect on new uploads.
 function buildChunkingStrategy(cfg: AppConfig) {
   return Chunking.getChunkingStrategy(cfg.chunkingStrategy, {
     embeddings: embeddingService,
@@ -130,12 +119,6 @@ async function resolveIngestDeps(): Promise<IngestDeps> {
   const cfg = await getRuntimeConfig();
   return { ...ingestDeps, chunkingStrategy: buildChunkingStrategy(cfg) };
 }
-// Session 2/6: all three rerankers are pre-instantiated at boot with their
-// availability recorded, so the runtime-selected provider (`cfg.rerankerProvider`)
-// can be resolved per request. `cosine` is always available (no reranker loaded);
-// `cohere` needs `COHERE_API_KEY`; `local` needs native onnxruntime and does not
-// run on Vercel serverless. An unavailable provider resolves to `undefined`, so
-// `searchChunks` falls back to cosine ordering.
 export type RerankerStatus = { ok: boolean; reason?: string };
 const rerankerRegistry = new Map<string, { reranker?: Reranker; status: RerankerStatus }>([
   ['cosine', { reranker: undefined, status: { ok: true } }],
@@ -165,8 +148,6 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
   return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
 }
 
-// Session 8 graders are always instantiated (Session 2: mode is selected per
-// request, not gated at boot). The grade model is threaded from runtime config.
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
   const graders = Llm.getGraders(true, cfg.gradeModel);
   return {
@@ -184,9 +165,6 @@ const rateLimiter: RateLimiter =
 const queryStats: QueryStats =
   process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashQueryStats() : Auth.inMemoryQueryStats;
 
-// Session 10: answer cache reuses the same Upstash Redis as the rate-limiter
-// and query stats (no second connection). Falls back to an in-memory cache when
-// Redis is not configured, so the cache toggle works in local/dev + tests.
 function createAnswerCache() {
   if (process.env.UPSTASH_REDIS_REST_URL) {
     try {
@@ -207,18 +185,10 @@ function createComposition() {
 
   return {
     ingestFile: async (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, await resolveIngestDeps()),
-    /** Plain search bound to the per-request runtime config: the reranker is
-      * resolved from `cfg.rerankerProvider` and the threshold/hybrid knobs from
-      * `cfg`. */
     searchChunks: (cfg: AppConfig, q: string, o: Parameters<typeof searchChunks>[1]) =>
       bind(searchChunks, q, { ...o, threshold: cfg.similarityThreshold, hybridEnabled: cfg.hybridEnabled }, getSearchDeps(cfg)),
-    /** Session 8 agentic retrieval loop (rewrite → retrieve → grade → retry),
-      * with graders/knobs resolved from the per-request runtime config. */
     agenticSearch: (cfg: AppConfig, query: string) => agenticSearch(query, getAgenticDeps(cfg)),
-    /** Session 8 hallucination grader (post-generation guardrail), bound to the
-      * per-request runtime grade model. */
     getHallucinationGrader: (cfg: AppConfig) => getAgenticDeps(cfg).hallucinationGrader.grade,
-    /** Session 2/3: per-request retrieval selectors + reranker availability. */
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -251,10 +221,6 @@ function createComposition() {
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
     replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
       bind(replacePdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
-    /** Ingest pre-chunked Markdown (Session 2). Parses via the injected
-      * MarkdownParser adapter (infrastructure), then embeds + writes the
-      * chunks with their page/section/source metadata. An optional companion
-      * PDF is stored as the document blob for preview/download. */
     uploadChunkedMarkdown: (input: {
       fileName: string;
       mdText: string;
@@ -273,18 +239,6 @@ function createComposition() {
         markdownParser: Markdown.markdownParser,
         summarizer: Llm.docSummarizer,
       }),
-    /** Drain a queued ingest: called by the /api/admin/ingest-worker
-     *  route on a QStash callback. Loads the doc, reads the PDF from the blob
-     *  store, parses+embeds it, then claims the job and inserts chunks + flips
-     *  to `done` inside one transaction. A retry that sees `done` is a no-op; a
-     *  concurrent worker that already claimed the job returns `busy` (the route
-     *  maps that to 409 so QStash retries later).
-     *  The claim is now atomic via `DocumentRepository.claimIngest`
-     *  (`UPDATE … WHERE ingest_status='queued' RETURNING`), so concurrent
-     *  deliveries cannot both embed/insert (M1).
-     *  NOTE: a crash after a successful claim leaves the doc stuck in
-     *  `ingesting`; there is no auto-recovery scan — a future job should
-     *  periodically re-queue (or time-out) stuck `ingesting` rows. */
     ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
@@ -379,8 +333,6 @@ export function parseQueryPagination(
   };
 }
 
-/** Parse a `page` search-param into a 1-based integer, falling
- *  back gracefully on NaN, negatives, or floats. */
 export function parsePageParam(raw: string | undefined, fallback = 1): number {
   const n = Number(raw ?? fallback);
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;

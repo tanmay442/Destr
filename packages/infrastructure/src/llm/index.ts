@@ -50,23 +50,14 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
   }
 }
 
-/** Select the second-stage reranker adapter (Session 6). `local` runs an
- *  on-device cross-encoder (no key required); `cohere` uses the hosted Rerank
- *  API (requires `COHERE_API_KEY`). Defaults to `local`. */
 /**
- * Select the second-stage reranker adapter (Session 6).
+ * Select the second-stage reranker adapter.
  *
  * `RERANKER_PROVIDER` chooses between three modes:
- *   - 'cosine' : the original pre-Session-6 bi-encoder ordering. No reranker is
- *               loaded — returns `undefined`, so `searchChunks` keeps its OG
- *               vector behaviour. This is the safe serverless default.
- *   - 'local'  : on-device Xenova cross-encoder (`localReranker`), no API key.
- *   - 'cohere' : hosted Cohere Rerank API (`cohereReranker`). If `COHERE_API_KEY`
- *               is missing, returns `undefined` (→ cosine) instead of attempting a
- *               call that would fail — a clean switch rather than a thrown error.
- *
- * In every case, if the chosen reranker later fails at runtime (model won't load,
- * API error, etc.), `searchChunks` automatically falls back to cosine ordering.
+ *   - 'cosine' : no reranker loaded, returns `undefined` (vector ordering only).
+ *   - 'local'  : on-device Xenova cross-encoder, no API key.
+ *   - 'cohere' : hosted Cohere Rerank API. Falls back to cosine if
+ *               `COHERE_API_KEY` is missing.
  */
 export function getReranker(provider?: string): Reranker | undefined {
   const selected = provider ?? process.env.RERANKER_PROVIDER ?? 'cosine';
@@ -83,10 +74,8 @@ export function getReranker(provider?: string): Reranker | undefined {
 }
 
 /**
- * Return the Session 8 agentic-loop graders, or `undefined` for each when the
- * loop is disabled (`AGENTIC_ENABLED=false`). Adapters reuse the chat model
- * (cheap `GRADE_MODEL` override, or the Session 2 runtime `gradeModelId` when
- * supplied) and degrade safely on failure.
+ * Return the agentic-loop graders, or `undefined` for each when the loop is
+ * disabled (`AGENTIC_ENABLED=false`).
  */
 export function getGraders(enabled?: boolean, gradeModelId?: string): {
   queryRewriter: QueryRewriter | undefined;
@@ -115,10 +104,8 @@ export {
   hallucinationGrader,
 };
 
-/** Resolve the resolved embedding model id string for the active provider.
- *  Used to stamp `DocumentChunk.embeddingModel` metadata from within
- *  infrastructure (the application layer must not import infrastructure, so it
- *  cannot read the provider-specific model id itself). */
+/** Resolve the embedding model id string for the active provider.
+ *  Used to stamp `DocumentChunk.embeddingModel` metadata. */
 export function getEmbeddingModelId(): string {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
   switch (provider) {

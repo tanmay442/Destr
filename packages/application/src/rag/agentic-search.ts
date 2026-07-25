@@ -16,8 +16,7 @@ export interface AgenticDeps {
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
   hallucinationGrader: HallucinationGrader;
-  /** Runtime knobs (Session 2). Each falls back to its frozen constant so
-   *  callers that omit them keep the prior behaviour. */
+  /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
   outOfDomainThreshold?: number;
@@ -26,7 +25,7 @@ export interface AgenticDeps {
 /** Outcome of one agentic retrieval pass. */
 export interface AgenticResult {
   chunks: RetrievedChunk[];
-  /** Rewritten query actually used for the final retrieval. */
+  /** Rewritten query used for the final retrieval. */
   rewrittenQuery: string;
   /** True when no chunk cleared the relevance grade and similarity was below threshold. */
   outOfDomain: boolean;
@@ -50,12 +49,9 @@ async function retrieveAndGrade(
 }
 
 /**
- * Agentic retrieval loop (Session 8) over the hybrid/reranked `searchChunks`.
- *
- * 1. rewrite the query, 2. retrieve + grade/drop irrelevant chunks,
- * 3. if nothing kept and similarity is low, re-retrieve with the original
- *    query (one bounded retry), 4. report out-of-domain when the final pool is
- *    empty and below `OUT_OF_DOMAIN_THRESHOLD`. The generation + hallucination
+ * Agentic retrieval loop: 1. rewrite query, 2. retrieve + grade/drop irrelevant
+ * chunks, 3. retry with original query if nothing kept, 4. report out-of-domain
+ * when the final pool is empty and below threshold. Generation + hallucination
  * check happen in the route after `streamText` returns.
  */
 export async function agenticSearch(

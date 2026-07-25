@@ -119,14 +119,12 @@ const config: AppConfig = {
   // model to call the tool every turn.
   prefetchFirstTurn: false,
 
-  // Chunking strategy at ingest (Session 4). Override with the
-  // CHUNKING_STRATEGY env var. Default `document-aware` yields
-  // per-section `sectionTitle` provenance for richer citations.
-  // `parent-child` (Session 5) emits small children + large parent blocks.
+  // Chunking strategy at ingest. Override with the CHUNKING_STRATEGY env var.
+  // Default `document-aware` yields per-section `sectionTitle` provenance.
+  // `parent-child` emits small children + large parent blocks.
   chunkingStrategy: (process.env.CHUNKING_STRATEGY ?? 'document-aware') as AppConfig['chunkingStrategy'],
 
-  // Parent-child indexing (Session 5). Only used when
-  // `chunkingStrategy === 'parent-child'`. Sizes are in characters.
+  // Parent-child indexing. Only used when `chunkingStrategy === 'parent-child'`.
   parentChunkSize: PARENT_CHUNK_SIZE,
   childChunkSize: CHILD_CHUNK_SIZE,
   // How `searchChunks` resolves a child hit to context: `parent` returns the

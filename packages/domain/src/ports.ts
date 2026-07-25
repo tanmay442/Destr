@@ -65,12 +65,7 @@ export interface DocumentRepository {
   countChunksForAll(): Promise<number>;
 }
 
-/**
- * A single pre-split chunk parsed from user-supplied Markdown. Produced by a
- * `MarkdownParser` adapter; maps onto `DocumentChunk`/`chunks` metadata columns
- * by the pre-chunked ingest use-case (Session 2). Kept in the domain so the
- * application + API layers can consume it without importing infrastructure.
- */
+/** A single pre-split chunk parsed from user-supplied Markdown. */
 export interface ParsedChunk {
   content: string;
   page?: number | null;
@@ -90,21 +85,17 @@ export interface DocumentChunk {
   page?: number | null;
   sectionTitle?: string | null;
   source?: string | null;
-  title?: string | null; // CCH (Session 3)
-  summary?: string | null; // CCH (Session 3)
-  parentChunkId?: number | null; // parent-child (Session 5)
-  sourceChunkId?: number | null; // proposition back-ref (future)
-  /** Kind of chunk. `parent` = large block returned for context; `child` =
-   *  small block embedded for precise retrieval; `summary` = LLM-generated
-   *  summary (optional variant, Session 5). Defaults to `child`. */
+  title?: string | null;
+  summary?: string | null;
+  parentChunkId?: number | null;
+  sourceChunkId?: number | null;
+  /** Kind of chunk: `parent` (large context block), `child` (embedded for retrieval), `summary` (LLM-generated). */
   kind?: 'parent' | 'child' | 'summary';
   embeddingModel?: string | null;
   contentHash?: string | null;
 }
 
-/** Shape returned by vector/lookup queries: provenance + similarity. Shared by
- *  `searchByVector`, `getByIds`, and `getByDocAndRange` so resolution logic in
- *  the application layer can treat them uniformly. */
+/** Shape returned by vector/lookup queries: provenance + similarity. */
 export interface RetrievedChunkRow {
   id: number;
   documentId: number;
@@ -121,7 +112,7 @@ export interface RetrievedChunkRow {
 /** Parses raw content (e.g. PDF buffer) into structured pages. */
 export interface ContentParser {
   extractPages(buffer: Buffer): Promise<Array<{ page: number; text: string }>>;
-  extractText(buffer: Buffer): Promise<string>; // legacy fallback
+  extractText(buffer: Buffer): Promise<string>;
 }
 
 /** A chunking strategy that turns structured pages into DocumentChunk[]. */
@@ -134,29 +125,20 @@ export interface ChunkRepository {
     embedding: number[],
     opts: { threshold: number; limit: number; filter?: { documentId?: number } },
   ): Promise<RetrievedChunkRow[]>;
-  /** Lexical (BM25 / `tsvector`) retrieval. Returns chunks whose generated
-   *  `tsv` matches the query, ranked by `ts_rank`, with `similarity` set to the
-   *  (padded) rank score. Used by Session 7 hybrid retrieval alongside the
-   *  vector branch; fused via Reciprocal Rank Fusion in `searchChunks`. */
+  /** Lexical (BM25) retrieval ranked by ts_rank. */
   searchByLexical(
     query: string,
     opts: { limit: number; filter?: { documentId?: number } },
   ): Promise<RetrievedChunkRow[]>;
-  /** Fetch chunks by their (surrogate) ids. Returns `RetrievedChunkRow`s with
-   *  `similarity` left as a placeholder (the caller overrides it) — used to
-   *  resolve child hits to their parent blocks (Session 5 parent-child). */
+  /** Fetch chunks by ids. Caller overrides `similarity`; used to resolve child→parent. */
   getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
-  /** Fetch chunks of a document whose `chunkIndex` lies in `[start, end]`
-   *  (inclusive). Used by the `window` parent-child mode to pad a hit with its
-   *  neighbours (Session 5). */
+  /** Fetch chunks in `[start, end]` range. Used by window parent-child mode. */
   getByDocAndRange(
     documentId: number,
     start: number,
     end: number,
   ): Promise<RetrievedChunkRow[]>;
-  /** Batched variant of `getByDocAndRange` for window mode: one round-trip
-   *  fetches neighbours for every `(documentId, start, end)` triple. Returns a
-   *  map keyed by `documentId:start:end`. */
+  /** Batched getByDocAndRange. Returns map keyed by `documentId:start:end`. */
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
   ): Promise<Map<string, RetrievedChunkRow[]>>;
@@ -311,8 +293,7 @@ export interface AuditLog {
 }
 
 
-/** Per-turn chat metrics recorded by the chat route (Session 6). `mode` uses the
- *  `agentic|vector` vocabulary — plain (`normal`) retrieval maps to `vector`. */
+/** Per-turn chat metrics. `mode`: 'agentic' or 'vector'. */
 export interface ChatEventInput {
   userId: string | null;
   query: string | null;
@@ -365,12 +346,7 @@ export interface ChatEventDailyUsage {
   uniqueUsers: number;
 }
 
-/**
- * Batched, dead-lettered per-turn metrics store (Session 6). `record` buffers
- * in memory and flushes on a size/interval threshold; `flush` drains the buffer
- * (call it from a serverless `after`/`waitUntil` hook). Additive to
- * `QueryStats` — truncating this table never affects core chat behaviour.
- */
+/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
@@ -396,14 +372,7 @@ export interface QueryStats {
   top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
-/**
- * Short-lived cache for final, query-keyed answers (Session 10). Sits in front
- * of generation so repeat questions skip the LLM entirely. Because an answer is
- * tied to a specific embedding + chat model, callers MUST pin the model ids
- * into the cache key, otherwise a model swap silently serves stale text. The
- * adapter owns the transport (Upstash Redis / in-memory); the port never
- * encodes a key format.
- */
+/** Cache for query-keyed answers. Callers MUST pin model ids into the key. */
 export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
@@ -415,62 +384,33 @@ export interface EmbeddingService {
   embedBatch(values: string[]): Promise<number[][]>;
 }
 
-/** A single reranked document: its position in the input `documents` array and
- *  the reranker's relevance score for the query (higher = more relevant). */
+/** A reranked document with original index and relevance score. */
 export interface RankedDocument {
   index: number;
   relevanceScore: number;
 }
 
-/**
- * Second-stage reranker (Session 6). Reorders an initial pool of retrieval
- * candidates by true query–document relevance. Unlike bi-encoder cosine
- * (pgvector), cross-encoders / hosted rerankers attend to the query and each
- * document jointly, giving markedly better precision on noisy corpora.
- *
- * `rank` receives the query and the candidate document texts and returns one
- * `RankedDocument` per input, each carrying the original `index` and a
- * `relevanceScore`. Implementations must not assume the results are sorted —
- * callers sort by `relevanceScore`. Implemented in infrastructure as
- * provider-agnostic adapters (local cross-encoder or hosted Cohere).
- */
+/** Second-stage reranker: reorders retrieval candidates by query-document relevance. */
 export interface Reranker {
   rank(query: string, documents: string[]): Promise<RankedDocument[]>;
 }
 
-/**
- * Rewrites a vague user query into a tighter, more retrievable phrase
- * (Session 8 agentic loop). Provider-agnostic; adapters reuse the chat model
- * with structured output. The application layer depends only on this port.
- */
+/** Rewrites a vague user query into a tighter, more retrievable phrase. */
 export interface QueryRewriter {
   rewrite(query: string): Promise<string>;
 }
 
-/**
- * Binary relevance grader for a single retrieved document against a question
- * (Session 8 agentic loop). Returns `'yes'` when the document helps answer the
- * question, `'no'` otherwise. Adapters reuse the chat model.
- */
+/** Binary relevance grader: returns 'yes' if document helps answer the question. */
 export interface DocumentGrader {
   grade(question: string, document: string): Promise<'yes' | 'no'>;
 }
 
-/**
- * Hallucination grader: given the retrieved `documents` text and a `generation`,
- * returns `'yes'` when the answer is grounded in the documents, `'no'` when it
- * is not (Session 8 agentic loop). Adapters reuse the chat model.
- */
+/** Hallucination grader: returns 'yes' when generation is grounded in documents. */
 export interface HallucinationGrader {
   grade(documents: string, generation: string): Promise<'yes' | 'no'>;
 }
 
-/**
- * Generates a short document title + summary used to prepend a contextual
- * header to every chunk before embedding (Contextual Chunk Headers, Session 3).
- * Implemented in infrastructure as a provider-agnostic adapter built on top of
- * the configured chat model. The application layer depends only on this port.
- */
+/** Generates a short document title + summary for contextual chunk headers. */
 export interface DocSummarizer {
   generateDocContext(text: string): Promise<{ title: string; summary: string }>;
 }
@@ -487,7 +427,6 @@ export interface BlobStorage {
 
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
-  /** True when enqueued documents are discarded (no worker wired). Re-ingest refuses to run against it. */
   isNoOp(): boolean;
 }
 
@@ -527,12 +466,7 @@ export interface SessionStore {
   } | null>;
 }
 
-/**
- * Single-row override store for runtime configuration (`app_settings`, id=1).
- * Reads return the current JSONB overrides plus a monotonic `version` used for
- * optimistic concurrency; writes fail with `{ conflict: true }` when the
- * supplied `expectedVersion` no longer matches.
- */
+/** Runtime configuration override store with optimistic concurrency (version field). */
 export interface SettingsRepo {
   getOverrides(): Promise<{ overrides: Partial<AppConfig>; version: number }>;
   saveOverrides(input: {

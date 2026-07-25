@@ -1,4 +1,3 @@
-// `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
   pgTable, serial, text, timestamp, integer, real, jsonb, boolean,
   index, check, foreignKey, uniqueIndex,
@@ -31,7 +30,6 @@ export const chunks = pgTable('chunks', {
   documentId: integer('document_id').references(() => documents.id, { onDelete: 'cascade' }).notNull(),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
-  // --- Metadata + provenance (Session 1, additive) ---
   chunkIndex: integer('chunk_index').notNull().default(0),
   page: integer('page'),
   sectionTitle: text('section_title'),
@@ -40,12 +38,9 @@ export const chunks = pgTable('chunks', {
   kind: text('kind').notNull().default('child'),
   embeddingModel: text('embedding_model'),
   contentHash: text('content_hash'),
-  // Full-text-search vector: STORED generated from `content`, used by Session 7 hybrid retrieval.
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
-  // Partial HNSW index: parent blocks carry a constant placeholder vector
-  // (Session 5, Option C) and are filtered out of every vector query, so they
-  // never need to live in the ANN index. Excluding them keeps the index small.
+  // HNSW index excludes parent blocks (kind='parent') to keep the index small.
   index('embedding_idx')
     .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
     .where(sql`${table.kind} <> 'parent'`),
@@ -86,12 +81,7 @@ export const users = pgTable('users', {
   check('users_role_check', sql`${table.role} IN ('admin','user')`),
 ]);
 
-/**
- * Single generic audit trail (Session 5). Replaces the former per-category
- * `document_audit` / `ticket_audit` / `user_audit` tables. `source_ref` is a
- * backfill-only dedup key (`<old_table>:<old_id>`) that makes the backfill
- * migration idempotently re-runnable.
- */
+/** Generic audit trail. `source_ref` is a backfill-only dedup key. */
 export const auditEvents = pgTable('audit_events', {
   id: serial('id').primaryKey(),
   kind: text('kind').notNull(),
@@ -126,13 +116,7 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
   replayed: boolean('replayed').notNull().default(false),
 });
 
-/**
- * Append-only per-turn chat metrics (Session 6). Additive to `QueryStats`: this
- * table backs the rich historical analytics while `QueryStats` powers instant
- * top-queries. `query` is null when `captureQueryText` is disabled. `meta` is an
- * overflow bag for future metrics without a schema migration. `mode` uses the
- * `agentic|vector` vocabulary (`normal` retrieval is persisted as `vector`).
- */
+/** Append-only per-turn chat metrics. `mode` is `agentic` or `vector`. */
 export const chatEvents = pgTable('chat_events', {
   id: serial('id').primaryKey(),
   userId: text('user_id'),

@@ -1,5 +1,5 @@
 /**
- * `pnpm eval` entrypoint (Session 10).
+ * `pnpm eval` entrypoint.
  *
  * Wires the evaluation harness to real adapters when the env is present
  * (Upstash Redis for stats, embedding/chat LLM providers, Postgres chunks),

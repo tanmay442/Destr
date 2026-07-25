@@ -3,7 +3,7 @@ import { ChatEventBatcher } from '../chat-events-repo';
 import { chatEvents, auditDeadLetter } from '../schema';
 import type { ChatEventInput } from '@app/domain';
 
-type Insert = { table: unknown; values: unknown[] };
+type Insert = { table: unknown; values: unknown };
 
 function makeFakeClient(opts: { failChatInsert?: boolean } = {}) {
   const inserts: Insert[] = [];
@@ -11,7 +11,7 @@ function makeFakeClient(opts: { failChatInsert?: boolean } = {}) {
   const client = {
     insert(table: unknown) {
       return {
-        async values(values: unknown[]) {
+        async values(values: unknown) {
           if (table === chatEvents && opts.failChatInsert) throw new Error('insert boom');
           inserts.push({ table, values });
         },
@@ -63,7 +63,7 @@ describe('ChatEventBatcher', () => {
     await batcher.flush();
     expect(inserts).toHaveLength(1);
     expect(inserts[0]!.table).toBe(chatEvents);
-    expect(inserts[0]!.values).toHaveLength(2);
+    expect(inserts[0]!.values as unknown[]).toHaveLength(2);
   });
 
   it('auto-flushes when the buffer reaches the max size', async () => {
@@ -72,7 +72,7 @@ describe('ChatEventBatcher', () => {
     for (let i = 0; i < 100; i++) batcher.record(sample);
     await vi.runOnlyPendingTimersAsync();
     expect(inserts).toHaveLength(1);
-    expect(inserts[0]!.values).toHaveLength(100);
+    expect(inserts[0]!.values as unknown[]).toHaveLength(100);
   });
 
   it('auto-flushes on the interval timer', async () => {

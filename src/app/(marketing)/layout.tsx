@@ -1,6 +1,5 @@
 import { MarketingFerrofluid } from '@/components/react-bits/MarketingFerrofluid';
 
-// Marketing route group. Passthrough layout; future pages pick up shared chrome here.
 export default function MarketingLayout({
   children,
 }: {

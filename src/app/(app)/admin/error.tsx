@@ -4,7 +4,6 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 export default function AdminError({
-  // error prop required by Next.js ErrorBoundary API
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   error,
   reset,

@@ -31,11 +31,11 @@ function parseDocContext(raw: string): { title: string; summary: string } {
   const normalized = raw.trim();
   let jsonText = normalized;
 
-  // Strip ```json ... ``` or ``` ... ``` fences if present.
+  // Strip ```json ... ``` fences.
   const fence = jsonText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fence) jsonText = (fence[1] ?? '').trim();
 
-  // Fall back to the first balanced {...} block if there is stray prose.
+  // Fall back to the first balanced {...} block.
   if (!jsonText.startsWith('{')) {
     const brace = jsonText.match(/\{[\s\S]*\}/);
     if (brace) jsonText = brace[0];
@@ -47,10 +47,10 @@ function parseDocContext(raw: string): { title: string; summary: string } {
     const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
     if (title || summary) return { title, summary };
   } catch {
-    // Fall through to heuristic parse below.
+    // Fall through to heuristic parse.
   }
 
-  // Last-resort heuristic: first non-empty line = title, remainder = summary.
+  // Last-resort heuristic: first line = title, remainder = summary.
   const lines = normalized.split('\n').map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return { title: '', summary: '' };
   const title = lines[0]!.replace(/^title:?\s*/i, '');
@@ -59,13 +59,10 @@ function parseDocContext(raw: string): { title: string; summary: string } {
 }
 
 /**
- * Provider-agnostic `DocSummarizer` (Session 3 / Contextual Chunk Headers).
- *
- * Wraps the configured chat model (selected by `CHAT_PROVIDER`) with an
- * optional `CCH_MODEL` override. A single call produces one title + summary
- * per document, which `parseAndEmbed`/`ingestPrechunked` prepend as a header
- * to every chunk before embedding. Never throws on malformed model output —
- * it returns the best-effort parse so ingest is never blocked by the LLM.
+ * Provider-agnostic `DocSummarizer` — wraps the configured chat model with an
+ * optional `CCH_MODEL` override. Produces one title + summary per document,
+ * which `parseAndEmbed`/`ingestPrechunked` prepend as a header before
+ * embedding. Never throws on malformed model output.
  */
 export const docSummarizer: DocSummarizer = {
   async generateDocContext(text: string): Promise<{ title: string; summary: string }> {

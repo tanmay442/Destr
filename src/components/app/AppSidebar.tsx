@@ -62,8 +62,6 @@ export function AppSidebar({
   const pathname = usePathname();
   const { signOut } = useClerk();
 
-  // Open by default on /admin/* so deep links show context, and
-  // stay open when navigated to client-side. Remains toggdleable off-admin.
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminToggled, setAdminToggled] = useState<boolean>(false);
   const adminOpen = onAdmin || adminToggled;

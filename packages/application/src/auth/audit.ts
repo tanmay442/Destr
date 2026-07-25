@@ -26,7 +26,7 @@ export async function logTicketEvent(
   return serviceResult(() => deps.audit.logTicketEvent(input), 'Failed to log ticket event');
 }
 
-/** Persist a settings diff (`{ key, old, new }` per changed field) to `audit_events`. */
+/** Persist a settings diff to `audit_events`. */
 export async function logSettingsChange(
   input: { actorId: string; changes: SettingsChange[] },
   deps: { audit: AuditLog },

@@ -22,7 +22,6 @@ export type SafeErrorBody = {
   details?: Record<string, unknown>;
 };
 
-// Safe error body; never leaks internals.
 function toErrorBody(err: DomainError): SafeErrorBody {
   const body: SafeErrorBody = {
     error: SAFE_MESSAGES[err.code] ?? 'An error occurred',
@@ -57,7 +56,6 @@ export function isActionError<T>(
   );
 }
 
-// DomainError → status + safe body; generic/unknown → 500. Never 200.
 export function respond(err: Error | DomainError | Response | unknown): Response {
   if (err instanceof DomainError) {
     const headers: Record<string, string> = {};

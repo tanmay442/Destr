@@ -43,8 +43,8 @@ export interface Graders {
 }
 
 /**
- * Build the Session 8 agentic-loop graders bound to a chat model. `gradeModelId`
- * (Session 2 runtime knob) overrides the frozen `GRADE_MODEL` when supplied, so
+ * Build the agentic-loop graders bound to a chat model. `gradeModelId`
+ * overrides the frozen `GRADE_MODEL` when supplied, so
  * the grade model can be switched per request. All three degrade safely on
  * failure: the rewriter echoes the original query, the graders default to `yes`.
  */

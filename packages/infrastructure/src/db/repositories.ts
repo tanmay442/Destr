@@ -328,11 +328,7 @@ export async function insertChunks(
   }
   const BATCH_SIZE = 500;
 
-  // Two-pass insert for parent-child indices (Session 5). Children reference
-  // their parent via a *transient* key equal to the parent's global
-  // `chunkIndex`; parents have `parentChunkId = null`. We insert parents
-  // first, capture their real surrogate ids, then rewrite each child's
-  // `parentChunkId` before inserting the children (so the self-FK holds).
+  // Two-pass insert: parents first to capture real IDs, then rewrite children's parentChunkId.
   const parents = rows.filter((r) => r.kind === 'parent');
   if (parents.length === 0) {
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {

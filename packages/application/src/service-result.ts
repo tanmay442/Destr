@@ -3,7 +3,7 @@ import { ExternalServiceError } from '@app/domain';
 
 export type { Result } from '@app/domain';
 
-/** Unhandled throws become ExternalServiceError; `err(...)` results pass through. */
+/** Unhandled throws become ExternalServiceError. */
 export async function wrapServiceCall<T>(
   op: () => Promise<Result<T>>,
   message: string,

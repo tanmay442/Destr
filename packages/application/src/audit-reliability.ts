@@ -1,12 +1,7 @@
 import type { AuditKind } from '@app/domain';
 
-/**
- * Write an audit event without blocking the calling operation. The primary
- * write is awaited; if it throws, the failure is captured to the audit
- * dead-letter store (for compliance replay) instead of being silently lost.
- * The dead-letter write's own failure is swallowed so a logging outage can
- * never fail the request.
- */
+/** Write an audit event without blocking the caller. On failure, captures to
+ *  the dead-letter store. Dead-letter failures are swallowed. */
 export async function safeAudit(
   write: () => Promise<void>,
   recordDeadLetter: (payload: unknown, error: string) => Promise<void>,

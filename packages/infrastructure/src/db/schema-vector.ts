@@ -34,8 +34,8 @@ export const vector = customType<{ data: number[]; driverData: string }>({
 /**
  * Full-text-search vector column (PostgreSQL `tsvector`).
  * Materialized as a STORED generated column (see `chunks.tsv`) so it is
- * always in sync with `content` without manual writes. Used by Session 7
- * hybrid retrieval; not read/written through the ORM directly here.
+ * always in sync with `content` without manual writes. Used by hybrid
+ * retrieval; not read/written through the ORM directly here.
  */
 export const tsvector = customType<{ data: string; driverData: string }>({
   dataType() {

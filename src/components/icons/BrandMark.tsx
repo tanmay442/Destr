@@ -1,5 +1,3 @@
-// RAG Support brand mark: chat-bubble retrieval metaphor, strokeWidth 2.5 for 16px legibility.
-
 interface BrandMarkProps {
   className?: string;
   /** Size of the square container. Default 28px (h-7). */

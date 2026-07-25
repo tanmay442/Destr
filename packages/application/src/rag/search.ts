@@ -28,27 +28,22 @@ export interface RetrievedChunk {
 export interface SearchDeps {
   chunks: ChunkRepository;
   embeddings: EmbeddingService;
-  /** Optional second-stage reranker (Session 6). When present, `searchChunks`
-   *  retrieves a broad candidate pool then reorders it by true query–document
-   *  relevance before capping to `limit`. When absent, results fall back to
-   *  cosine (pgvector) ordering — the pre-Session-6 behaviour. */
+  /** Optional second-stage reranker. Retrieves a broad pool then reorders by
+   *  relevance. Falls back to cosine ordering when absent. */
   reranker?: Reranker;
 }
 
 export interface SearchOpts {
   threshold?: number;
   limit?: number;
-  /** Override the `PARENT_CHILD_MODE` config for this call (`parent`|`window`). */
+  /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
   mode?: 'parent' | 'window';
-  /** Override the broad candidate-pool size retrieved before reranking
-   *  (Session 6). Ignored when no reranker is configured. */
+  /** Broad candidate-pool size before reranking. Ignored when no reranker. */
   candidateLimit?: number;
-  /** Override the `HYBRID_ENABLED` config (Session 2 runtime knob). Defaults to
-   *  the frozen constant so callers that omit it keep the prior behaviour. */
+  /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
   hybridEnabled?: boolean;
 }
 
-/** Map a raw query row to the public `RetrievedChunk` (drops `parentChunkId`). */
 function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
   return {
     id: r.id,
@@ -62,12 +57,9 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
   };
 }
 
-/**
- * Resolve child vector hits to their parent blocks (Session 5, `parent` mode).
- * Returns one entry per parent, using the parent's content but keeping the
- * most-relevant child's `page`/`sectionTitle`/`source` for precise citations
- * (gotcha #4). Flat chunks (no `parentChunkId`) pass through unchanged.
- */
+/** Resolve child vector hits to their parent blocks (`parent` mode).
+ *  Returns one entry per parent, using parent content with the most-relevant
+ *  child's citation. Flat chunks pass through unchanged. */
 async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
   const childHits = hits.filter((h) => h.parentChunkId != null);
   const flatHits = hits.filter((h) => h.parentChunkId == null);
@@ -79,8 +71,6 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
   const parents = await deps.chunks.getByIds(parentIds);
   const parentById = new Map(parents.map((p) => [p.id, p]));
 
-  // Best child similarity (for ranking) and best child citation (for precision)
-  // per parent.
   const bestSim = new Map<number, number>();
   const bestChild = new Map<number, RetrievedChunkRow>();
   for (const h of childHits) {
@@ -110,11 +100,8 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
   return [...resolved, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
 }
 
-/**
- * Pad each hit with its `±N` neighbouring chunks (Session 5, `window` mode).
- * Keeps the hit's id/citation but concatenates neighbour content for context.
- * Neighbours for every hit are fetched in a single batched round-trip.
- */
+/** Pad each hit with its `±N` neighbouring chunks (`window` mode).
+ *  Concatenates neighbour content for context in a single batched round-trip. */
 async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
   const radius = PARENT_CHILD_WINDOW;
   const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - radius, end: h.chunkIndex + radius }));
@@ -136,12 +123,7 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
   });
 }
 
-/**
- * Reorder candidate rows by the reranker's relevance score and cap to `topN`.
- * Defensive against out-of-range indices from the adapter. If the reranker
- * throws, falls back to cosine (similarity) ordering so a reranker outage never
- * breaks search (the default provider is on-device and could fail to load).
- */
+/** Reorder by reranker relevance score, cap to `topN`. Falls back to cosine on failure. */
 async function rerankRows(
   query: string,
   rows: RetrievedChunkRow[],
@@ -154,7 +136,6 @@ async function rerankRows(
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .map((r) => rows[r.index])
       .filter((r): r is RetrievedChunkRow => r != null);
-    // If the adapter returned nothing usable, fall back to cosine ordering.
     return (ordered.length > 0 ? ordered : sortBySimilarity(rows)).slice(0, topN);
   } catch {
     return sortBySimilarity(rows).slice(0, topN);
@@ -165,14 +146,8 @@ function sortBySimilarity(rows: RetrievedChunkRow[]): RetrievedChunkRow[] {
   return [...rows].sort((a, b) => b.similarity - a.similarity);
 }
 
-/**
- * Fuse two ranked candidate lists via Reciprocal Rank Fusion:
- * `score = Σ boost / (K + rank)`, where rank is 1-based. Both branches are
- * ranked independently (vector by cosine similarity, lexical by ts_rank); the
- * fused score rewards chunks that rank well in either modality. `boost`
- * upweights a branch (e.g. `LEXICAL_WEIGHT`). Returns rows ordered by fused
- * score, capped to `limit`.
- */
+/** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and
+ *  lexical rankings, rewarding chunks that rank well in either modality. */
 function reciprocalRankFusion(
   vectorRows: RetrievedChunkRow[],
   lexicalRows: RetrievedChunkRow[],
@@ -203,8 +178,6 @@ export async function searchChunks(
   }
   const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, RERANK_TOP_N);
   const rerankerEnabled = deps.reranker != null;
-  // With a reranker we cast a wide net (broad pool, no cosine cutoff) and let
-  // the cross-encoder decide; otherwise we keep the pre-Session-6 behaviour.
   const threshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
   const candidateLimit = rerankerEnabled ? (opts.candidateLimit ?? CANDIDATE_POOL) : topN;
 
@@ -219,9 +192,7 @@ export async function searchChunks(
   const searchByLexical = deps.chunks.searchByLexical;
   const runHybrid = hybridEnabled && searchByLexical != null;
 
-  // Run vector + lexical concurrently. The lexical branch settles into a
-  // tagged result so a lexical outage falls back to vector-only (as before)
-  // without a rejected `Promise.all` masking a genuine vector failure.
+  // Run vector + lexical concurrently; lexical failure falls back to vector-only.
   const vectorPromise = deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
   const lexicalPromise = runHybrid
     ? searchByLexical(query, { limit: candidateLimit }).then(
@@ -255,10 +226,7 @@ export async function searchChunks(
   return capAndResolve(fused, query, topN, opts, deps);
 }
 
-/**
- * Apply the optional reranker (Session 6) and parent/window resolution, then
- * cap to `topN`. Shared by the vector-only and hybrid fusion paths.
- */
+/** Apply optional reranker + parent/window resolution, then cap to `topN`. */
 async function capAndResolve(
   rows: RetrievedChunkRow[],
   query: string,

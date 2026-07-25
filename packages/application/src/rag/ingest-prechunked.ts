@@ -9,7 +9,7 @@ import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
 import { stripThinkTraces } from '@app/domain/sanitize-think';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
-/** Sanitize a filename for use inside a blob-storage key (mirrors seed.ts). */
+/** Sanitize a filename for use inside a blob-storage key. */
 function safeBlobName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
@@ -17,7 +17,7 @@ function safeBlobName(name: string): string {
 export interface PrechunkedIngestInput {
   /** Markdown file name; also used as the document `fileName` (dedup key). */
   fileName: string;
-  /** Already-parsed chunks (parser runs in the caller / infra adapter). */
+  /** Already-parsed chunks. */
   chunks: ParsedChunk[];
   uploadedBy: string;
   /** Optional companion PDF; stored as the document blob for preview/download. */
@@ -31,21 +31,16 @@ export interface PrechunkedIngestDeps {
   chunks: ChunkRepository;
   embeddings: EmbeddingService;
   hasher: Hasher;
-  /** Optional: stores the companion PDF and links it to the document row. */
+  /** Stores the companion PDF and links it to the document row. */
   blobStorage?: BlobStorage;
-  /** Optional: makes the upsert + chunk-replace sequence atomic. */
+  /** Makes the upsert + chunk-replace sequence atomic. */
   runner?: TransactionRunner;
-  /** Optional Contextual-Chunk-Header summarizer (Session 3). */
+  /** Optional Contextual-Chunk-Header summarizer. */
   summarizer?: DocSummarizer;
 }
 
-/**
- * Ingest pre-chunked Markdown. The parser is a pass-through — we never run a
- * `ChunkingStrategy` on the content. Chunks are embedded and written with their
- * page/sectionTitle/source metadata into the same `chunks` columns the
- * strategy sessions use. An optional companion PDF is stored as the document
- * blob (for preview/download) only when supplied.
- */
+/** Ingest pre-chunked Markdown. An optional companion PDF is stored as
+ *  the document blob for preview/download. */
 export async function ingestPrechunked(
   input: PrechunkedIngestInput,
   deps: PrechunkedIngestDeps,
@@ -55,7 +50,7 @@ export async function ingestPrechunked(
     return err(new ValidationError(`No chunks parsed from ${fileName}`));
   }
 
-  // Hash the markdown content (or the PDF buffer when present) for dedup.
+  // Hash the markdown (or PDF buffer when present) for dedup.
   const hashSource = pdfBuffer ?? Buffer.from(chunks.map((c) => c.content).join('\n'));
   const fileHash = deps.hasher.sha256(hashSource);
 
@@ -64,8 +59,7 @@ export async function ingestPrechunked(
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
 
-  // Contextual Chunk Header (Session 3): one title+summary per document,
-  // prepended to every chunk before embedding so retrieval matches.
+  // CCH: one title+summary per document, prepended to every chunk before embedding.
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;
@@ -107,8 +101,7 @@ export async function ingestPrechunked(
     contentHash: null,
   }));
 
-  // Upload blob before the tx (matching documents.ts) so a rolled-back tx never
-  // orphans a blob a committed row points at; link key inside the tx atomically.
+  // Upload blob before the tx so a rolled-back tx never orphans a blob.
   const blobKey = pdfBuffer && deps.blobStorage
     ? `docs/${randomUUID()}/${safeBlobName(pdfFileName ?? fileName)}`
     : undefined;
@@ -129,7 +122,7 @@ export async function ingestPrechunked(
 
 export interface UploadPrechunkedMarkdownInput {
   fileName: string;
-  /** Raw markdown text to parse (caller supplies delimiter when non-default). */
+  /** Raw markdown text to parse. */
   mdText: string;
   delimiter?: string;
   uploadedBy: string;
@@ -138,10 +131,7 @@ export interface UploadPrechunkedMarkdownInput {
 }
 
 /**
- * Parse pre-chunked Markdown via the injected `MarkdownParser` port and ingest
- * the result. Keeps the parser (an infrastructure concern) out of the API
- * layer: callers here wire the adapter, so `src/app` never imports
- * infrastructure directly.
+ * Parse pre-chunked Markdown via the injected `MarkdownParser` port and ingest.
  */
 export async function uploadPrechunkedMarkdown(
   input: UploadPrechunkedMarkdownInput,

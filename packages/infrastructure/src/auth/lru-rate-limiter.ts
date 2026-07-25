@@ -7,8 +7,6 @@ interface Bucket { timestamps: number[]; }
 const buckets = new Map<string, Bucket>();
 
 function evictOldest() {
-  // Map iterates in insertion order; the first key is the
-  // least-recently-used. Delete until back at or below the cap.
   for (const k of buckets.keys()) {
     if (buckets.size <= MAX_KEYS) break;
     buckets.delete(k);
@@ -25,7 +23,6 @@ export const lruRateLimiter: RateLimiter = {
       buckets.set(key, bucket);
     }
     bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
-    // Re-insert to move the key to the most-recently-used position.
     buckets.set(key, bucket);
 
     if (buckets.size > MAX_KEYS) {

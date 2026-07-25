@@ -26,16 +26,12 @@ export interface IngestDeps {
   hasher: Hasher;
   pdfParser: PdfParser;
   textSplitter: TextSplitter;
-  /** Optional: when present (wired in Session 4), chunking uses the new
-   *  strategy path instead of the legacy TextSplitter. Legacy stays required
-   *  until then so the existing ingest path is never broken. */
+  /** Optional: when present, chunking uses the new strategy path instead of the legacy TextSplitter. */
   contentParser?: ContentParser;
   chunkingStrategy?: ChunkingStrategy;
-  /** Optional Contextual-Chunk-Header summarizer (Session 3). */
+  /** Optional Contextual-Chunk-Header summarizer. */
   summarizer?: DocSummarizer;
-  /** Optional transaction runner used to make the upsert+replace-chunks
-   *  sequence atomic. When absent (e.g. unit tests), the legacy direct
-   *  writes are used. */
+  /** Optional transaction runner used to make the upsert+replace-chunks sequence atomic. */
   runner?: TransactionRunner;
 }
 
@@ -55,24 +51,19 @@ export interface PreparedChunk {
   contentHash?: string | null;
 }
 
-/** Deps needed to parse + split + embed. Shared by `parseAndEmbed`/`prepareIngest`. */
 export interface ParseDeps {
   embeddings: EmbeddingService;
   pdfParser: PdfParser;
   textSplitter: TextSplitter;
   contentParser?: ContentParser;
   chunkingStrategy?: ChunkingStrategy;
-  /** Optional Contextual-Chunk-Header summarizer (Session 3). When present
-   *  (and `CCH_ENABLED`), one title+summary is generated per document and
-   *  prepended to every chunk before embedding. */
+  /** CCH summarizer. When present (and `CCH_ENABLED`), one title+summary per document. */
   summarizer?: DocSummarizer;
 }
 
 /**
  * Generate the Contextual Chunk Header (CCH) for a document, once.
- * Returns the header string to prepend and the title/summary metadata.
- * Returns empty/falsy values when CCH is disabled or no summarizer is wired,
- * so callers can safely prepend (no-op) without branching.
+ * Returns the header string and title/summary metadata.
  */
 async function buildCchHeader(
   deps: ParseDeps,
@@ -84,14 +75,11 @@ async function buildCchHeader(
   const ctx = await deps.summarizer.generateDocContext(sourceText.slice(0, CCH_CONTEXT_CHARS));
   const title = ctx.title?.trim() || null;
   const summary = ctx.summary?.trim() || null;
-  // Only prepend a header when we got a usable title; the metadata is still
-  // recorded regardless so downstream retrieval can see provenance.
   const header = title ? `Document: ${title}\nSummary: ${summary ?? ''}\n\n` : '';
   return { header, title, summary };
 }
 
-/** Prepend a CCH header to every chunk (when present) and always stamp the
- *  title/summary metadata so retrieval/provenance can use it. */
+/** Prepend a CCH header to every chunk and stamp title/summary metadata. */
 function applyCchHeader(
   docChunks: DocumentChunk[],
   header: string,
@@ -137,12 +125,11 @@ export async function parseAndEmbed(
   let docChunks: DocumentChunk[];
   let sourceText = '';
   if (deps.contentParser && deps.chunkingStrategy) {
-    // New strategy path (wired in Session 4). Yields per-page provenance.
+    // New strategy path: yields per-page provenance.
     const pages = await deps.contentParser.extractPages(input.buffer);
     docChunks = await deps.chunkingStrategy.splitPages(pages);
     sourceText = pages.map((p) => p.text).join('\n\n');
   } else {
-    // Legacy path: whole-document text → TextSplitter.
     let text: string;
     try {
       text = await deps.pdfParser.extractText(input.buffer);
@@ -155,8 +142,6 @@ export async function parseAndEmbed(
   }
   docChunks = docChunks.map((c) => ({ ...c, content: stripThinkTraces(c.content) }));
   sourceText = stripThinkTraces(sourceText);
-  // Contextual Chunk Header (Session 3): one title+summary per document,
-  // prepended to every chunk before embedding so retrieval scores match.
   const { header, title, summary } = await buildCchHeader(deps, sourceText);
   docChunks = applyCchHeader(docChunks, header, title, summary);
 
@@ -164,12 +149,7 @@ export async function parseAndEmbed(
     return err(new ValidationError(`No extractable text in ${input.fileName}`));
   }
 
-  // Session 5 (Option C): parent blocks are returned by reference and are
-  // filtered out of every vector query (`searchChunksByVector` uses
-  // `kind <> 'parent'`), so embedding them is wasted API spend + index bloat.
-  // Skip the embedding call for `kind='parent'` chunks and store a constant
-  // placeholder vector (same dim as the real embeddings) instead. Children and
-  // summaries are embedded normally.
+  // Parent blocks are filtered from vector queries; skip embedding them.
   const hasParents = docChunks.some((c) => c.kind === 'parent');
   const embeddable = docChunks.filter((c) => c.kind !== 'parent');
   if (hasParents && embeddable.length > 0) {
@@ -192,7 +172,6 @@ export async function parseAndEmbed(
     return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
   }
 
-  // Default path (no parents): embed every chunk.
   let embeddings: number[][];
   try {
     embeddings = await deps.embeddings.embedBatch(docChunks.map((c) => c.content));
@@ -206,9 +185,8 @@ export async function parseAndEmbed(
   return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
 }
 
-/** Write the upsert-then-replace-chunks sequence against the given repos/tx.
- *  Exported so other ingest paths (pre-chunked Markdown) can reuse the
- *  identical atomic insert + chunk-replace behaviour. */
+/** Write the upsert-then-replace-chunks sequence. Exported so other ingest
+ *  paths (pre-chunked Markdown) can reuse the atomic insert + chunk-replace. */
 export async function writeChunks(
   documents: DocumentRepository,
   chunks: ChunkRepository,
@@ -251,11 +229,7 @@ export async function ingestFile(
   const parsed = await parseAndEmbed({ fileName, buffer }, deps);
   if (!parsed.ok) return parsed;
 
-  // Upsert by unique file_name: an existing (or soft-deleted) same-name row is
-  // updated in place and un-deleted, keeping its id, so we never delete the row
-  // we just wrote (which previously caused an FK violation on the audit insert)
-  // and never lose the only copy. Its chunks are then replaced wholesale.
-  // When a transaction runner is available the whole sequence runs atomically.
+  // Upsert by file_name: reuse existing id to avoid FK violations on audit inserts.
   const outcome = deps.runner
     ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy }, parsed.value.rows))
     : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy }, parsed.value.rows);

@@ -1,5 +1,5 @@
 /**
- * Evaluation harness logic (Session 10) — pure, provider-agnostic.
+ * Evaluation harness logic — pure, provider-agnostic.
  *
  * Given a golden question, the harness:
  *   1. retrieves context via `searchChunks`,

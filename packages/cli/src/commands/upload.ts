@@ -93,7 +93,6 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
   const mdText = readFileSync(mdPath, 'utf8');
   const fileName = opts.name ?? mdPath.split(/[\\/]/).pop()!;
 
-  // --dry-run: parse and summarize, never embed or store.
   if (opts.upload === undefined) {
     const parsed = markdownParser.parseChunkedMarkdown(mdText, opts.delimiter);
     console.log(`Parsed ${parsed.length} chunk(s) from ${mdPath}`);

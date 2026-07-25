@@ -32,7 +32,6 @@ async function findUserByClerkId(clerkUserId: string) {
 }
 
 async function touchLastSeen(clerkUserId: string): Promise<void> {
-  // Avoids an extra SELECT: only updates when last_seen_at is NULL or >60s stale.
   await db.update(users).set({ lastSeenAt: sql`now()` }).where(
     and(
       eq(users.clerkUserId, clerkUserId),

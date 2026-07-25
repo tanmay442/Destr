@@ -13,7 +13,7 @@ interface CohereRerankResponse {
 }
 
 /**
- * Hosted reranker backed by Cohere's Rerank API (Session 6).
+ * Hosted reranker backed by Cohere's Rerank API.
  *
  * Selected when `RERANKER_PROVIDER=cohere`. Requires `COHERE_API_KEY`; the
  * model is overridable via `COHERE_RERANK_MODEL` (default

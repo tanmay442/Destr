@@ -16,7 +16,7 @@ export type ChunkingStrategyName =
 export interface ChunkingStrategyOptions {
   embeddings: EmbeddingService;
   modelId?: string;
-  /** Parent-child strategy tunables (Session 5). */
+  /** Parent-child strategy tunables. */
   parentSize?: number;
   childSize?: number;
   overlap?: number;
