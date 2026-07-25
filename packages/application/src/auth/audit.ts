@@ -19,6 +19,13 @@ export async function logTicketEvent(
   return serviceResult(() => deps.audit.logTicketEvent(input), 'Failed to log ticket event');
 }
 
+// TODO(session-05): persist the settings diff to the audit_events table once it exists.
+export async function logSettingsChange(
+  input: { actorId: string; before: Record<string, unknown>; after: Record<string, unknown> },
+): Promise<void> {
+  void input;
+}
+
 export async function logUserRoleChange(
   input: { clerkUserId: string; actorId: string; fromRole: 'admin' | 'user'; toRole: 'admin' | 'user' },
   deps: { audit: AuditLog },

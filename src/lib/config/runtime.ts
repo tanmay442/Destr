@@ -18,6 +18,10 @@ const ENV_LOCK = (process.env.APP_SETTINGS_LOCK ?? '')
   .map((s) => s.trim())
   .filter(Boolean);
 
+export function envLockedPaths(): readonly string[] {
+  return ENV_LOCK;
+}
+
 function deepGet(obj: unknown, parts: string[]): unknown {
   let cur: unknown = obj;
   for (const p of parts) {

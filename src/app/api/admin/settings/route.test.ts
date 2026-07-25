@@ -1,53 +1,148 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { settingsMock, isUnauthorized } = vi.hoisted(() => ({
-  settingsMock: vi.fn(),
-  isUnauthorized: { value: false },
+const { state } = vi.hoisted(() => ({
+  state: {
+    unauthorized: false,
+    overrides: {} as Record<string, unknown>,
+    version: 3,
+    rerankers: new Map<string, { ok: boolean; reason?: string }>([
+      ['cosine', { ok: true }],
+      ['cohere', { ok: false, reason: 'COHERE_API_KEY not set' }],
+    ]),
+    rateOk: true,
+    saveResult: { version: 4 } as { version: number } | { conflict: true },
+    locked: [] as string[],
+    logCalls: [] as unknown[],
+    invalidated: 0,
+  },
 }));
+
+const comp = {
+  settingsRepo: {
+    getOverrides: async () => ({ overrides: state.overrides, version: state.version }),
+    saveOverrides: async () => state.saveResult,
+  },
+  availableRerankers: () => state.rerankers,
+  rateLimit: async () => (state.rateOk ? { ok: true, remaining: 0, resetMs: 0 } : { ok: false, retryAfterMs: 5000 }),
+  logSettingsChange: async (input: unknown) => {
+    state.logCalls.push(input);
+  },
+};
 
 vi.mock('@/composition', () => ({
   requireAdminRoute: async () => {
-    if (isUnauthorized.value) {
-      return { ok: false, response: new Response('Unauthorized', { status: 401 }) };
-    }
-    return { ok: true, session: {}, comp: {} };
+    if (state.unauthorized) return { ok: false, response: new Response('Unauthorized', { status: 401 }) };
+    return { ok: true, session: { user: { id: 'admin-1' } }, comp };
   },
 }));
 
-vi.mock('@/lib/config', () => ({
-  appConfig: {
-    chunkingStrategy: 'document-aware',
-    parentChunkSize: 1800,
-    childChunkSize: 400,
+vi.mock('@/lib/config/runtime', () => ({
+  getRuntimeConfig: async () => ({
+    retrievalMode: 'agentic',
+    agentStepBudget: 8,
+    rerankerProvider: 'cosine',
+    agentPersona: { name: 'Astra', tone: 'friendly' },
+  }),
+  invalidateRuntimeConfig: () => {
+    state.invalidated += 1;
   },
+  envLockedPaths: () => state.locked,
 }));
 
 import * as route from './route';
 
 beforeEach(() => {
-  settingsMock.mockReset();
-  isUnauthorized.value = false;
-  process.env.EMBEDDING_PROVIDER = 'google';
+  state.unauthorized = false;
+  state.overrides = {};
+  state.version = 3;
+  state.rateOk = true;
+  state.saveResult = { version: 4 };
+  state.locked = [];
+  state.logCalls = [];
+  state.invalidated = 0;
 });
+
+function putReq(body: unknown): Request {
+  return new Request('http://localhost/api/admin/settings', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
 
 describe('GET /api/admin/settings', () => {
   it('returns 401 when not authenticated', async () => {
-    isUnauthorized.value = true;
+    state.unauthorized = true;
     const res = await route.GET();
     expect(res.status).toBe(401);
   });
 
-  it('returns the current chunking strategy, embedding model, and strategy list', async () => {
+  it('returns version, values and source flags', async () => {
+    state.overrides = { retrievalMode: 'agentic' };
     const res = await route.GET();
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.chunkingStrategy).toBe('document-aware');
-    expect(json.envDriven).toBe(true);
-    expect(Array.isArray(json.chunkingStrategies)).toBe(true);
-    expect(json.chunkingStrategies).toContain('document-aware');
-    expect(json.chunkingStrategies).toContain('parent-child');
-    expect(json.embeddingModel).toBe('gemini-embedding-001');
-    expect(json.parentChunkSize).toBe(1800);
-    expect(json.childChunkSize).toBe(400);
+    expect(json.version).toBe(3);
+    expect(json.values.retrievalMode).toBe('agentic');
+    expect(json.sources.retrievalMode).toBe('db');
+    expect(json.sources.agentStepBudget).toBe('default');
+    expect(json.envDriven).toBeUndefined();
+  });
+});
+
+describe('PUT /api/admin/settings', () => {
+  it('returns 401 when not authenticated', async () => {
+    state.unauthorized = true;
+    const res = await route.PUT(putReq({ patch: {}, expectedVersion: 3 }));
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 429 when rate limited', async () => {
+    state.rateOk = false;
+    const res = await route.PUT(putReq({ patch: { agentStepBudget: 5 }, expectedVersion: 3 }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('5');
+  });
+
+  it('returns 400 when expectedVersion is missing', async () => {
+    const res = await route.PUT(putReq({ patch: { agentStepBudget: 5 } }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 on validation failure', async () => {
+    const res = await route.PUT(putReq({ patch: { agentStepBudget: -3 }, expectedVersion: 3 }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 422 when patch touches an env-locked field', async () => {
+    state.locked = ['retrievalMode'];
+    const res = await route.PUT(putReq({ patch: { retrievalMode: 'normal' }, expectedVersion: 3 }));
+    expect(res.status).toBe(422);
+    const json = await res.json();
+    expect(json.locked).toContain('retrievalMode');
+  });
+
+  it('returns 422 when the requested reranker is unavailable', async () => {
+    const res = await route.PUT(putReq({ patch: { rerankerProvider: 'cohere' }, expectedVersion: 3 }));
+    expect(res.status).toBe(422);
+    const json = await res.json();
+    expect(json.reason).toBe('COHERE_API_KEY not set');
+  });
+
+  it('returns 409 on version conflict', async () => {
+    state.saveResult = { conflict: true };
+    state.version = 7;
+    const res = await route.PUT(putReq({ patch: { agentStepBudget: 5 }, expectedVersion: 3 }));
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.version).toBe(7);
+  });
+
+  it('saves, invalidates cache, logs, and returns the new version', async () => {
+    const res = await route.PUT(putReq({ patch: { agentStepBudget: 5 }, expectedVersion: 3 }));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.version).toBe(4);
+    expect(state.invalidated).toBe(1);
+    expect(state.logCalls).toHaveLength(1);
   });
 });
