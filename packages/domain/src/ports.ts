@@ -311,6 +311,79 @@ export interface AuditLog {
 }
 
 
+/** Per-turn chat metrics recorded by the chat route (Session 6). `mode` uses the
+ *  `agentic|vector` vocabulary — plain (`normal`) retrieval maps to `vector`. */
+export interface ChatEventInput {
+  userId: string | null;
+  query: string | null;
+  mode: 'agentic' | 'vector';
+  retrieveMs?: number | null;
+  generateMs?: number | null;
+  totalMs?: number | null;
+  hitCount?: number | null;
+  maxSimilarity?: number | null;
+  outOfDomain?: boolean;
+  hallucinationBlocked?: boolean;
+  cacheHit?: boolean;
+  ticketCreated?: boolean;
+  citationCount?: number | null;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface ChatEventRange {
+  from?: Date;
+  to?: Date;
+}
+
+/** Aggregate per-turn metrics for the analytics dashboard. */
+export interface ChatEventMetrics {
+  total: number;
+  ticketsCreated: number;
+  deflectionRate: number;
+  outOfDomainRate: number;
+  zeroResultRate: number;
+  cacheHitRate: number;
+  hallucinationRate: number;
+  agenticRetryRate: number;
+  retrieveP50Ms: number;
+  retrieveP95Ms: number;
+  generateP50Ms: number;
+  generateP95Ms: number;
+  totalP50Ms: number;
+  totalP95Ms: number;
+  tokensIn: number;
+  tokensOut: number;
+  uniqueUsers: number;
+  byMode: Array<{ mode: 'agentic' | 'vector'; total: number }>;
+}
+
+export interface ChatEventDailyUsage {
+  day: string;
+  total: number;
+  uniqueUsers: number;
+}
+
+/**
+ * Batched, dead-lettered per-turn metrics store (Session 6). `record` buffers
+ * in memory and flushes on a size/interval threshold; `flush` drains the buffer
+ * (call it from a serverless `after`/`waitUntil` hook). Additive to
+ * `QueryStats` — truncating this table never affects core chat behaviour.
+ */
+export interface ChatEventsRepo {
+  record(event: ChatEventInput): void;
+  flush(): Promise<void>;
+  getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
+  getTopZeroResultQueries(limit: number, range?: ChatEventRange): Promise<Array<{ q: string; count: number }>>;
+  getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
+  refreshDailyStats(): Promise<void>;
+  purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
+  purgeUserData(userId: string): Promise<{ deletedCount: number }>;
+  anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
+}
+
+
 export interface RateLimiter {
   check(
     key: string,

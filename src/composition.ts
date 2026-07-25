@@ -8,7 +8,7 @@ import {
   isTicketStatus, TICKET_STATUSES,
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
-  getAnalyticsSummary, listAudit, logSettingsChange,
+  getAnalyticsSummary, getChatAnalytics, listAudit, logSettingsChange,
   prepareIngest,
   uploadPrechunkedMarkdown,
   reingestAll,
@@ -48,6 +48,9 @@ const bind = <Args extends unknown[], T>(
 const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 const settingsRepo = Db.createSettingsRepo(Db.db);
+// Single shared batcher instance: the chat route and tests use this one so a
+// mocked instance never drifts from a bare module singleton (Session 6).
+const chatEventBatcher = Db.createChatEventsRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
 
@@ -288,6 +291,8 @@ function createComposition() {
     reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: queryStats }),
+    getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
+      bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,
@@ -298,6 +303,7 @@ function createComposition() {
     answerCacheKey,
     answerCache: createAnswerCache(),
     settingsRepo,
+    chatEventBatcher,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),

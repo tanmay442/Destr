@@ -86,6 +86,7 @@ type MockComposition = {
   logTicketEvent: ReturnType<typeof vi.fn>;
   agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
   getHallucinationGrader: (cfg: unknown) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  chatEventBatcher: { record: ReturnType<typeof vi.fn>; flush: ReturnType<typeof vi.fn> };
 };
 
 const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => ({
@@ -105,6 +106,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     logTicketEvent: vi.fn(),
     agenticSearch: vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never),
     getHallucinationGrader: vi.fn(() => graderHolder.fn),
+    chatEventBatcher: { record: vi.fn(), flush: vi.fn(async () => undefined) },
   },
 }));
 
@@ -173,6 +175,8 @@ beforeEach(() => {
   retrievalConfig.retrievalModeRolloutPercent = 100;
   compositionMock.agenticSearch = vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never);
   graderHolder.fn = null;
+  compositionMock.chatEventBatcher.record.mockClear();
+  compositionMock.chatEventBatcher.flush.mockClear();
 });
 
 describe('/api/chat', () => {
@@ -644,6 +648,70 @@ async function runAgenticStreamAndRead(query: string): Promise<string> {
   body += decoder.decode();
   return body;
 }
+
+describe('/api/chat chat_events instrumentation (Session 6)', () => {
+  async function drain(res: Response): Promise<void> {
+    const reader = res.body!.getReader();
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  }
+
+  async function runTurn(text: string): Promise<Record<string, unknown> | undefined> {
+    authMock.mockResolvedValue({ userId: 'user_test' });
+    streamTextImpl.mockImplementation(() => ({ toUIMessageStream: () => makeUIMessageStream() }));
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    await drain(res);
+    return compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  }
+
+  it('records mode "vector" when effectiveMode is normal', async () => {
+    retrievalConfig.retrievalMode = 'normal';
+    const event = await runTurn('how do I reset my password?');
+    expect(event?.mode).toBe('vector');
+    expect(event?.userId).toBe('user_test');
+    expect(event?.cacheHit).toBeFalsy();
+  });
+
+  it('records mode "agentic" when effectiveMode is agentic', async () => {
+    retrievalConfig.retrievalMode = 'agentic';
+    const event = await runTurn('what is the refund policy?');
+    expect(event?.mode).toBe('agentic');
+  });
+
+  it('omits the query text when captureQueryText is disabled', async () => {
+    retrievalConfig.captureQueryText = false;
+    const event = await runTurn('sensitive question');
+    expect(event?.query).toBeNull();
+    retrievalConfig.captureQueryText = true;
+  });
+
+  it('records a cacheHit event and skips generation on a cache hit', async () => {
+    retrievalConfig.retrievalMode = 'normal';
+    compositionMock.answerCache.get.mockResolvedValueOnce('cached answer');
+    authMock.mockResolvedValue({ userId: 'user_test' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'cached please' }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    await drain(res);
+    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event?.cacheHit).toBe(true);
+    expect(event?.mode).toBe('vector');
+  });
+});
 
 describe('/api/chat answer cache (Session 10)', () => {
   const CACHED = 'This is a cached answer from a previous generation.';

@@ -4,7 +4,8 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, type MyUIMessage, type Composition } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
+import type { ChatEventInput } from '@app/domain';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
@@ -28,6 +29,16 @@ function emitCitations(
   }));
 }
 
+/** Per-turn metrics accumulated while the tools run (Session 6). Persisted to
+ *  `chat_events` after generation completes. */
+interface TurnMetrics {
+  retrieveMs: number;
+  hitCount: number | null;
+  maxSimilarity: number | null;
+  ticketCreated: boolean;
+  rewritten: boolean;
+}
+
 function buildChatTools(deps: {
   /** Retrieval mode for this request (canary-resolved). Gates agentic vs plain
    *  search explicitly — never the truthiness of `agenticSearch`. */
@@ -39,8 +50,9 @@ function buildChatTools(deps: {
   userId: string;
   /** Set to true by the agentic loop when retrieval found nothing relevant. */
   outOfDomainRef: { value: boolean };
+  metrics: TurnMetrics;
 }) {
-  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef } = deps;
+  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef, metrics } = deps;
   return {
     searchDocumentation: tool({
       description:
@@ -65,7 +77,7 @@ function buildChatTools(deps: {
       }),
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
-        const t0 = TRACE_ENABLED ? performance.now() : 0;
+        const t0 = performance.now();
         if (effectiveMode === 'agentic') {
           const r = await agenticFn(query);
           if (!r.ok) {
@@ -74,6 +86,7 @@ function buildChatTools(deps: {
           }
           if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           outOfDomainRef.value = r.value.outOfDomain;
+          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
           const r = await searchFn(query, { limit });
@@ -83,6 +96,11 @@ function buildChatTools(deps: {
           }
           if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'vector', query, ms: performance.now() - t0, hits: r.value.length });
           matches = r.value;
+        }
+        metrics.retrieveMs += Math.round(performance.now() - t0);
+        metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
+        for (const m of matches) {
+          if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
         const capped = matches.map((m) => ({
           content:
@@ -148,13 +166,25 @@ function buildChatTools(deps: {
           logger.error('createSupportTicket: createTicket failed', { error: result.error });
           return { ticketId: null, status: 'error' };
         }
+        metrics.ticketCreated = true;
         return result.value;
       },
     }),
   };
 }
 
+function scheduleFlush(comp: Composition): void {
+  try {
+    after(() => {
+      void comp.chatEventBatcher.flush();
+    });
+  } catch {
+    void comp.chatEventBatcher.flush();
+  }
+}
+
 async function streamChatResponse(req: Request): Promise<Response> {
+  const turnStart = performance.now();
   const { userId } = await auth();
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
@@ -218,6 +248,13 @@ async function streamChatResponse(req: Request): Promise<Response> {
       ? 'normal'
       : 'agentic';
 
+  // Session 6: `chat_events` uses the `agentic|vector` vocabulary — plain
+  // (`normal`) retrieval is persisted as `vector`. `query` is omitted when
+  // `captureQueryText` is disabled.
+  const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
+  const queryText = cfg.captureQueryText ? lastUserText || null : null;
+  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, rewritten: false };
+
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
     ? comp.answerCacheKey(lastUserText, {
@@ -237,6 +274,14 @@ async function streamChatResponse(req: Request): Promise<Response> {
           writer.write({ type: 'text-end', id: 'cached' });
         },
       });
+      comp.chatEventBatcher.record({
+        userId,
+        query: queryText,
+        mode: persistedMode,
+        cacheHit: true,
+        totalMs: Math.round(performance.now() - turnStart),
+      });
+      scheduleFlush(comp);
       return createUIMessageStreamResponse({ stream });
     }
     if (TRACE_ENABLED) logger.info('rag.cache.miss', { key: cacheKey });
@@ -272,6 +317,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       createTicket: comp.createTicket,
       userId,
       outOfDomainRef,
+      metrics,
     }),
   });
 
@@ -293,7 +339,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
-          await runHallucinationCheck({
+          const hallucinationBlocked = await runHallucinationCheck({
             controller,
             result,
             capturedCitations,
@@ -312,6 +358,25 @@ async function streamChatResponse(req: Request): Promise<Response> {
               logger.warn('Answer cache write skipped', { error: String(err) });
             }
           }
+          const usage = await Promise.resolve(result.usage).catch(() => null);
+          const totalMs = Math.round(performance.now() - turnStart);
+          comp.chatEventBatcher.record({
+            userId,
+            query: queryText,
+            mode: persistedMode,
+            retrieveMs: metrics.retrieveMs,
+            generateMs: Math.max(0, totalMs - metrics.retrieveMs),
+            totalMs,
+            hitCount: metrics.hitCount,
+            maxSimilarity: metrics.maxSimilarity,
+            outOfDomain: outOfDomainRef.value,
+            hallucinationBlocked,
+            ticketCreated: metrics.ticketCreated,
+            citationCount: capturedCitations.length,
+            tokensIn: usage?.inputTokens ?? 0,
+            tokensOut: usage?.outputTokens ?? 0,
+            meta: metrics.rewritten ? { rewritten: true } : {},
+          });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(err);
@@ -322,6 +387,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
     },
   });
 
+  scheduleFlush(comp);
   return createUIMessageStreamResponse({ stream: citationStream });
 }
 
@@ -337,9 +403,9 @@ async function runHallucinationCheck(opts: {
   capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   outOfDomain: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
-  if (!hallucinationGrader) return;
+  if (!hallucinationGrader) return false;
 
   let ungrounded = outOfDomain;
   if (!ungrounded && capturedCitations.length > 0) {
@@ -358,6 +424,7 @@ async function runHallucinationCheck(opts: {
       data: { outOfDomain, offerTicket: true },
     } as InferUIMessageChunk<MyUIMessage>);
   }
+  return ungrounded;
 }
 
 export async function POST(req: Request) {

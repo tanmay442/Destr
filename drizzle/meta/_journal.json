@@ -71,6 +71,13 @@
       "when": 1784986304020,
       "tag": "0009_old_santa_claus",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784988745374,
+      "tag": "0010_pale_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

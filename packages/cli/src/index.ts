@@ -2,6 +2,7 @@ import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
 import { runSeed, parseSeedArgs } from './commands/seed';
 import { runUpload, parseUploadArgs } from './commands/upload';
+import { runPurgeChatEvents, parsePurgeArgs } from './commands/purge-chat-events';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { askYesNo, makeRl } from './prompts/index';
@@ -17,6 +18,7 @@ Commands:
   setup              One-command interactive first-run wizard.
   seed [--dir=...]   Ingest every PDF in the given dir.
   upload --md=FILE   Upload pre-chunked Markdown (see --help in the upload module).
+  purge-chat-events [--days=90]  Delete chat_events older than the retention window.
   db-migrate [args]  Run drizzle-kit push (or other migration command).
 `);
 }
@@ -49,6 +51,10 @@ async function main(): Promise<void> {
         delimiter: args.delimiter,
         dryRun: args.dryRun,
       });
+      return;
+    }
+    case 'purge-chat-events': {
+      await runPurgeChatEvents(parsePurgeArgs(rest));
       return;
     }
     case 'db-migrate': {

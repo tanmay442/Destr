@@ -1,6 +1,6 @@
 // `blob` bytea retained until backfill moves binaries to `storage_key`.
 import {
-  pgTable, serial, text, timestamp, integer, jsonb, boolean,
+  pgTable, serial, text, timestamp, integer, real, jsonb, boolean,
   index, check, foreignKey, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -125,6 +125,42 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
   attemptedAt: timestamp('attempted_at').defaultNow().notNull(),
   replayed: boolean('replayed').notNull().default(false),
 });
+
+/**
+ * Append-only per-turn chat metrics (Session 6). Additive to `QueryStats`: this
+ * table backs the rich historical analytics while `QueryStats` powers instant
+ * top-queries. `query` is null when `captureQueryText` is disabled. `meta` is an
+ * overflow bag for future metrics without a schema migration. `mode` uses the
+ * `agentic|vector` vocabulary (`normal` retrieval is persisted as `vector`).
+ */
+export const chatEvents = pgTable('chat_events', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id'),
+  query: text('query'),
+  mode: text('mode').notNull(),
+  retrieveMs: integer('retrieve_ms'),
+  generateMs: integer('generate_ms'),
+  totalMs: integer('total_ms'),
+  hitCount: integer('hit_count'),
+  maxSimilarity: real('max_similarity'),
+  outOfDomain: boolean('out_of_domain').notNull().default(false),
+  hallucinationBlocked: boolean('hallucination_blocked').notNull().default(false),
+  cacheHit: boolean('cache_hit').notNull().default(false),
+  ticketCreated: boolean('ticket_created').notNull().default(false),
+  citationCount: integer('citation_count'),
+  tokensIn: integer('tokens_in'),
+  tokensOut: integer('tokens_out'),
+  meta: jsonb('meta').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('chat_events_mode_check', sql`${table.mode} IN ('agentic','vector')`),
+  index('chat_events_created_at_idx').on(table.createdAt.desc()),
+  index('chat_events_mode_idx').on(table.mode),
+  index('chat_events_user_id_idx').on(table.userId),
+]);
+
+export type ChatEvent = typeof chatEvents.$inferSelect;
+export type NewChatEvent = typeof chatEvents.$inferInsert;
 
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
