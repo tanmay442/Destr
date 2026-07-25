@@ -167,11 +167,18 @@ for detailed sign-up links and per-service walkthroughs.
   race conditions on concurrent creation.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
-- **`/admin/analytics`** — Read-only overview: summary counts, an activity
-  donut, a 7-day activity timeline, and a recent-activity audit list.
-- **`/admin/audit`** — Full audit log filterable by document id or
-  ticket id. Document audit events: upload, replace, delete, restore.
-  Ticket audit events: create, assign, status_change, note, impersonation, role_change.
+- **`/admin/analytics`** — Rebuilt around per-turn `chat_events`: stat cards
+  for deflection, cache-hit, out-of-domain, zero-result, hallucination-blocked,
+  and agentic-retry rates plus estimated token cost; a latency `BarList`
+  (retrieve / generate / total p50 + p95); a 7-day usage `ActivityBars`; and
+  Top Queries (still powered by `QueryStats`) plus Top zero-result queries.
+  Graceful empty state when no chat data exists.
+- **`/admin/audit`** — Full audit log over the single generic `audit_events`
+  table, filterable by `kind` (document / ticket / user / **settings**),
+  `action`, `actor`, date range, document id, or ticket id. Settings changes
+  are recorded as `{ key: old → new }` diffs with a one-click **revert** that
+  re-applies the old value via a fresh, audited `PUT`. User role changes show
+  as badges.
 
   Audit writes are **best-effort for availability**: a failed audit write
   never fails the underlying operation (e.g. a role change or ticket update
@@ -182,12 +189,20 @@ for detailed sign-up links and per-service walkthroughs.
   than only in server logs. (Document-upload/delete audit events are written
   inside the same DB transaction as the operation, so they fail loudly with
   the operation rather than being dead-lettered.)
-- **`/admin/settings`** — Read-only view of the current `CHUNKING_STRATEGY`,
-  embedding model, parent/child chunk sizes, and a **Re-ingest All** button
-  (`POST /api/admin/reingest`). The strategy/model are env-driven (read at
-  startup + redeploy), so the dropdown is disabled and the copy tells the
-  operator to edit the env var, redeploy, then run "Re-ingest All" to
-  re-embed every document under the new config.
+- **`/admin/settings`** — Fully runtime-editable, driven by the descriptor at
+  `GET /api/admin/settings/schema`. Admins can change retrieval mode + knobs
+  (`retrievalMode`, `agentStepBudget`, similarity threshold, hybrid toggle,
+  reranker provider, agentic limits), the agent persona/prompt, the structured
+  out-of-scope list, and chunking strategy for **new uploads** — no redeploy
+  needed. Each field shows its effective value and source (`default` / `db` /
+  `env-locked`); fields pinned by `APP_SETTINGS_LOCK` render disabled with a
+  lock hint. Saving opens a diff preview (old → new) of only changed fields;
+  the save is optimistic-concurrency-aware (409 → re-apply) and is itself
+  audited. The system-prompt preview is rendered read-only so an admin cannot
+  override guardrail blocks. `INGEST_CHUNK_SIZE` / `INGEST_CHUNK_OVERLAP`
+  remain env-driven and are shown as a deploy-time note (no UI control).
+  **Re-ingest All** (`POST /api/admin/reingest`) re-embeds every document
+  under the current config.
 
   The **Re-ingest All** endpoint (`POST /api/admin/reingest`) refuses to run
   when the ingest queue is a no-op (i.e. no `QSTASH_TOKEN`/inline worker is
@@ -195,6 +210,50 @@ for detailed sign-up links and per-service walkthroughs.
   queue would discard every enqueued document. Set `QSTASH_TOKEN` (and
   `QSTASH_INGEST_WORKER_URL`) so re-ingest actually re-embeds. When a sync
   inline queue is wired (local dev), each document is re-ingested inline.
+
+### Health check
+
+- **`GET /api/health`** — Liveness/readiness probe. Returns **200 OK**
+  (`{ "status": "healthy" }`) when the runtime-config resolver succeeds and a
+  `SELECT 1` DB check passes; returns **503** (`{ "status": "degraded" }`) when
+  either check fails. Use it for orchestrator/uptime pings and rollout gates.
+
+### Runtime settings & precedence
+
+Settings are resolved through a 4-layer precedence (highest wins):
+
+1. **`env-lock`** — paths listed in `APP_SETTINGS_LOCK` are pinned read-only
+   at read time and the matching UI controls are disabled.
+2. **DB override** — rows written by `PUT /api/admin/settings` into the
+   `app_settings` single-row table (`id = 1`).
+3. **File / env default** — `config/app.config.ts` (typed, checked in).
+4. **Zod schema default** — the `appConfigSchema` fallback defaults.
+
+`APP_SETTINGS_LOCK` takes a comma-separated list of dot-paths, e.g.
+`APP_SETTINGS_LOCK=retrievalMode,agentStepBudget` (flat leaves and nested
+paths like `agentPersona.tone` both work). Good candidates to pin are
+operational knobs you never want drifted via the UI — e.g. `retrievalMode`,
+`agentStepBudget`, `rerankerProvider`, `similarityThreshold`. Persona, prompt,
+retrieval knobs, and chunking-for-new-uploads are otherwise runtime-editable;
+`INGEST_CHUNK_SIZE` / `INGEST_CHUNK_OVERLAP` stay env-driven (no UI control).
+
+### Data model
+
+Key tables (Drizzle on Postgres + pgvector):
+
+- `app_settings` — single-row (`id = 1`) JSONB overrides + optimistic-concurrency
+  `version`, backing runtime-editable settings.
+- `audit_events` — generic append-only audit log (`kind` ∈
+  document / ticket / user / settings, `action`, `actor_id`, `details` JSONB).
+  Replaced the old `document_audit` / `ticket_audit` / `user_audit` tables.
+- `chat_events` — append-only per-turn instrumentation (latency, hit/citation
+  counts, cache-hit, out-of-domain, hallucination-blocked, token usage, mode).
+- `chat_daily_stats` — materialized view (refresh via
+  `POST /api/admin/analytics/rollup`) for the 7-day usage chart.
+- `audit_dead_letter` — captures failed audit writes for replay.
+
+`QueryStats` is retained and still powers the "Top Queries" card; `chat_events`
+is purely additive.
 
 ### Rate limit
 

@@ -2,8 +2,8 @@
 
 ## Unit + integration (Vitest)
 
-366 tests across 46 files. Run with `pnpm test` (single run) or
-`pnpm test:ui` (interactive). Highlights:
+440 tests (432 passing, 8 DB-gated skips) across ~55 files. Run with
+`pnpm test` (single run) or `pnpm test:ui` (interactive). Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
   `searchDocumentation` and `createSupportTicket` tool wiring
@@ -86,10 +86,21 @@
 - `scripts/apply-migration.test.ts` — migration runner helper
 - `scripts/seed-docs.test.ts` — doc seeding
 - `scripts/setup-test-db.test.ts` — test DB provisioning
-- `src/app/api/admin/audit/route.test.ts` — audit log GET (auth + filter)
+- `src/app/api/admin/audit/route.test.ts` — audit log GET (auth + kind/action/actor/date filters, invalid kind/date 400s, user + settings pass-through)
 - `src/app/api/admin/ingest-worker/route.test.ts` — QStash ingest worker
 - `src/app/api/admin/reingest/route.test.ts` — re-ingest POST (admin)
-- `src/app/api/admin/settings/route.test.ts` — settings GET (admin)
+- `src/app/api/admin/settings/route.test.ts` — settings GET (`version`/`values`/`sources`) + PUT (401/429/400/422/409/200, exact settings diff)
+- `src/app/api/admin/settings/schema/route.test.ts` — descriptor GET (fieldConfig coverage superset, read-only/immutable/locked sources)
+- `src/app/api/admin/settings/effective/route.test.ts` — resolved-config GET (`{ dotPath: { value, source } }`)
+- `src/app/api/admin/settings/descriptor.test.ts` — Zod introspection + `fieldConfig` flatten coverage, deep-merge / `mergePatch` / `lockedPathsInPatch`
+- `src/lib/config/__tests__/runtime.test.ts` — resolver precedence, deep-merge, validation, SWR caching, `APP_SETTINGS_LOCK` (incl. nested paths), graceful degradation to last-known-good
+- `packages/infrastructure/src/db/__tests__/settings-repo.test.ts` — `app_settings` optimistic-concurrency (`WHERE id=1 AND version=…`, conflict → retry)
+- `src/app/(app)/admin/settings/settings-client.test.tsx` — descriptor-driven render, env-locked disabled, diff preview, 409 → re-apply
+- `src/app/(app)/admin/audit/settings-revert-button.test.tsx` — one-click revert PUT body + version, error toast
+- `packages/infrastructure/src/db/__tests__/audit-backfill.test.ts` — `audit_events` backfill + drop of legacy tables + idempotent re-run (DB-gated)
+- `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` — `ChatEventBatcher` batching, size/interval auto-flush, dead-letter, purge / `purgeOlderThan` / `anonymizeUserData` (fake client, no live DB)
+- `packages/application/src/admin/__tests__/analytics.test.ts` — `getChatAnalytics` admin authz + estimated token cost
+- `src/app/api/chat/route.test.ts` — extended: `chat_events` mode mapping (`normal→vector` / `agentic→agentic`), `captureQueryText=false → query:null`, cache-hit event
 - `src/lib/__tests__/sanitize.test.ts` — `escapeHtml` / `sanitizeText`
 - `src/__tests__/chunking-strategy.test.ts` — chunking-strategy config
   resolution
@@ -158,7 +169,7 @@ assertions, so the suite is green in any environment:
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes **366/366** even when
+After this fix the full suite passes **432/432** (8 DB-gated tests skip) even when
 `.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to
