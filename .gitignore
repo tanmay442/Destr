@@ -65,3 +65,6 @@ skills-lock.json
 scripts/chunk-output/
 
 docs/adminplanv3.md
+
+# Session handoff context (not committed)
+docs/execution-plan/context/

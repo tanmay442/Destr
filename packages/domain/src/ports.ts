@@ -2,6 +2,8 @@
 
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
+import type { AppConfig } from './app-config';
+
 export interface DocumentRow {
   id: number;
   fileName: string;
@@ -427,4 +429,19 @@ export interface SessionStore {
   getSession(): Promise<{
     user: { id: string; email: string; name: string; imageUrl: string | null; role: 'admin' | 'user' };
   } | null>;
+}
+
+/**
+ * Single-row override store for runtime configuration (`app_settings`, id=1).
+ * Reads return the current JSONB overrides plus a monotonic `version` used for
+ * optimistic concurrency; writes fail with `{ conflict: true }` when the
+ * supplied `expectedVersion` no longer matches.
+ */
+export interface SettingsRepo {
+  getOverrides(): Promise<{ overrides: Partial<AppConfig>; version: number }>;
+  saveOverrides(input: {
+    patch: Partial<AppConfig>;
+    actorId: string;
+    expectedVersion: number;
+  }): Promise<{ version: number } | { conflict: true }>;
 }

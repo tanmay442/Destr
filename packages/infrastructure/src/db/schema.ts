@@ -6,7 +6,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { vector, tsvector } from './schema-vector';
 import { byteaBlob } from '../storage/bytea-blob';
-import type { IngestStatus } from '@app/domain';
+import type { IngestStatus, AppConfig } from '@app/domain';
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
@@ -134,3 +134,11 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
 export type User = typeof users.$inferSelect;
+
+export const appSettings = pgTable('app_settings', {
+  id: integer('id').primaryKey(),
+  overrides: jsonb('overrides').notNull().$type<Partial<AppConfig>>().default({}),
+  version: integer('version').notNull().default(0),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});

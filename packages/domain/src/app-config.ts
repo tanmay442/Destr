@@ -85,6 +85,59 @@ export const appConfigSchema = z.object({
   childChunkSize: z.coerce.number().int().positive().default(400),
   parentChildMode: z.enum(['parent', 'window']).default('parent'),
   parentChildWindow: z.coerce.number().int().nonnegative().default(2),
+  retrievalMode: z.enum(['agentic', 'normal']).default('agentic'),
+  agentStepBudget: z.coerce.number().int().positive().default(8),
+  agenticRetrieveLimit: z.coerce.number().int().positive().default(10),
+  agenticMaxRetries: z.coerce.number().int().nonnegative().default(1),
+  similarityThreshold: z.coerce.number().min(0).max(1).default(0.5),
+  hybridEnabled: z.boolean().default(true),
+  rerankerProvider: z.enum(['cosine', 'local', 'cohere']).default('cosine'),
+  gradeModel: z.string().optional(),
+  answerCacheEnabled: z.boolean().default(true),
+  answerCacheTtlSec: z.coerce.number().int().positive().default(3600),
+  captureQueryText: z.boolean().default(true),
+  retrievalModeRolloutPercent: z.coerce.number().min(0).max(100).default(100),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
+
+/** Recursively convert a Zod schema into its deep-partial form so a settings
+ *  write can validate a partial patch without stripping unspecified fields. */
+type SchemaDef = {
+  type?: string;
+  shape?: Record<string, z.ZodTypeAny>;
+  innerType?: z.ZodTypeAny;
+  element?: z.ZodTypeAny;
+};
+
+function deepPartial(schema: z.ZodTypeAny): z.ZodTypeAny {
+  const def: SchemaDef | undefined = (schema as { _def?: SchemaDef })._def;
+  switch (def?.type) {
+    case 'object': {
+      const shape = def.shape ?? {};
+      const out: Record<string, z.ZodTypeAny> = {};
+      for (const key of Object.keys(shape)) {
+        const field = shape[key];
+        if (field) out[key] = deepPartial(field);
+      }
+      return z.object(out);
+    }
+    case 'default':
+    case 'optional': {
+      const inner = def.innerType;
+      return (inner ? deepPartial(inner) : schema).optional();
+    }
+    case 'array': {
+      const el = def.element;
+      return (el ? deepPartial(el) : z.unknown()).array().optional();
+    }
+    case 'nullable': {
+      const inner = def.innerType;
+      return (inner ? deepPartial(inner) : z.unknown()).nullable().optional();
+    }
+    default:
+      return schema.optional();
+  }
+}
+
+export const partialAppConfigSchema = deepPartial(appConfigSchema) as unknown as z.ZodType<Partial<AppConfig>>;

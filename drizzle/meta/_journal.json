@@ -30,7 +30,7 @@
       "tag": "0003_deep_crystal",
       "breakpoints": true
     },
-      {
+    {
       "idx": 4,
       "version": "7",
       "when": 1784106413795,
@@ -56,6 +56,13 @@
       "version": "7",
       "when": 1784115975983,
       "tag": "0007_audit_dead_letter",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784981482238,
+      "tag": "0008_marvelous_wallow",
       "breakpoints": true
     }
   ]

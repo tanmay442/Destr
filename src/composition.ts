@@ -45,6 +45,7 @@ const bind = <Args extends unknown[], T>(
 // defining duplicate adapter wrappers here.
 const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
+const settingsRepo = Db.createSettingsRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
 
@@ -278,6 +279,7 @@ function createComposition() {
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
     answerCache: createAnswerCache(),
+    settingsRepo,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),

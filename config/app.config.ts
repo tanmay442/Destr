@@ -4,6 +4,16 @@ import {
   CHILD_CHUNK_SIZE,
   PARENT_CHILD_MODE,
   PARENT_CHILD_WINDOW,
+  AGENT_STEP_BUDGET,
+  AGENTIC_RETRIEVE_LIMIT,
+  AGENTIC_MAX_RETRIES,
+  SIMILARITY_THRESHOLD,
+  HYBRID_ENABLED,
+  RERANKER_PROVIDER,
+  GRADE_MODEL,
+  ANSWER_CACHE_ENABLED,
+  ANSWER_CACHE_TTL_SEC,
+  AGENTIC_ENABLED,
 } from '@app/domain';
 
 // Runtime configuration for this deployment of the RAG Support Agent.
@@ -123,6 +133,19 @@ const config: AppConfig = {
   // parent block; `window` pads the hit with its ±N neighbours.
   parentChildMode: PARENT_CHILD_MODE,
   parentChildWindow: PARENT_CHILD_WINDOW,
+
+  retrievalMode: AGENTIC_ENABLED ? 'agentic' : 'normal',
+  agentStepBudget: AGENT_STEP_BUDGET,
+  agenticRetrieveLimit: AGENTIC_RETRIEVE_LIMIT,
+  agenticMaxRetries: AGENTIC_MAX_RETRIES,
+  similarityThreshold: SIMILARITY_THRESHOLD,
+  hybridEnabled: HYBRID_ENABLED,
+  rerankerProvider: RERANKER_PROVIDER,
+  gradeModel: GRADE_MODEL || undefined,
+  answerCacheEnabled: ANSWER_CACHE_ENABLED,
+  answerCacheTtlSec: ANSWER_CACHE_TTL_SEC,
+  captureQueryText: true,
+  retrievalModeRolloutPercent: 100,
 };
 
 export default config;
