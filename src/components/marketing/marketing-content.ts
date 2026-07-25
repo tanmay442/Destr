@@ -12,6 +12,11 @@ export const FEATURES = [
   { title: 'Multi-step Workflows', description: 'Clarifies, searches, and synthesizes.' },
   { title: 'Human Escalation', description: 'Escalates to a structured support ticket.' },
   { title: 'Serverless Architecture', description: 'Edge-ready, pay-as-you-go infra.' },
+  {
+    title: 'Admin Console & Observability',
+    description:
+      'Runtime-editable settings, a full audit log with one-click revert, and per-turn analytics.',
+  },
 ];
 
 export const TECH = [
