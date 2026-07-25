@@ -514,4 +514,38 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
       expect(r.source).toBe(`Page ${r.id} — Sec ${r.id}`);
     }
   });
+
+  it('runs the vector and lexical branches concurrently and fuses to the same result', async () => {
+    const deps = hybridDeps([], []);
+    let resolveVector!: (rows: RetrievedChunkRow[]) => void;
+    let resolveLexical!: (rows: RetrievedChunkRow[]) => void;
+    (deps.chunks.searchByVector as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<RetrievedChunkRow[]>((r) => { resolveVector = r; }),
+    );
+    (deps.chunks.searchByLexical as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<RetrievedChunkRow[]>((r) => { resolveLexical = r; }),
+    );
+    // Kick off the search without awaiting: both branches must be in flight
+    // before either resolves (proving parallel, not sequential, dispatch).
+    const pending = searchChunks('q', { limit: 3 }, deps);
+    // Flush the embed() microtask so both branches get dispatched.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.chunks.searchByVector).toHaveBeenCalledTimes(1);
+    expect(deps.chunks.searchByLexical).toHaveBeenCalledTimes(1);
+    resolveVector([flatRow(1, 'content one', 0.9)]);
+    resolveLexical([flatRow(2, 'content two', 0.6)]);
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id).sort()).toEqual([1, 2]);
+  });
+
+  it('honours opts.hybridEnabled = false (vector-only, no lexical call)', async () => {
+    const deps = hybridDeps([flatRow(1, 'only vector', 0.9)], [flatRow(2, 'lexical', 0.6)]);
+    const result = await searchChunks('q', { limit: 3, hybridEnabled: false }, deps);
+    expect(deps.chunks.searchByLexical).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([1]);
+  });
 });

@@ -40,6 +40,31 @@ vi.mock('@/lib/config', () => ({
   appConfig: appConfigMock,
 }));
 
+const { retrievalConfig } = vi.hoisted(() => ({
+  retrievalConfig: {
+    retrievalMode: 'normal' as 'agentic' | 'normal',
+    retrievalModeRolloutPercent: 100,
+    agentStepBudget: 8,
+    agenticRetrieveLimit: 10,
+    agenticMaxRetries: 1,
+    similarityThreshold: 0.5,
+    hybridEnabled: true,
+    rerankerProvider: 'cosine' as const,
+    gradeModel: undefined as string | undefined,
+    answerCacheEnabled: true,
+    answerCacheTtlSec: 3600,
+    captureQueryText: true,
+  },
+}));
+
+vi.mock('@/lib/config/runtime', () => ({
+  getRuntimeConfig: vi.fn(async () => ({ ...appConfigMock, ...retrievalConfig })),
+}));
+
+const { graderHolder } = vi.hoisted(() => ({
+  graderHolder: { fn: null as null | ((documents: string, generation: string) => Promise<'yes' | 'no'>) },
+}));
+
 vi.mock('@clerk/nextjs/server', () => ({
   auth: authMock,
   currentUser: currentUserMock,
@@ -59,8 +84,8 @@ type MockComposition = {
     set: ReturnType<typeof vi.fn>;
   };
   logTicketEvent: ReturnType<typeof vi.fn>;
-  agenticSearch?: (query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
-  hallucinationGrader?: (documents: string, generation: string) => Promise<'yes' | 'no'>;
+  agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
+  getHallucinationGrader: (cfg: unknown) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
 };
 
 const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => ({
@@ -78,8 +103,8 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
       set: vi.fn(async () => undefined),
     },
     logTicketEvent: vi.fn(),
-    agenticSearch: undefined,
-    hallucinationGrader: undefined,
+    agenticSearch: vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never),
+    getHallucinationGrader: vi.fn(() => graderHolder.fn),
   },
 }));
 
@@ -144,6 +169,10 @@ beforeEach(() => {
   rateLimitResult.remaining = 29;
   rateLimitResult.resetMs = 60_000;
   appConfigMock.prefetchFirstTurn = false;
+  retrievalConfig.retrievalMode = 'normal';
+  retrievalConfig.retrievalModeRolloutPercent = 100;
+  compositionMock.agenticSearch = vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never);
+  graderHolder.fn = null;
 });
 
 describe('/api/chat', () => {
@@ -296,7 +325,7 @@ describe('/api/chat searchDocumentation tool', () => {
       .mockResolvedValueOnce(ok([]) as never);
     const { tools } = await captureTools();
     await tools?.searchDocumentation?.execute({ query: 'q', limit: 5 });
-    expect(searchChunksSpy).toHaveBeenCalledWith('q', { limit: 5 });
+    expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', { limit: 5 });
     searchChunksSpy.mockRestore();
   });
 
@@ -486,11 +515,13 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
 
 describe('/api/chat agentic loop (Session 8)', () => {
   beforeEach(() => {
-    compositionMock.agenticSearch = undefined;
-    compositionMock.hallucinationGrader = undefined;
+    // Mode selection is now driven by effectiveMode (cfg.retrievalMode), NOT by
+    // whether agenticSearch is defined — agenticSearch is always instantiated.
+    retrievalConfig.retrievalMode = 'agentic';
+    graderHolder.fn = null;
   });
 
-  it('uses agenticSearch when wired, dropping graded-irrelevant chunks before the model sees them', async () => {
+  it('uses agenticSearch when effectiveMode is agentic, dropping graded-irrelevant chunks before the model sees them', async () => {
     const allChunks = [
       { content: 'keep this', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
       { content: 'drop this', similarity: 0.2, id: 2, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
@@ -500,16 +531,27 @@ describe('/api/chat agentic loop (Session 8)', () => {
     );
     const { tools } = await captureToolsForAgentic();
     const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
-    expect(compositionMock.agenticSearch).toHaveBeenCalledWith('vague');
+    expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague');
     expect(result).toHaveLength(1);
     expect(result[0]!.content).toBe('keep this');
+  });
+
+  it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {
+    retrievalConfig.retrievalMode = 'normal';
+    const searchSpy = vi.spyOn(compositionMock, 'searchChunks').mockResolvedValue(ok([]) as never);
+    const agenticSpy = compositionMock.agenticSearch as ReturnType<typeof vi.fn>;
+    const { tools } = await captureToolsForAgentic();
+    await tools?.searchDocumentation?.execute({ query: 'plain' });
+    expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', { limit: undefined });
+    expect(agenticSpy).not.toHaveBeenCalled();
+    searchSpy.mockRestore();
   });
 
   it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok({ chunks: [], rewrittenQuery: 'rewritten', outOfDomain: true }) as never,
     );
-    compositionMock.hallucinationGrader = vi.fn(async () => 'no' as const);
+    graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
     expect(body).toMatch(/data-guardrail/);
     expect(body).toMatch(/offerTicket/);
@@ -523,7 +565,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
         outOfDomain: false,
       }) as never,
     );
-    compositionMock.hallucinationGrader = vi.fn(async () => 'no' as const);
+    graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).toMatch(/data-guardrail/);
     expect(body).toMatch(/offerTicket/);
@@ -537,7 +579,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
         outOfDomain: false,
       }) as never,
     );
-    compositionMock.hallucinationGrader = vi.fn(async () => 'yes' as const);
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).not.toMatch(/data-guardrail/);
   });

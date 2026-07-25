@@ -1,14 +1,15 @@
 import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, createUIMessageStream, type InferUIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { getComposition, appConfig, type MyUIMessage, type Composition } from '@/composition';
+import { getComposition, type MyUIMessage, type Composition } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import { NextResponse } from 'next/server';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT,   AGENT_STEP_BUDGET, AGENTIC_ENABLED, ANSWER_CACHE_ENABLED, ANSWER_CACHE_TTL_SEC, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
+import { getRuntimeConfig } from '@/lib/config/runtime';
 
 function emitCitations(
   chunks: RetrievedChunk[],
@@ -28,15 +29,18 @@ function emitCitations(
 }
 
 function buildChatTools(deps: {
-  searchChunks: Composition['searchChunks'];
-  agenticSearch: Composition['agenticSearch'];
+  /** Retrieval mode for this request (canary-resolved). Gates agentic vs plain
+   *  search explicitly — never the truthiness of `agenticSearch`. */
+  effectiveMode: 'agentic' | 'normal';
+  searchChunks: (query: string, opts: { limit?: number }) => ReturnType<Composition['searchChunks']>;
+  agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
   capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
   createTicket: Composition['createTicket'];
   userId: string;
   /** Set to true by the agentic loop when retrieval found nothing relevant. */
   outOfDomainRef: { value: boolean };
 }) {
-  const { searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef } = deps;
+  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef } = deps;
   return {
     searchDocumentation: tool({
       description:
@@ -62,7 +66,7 @@ function buildChatTools(deps: {
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
         const t0 = TRACE_ENABLED ? performance.now() : 0;
-        if (agenticFn) {
+        if (effectiveMode === 'agentic') {
           const r = await agenticFn(query);
           if (!r.ok) {
             logger.error('Agentic retrieval failed', { error: r.error });
@@ -164,6 +168,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
     return new Response('Payload too large', { status: 413 });
   }
   const comp = getComposition();
+  const cfg = await getRuntimeConfig();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {
     const retryAfter = Number.isFinite(limit.retryAfterMs)
@@ -203,7 +208,17 @@ async function streamChatResponse(req: Request): Promise<Response> {
   // Session 10: answer cache. Only first-turn, query-keyed answers are cached —
   // follow-up turns carry conversation state and must not be served stale. The key
   // pins the embedding + chat model ids so a model swap never serves a stale text.
-  const cacheable = ANSWER_CACHE_ENABLED && isFirstTurn && lastUserText.trim() !== '';
+  // Canary rollout: decide once per request whether to honour the configured
+  // retrieval mode or its inverse, then thread that single decision through both
+  // the tool-selection gate and the step budget.
+  const useConfiguredMode = Math.random() * 100 < cfg.retrievalModeRolloutPercent;
+  const effectiveMode = useConfiguredMode
+    ? cfg.retrievalMode
+    : cfg.retrievalMode === 'agentic'
+      ? 'normal'
+      : 'agentic';
+
+  const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
     ? comp.answerCacheKey(lastUserText, {
         embeddingModel: comp.getEmbeddingModelId(),
@@ -228,8 +243,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
   }
 
   let prefetch: RetrievedChunk[] | null = null;
-  if (appConfig.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
-    const prefetchResult = await comp.searchChunks(lastUserText, {});
+  if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
+    const prefetchResult = await comp.searchChunks(cfg, lastUserText, {});
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
@@ -245,13 +260,14 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const result = streamText({
     model: comp.getChatModel(),
-    system: buildSystemPrompt(appConfig, prefetch),
+    system: buildSystemPrompt(cfg, prefetch),
     messages: await convertToModelMessages(messages),
-    stopWhen: stepCountIs(AGENTIC_ENABLED ? AGENT_STEP_BUDGET : 5),
+    stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: req.signal,
     tools: buildChatTools({
-      searchChunks: comp.searchChunks,
-      agenticSearch: comp.agenticSearch,
+      effectiveMode,
+      searchChunks: (query, opts) => comp.searchChunks(cfg, query, opts),
+      agenticSearch: (query) => comp.agenticSearch(cfg, query),
       capturedCitations,
       createTicket: comp.createTicket,
       userId,
@@ -281,7 +297,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             controller,
             result,
             capturedCitations,
-            hallucinationGrader: comp.hallucinationGrader,
+            hallucinationGrader: comp.getHallucinationGrader(cfg),
             outOfDomain: outOfDomainRef.value,
           });
           // Session 10: write the freshly-generated first-turn answer to the cache.
@@ -290,7 +306,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 if (TRACE_ENABLED) logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
-                await comp.answerCache.set(cacheKey, finalAnswer, ANSWER_CACHE_TTL_SEC);
+                await comp.answerCache.set(cacheKey, finalAnswer, cfg.answerCacheTtlSec);
               }
             } catch (err) {
               logger.warn('Answer cache write skipped', { error: String(err) });

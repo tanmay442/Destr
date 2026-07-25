@@ -22,14 +22,16 @@ const authAdapter = Auth.createAuthAdapter();
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats, type Reranker } from '@app/domain';
 import type { MyUIMessage } from '@/chat/types';
 import type { DocumentRow } from '@app/domain';
+import type { AppConfig } from '@app/domain/app-config';
 import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';
+import { getRuntimeConfig } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
-import { MAX_LIST_LIMIT, RERANKER_PROVIDER } from '../config/constants';
+import { MAX_LIST_LIMIT } from '../config/constants';
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -81,7 +83,7 @@ async function ingestQueuedDocumentStandalone(
     await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
     return err(new ExternalServiceError('Blob read failed', e));
   }
-  const prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, ingestDeps);
+  const prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
   if (!prepared.ok) {
     await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
     return prepared;
@@ -102,68 +104,77 @@ async function ingestQueuedDocumentStandalone(
   }
 }
 
-const ingestDeps: IngestDeps = {
+const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
-  // Session 4: strategy-driven chunking is the default path. Both ingest
-  // routes (ingestFile + ingestQueuedDocument) share this single resolution.
   contentParser: Pdf.unpdfParser,
-  chunkingStrategy: Chunking.getChunkingStrategy(appConfig.chunkingStrategy, {
-    embeddings: embeddingService,
-    parentSize: appConfig.parentChunkSize,
-    childSize: appConfig.childChunkSize,
-  }),
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
 };
-// Session 6: second-stage reranker. `RERANKER_PROVIDER` selects one of
-// three modes (see config/constants.ts): 'cosine' (OG vector ordering, default,
-// no reranker loaded), 'local' (on-device Xenova cross-encoder, no key),
-// 'cohere' (hosted API, needs COHERE_API_KEY). getReranker() returns
-// `undefined` for 'cosine' or for 'cohere' without a key, so searchChunks
-// keeps its original behaviour. When a chosen reranker fails at runtime,
-// searchChunks automatically falls back to cosine ordering.
-const reranker = Llm.getReranker(RERANKER_PROVIDER);
-if (RERANKER_PROVIDER !== 'cosine') {
-  if (RERANKER_PROVIDER === 'local' && process.env.VERCEL) {
-    // Native onnxruntime (~137 MB) + model download can exceed the serverless
-    // function cap or fail on a read-only FS — fall back to cosine if so.
-    logger.warn(
-      'RERANKER_PROVIDER=local on Vercel serverless: the on-device ' +
-        'cross-encoder needs native onnxruntime and a model download, which may ' +
-        'exceed the function size limit or fail on a read-only FS. If it fails ' +
-        'to load, searchChunks falls back to cosine ordering (reranking is ' +
-        'effectively disabled on this deployment). To keep reranking on ' +
-        'serverless, pre-bake the model into TRANSFORMERS_CACHE in the build.',
-    );
-  } else if (RERANKER_PROVIDER === 'cohere' && !process.env.COHERE_API_KEY) {
-    // getReranker already returns undefined here, but log it so the operator
-    // understands why reranking is not active.
-    logger.warn(
-      'RERANKER_PROVIDER=cohere but COHERE_API_KEY is not set — searchChunks ' +
-        'will use cosine ordering (reranking disabled). Set COHERE_API_KEY to ' +
-        'enable the hosted reranker.',
-    );
-  }
-}
-const searchDeps: SearchDeps = {
-  chunks: chunkRepo,
-  embeddings: embeddingService,
-  reranker,
-};
 
-// Session 8: agentic retrieval loop graders (rewrite / grade / hallucination).
-// `Llm.getGraders` returns `undefined` for each when AGENTIC_ENABLED=false.
-const graders = Llm.getGraders();
-const agenticDeps: AgenticDeps | null = graders.queryRewriter && graders.documentGrader && graders.hallucinationGrader
-  ? {
-      search: searchDeps,
-      queryRewriter: graders.queryRewriter,
-      documentGrader: graders.documentGrader,
-      hallucinationGrader: graders.hallucinationGrader,
-    }
-  : null;
+// Session 2: chunking strategy + parent/child sizes are resolved per ingest
+// from runtime config so parent-child edits take effect on new uploads.
+function buildChunkingStrategy(cfg: AppConfig) {
+  return Chunking.getChunkingStrategy(cfg.chunkingStrategy, {
+    embeddings: embeddingService,
+    parentSize: cfg.parentChunkSize,
+    childSize: cfg.childChunkSize,
+  });
+}
+
+async function resolveIngestDeps(): Promise<IngestDeps> {
+  const cfg = await getRuntimeConfig();
+  return { ...ingestDeps, chunkingStrategy: buildChunkingStrategy(cfg) };
+}
+// Session 2/6: all three rerankers are pre-instantiated at boot with their
+// availability recorded, so the runtime-selected provider (`cfg.rerankerProvider`)
+// can be resolved per request. `cosine` is always available (no reranker loaded);
+// `cohere` needs `COHERE_API_KEY`; `local` needs native onnxruntime and does not
+// run on Vercel serverless. An unavailable provider resolves to `undefined`, so
+// `searchChunks` falls back to cosine ordering.
+export type RerankerStatus = { ok: boolean; reason?: string };
+const rerankerRegistry = new Map<string, { reranker?: Reranker; status: RerankerStatus }>([
+  ['cosine', { reranker: undefined, status: { ok: true } }],
+  [
+    'cohere',
+    process.env.COHERE_API_KEY
+      ? { reranker: Llm.getReranker('cohere'), status: { ok: true } }
+      : { reranker: undefined, status: { ok: false, reason: 'COHERE_API_KEY not set' } },
+  ],
+  [
+    'local',
+    process.env.VERCEL
+      ? { reranker: undefined, status: { ok: false, reason: 'local reranker unavailable on Vercel serverless' } }
+      : { reranker: Llm.getReranker('local'), status: { ok: true } },
+  ],
+]);
+
+function availableRerankers(): Map<string, RerankerStatus> {
+  return new Map([...rerankerRegistry].map(([name, entry]) => [name, entry.status]));
+}
+
+function resolveReranker(cfg: AppConfig): Reranker | undefined {
+  return rerankerRegistry.get(cfg.rerankerProvider)?.reranker;
+}
+
+function getSearchDeps(cfg: AppConfig): SearchDeps {
+  return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
+}
+
+// Session 8 graders are always instantiated (Session 2: mode is selected per
+// request, not gated at boot). The grade model is threaded from runtime config.
+function getAgenticDeps(cfg: AppConfig): AgenticDeps {
+  const graders = Llm.getGraders(true, cfg.gradeModel);
+  return {
+    search: getSearchDeps(cfg),
+    queryRewriter: graders.queryRewriter!,
+    documentGrader: graders.documentGrader!,
+    hallucinationGrader: graders.hallucinationGrader!,
+    retrieveLimit: cfg.agenticRetrieveLimit,
+    maxRetries: cfg.agenticMaxRetries,
+  };
+}
 const rateLimiter: RateLimiter =
   process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashRateLimiter() : Auth.lruRateLimiter;
 
@@ -192,17 +203,23 @@ function createComposition() {
   const txRunner = Db.transactionRunner;
 
   return {
-    ingestFile: (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, ingestDeps),
-    searchChunks: (q: string, o: Parameters<typeof searchChunks>[1]) => bind(searchChunks, q, o, searchDeps),
-    /** Session 8 agentic retrieval loop (rewrite → retrieve → grade → retry).
-      * Returns `null` when AGENTIC_ENABLED=false so the route falls back to the
-      * plain `searchChunks` path. */
-    agenticSearch: agenticDeps
-      ? (query: string) => agenticSearch(query, agenticDeps)
-      : null,
-    /** Session 8 hallucination grader (post-generation guardrail). `null` when
-      * AGENTIC_ENABLED=false. */
-    hallucinationGrader: agenticDeps ? agenticDeps.hallucinationGrader.grade : null,
+    ingestFile: async (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, await resolveIngestDeps()),
+    /** Plain search bound to the per-request runtime config: the reranker is
+      * resolved from `cfg.rerankerProvider` and the threshold/hybrid knobs from
+      * `cfg`. */
+    searchChunks: (cfg: AppConfig, q: string, o: Parameters<typeof searchChunks>[1]) =>
+      bind(searchChunks, q, { ...o, threshold: cfg.similarityThreshold, hybridEnabled: cfg.hybridEnabled }, getSearchDeps(cfg)),
+    /** Session 8 agentic retrieval loop (rewrite → retrieve → grade → retry),
+      * with graders/knobs resolved from the per-request runtime config. */
+    agenticSearch: (cfg: AppConfig, query: string) => agenticSearch(query, getAgenticDeps(cfg)),
+    /** Session 8 hallucination grader (post-generation guardrail), bound to the
+      * per-request runtime grade model. */
+    getHallucinationGrader: (cfg: AppConfig) => getAgenticDeps(cfg).hallucinationGrader.grade,
+    /** Session 2/3: per-request retrieval selectors + reranker availability. */
+    getSearchDeps,
+    getAgenticDeps,
+    resolveReranker,
+    availableRerankers,
     listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
     setUserRole: (input: Parameters<typeof setUserRole>[0]) => bind(setUserRole, input, { ...userDeps, ...auditDeps }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
@@ -214,8 +231,8 @@ function createComposition() {
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
-    uploadPdf: (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+    uploadPdf: async (input: Parameters<typeof uploadPdf>[0]) =>
+      bind(uploadPdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
@@ -228,8 +245,8 @@ function createComposition() {
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
-    replacePdf: (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...ingestDeps, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+    replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
+      bind(replacePdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     /** Ingest pre-chunked Markdown (Session 2). Parses via the injected
       * MarkdownParser adapter (infrastructure), then embeds + writes the
       * chunks with their page/section/source metadata. An optional companion

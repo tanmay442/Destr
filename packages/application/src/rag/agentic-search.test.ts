@@ -97,4 +97,21 @@ describe('agenticSearch', () => {
     expect(res.ok).toBe(true);
     expect(unwrap(res).rewrittenQuery).toBe('original wording');
   });
+
+  it('threads runtime retrieveLimit and maxRetries knobs', async () => {
+    searchChunksMock.mockResolvedValue(ok([chunk('weak', 0.2)]));
+    graderMock.mockResolvedValue('no');
+    const res = await agenticSearch('q', { ...makeDeps(), retrieveLimit: 25, maxRetries: 2 });
+    expect(res.ok).toBe(true);
+    expect(searchChunksMock).toHaveBeenCalledWith('q', { limit: 25 }, expect.anything());
+    expect(searchChunksMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('flags out-of-domain against a runtime outOfDomainThreshold', async () => {
+    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.6)]));
+    graderMock.mockResolvedValue('no');
+    const res = await agenticSearch('q', { ...makeDeps(), outOfDomainThreshold: 0.9 });
+    expect(res.ok).toBe(true);
+    expect(unwrap(res).outOfDomain).toBe(true);
+  });
 });

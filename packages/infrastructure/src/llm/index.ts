@@ -16,6 +16,7 @@ import { docSummarizer } from './doc-summarizer';
 import { localReranker } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
 import {
+  createGraders,
   queryRewriter,
   documentGrader,
   hallucinationGrader,
@@ -84,9 +85,10 @@ export function getReranker(provider?: string): Reranker | undefined {
 /**
  * Return the Session 8 agentic-loop graders, or `undefined` for each when the
  * loop is disabled (`AGENTIC_ENABLED=false`). Adapters reuse the chat model
- * (cheap `GRADE_MODEL` override when set) and degrade safely on failure.
+ * (cheap `GRADE_MODEL` override, or the Session 2 runtime `gradeModelId` when
+ * supplied) and degrade safely on failure.
  */
-export function getGraders(enabled?: boolean): {
+export function getGraders(enabled?: boolean, gradeModelId?: string): {
   queryRewriter: QueryRewriter | undefined;
   documentGrader: DocumentGrader | undefined;
   hallucinationGrader: HallucinationGrader | undefined;
@@ -99,7 +101,7 @@ export function getGraders(enabled?: boolean): {
       hallucinationGrader: undefined,
     };
   }
-  return { queryRewriter, documentGrader, hallucinationGrader };
+  return gradeModelId ? createGraders(gradeModelId) : { queryRewriter, documentGrader, hallucinationGrader };
 }
 
 export { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
@@ -107,6 +109,7 @@ export {
   docSummarizer,
   localReranker,
   cohereReranker,
+  createGraders,
   queryRewriter,
   documentGrader,
   hallucinationGrader,

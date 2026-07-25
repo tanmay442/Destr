@@ -43,6 +43,9 @@ export interface SearchOpts {
   /** Override the broad candidate-pool size retrieved before reranking
    *  (Session 6). Ignored when no reranker is configured. */
   candidateLimit?: number;
+  /** Override the `HYBRID_ENABLED` config (Session 2 runtime knob). Defaults to
+   *  the frozen constant so callers that omit it keep the prior behaviour. */
+  hybridEnabled?: boolean;
 }
 
 /** Map a raw query row to the public `RetrievedChunk` (drops `parentChunkId`). */
@@ -212,24 +215,37 @@ export async function searchChunks(
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
 
+  const hybridEnabled = opts.hybridEnabled ?? HYBRID_ENABLED;
+  const searchByLexical = deps.chunks.searchByLexical;
+  const runHybrid = hybridEnabled && searchByLexical != null;
+
+  // Run vector + lexical concurrently. The lexical branch settles into a
+  // tagged result so a lexical outage falls back to vector-only (as before)
+  // without a rejected `Promise.all` masking a genuine vector failure.
+  const vectorPromise = deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
+  const lexicalPromise = runHybrid
+    ? searchByLexical(query, { limit: candidateLimit }).then(
+        (rows) => ({ ok: true as const, rows }),
+        (cause: unknown) => ({ ok: false as const, cause }),
+      )
+    : Promise.resolve(null);
+
   let vectorRows: RetrievedChunkRow[];
   try {
-    vectorRows = await deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
+    vectorRows = await vectorPromise;
   } catch (cause) {
     return err(new ExternalServiceError('Vector search failed', cause));
   }
 
-  if (!HYBRID_ENABLED || !deps.chunks.searchByLexical) {
+  const lexicalResult = await lexicalPromise;
+  if (lexicalResult === null) {
     return capAndResolve(vectorRows, query, topN, opts, deps);
   }
-
-  let lexicalRows: RetrievedChunkRow[];
-  try {
-    lexicalRows = await deps.chunks.searchByLexical(query, { limit: candidateLimit });
-  } catch (cause) {
-    console.warn('Lexical search failed; falling back to vector-only', { error: String(cause) });
+  if (!lexicalResult.ok) {
+    console.warn('Lexical search failed; falling back to vector-only', { error: String(lexicalResult.cause) });
     return capAndResolve(vectorRows, query, topN, opts, deps);
   }
+  const lexicalRows = lexicalResult.rows;
 
   if (vectorRows.length === 0 && lexicalRows.length === 0) {
     return ok([]);

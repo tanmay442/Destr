@@ -16,6 +16,11 @@ export interface AgenticDeps {
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
   hallucinationGrader: HallucinationGrader;
+  /** Runtime knobs (Session 2). Each falls back to its frozen constant so
+   *  callers that omit them keep the prior behaviour. */
+  retrieveLimit?: number;
+  maxRetries?: number;
+  outOfDomainThreshold?: number;
 }
 
 /** Outcome of one agentic retrieval pass. */
@@ -31,7 +36,7 @@ async function retrieveAndGrade(
   query: string,
   deps: AgenticDeps,
 ): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> {
-  const found = await searchChunks(query, { limit: AGENTIC_RETRIEVE_LIMIT }, deps.search);
+  const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
   if (!found.ok) {
     throw new ExternalServiceError('Agentic retrieval failed', found.error);
   }
@@ -71,14 +76,16 @@ export async function agenticSearch(
 
     let pass = await retrieveAndGrade(rewritten, deps);
 
+    const maxRetries = deps.maxRetries ?? AGENTIC_MAX_RETRIES;
     if (pass.chunks.length === 0) {
-      for (let attempt = 0; attempt < AGENTIC_MAX_RETRIES && pass.chunks.length === 0; attempt++) {
+      for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0; attempt++) {
         pass = await retrieveAndGrade(originalQuery, deps);
       }
     }
 
     const outOfDomain =
-      pass.chunks.length === 0 && pass.maxSimilarity < OUT_OF_DOMAIN_THRESHOLD;
+      pass.chunks.length === 0 &&
+      pass.maxSimilarity < (deps.outOfDomainThreshold ?? OUT_OF_DOMAIN_THRESHOLD);
 
     return ok({
       chunks: pass.chunks,
