@@ -326,7 +326,8 @@ export interface ChatEventRange {
 export interface ChatEventMetrics {
   total: number;
   ticketsCreated: number;
-  deflectionRate: number;
+  ticketCreationRate: number;
+  selfServeSuccessRate: number;
   outOfDomainRate: number;
   zeroResultRate: number;
   cacheHitRate: number;
@@ -350,6 +351,66 @@ export interface ChatEventDailyUsage {
   uniqueUsers: number;
 }
 
+export interface ChatDailyTrendRow {
+  day: string;
+  total: number;
+  hallucinations: number;
+  outOfDomain: number;
+  cacheHits: number;
+  ticketsCreated: number;
+  selfServe: number;
+  avgMaxSimilarity: number;
+  totalP50Ms: number;
+  totalP95Ms: number;
+  retrieveP50Ms: number;
+  retrieveP95Ms: number;
+  generateP50Ms: number;
+  generateP95Ms: number;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface QueryLengthBuckets {
+  short: number;
+  medium: number;
+  long: number;
+}
+
+export interface ModeComparison {
+  mode: 'agentic' | 'vector';
+  total: number;
+  avgTokensPerQuery: number;
+  avgMaxSimilarity: number;
+  ticketRate: number;
+  hallucinationRate: number;
+  totalP50Ms: number;
+  totalP95Ms: number;
+  queryLengthBuckets: QueryLengthBuckets;
+}
+
+export interface CacheBusterQuery {
+  query: string;
+  misses: number;
+}
+
+export interface QueryOutcome {
+  query: string;
+  outOfDomain: boolean;
+  ticketCreated: boolean;
+}
+
+export interface StuckSessionSample {
+  userId: string;
+  sessionNo: number;
+  turns: number;
+  lastActivity: string;
+}
+
+export interface StuckSessions {
+  count: number;
+  samples: StuckSessionSample[];
+}
+
 /** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
@@ -357,6 +418,11 @@ export interface ChatEventsRepo {
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getTopZeroResultQueries(limit: number, range?: ChatEventRange): Promise<Array<{ q: string; count: number }>>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
+  getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
+  getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
+  getCacheBusterQueries(limit: number, range?: ChatEventRange): Promise<CacheBusterQuery[]>;
+  getQueryOutcomes(range?: ChatEventRange, limit?: number): Promise<QueryOutcome[]>;
+  getStuckSessions(range?: ChatEventRange): Promise<StuckSessions>;
   refreshDailyStats(): Promise<void>;
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;

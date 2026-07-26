@@ -1,7 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
 import { chatEvents, auditDeadLetter } from '../schema';
 import type { ChatEventInput } from '@app/domain';
+
+const dialect = new PgDialect();
+
+function makeExecuteClient(rows: unknown[]) {
+  const executed: SQL[] = [];
+  const client = {
+    execute(query: SQL) {
+      executed.push(query);
+      return Promise.resolve({ rows });
+    },
+  };
+  return { client: client as never, executed };
+}
+
+function compiled(executed: SQL[]): string {
+  return dialect.sqlToQuery(executed[executed.length - 1]!).sql.toLowerCase();
+}
 
 type Insert = { table: unknown; values: unknown };
 
@@ -117,5 +136,47 @@ describe('ChatEventBatcher', () => {
     const result = await new ChatEventBatcher(client).anonymizeUserData('u1');
     expect(result).toEqual({ updatedCount: 1 });
     expect(deleted.userId).toBe('REDACTED');
+  });
+
+  it('getCacheBusterQueries filters repeated misses with zero hits and maps rows', async () => {
+    const { client, executed } = makeExecuteClient([{ query: 'reset key', misses: 4 }]);
+    const result = await new ChatEventBatcher(client).getCacheBusterQueries(5);
+    expect(result).toEqual([{ query: 'reset key', misses: 4 }]);
+    const sql = compiled(executed);
+    expect(sql).toContain('group by');
+    expect(sql).toContain('having');
+    expect(sql).toContain('cache_hit');
+    expect(sql).toContain('order by misses desc');
+    expect(sql).toContain('limit');
+  });
+
+  it('getStuckSessions sessionizes with lag and reports count + samples', async () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      total_count: 12,
+      user_id: `u${i}`,
+      session_no: i + 1,
+      turns: 6,
+      last_activity: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    }));
+    const { client, executed } = makeExecuteClient(rows);
+    const result = await new ChatEventBatcher(client).getStuckSessions();
+    expect(result.count).toBe(12);
+    expect(result.samples).toHaveLength(10);
+    expect(result.samples[0]).toEqual({ userId: 'u0', sessionNo: 1, turns: 6, lastActivity: '2026-01-01T00:00:00Z' });
+    const sql = compiled(executed);
+    expect(sql).toContain('lag(');
+    expect(sql).toContain('partition by');
+    expect(sql).toContain("interval '30 minutes'");
+    expect(sql).toContain('having count(*) >= 5');
+    expect(sql).toContain('is not null');
+    expect(sql).toContain('order by last_activity desc');
+    expect(sql).toContain('limit 10');
+    expect(sql).not.toContain('any_ticket');
+  });
+
+  it('getStuckSessions returns zero count with no rows', async () => {
+    const { client } = makeExecuteClient([]);
+    const result = await new ChatEventBatcher(client).getStuckSessions();
+    expect(result).toEqual({ count: 0, samples: [] });
   });
 });

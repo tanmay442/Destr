@@ -168,7 +168,7 @@ for detailed sign-up links and per-service walkthroughs.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
 - **`/admin/analytics`** — Rebuilt around per-turn `chat_events`: stat cards
-  for deflection, cache-hit, out-of-domain, zero-result, hallucination-blocked,
+  for self-serve success, cache-hit, out-of-domain, zero-result, hallucination-blocked,
   and agentic-retry rates plus estimated token cost; a latency `BarList`
   (retrieve / generate / total p50 + p95); a 7-day usage `ActivityBars`; and
   Top Queries (still powered by `QueryStats`) plus Top zero-result queries.

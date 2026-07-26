@@ -141,6 +141,14 @@ const config: AppConfig = {
   answerCacheTtlSec: ANSWER_CACHE_TTL_SEC,
   captureQueryText: true,
   retrievalModeRolloutPercent: 100,
+
+  analyticsTopics: {
+    'password reset': ['password', 'reset password', 'forgot password', 'locked out'],
+    billing: ['billing', 'invoice', 'payment', 'refund', 'charge', 'subscription'],
+    installation: ['install', 'installation', 'setup', 'download'],
+    api: ['api', 'endpoint', 'token', 'webhook', 'rate limit'],
+    account: ['account', 'login', 'sign in', 'sign up', 'profile'],
+  },
 };
 
 export default config;

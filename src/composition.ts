@@ -7,7 +7,8 @@ import {
   isTicketStatus, TICKET_STATUSES,
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
-  getAnalyticsSummary, getChatAnalytics, listAudit, logSettingsChange,
+  getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends, getTopicCoverage,
+  listAudit, logSettingsChange,
   prepareIngest,
   uploadPrechunkedMarkdown,
   reingestAll,
@@ -247,6 +248,10 @@ function createComposition() {
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: queryStats }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
+    getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
+      bind(getAnalyticsTrends, input, { ...userDeps, chatEvents: chatEventBatcher }),
+    getTopicCoverage: async (input: Parameters<typeof getTopicCoverage>[0]) =>
+      bind(getTopicCoverage, input, { ...userDeps, chatEvents: chatEventBatcher, config: await getRuntimeConfig() }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,
