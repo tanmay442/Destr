@@ -1,6 +1,7 @@
 import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
 import { DocumentRowActions } from './document-row-actions';
 import { RecountAllButton } from './recount-all-button';
+import { UploadDocumentDialog } from './upload-document-dialog';
 import { IngestStatusPoller } from './ingest-status-poller';
 import { Pagination } from '@/components/admin/Pagination';
 import { Button } from '@/components/ui/button';
@@ -97,6 +98,7 @@ export default async function DocumentsPage({
           />
           <Button type="submit">Search</Button>
           <RecountAllButton />
+          <UploadDocumentDialog />
         </form>
         {showRecountBanner ? (
           <Alert

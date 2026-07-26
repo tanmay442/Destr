@@ -74,7 +74,6 @@ export async function uploadPdfAction(
       return toSafeError(result.error);
     }
     revalidatePath('/admin');
-    revalidatePath('/admin/upload');
     revalidatePath('/admin/documents');
     return {
       status: result.value.status,

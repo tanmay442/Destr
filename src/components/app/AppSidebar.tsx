@@ -8,7 +8,6 @@ import {
   MessageSquare,
   ChevronRight,
   LayoutDashboard,
-  Upload,
   FileText,
   Inbox,
   Users,
@@ -35,7 +34,6 @@ import { cn } from '@/lib/utils';
 
 const ADMIN_LINKS = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard },
-  { href: '/admin/upload', label: 'Upload', icon: Upload },
   { href: '/admin/documents', label: 'Documents', icon: FileText },
   { href: '/admin/tickets', label: 'Tickets', icon: Inbox },
   { href: '/admin/users', label: 'Users', icon: Users },
