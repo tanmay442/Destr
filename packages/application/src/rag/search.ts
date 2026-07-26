@@ -21,6 +21,7 @@ export interface RetrievedChunk {
   page: number | null;
   sectionTitle: string | null;
   source: string | null;
+  title: string | null;
   content: string;
   similarity: number;
 }
@@ -52,6 +53,7 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
     page: r.page,
     sectionTitle: r.sectionTitle,
     source: r.source,
+    title: r.title,
     content: r.content,
     similarity: Number(r.similarity),
   };
@@ -91,6 +93,7 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
         page: child?.page ?? p.page,
         sectionTitle: child?.sectionTitle ?? p.sectionTitle,
         source: child?.source ?? p.source,
+        title: p.title ?? child?.title ?? null,
         content: p.content,
         similarity: bestSim.get(p.id) ?? child?.similarity ?? 0,
       };
@@ -117,6 +120,7 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
       page: h.page,
       sectionTitle: h.sectionTitle,
       source: h.source,
+      title: h.title,
       content: ordered.map((n) => n.content).join('\n\n'),
       similarity: h.similarity,
     };

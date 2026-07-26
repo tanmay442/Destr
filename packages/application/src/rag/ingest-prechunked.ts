@@ -72,21 +72,19 @@ export async function ingestPrechunked(
     summary = ctx.summary?.trim() || null;
     if (title) header = `Document: ${title}\nSummary: ${summary ?? ''}\n\n`;
   }
-  const headerChunks = header
-    ? cleanChunks.map((c) => ({ ...c, content: header + c.content }))
-    : cleanChunks;
-
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(headerChunks.map((c) => c.content));
+    embeddings = await deps.embeddings.embedBatch(
+      cleanChunks.map((c) => (header ? header + c.content : c.content)),
+    );
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
-  if (embeddings.length !== headerChunks.length) {
+  if (embeddings.length !== cleanChunks.length) {
     return err(new ExternalServiceError('Embedding count mismatch'));
   }
 
-  const rows: PreparedChunk[] = headerChunks.map((c, i) => ({
+  const rows: PreparedChunk[] = cleanChunks.map((c, i) => ({
     documentId: 0,
     content: c.content,
     embedding: embeddings[i]!,

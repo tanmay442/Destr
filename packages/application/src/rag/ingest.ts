@@ -79,7 +79,8 @@ async function buildCchHeader(
   return { header, title, summary };
 }
 
-/** Prepend a CCH header to every chunk and stamp title/summary metadata. */
+/** Attach the CCH header as an embedding-only prefix and stamp title/summary metadata.
+ *  `content` stays clean so citation snippets and LLM tool content are unpolluted. */
 function applyCchHeader(
   docChunks: DocumentChunk[],
   header: string,
@@ -88,10 +89,15 @@ function applyCchHeader(
 ): DocumentChunk[] {
   return docChunks.map((c) => ({
     ...c,
-    content: header ? header + c.content : c.content,
+    embeddingPrefix: header || undefined,
     title: c.title ?? title,
     summary: c.summary ?? summary,
   }));
+}
+
+/** Text sent to the embedding model: CCH prefix + clean content when present. */
+function embeddingInput(c: DocumentChunk): string {
+  return c.embeddingPrefix ? c.embeddingPrefix + c.content : c.content;
 }
 
 /** Turn parsed/split chunks into fully-populated PreparedChunk rows (no DB writes). */
@@ -155,7 +161,7 @@ export async function parseAndEmbed(
   if (hasParents && embeddable.length > 0) {
     let embedEmbeddings: number[][];
     try {
-      embedEmbeddings = await deps.embeddings.embedBatch(embeddable.map((c) => c.content));
+      embedEmbeddings = await deps.embeddings.embedBatch(embeddable.map(embeddingInput));
     } catch (cause) {
       return err(new ExternalServiceError('Embedding API failed', cause));
     }
@@ -174,7 +180,7 @@ export async function parseAndEmbed(
 
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(docChunks.map((c) => c.content));
+    embeddings = await deps.embeddings.embedBatch(docChunks.map(embeddingInput));
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
@@ -205,6 +211,7 @@ export async function writeChunks(
       page: r.page,
       sectionTitle: r.sectionTitle,
       source: r.source,
+      title: r.title,
       parentChunkId: r.parentChunkId,
       kind: r.kind ?? 'child',
       embeddingModel: r.embeddingModel,

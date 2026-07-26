@@ -87,6 +87,8 @@ export interface DocumentChunk {
   source?: string | null;
   title?: string | null;
   summary?: string | null;
+  /** Contextual-Chunk-Header text embedded alongside `content`; excluded from stored content. */
+  embeddingPrefix?: string;
   parentChunkId?: number | null;
   sourceChunkId?: number | null;
   /** Kind of chunk: `parent` (large context block), `child` (embedded for retrieval), `summary` (LLM-generated). */
@@ -103,6 +105,7 @@ export interface RetrievedChunkRow {
   page: number | null;
   sectionTitle: string | null;
   source: string | null;
+  title: string | null;
   content: string;
   similarity: number;
   parentChunkId: number | null;
@@ -151,6 +154,7 @@ export interface ChunkRepository {
       page?: number | null;
       sectionTitle?: string | null;
       source?: string | null;
+      title?: string | null;
       parentChunkId?: number | null;
       kind?: 'parent' | 'child' | 'summary';
       embeddingModel?: string | null;
