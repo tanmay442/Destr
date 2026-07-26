@@ -261,7 +261,6 @@ export function SettingsClient() {
   const personaGridKeys = [
     'agentPersona.tone',
     'orgName',
-    'orgShortName',
     'audience',
     'customInstructions',
   ];
@@ -392,7 +391,7 @@ export function SettingsClient() {
                   )}
                 </div>
 
-                {/* Row 2: Organization Name | Short Name */}
+                {/* Row 2: Organization Name */}
                 <div>
                   {fieldMap.has('orgName') && (
                     <FieldControl
@@ -400,16 +399,6 @@ export function SettingsClient() {
                       value={values['orgName']}
                       onChange={(v) => update('orgName', v)}
                       onReset={() => update('orgName', fieldMap.get('orgName')!.default)}
-                    />
-                  )}
-                </div>
-                <div>
-                  {fieldMap.has('orgShortName') && (
-                    <FieldControl
-                      field={fieldMap.get('orgShortName')!}
-                      value={values['orgShortName']}
-                      onChange={(v) => update('orgShortName', v)}
-                      onReset={() => update('orgShortName', fieldMap.get('orgShortName')!.default)}
                     />
                   )}
                 </div>
