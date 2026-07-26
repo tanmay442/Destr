@@ -15,7 +15,7 @@ export const PDF_PARSE_MAX_CHARS = finiteOrDefault(process.env.PDF_PARSE_MAX_CHA
 export const CCH_ENABLED = process.env.CCH_ENABLED !== 'false';
 export const CCH_MODEL = process.env.CCH_MODEL ?? '';
 export const CCH_CONTEXT_CHARS = 4000;
-export const CITATION_SNIPPET_MAX = 150;
+export const CITATION_SNIPPET_MAX = 250;
 export const DEFAULT_SEARCH_LIMIT = 3;
 export const MD_CHUNK_DELIMITER = process.env.MD_CHUNK_DELIMITER ?? '---chunk---';
 export const EMBEDDING_BATCH_CONCURRENCY = 3;
