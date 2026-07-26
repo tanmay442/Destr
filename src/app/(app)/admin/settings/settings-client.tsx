@@ -48,7 +48,6 @@ import {
   SheetHeader,
   SheetTitle,
   SheetDescription,
-  SheetFooter,
 } from '@/components/ui/sheet';
 import {
   Tabs,
@@ -1060,8 +1059,8 @@ function OutOfScopeEditor({
 
       {/* Slide-over Drawer (Sheet) for focused policy editing */}
       <Sheet open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
-        <SheetContent side="right" className="sm:max-w-md bg-card border-border text-zinc-100">
-          <SheetHeader>
+        <SheetContent side="right" className="sm:max-w-md bg-card border-border text-zinc-100 flex flex-col">
+          <SheetHeader className="pb-4 border-b border-zinc-800">
             <SheetTitle className="text-zinc-100">
               {editingIndex !== null && value[editingIndex]?.topic
                 ? `Edit Policy: ${value[editingIndex].topic}`
@@ -1072,33 +1071,47 @@ function OutOfScopeEditor({
             </SheetDescription>
           </SheetHeader>
           {currentEditing && (
-            <div className="flex flex-col gap-5 py-6">
-              <div className="grid gap-2">
-                <Label htmlFor="drawer-topic" className="text-xs font-medium text-zinc-300">Topic Name</Label>
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              <div className="space-y-1.5">
+                <Label htmlFor="drawer-topic" className="text-xs font-medium text-zinc-400">Topic Name</Label>
                 <Input
                   id="drawer-topic"
                   placeholder="e.g. legal-advice"
                   value={currentEditing.topic}
                   onChange={(e) => updateAt(editingIndex!, { topic: e.target.value })}
-                  className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200"
+                  className="h-10 px-3 py-2 text-sm border border-zinc-800 bg-zinc-900/50 text-zinc-200 placeholder:text-zinc-500"
                 />
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="drawer-handling" className="text-xs font-medium text-zinc-300">Action Summary &amp; Handling</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="drawer-handling" className="text-xs font-medium text-zinc-400">Action Summary &amp; Handling</Label>
                 <Textarea
                   id="drawer-handling"
                   placeholder="e.g. Decline request &amp; open security ticket..."
-                  rows={6}
+                  rows={5}
+                  className="min-h-[120px] px-3 py-2 text-sm border border-zinc-800 bg-zinc-900/50 text-zinc-200 placeholder:text-zinc-500 leading-relaxed"
                   value={currentEditing.handling}
                   onChange={(e) => updateAt(editingIndex!, { handling: e.target.value })}
-                  className="px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200"
                 />
               </div>
             </div>
           )}
-          <SheetFooter>
-            <Button onClick={() => setEditingIndex(null)} className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">Done</Button>
-          </SheetFooter>
+          <div className="flex items-center justify-between gap-3 border-t border-zinc-800 p-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEditingIndex(null)}
+              className="h-9 px-4 text-sm font-medium border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => setEditingIndex(null)}
+              className="h-9 px-4 text-sm font-medium bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
+            >
+              Save
+            </Button>
+          </div>
         </SheetContent>
       </Sheet>
     </Card>
