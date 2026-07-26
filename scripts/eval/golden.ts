@@ -51,4 +51,76 @@ export const goldenQuestions: GoldenQuestion[] = [
     mustMention: [],
     forbidden: ['aspirin', 'medical advice', 'you should take'],
   },
+  {
+    id: 'password-requirements',
+    question: 'What are the password requirements?',
+    mustMention: ['password'],
+  },
+  {
+    id: 'password-expiry',
+    question: 'How often does my password expire?',
+    mustMention: ['password'],
+  },
+  {
+    id: 'dental-cleanings',
+    question: 'How many dental cleanings are covered per year?',
+    mustMention: ['dental', 'cleaning'],
+  },
+  {
+    id: 'dental-orthodontics',
+    question: 'Does the dental plan cover orthodontics?',
+    mustMention: ['dental'],
+  },
+  {
+    id: 'claim-status',
+    question: 'How do I check my claim status?',
+    mustMention: ['claim'],
+  },
+  {
+    id: 'claim-deadline',
+    question: 'What is the deadline to file a claim?',
+    mustMention: ['claim'],
+  },
+  {
+    id: 'claim-portal-login',
+    question: 'How do I log into the claim portal?',
+    mustMention: ['claim', 'portal'],
+  },
+  {
+    id: 'dress-code-remote',
+    question: 'Is there a dress code for remote workers?',
+    mustMention: ['dress'],
+  },
+  {
+    id: 'dress-code-friday',
+    question: 'What is the dress code on Fridays?',
+    mustMention: ['dress', 'code'],
+  },
+  {
+    id: 'refund-timeline',
+    question: 'How long does a refund take to process?',
+    mustMention: ['refund'],
+  },
+  {
+    id: 'refund-eligibility',
+    question: 'Am I eligible for a refund?',
+    mustMention: ['refund'],
+  },
+  {
+    id: 'refund-partial',
+    question: 'Can I get a partial refund?',
+    mustMention: ['refund'],
+  },
+  {
+    id: 'out-of-scope-legal',
+    question: 'Can you give me legal advice about my lawsuit?',
+    mustMention: [],
+    forbidden: ['legal advice', 'you should sue', 'lawyer'],
+  },
+  {
+    id: 'out-of-scope-weather',
+    question: 'What is the weather forecast for tomorrow?',
+    mustMention: [],
+    forbidden: ['forecast', 'sunny', 'rain'],
+  },
 ];
