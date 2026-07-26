@@ -54,7 +54,7 @@ describe('ChatInterface', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('shows a breathing thinking indicator while the assistant is generating with no text yet', () => {
+  it('shows status stages while the assistant is generating with no text yet', () => {
     useChatMock.mockReturnValue({
       messages: [],
       sendMessage: vi.fn(),
@@ -64,7 +64,7 @@ describe('ChatInterface', () => {
     });
     render(<ChatInterface />);
     expect(screen.getByTestId('chat-thinking')).toBeInTheDocument();
-    expect(screen.getByText(/Thinking/i)).toBeInTheDocument();
+    expect(screen.getByText('Searching from the sources')).toBeInTheDocument();
   });
 
   it('renders citation cards for data-citation parts', () => {

@@ -19,17 +19,34 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
-import { ArrowUpIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, SquareIcon, Search, FileStack, FileCheck, Clock } from 'lucide-react';
 
-function ThinkingDot() {
+function StatusStages() {
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    if (stage >= 3) return;
+    const timer = setTimeout(() => setStage((s) => s + 1), 5000);
+    return () => clearTimeout(timer);
+  }, [stage]);
+
+  const stages = [
+    { icon: Search, label: 'Searching from the sources' },
+    { icon: FileStack, label: 'Compiling them' },
+    { icon: FileCheck, label: 'Finalizing output' },
+    { icon: Clock, label: 'Just a moment' },
+  ];
+
+  const { icon: Icon, label } = stages[stage]!;
+
   return (
     <span
       aria-label="Generating response"
-      className="relative flex size-5 items-center justify-center"
+      className="flex items-center gap-2 text-sm text-muted-foreground"
       data-testid="chat-thinking"
     >
-      <span className="absolute size-2 rounded-full bg-primary/40 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite]" />
-      <span className="absolute size-2 rounded-full bg-primary/70 motion-safe:animate-[breathe_1.6s_ease-in-out_infinite_reverse]" />
+      <Icon className="size-4 animate-pulse" aria-hidden="true" />
+      <span>{label}</span>
     </span>
   );
 }
@@ -249,8 +266,7 @@ export function ChatInterface() {
                   className="flex items-center gap-3"
                   data-testid="chat-message-assistant"
                 >
-                  <ThinkingDot />
-                  <span className="text-sm text-muted-foreground">Thinking…</span>
+                  <StatusStages />
                 </div>
               );
             })()}
