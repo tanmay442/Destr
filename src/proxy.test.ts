@@ -76,6 +76,7 @@ vi.mock('@app/infrastructure/auth', async () => {
     '/apple-icon',
     '/opengraph-image',
     '/api/admin/ingest-worker(.*)',
+    '/api/admin/analytics/rollup',
   ]);
 
   const isProtectedRoute = createRouteMatcher([
@@ -195,6 +196,12 @@ describe('proxy.ts (auth adapter)', () => {
 
   it('excludes /api/admin/ingest-worker from auth (QStash-signed)', async () => {
     await proxyHandler(makeReq('/api/admin/ingest-worker'));
+    expect(protectMock).not.toHaveBeenCalled();
+    expect(nextMock).toHaveBeenCalled();
+  });
+
+  it('excludes /api/admin/analytics/rollup from auth (route-level cron auth)', async () => {
+    await proxyHandler(makeReq('/api/admin/analytics/rollup'));
     expect(protectMock).not.toHaveBeenCalled();
     expect(nextMock).toHaveBeenCalled();
   });

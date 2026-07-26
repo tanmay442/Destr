@@ -18,6 +18,7 @@ const MessagePartSchema = z.union([
 ]);
 
 export const ChatRequestSchema = z.object({
+  turnId: z.string().max(100).optional(),
   messages: z.array(
     z.object({
       id: z.string().optional(),

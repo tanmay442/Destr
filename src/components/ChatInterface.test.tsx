@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
 // Mock useChat to drive messages from the test.
 const useChatMock = vi.fn();
@@ -14,6 +14,11 @@ vi.mock('ai', () => ({
   },
 }));
 
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+import { toast } from 'sonner';
 import { ChatInterface } from './ChatInterface';
 
 type Msg = {
@@ -24,6 +29,8 @@ type Msg = {
     | {
         type: 'data-citation';
         data: {
+          id?: number;
+          documentId?: number;
           similarity: number;
           snippet: string;
           fileName?: string | null;
@@ -49,7 +56,66 @@ function setupChat(messages: Msg[] = [], opts: { status?: string; send?: (m: { t
 
 beforeEach(() => {
   useChatMock.mockReset();
+  vi.mocked(toast.error).mockReset();
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+type OnFinish = (options: {
+  message: Msg;
+  messages: Msg[];
+  isAbort: boolean;
+  isDisconnect: boolean;
+  isError: boolean;
+}) => void;
+
+async function renderWithBoundTurn(assistant: Msg) {
+  const sendMessage = vi.fn();
+  setupChat([], { send: sendMessage });
+  const view = render(<ChatInterface />);
+  fireEvent.change(screen.getByTestId('chat-input'), {
+    target: { value: 'Question?' },
+  });
+  fireEvent.click(screen.getByTestId('chat-send'));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  const options = sendMessage.mock.calls[0]![1] as { body: { turnId: string } };
+  const turnId = options.body.turnId;
+  setupChat(
+    [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
+    { send: sendMessage },
+  );
+  view.rerender(<ChatInterface />);
+  const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+  act(() =>
+    chatOptions.onFinish({
+      message: assistant,
+      messages: [],
+      isAbort: false,
+      isDisconnect: false,
+      isError: false,
+    }),
+  );
+  return { turnId, view };
+}
+
+const ASSISTANT_WITH_CITATIONS: Msg = {
+  id: 'a1',
+  role: 'assistant',
+  parts: [
+    { type: 'text', text: 'Answer.' },
+    {
+      type: 'data-citation',
+      data: { id: 11, documentId: 7, similarity: 0.9, snippet: 'First chunk.' },
+    },
+    {
+      type: 'data-citation',
+      data: { id: 12, documentId: 7, similarity: 0.8, snippet: 'Second chunk.' },
+    },
+  ],
+};
 
 describe('ChatInterface', () => {
   it('renders a welcome intro when there are no messages', () => {
@@ -225,7 +291,18 @@ describe('ChatInterface', () => {
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'What is the dental plan?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
-    await waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ text: 'What is the dental plan?' }));
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        { text: 'What is the dental plan?' },
+        {
+          body: {
+            turnId: expect.stringMatching(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+            ),
+          },
+        },
+      ),
+    );
     expect((input).value).toBe('');
   });
 
@@ -247,6 +324,123 @@ describe('ChatInterface', () => {
     expect(button).toHaveAttribute('aria-label', 'Stop generating');
     fireEvent.click(button);
     await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it('does not render a feedback control for assistant messages without a bound turn', () => {
+    setupChat([
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi.' }] },
+    ]);
+    render(<ChatInterface />);
+    expect(screen.queryByTestId('chat-feedback')).not.toBeInTheDocument();
+  });
+
+  it('posts feedback with deduplicated document and chunk ids from citations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { turnId } = await renderWithBoundTurn(ASSISTANT_WITH_CITATIONS);
+
+    const control = screen.getByTestId('chat-feedback');
+    expect(control).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+
+    expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/chat/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          turnId,
+          feedback: 1,
+          documentIds: [7],
+          chunkIds: [11, 12],
+        }),
+      }),
+    );
+    expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('chat-feedback-down')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('omits documentIds and chunkIds when the message has no citations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { turnId } = await renderWithBoundTurn({
+      id: 'a1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'Answer without sources.' }],
+    });
+
+    fireEvent.click(screen.getByTestId('chat-feedback-down'));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/chat/feedback',
+        expect.objectContaining({ body: JSON.stringify({ turnId, feedback: -1 }) }),
+      ),
+    );
+  });
+
+  it('re-posts when the vote changes to the other thumb', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { turnId } = await renderWithBoundTurn(ASSISTANT_WITH_CITATIONS);
+
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId('chat-feedback-down'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const secondBody = JSON.parse(
+      (fetchMock.mock.calls[1]![1] as { body: string }).body,
+    ) as { turnId: string; feedback: number };
+    expect(secondBody.turnId).toBe(turnId);
+    expect(secondBody.feedback).toBe(-1);
+    expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('chat-feedback-down')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('does not re-post when the same thumb is clicked twice', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    await renderWithBoundTurn(ASSISTANT_WITH_CITATIONS);
+
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reverts the optimistic vote and shows a toast on failure', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal('fetch', fetchMock);
+    await renderWithBoundTurn(ASSISTANT_WITH_CITATIONS);
+
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'true');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'false'),
+    );
+    expect(toast.error).toHaveBeenCalled();
+  });
+
+  it('retries once after a 404 before succeeding', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    await renderWithBoundTurn(ASSISTANT_WITH_CITATIONS);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    vi.useRealTimers();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'true');
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {

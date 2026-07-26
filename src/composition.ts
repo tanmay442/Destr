@@ -7,7 +7,10 @@ import {
   isTicketStatus, TICKET_STATUSES,
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
-  getAnalyticsSummary, getChatAnalytics, listAudit, logSettingsChange,
+  getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends, getTopicCoverage,
+  getDocumentAnalytics, submitChatFeedback,
+  getTicketIntelligence,
+  listAudit, logSettingsChange,
   prepareIngest,
   uploadPrechunkedMarkdown,
   reingestAll,
@@ -44,6 +47,7 @@ const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 const settingsRepo = Db.createSettingsRepo(Db.db);
 const chatEventBatcher = Db.createChatEventsRepo(Db.db);
+const chatFeedbackRepo = Db.createChatFeedbackRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
 
@@ -247,6 +251,16 @@ function createComposition() {
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: queryStats }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
+    getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
+      bind(getAnalyticsTrends, input, { ...userDeps, chatEvents: chatEventBatcher }),
+    getTopicCoverage: async (input: Parameters<typeof getTopicCoverage>[0]) =>
+      bind(getTopicCoverage, input, { ...userDeps, chatEvents: chatEventBatcher, config: await getRuntimeConfig() }),
+    getDocumentAnalytics: (input: Parameters<typeof getDocumentAnalytics>[0]) =>
+      bind(getDocumentAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher, feedback: chatFeedbackRepo }),
+    getTicketIntelligence: (input: Parameters<typeof getTicketIntelligence>[0]) =>
+      bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: Db.ticketRepo }),
+    submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
+      bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,

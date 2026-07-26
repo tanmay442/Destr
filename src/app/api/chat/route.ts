@@ -9,26 +9,12 @@ import type { ChatEventInput } from '@app/domain';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
+import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { dedupeCitations } from '@/chat/dedupe-citations';
-
-function emitCitations(
-  chunks: RetrievedChunk[],
-  snippetMax = CITATION_SNIPPET_MAX,
-): Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> {
-  return chunks.map((m) => ({
-    similarity: m.similarity,
-    snippet:
-      m.content.length > snippetMax
-        ? m.content.slice(0, snippetMax) + '\u2026'
-        : m.content,
-    fileName: m.fileName,
-    page: m.page,
-    sectionTitle: m.sectionTitle,
-    source: m.source,
-  }));
-}
+import { emitCitations, citationDocumentIds, type EmittedCitation } from '@/chat/emit-citations';
+import { resolveTurnId } from '@/chat/turn-id';
+import { buildEventMeta } from '@/chat/build-event-meta';
 
 /** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
 interface TurnMetrics {
@@ -36,6 +22,7 @@ interface TurnMetrics {
   hitCount: number | null;
   maxSimilarity: number | null;
   ticketCreated: boolean;
+  ticketId: string | null;
   rewritten: boolean;
 }
 
@@ -43,7 +30,7 @@ function buildChatTools(deps: {
   effectiveMode: 'agentic' | 'normal';
   searchChunks: (query: string, opts: { limit?: number }) => ReturnType<Composition['searchChunks']>;
   agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
-  capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
+  capturedCitations: EmittedCitation[];
   createTicket: Composition['createTicket'];
   userId: string;
   outOfDomainRef: { value: boolean };
@@ -166,6 +153,7 @@ function buildChatTools(deps: {
           return { ticketId: null, status: 'error' };
         }
         metrics.ticketCreated = true;
+        metrics.ticketId = result.value.ticketId;
         return result.value;
       },
     }),
@@ -230,7 +218,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
     void comp.recordQuery(userId, lastUserText).catch(() => {});
   }
 
-  const capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> = [];
+  const capturedCitations: EmittedCitation[] = [];
+
+  const turnId = resolveTurnId(parsed.data.turnId);
 
   const isFirstTurn = messages.length <= 1;
 
@@ -246,7 +236,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, rewritten: false };
+  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -268,6 +258,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
         },
       });
       comp.chatEventBatcher.record({
+        turnId,
         userId,
         query: queryText,
         mode: persistedMode,
@@ -353,6 +344,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           const usage = await Promise.resolve(result.usage).catch(() => null);
           const totalMs = Math.round(performance.now() - turnStart);
           comp.chatEventBatcher.record({
+            turnId,
             userId,
             query: queryText,
             mode: persistedMode,
@@ -367,7 +359,11 @@ async function streamChatResponse(req: Request): Promise<Response> {
             citationCount: capturedCitations.length,
             tokensIn: usage?.inputTokens ?? 0,
             tokensOut: usage?.outputTokens ?? 0,
-            meta: metrics.rewritten ? { rewritten: true } : {},
+            meta: buildEventMeta({
+              rewritten: metrics.rewritten,
+              documentIds: citationDocumentIds(capturedCitations),
+              ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+            }),
           });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
@@ -390,7 +386,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
   result: { text: PromiseLike<string> };
-  capturedCitations: Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }>;
+  capturedCitations: EmittedCitation[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   outOfDomain: boolean;
 }): Promise<boolean> {

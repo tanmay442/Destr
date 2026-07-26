@@ -142,6 +142,7 @@ const isPublicRoute = createRouteMatcher([
   '/opengraph-image',
   // QStash-signed worker: gated solely by its own signature verification.
   '/api/admin/ingest-worker(.*)',
+  '/api/admin/analytics/rollup',
 ]);
 
 const isProtectedRoute = createRouteMatcher([
