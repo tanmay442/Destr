@@ -14,6 +14,7 @@ import { getRuntimeConfig } from '@/lib/config/runtime';
 import { dedupeCitations } from '@/chat/dedupe-citations';
 import { emitCitations, citationDocumentIds, type EmittedCitation } from '@/chat/emit-citations';
 import { resolveTurnId } from '@/chat/turn-id';
+import { buildEventMeta } from '@/chat/build-event-meta';
 
 /** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
 interface TurnMetrics {
@@ -21,6 +22,7 @@ interface TurnMetrics {
   hitCount: number | null;
   maxSimilarity: number | null;
   ticketCreated: boolean;
+  ticketId: string | null;
   rewritten: boolean;
 }
 
@@ -151,6 +153,7 @@ function buildChatTools(deps: {
           return { ticketId: null, status: 'error' };
         }
         metrics.ticketCreated = true;
+        metrics.ticketId = result.value.ticketId;
         return result.value;
       },
     }),
@@ -233,7 +236,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, rewritten: false };
+  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -356,10 +359,11 @@ async function streamChatResponse(req: Request): Promise<Response> {
             citationCount: capturedCitations.length,
             tokensIn: usage?.inputTokens ?? 0,
             tokensOut: usage?.outputTokens ?? 0,
-            meta: {
-              ...(metrics.rewritten ? { rewritten: true } : {}),
-              ...(capturedCitations.length > 0 ? { documentIds: citationDocumentIds(capturedCitations) } : {}),
-            },
+            meta: buildEventMeta({
+              rewritten: metrics.rewritten,
+              documentIds: citationDocumentIds(capturedCitations),
+              ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+            }),
           });
         } catch (err) {
           logger.error('Chat stream error', { error: err });

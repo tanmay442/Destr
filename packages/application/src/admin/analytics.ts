@@ -5,6 +5,7 @@ import type {
   ModeComparison, CacheBusterQuery, StuckSessions,
   ChatFeedbackRepo, DocumentUtilityRow, ZeroHitDocument,
   FeedbackSummary, DocumentSentiment, ThumbsDownDoc,
+  TurnsToTicket, TicketResponseTimes,
 } from '@app/domain';
 import { requireAdminActor } from './authz';
 
@@ -61,6 +62,7 @@ export async function getChatAnalytics(
 export interface AnalyticsTrendPoint {
   day: string;
   total: number;
+  ticketsCreated: number;
   hallucinationRate: number;
   outOfDomainRate: number;
   cacheHitRate: number;
@@ -95,6 +97,7 @@ export async function getAnalyticsTrends(
     const points: AnalyticsTrendPoint[] = rows.map((r) => ({
       day: r.day,
       total: r.total,
+      ticketsCreated: r.ticketsCreated,
       hallucinationRate: rate(r.hallucinations, r.total),
       outOfDomainRate: rate(r.outOfDomain, r.total),
       cacheHitRate: rate(r.cacheHits, r.total),
@@ -159,6 +162,28 @@ export interface AnalyticsSummary {
   usersCount: number;
   topQueries: Array<{ q: string; count: number }>;
   coldStart: boolean;
+}
+
+export interface TicketIntelligence {
+  turnsToTicket: TurnsToTicket;
+  responseTimes: TicketResponseTimes;
+}
+
+export async function getTicketIntelligence(
+  input: { actorId: string; range?: ChatEventRange },
+  deps: { users: UserRepository; chatEvents: ChatEventsRepo; tickets: TicketRepository },
+): Promise<Result<TicketIntelligence>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
+  try {
+    const [turnsToTicket, responseTimes] = await Promise.all([
+      deps.chatEvents.getTurnsToTicket(input.range),
+      deps.tickets.getTicketResponseTimes(input.range),
+    ]);
+    return ok({ turnsToTicket, responseTimes });
+  } catch (e) {
+    return err(new ExternalServiceError('Failed to load ticket intelligence', e));
+  }
 }
 
 export async function getAnalyticsSummary(

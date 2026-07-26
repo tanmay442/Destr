@@ -208,4 +208,44 @@ describe('ChatEventBatcher', () => {
     expect(sql).toContain('@> to_jsonb(d.id)');
     expect(sql).toContain('deleted_at is null');
   });
+
+  it('getTurnsToTicket sessionizes with lag and buckets first ticket turns', async () => {
+    const { client, executed } = makeExecuteClient([
+      {
+        total_sessions: 3,
+        avg_turns: '2.33',
+        first_turns: [
+          { turns: 1 },
+          { turns: 2 },
+          { turns: 5 },
+        ],
+      },
+    ]);
+    const result = await new ChatEventBatcher(client).getTurnsToTicket();
+    expect(result.ticketSessions).toBe(3);
+    expect(result.avgTurns).toBe(2.33);
+    expect(result.buckets).toEqual([
+      { label: '1', turns: 1, count: 1 },
+      { label: '2', turns: 2, count: 1 },
+      { label: '3', turns: 3, count: 0 },
+      { label: '4', turns: 4, count: 0 },
+      { label: '5+', turns: 5, count: 1 },
+    ]);
+    const sql = compiled(executed);
+    expect(sql).toContain('lag(');
+    expect(sql).toContain('partition by');
+    expect(sql).toContain("interval '30 minutes'");
+    expect(sql).toContain('having bool_or(ticket_created)');
+    expect(sql).toContain('first_ticket_turn');
+    expect(sql).toContain('row_number() over (partition by user_id, session_no order by created_at)');
+    expect(sql).toContain('limit 10000');
+  });
+
+  it('getTurnsToTicket returns empty buckets when there are no ticket sessions', async () => {
+    const { client } = makeExecuteClient([]);
+    const result = await new ChatEventBatcher(client).getTurnsToTicket();
+    expect(result.ticketSessions).toBe(0);
+    expect(result.avgTurns).toBe(0);
+    expect(result.buckets.every((b) => b.count === 0)).toBe(true);
+  });
 });

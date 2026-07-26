@@ -18,6 +18,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
+import { formatDuration } from '@/lib/format-duration';
 import type { AnalyticsTrendPoint } from '@app/application';
 import type { ModeComparison } from '@app/domain';
 
@@ -51,6 +52,7 @@ interface WeeklyPoint {
   avgMaxSimilarity: number;
   totalP50Ms: number;
   totalP95Ms: number;
+  ticketsCreated: number;
 }
 
 function toWeekly(points: AnalyticsTrendPoint[], maxWeeks = 12): WeeklyPoint[] {
@@ -73,6 +75,7 @@ function toWeekly(points: AnalyticsTrendPoint[], maxWeeks = 12): WeeklyPoint[] {
       avgMaxSimilarity: wAvg((p) => p.avgMaxSimilarity),
       totalP50Ms: wAvg((p) => p.totalP50Ms),
       totalP95Ms: wAvg((p) => p.totalP95Ms),
+      ticketsCreated: group.reduce((s, p) => s + p.ticketsCreated, 0),
     });
   }
   return weeks.slice(-maxWeeks);
@@ -141,13 +144,14 @@ export default async function AnalyticsPage() {
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
-  const [auditRes, chatRes, trendsRes, topicsRes, summaryRes, documentsRes] = await Promise.all([
+  const [auditRes, chatRes, trendsRes, topicsRes, summaryRes, documentsRes, ticketsRes] = await Promise.all([
     comp.listAudit({ limit: 20, actorId }),
     comp.getChatAnalytics({ actorId, usageDays: 7 }),
     comp.getAnalyticsTrends({ actorId }),
     comp.getTopicCoverage({ actorId }),
     comp.getAnalyticsSummary({ actorId }),
     comp.getDocumentAnalytics({ actorId }),
+    comp.getTicketIntelligence({ actorId }),
   ]);
   const audit = unwrap(auditRes);
   const chat = chatRes.ok ? chatRes.value : null;
@@ -155,6 +159,7 @@ export default async function AnalyticsPage() {
   const topics = topicsRes.ok ? topicsRes.value : null;
   const summary = summaryRes.ok ? summaryRes.value : null;
   const documents = documentsRes.ok ? documentsRes.value : null;
+  const ticketIntel = ticketsRes.ok ? ticketsRes.value : null;
 
   const feedback = documents?.feedback ?? null;
   const feedbackRate =
@@ -459,6 +464,91 @@ export default async function AnalyticsPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+
+        <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
+          <h4 className="text-sm font-medium text-muted-foreground">Ticket intelligence</h4>
+          {ticketIntel ? (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Card className="gap-0" data-testid="analytics-ticket-volume">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Ticket volume</CardTitle>
+                  <CardDescription>Tickets created per week across the trend window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {hasTrends ? (
+                    <LineChart data={series((w) => w.ticketsCreated)} />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No trend data yet.</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0" data-testid="analytics-turns-to-ticket">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Turns before a ticket</CardTitle>
+                  <CardDescription>Session turns up to the first ticket created.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {ticketIntel.turnsToTicket.ticketSessions > 0 ? (
+                    <div className="flex flex-col gap-3">
+                      <BarList
+                        items={ticketIntel.turnsToTicket.buckets.map((b) => ({
+                          label: b.label,
+                          value: b.count,
+                        }))}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Avg {ticketIntel.turnsToTicket.avgTurns} turns ·{' '}
+                        {num(ticketIntel.turnsToTicket.ticketSessions)} ticket sessions
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No ticket-creating sessions yet.</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <div className="contents" data-testid="analytics-ticket-response-times">
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>First response</CardTitle>
+                    <CardDescription>Median time to first status change.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {ticketIntel.responseTimes.respondedCount > 0 ? (
+                      <span className="text-2xl font-semibold tabular-nums text-foreground">
+                        {formatDuration(ticketIntel.responseTimes.medianFirstResponseMs)}
+                      </span>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No audit history of status changes yet.</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>Resolution</CardTitle>
+                    <CardDescription>Median time to a closed status.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {ticketIntel.responseTimes.resolvedCount > 0 ? (
+                      <span className="text-2xl font-semibold tabular-nums text-foreground">
+                        {formatDuration(ticketIntel.responseTimes.medianResolutionMs)}
+                      </span>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No resolved tickets yet.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Topic-level ticket rates are shown in the Topic coverage card above.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { getChatAnalytics, getAnalyticsTrends, getDocumentAnalytics } from '../analytics';
+import { getChatAnalytics, getAnalyticsTrends, getDocumentAnalytics, getTicketIntelligence } from '../analytics';
 import { unwrap, ForbiddenError } from '@app/domain';
-import type { UserRepository, ChatEventsRepo, ChatFeedbackRepo, ChatEventMetrics, ChatDailyTrendRow } from '@app/domain';
+import type { UserRepository, ChatEventsRepo, ChatFeedbackRepo, ChatEventMetrics, ChatDailyTrendRow, TicketRepository, TurnsToTicket, TicketResponseTimes } from '@app/domain';
 
 const adminUsers = {
   findByClerkId: async (id: string) => (id === 'admin' ? { role: 'admin' } : { role: 'user' }),
@@ -96,6 +96,52 @@ describe('getDocumentAnalytics', () => {
     expect(value.feedback.summary).toEqual({ up: 8, down: 2, total: 10, totalEvents: 40 });
     expect(value.feedback.documentSentiment[0]!.up).toBe(6);
     expect(value.feedback.thumbsDownDocs[0]!.down).toBe(4);
+  });
+});
+
+describe('getTicketIntelligence', () => {
+  const turnsToTicket: TurnsToTicket = {
+    ticketSessions: 3,
+    avgTurns: 2.33,
+    buckets: [
+      { label: '1', turns: 1, count: 1 },
+      { label: '2', turns: 2, count: 1 },
+      { label: '3', turns: 3, count: 1 },
+      { label: '4', turns: 4, count: 0 },
+      { label: '5+', turns: 5, count: 0 },
+    ],
+  };
+  const responseTimes: TicketResponseTimes = {
+    medianFirstResponseMs: 3600_000,
+    medianResolutionMs: 86_400_000,
+    respondedCount: 2,
+    resolvedCount: 1,
+  };
+  const ticketChatEvents = {
+    getTurnsToTicket: async () => turnsToTicket,
+  } as unknown as ChatEventsRepo;
+  const ticketRepo = {
+    getTicketResponseTimes: async () => responseTimes,
+  } as unknown as TicketRepository;
+
+  it('rejects a non-admin actor', async () => {
+    const res = await getTicketIntelligence(
+      { actorId: 'user' },
+      { users: adminUsers, chatEvents: ticketChatEvents, tickets: ticketRepo },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBeInstanceOf(ForbiddenError);
+  });
+
+  it('returns turns-to-ticket and response times for an admin', async () => {
+    const res = await getTicketIntelligence(
+      { actorId: 'admin' },
+      { users: adminUsers, chatEvents: ticketChatEvents, tickets: ticketRepo },
+    );
+    const value = unwrap(res);
+    expect(value.turnsToTicket.ticketSessions).toBe(3);
+    expect(value.responseTimes.respondedCount).toBe(2);
+    expect(value.responseTimes.medianResolutionMs).toBe(86_400_000);
   });
 });
 

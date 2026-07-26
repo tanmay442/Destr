@@ -14,12 +14,41 @@ import type {
   StuckSessions,
   DocumentUtilityRow,
   ZeroHitDocument,
+  TurnsToTicket,
+  TurnToTicketBucket,
 } from '@app/domain';
 
 type Client = typeof db;
 
 const MAX_BUFFER = 100;
 const FLUSH_INTERVAL_MS = 5_000;
+
+const TURN_BUCKET_LABELS = ['1', '2', '3', '4', '5+'] as const;
+
+const EMPTY_TURNS_BUCKETS: TurnToTicketBucket[] = TURN_BUCKET_LABELS.map((label) => ({
+  label,
+  turns: Number(label === '5+' ? 5 : label),
+  count: 0,
+}));
+
+function bucketForTurns(turns: number): number {
+  if (turns <= 1) return 0;
+  if (turns >= 5) return 4;
+  return turns - 1;
+}
+
+function buildTurnBuckets(firstTurns: number[]): TurnToTicketBucket[] {
+  const counts = [0, 0, 0, 0, 0];
+  for (const t of firstTurns) {
+    if (!Number.isFinite(t) || t < 1) continue;
+    counts[bucketForTurns(Math.floor(t))]! += 1;
+  }
+  return TURN_BUCKET_LABELS.map((label, i) => ({
+    label,
+    turns: Number(label === '5+' ? 5 : label),
+    count: counts[i]!,
+  }));
+}
 
 function toRow(event: ChatEventInput): NewChatEvent {
   return {
@@ -379,6 +408,71 @@ export class ChatEventBatcher implements ChatEventsRepo {
       fileName: r.file_name === null ? null : String(r.file_name),
       createdAt: String(r.created_at),
     }));
+  }
+
+  async getTurnsToTicket(range?: ChatEventRange): Promise<TurnsToTicket> {
+    const result = await this.client.execute(sql`
+      with recent as (
+        select
+          ${chatEvents.userId} as user_id,
+          ${chatEvents.createdAt} as created_at,
+          ${chatEvents.ticketCreated} as ticket_created
+        from ${chatEvents}
+        where ${chatEvents.userId} is not null${range?.from ? sql` and ${chatEvents.createdAt} >= ${range.from}` : sql``}${range?.to ? sql` and ${chatEvents.createdAt} <= ${range.to}` : sql``}
+        order by ${chatEvents.createdAt} desc
+        limit 10000
+      ),
+      turns as (
+        select
+          user_id, created_at, ticket_created,
+          case
+            when created_at - lag(created_at) over (partition by user_id order by created_at) > interval '30 minutes'
+              or lag(created_at) over (partition by user_id order by created_at) is null
+            then 1 else 0 end as is_new_session
+        from recent
+      ),
+      sessioned as (
+        select
+          user_id, created_at, ticket_created,
+          sum(is_new_session) over (partition by user_id order by created_at) as session_no
+        from turns
+      ),
+      numbered as (
+        select
+          user_id, session_no, ticket_created,
+          row_number() over (partition by user_id, session_no order by created_at) as turn_no
+        from sessioned
+      ),
+      sessions as (
+        select user_id, session_no,
+          count(*)::int as turns,
+          min(turn_no) filter (where ticket_created) as first_ticket_turn
+        from numbered
+        group by user_id, session_no
+        having bool_or(ticket_created)
+      )
+      select
+        (select count(*)::int from sessions) as total_sessions,
+        coalesce(avg(first_ticket_turn), 0)::numeric as avg_turns,
+        coalesce(jsonb_agg(jsonb_build_object('turns', first_ticket_turn)), '[]'::jsonb) as first_turns
+      from sessions
+    `);
+    const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    const row = rows[0];
+    if (!row) {
+      return { ticketSessions: 0, avgTurns: 0, buckets: EMPTY_TURNS_BUCKETS };
+    }
+    const firstTurns = Array.isArray(row.first_turns)
+      ? (row.first_turns as Array<{ turns: number }>).map((r) => Number(r.turns))
+      : [];
+    const buckets = buildTurnBuckets(firstTurns);
+    const total = Number(row.total_sessions) || 0;
+    const avg = Number(row.avg_turns) || 0;
+    return {
+      ticketSessions: total,
+      avgTurns: Math.round(avg * 100) / 100,
+      buckets,
+    };
   }
 
   async refreshDailyStats(): Promise<void> {

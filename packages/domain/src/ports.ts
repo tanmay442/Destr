@@ -194,6 +194,7 @@ export interface TicketRepository {
   ): Promise<TicketRow | null>;
   countAll(): Promise<number>;
   countOpen(): Promise<number>;
+  getTicketResponseTimes(range?: ChatEventRange): Promise<TicketResponseTimes>;
 }
 
 
@@ -420,6 +421,25 @@ export interface DocumentUtilityRow {
   ticketConversionRate: number;
 }
 
+export interface TurnToTicketBucket {
+  label: string;
+  turns: number;
+  count: number;
+}
+
+export interface TurnsToTicket {
+  ticketSessions: number;
+  avgTurns: number;
+  buckets: TurnToTicketBucket[];
+}
+
+export interface TicketResponseTimes {
+  medianFirstResponseMs: number;
+  medianResolutionMs: number;
+  respondedCount: number;
+  resolvedCount: number;
+}
+
 export interface ZeroHitDocument {
   documentId: number;
   fileName: string | null;
@@ -462,6 +482,7 @@ export interface ChatEventsRepo {
   getStuckSessions(range?: ChatEventRange): Promise<StuckSessions>;
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
   getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]>;
+  getTurnsToTicket(range?: ChatEventRange): Promise<TurnsToTicket>;
   refreshDailyStats(): Promise<void>;
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;

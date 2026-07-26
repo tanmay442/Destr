@@ -10,7 +10,7 @@ import {
   auditDeadLetter,
   type Document,
 } from './schema';
-import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter } from '@app/domain';
+import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
 import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -763,7 +763,66 @@ export const ticketRepo = {
       .where(sql`${tickets.status} <> 'closed'`);
     return row?.count ?? 0;
   },
+  async getTicketResponseTimes(range?: ChatEventRange, client: Client = db): Promise<TicketResponseTimes> {
+    const whereParts: ReturnType<typeof sql>[] = [];
+    if (range?.from) whereParts.push(sql`${tickets.createdAt} >= ${range.from}`);
+    if (range?.to) whereParts.push(sql`${tickets.createdAt} <= ${range.to}`);
+    const where = whereParts.length ? sql`where ${sql.join(whereParts, sql` and `)}` : sql``;
+    const rows = (await client.execute(sql`
+      with scoped as (
+        select t.ticket_id as ticket_id, t.created_at as created_at, t.status as status
+        from ${tickets} t
+        ${where}
+        order by t.created_at desc
+        limit 5000
+      ),
+      changes as (
+        select a.target_id as ticket_id, a.at as changed_at
+        from ${auditEvents} a
+        where a.kind = 'ticket' and a.action = 'status_change'
+      ),
+      firsts as (
+        select
+          s.ticket_id,
+          s.created_at,
+          min(c.changed_at) as first_change,
+          max(c.changed_at) as last_change,
+          bool_or(s.status = 'closed') as is_closed
+        from scoped s
+        left join changes c on c.ticket_id = s.ticket_id
+        group by s.ticket_id, s.created_at, s.status
+      )
+      select
+        f.ticket_id,
+        extract(epoch from (f.first_change - f.created_at)) * 1000 as first_response_ms,
+        case when f.is_closed and f.last_change is not null
+          then extract(epoch from (f.last_change - f.created_at)) * 1000
+          else null end as resolution_ms
+      from firsts f
+    `)) as unknown as { rows: Array<{ first_response_ms: number | null; resolution_ms: number | null }> };
+    const data = rows.rows ?? [];
+    const responses = data
+      .map((r) => (r.first_response_ms == null ? null : Number(r.first_response_ms)))
+      .filter((v): v is number => v != null);
+    const resolutions = data
+      .map((r) => (r.resolution_ms == null ? null : Number(r.resolution_ms)))
+      .filter((v): v is number => v != null);
+    return {
+      medianFirstResponseMs: median(responses),
+      medianResolutionMs: median(resolutions),
+      respondedCount: responses.length,
+      resolvedCount: resolutions.length,
+    };
+  },
 };
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const value = sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+  return Math.round(value);
+}
 
 export const userRepo = {
   async upsertFromClerk(input: {
@@ -1015,6 +1074,7 @@ function createTicketRepo(client: Client): TicketRepository {
     update: (ticketId, patch) => ticketRepo.update(ticketId, patch, client),
     countAll: () => ticketRepo.countAll(client),
     countOpen: () => ticketRepo.countOpen(client),
+    getTicketResponseTimes: (range) => ticketRepo.getTicketResponseTimes(range, client),
   };
 }
 

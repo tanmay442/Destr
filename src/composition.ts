@@ -9,6 +9,7 @@ import {
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends, getTopicCoverage,
   getDocumentAnalytics, submitChatFeedback,
+  getTicketIntelligence,
   listAudit, logSettingsChange,
   prepareIngest,
   uploadPrechunkedMarkdown,
@@ -256,6 +257,8 @@ function createComposition() {
       bind(getTopicCoverage, input, { ...userDeps, chatEvents: chatEventBatcher, config: await getRuntimeConfig() }),
     getDocumentAnalytics: (input: Parameters<typeof getDocumentAnalytics>[0]) =>
       bind(getDocumentAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher, feedback: chatFeedbackRepo }),
+    getTicketIntelligence: (input: Parameters<typeof getTicketIntelligence>[0]) =>
+      bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: Db.ticketRepo }),
     submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
       bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
