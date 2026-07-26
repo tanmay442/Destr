@@ -15,11 +15,85 @@ import remarkGfm from 'remark-gfm';
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
+import type { CitationData } from '@/chat/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
-import { ArrowUpIcon, SquareIcon, Search, FileStack, FileCheck, Clock } from 'lucide-react';
+import {
+  ArrowUpIcon,
+  SquareIcon,
+  Search,
+  FileStack,
+  FileCheck,
+  Clock,
+  ThumbsUp,
+  ThumbsDown,
+} from 'lucide-react';
+
+const FEEDBACK_RETRY_DELAY_MS = 1500;
+
+type FeedbackVote = 1 | -1;
+
+function uniqueIds(values: Array<number | null | undefined>): number[] {
+  return [...new Set(values.filter((v): v is number => typeof v === 'number'))];
+}
+
+function postFeedback(payload: {
+  turnId: string;
+  feedback: FeedbackVote;
+  documentIds?: number[];
+  chunkIds?: number[];
+}): Promise<Response> {
+  return fetch('/api/chat/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+function FeedbackControl({
+  vote,
+  onVote,
+}: {
+  vote: FeedbackVote | undefined;
+  onVote: (feedback: FeedbackVote) => void;
+}) {
+  return (
+    <div className="flex items-center" data-testid="chat-feedback">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Helpful answer"
+        aria-pressed={vote === 1}
+        onClick={() => onVote(1)}
+        className={cn(
+          'text-muted-foreground hover:text-foreground',
+          vote === 1 && 'text-primary hover:text-primary [&_svg]:fill-current',
+        )}
+        data-testid="chat-feedback-up"
+      >
+        <ThumbsUp />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Unhelpful answer"
+        aria-pressed={vote === -1}
+        onClick={() => onVote(-1)}
+        className={cn(
+          'text-muted-foreground hover:text-foreground',
+          vote === -1 && 'text-destructive hover:text-destructive [&_svg]:fill-current',
+        )}
+        data-testid="chat-feedback-down"
+      >
+        <ThumbsDown />
+      </Button>
+    </div>
+  );
+}
 
 function StatusStages() {
   const [stage, setStage] = useState(0);
@@ -74,16 +148,65 @@ const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
+  const [turnIds, setTurnIds] = useState<Record<string, string>>({});
+  const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
+  const pendingTurnIdRef = useRef<string | null>(null);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
     transport,
+    onFinish: ({ message, isAbort, isDisconnect, isError }) => {
+      const turnId = pendingTurnIdRef.current;
+      pendingTurnIdRef.current = null;
+      if (!turnId || isAbort || isDisconnect || isError) return;
+      if (message.role !== 'assistant') return;
+      setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
+    },
   });
 
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    sendMessage({ text: trimmed });
+    const turnId = crypto.randomUUID();
+    pendingTurnIdRef.current = turnId;
+    sendMessage({ text: trimmed }, { body: { turnId } });
     setInput('');
+  };
+
+  const submitFeedback = async (
+    message: MyUIMessage,
+    turnId: string,
+    feedback: FeedbackVote,
+  ) => {
+    const previous = votes[turnId];
+    if (previous === feedback) return;
+    setVotes((prev) => ({ ...prev, [turnId]: feedback }));
+    const citationData = message.parts
+      .filter((p) => p.type === 'data-citation')
+      .map((p) => (p as { data: CitationData }).data);
+    const documentIds = uniqueIds(citationData.map((c) => c.documentId));
+    const chunkIds = uniqueIds(citationData.map((c) => c.id));
+    const payload = {
+      turnId,
+      feedback,
+      ...(documentIds.length > 0 ? { documentIds } : {}),
+      ...(chunkIds.length > 0 ? { chunkIds } : {}),
+    };
+    try {
+      let res = await postFeedback(payload);
+      if (res.status === 404) {
+        await new Promise((resolve) => setTimeout(resolve, FEEDBACK_RETRY_DELAY_MS));
+        res = await postFeedback(payload);
+      }
+      if (!res.ok) throw new Error(`Feedback request failed (${res.status})`);
+    } catch {
+      setVotes((prev) => {
+        const next = { ...prev };
+        if (previous === undefined) delete next[turnId];
+        else next[turnId] = previous;
+        return next;
+      });
+      toast.error('Could not save your feedback. Please try again.');
+    }
   };
 
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -172,14 +295,9 @@ export function ChatInterface() {
                 (p) => p.type === 'data-citation',
               ) as Array<{
                 type: 'data-citation';
-                data: {
-                  similarity: number;
-                  snippet: string;
-                  fileName?: string | null;
-                  page?: number | null;
-                  sectionTitle?: string | null;
-                };
+                data: CitationData;
               }>;
+              const turnId = turnIds[m.id];
               return (
                 <div
                   key={m.id}
@@ -280,6 +398,13 @@ export function ChatInterface() {
                         );
                       })}
                     </div>
+                  )}
+
+                  {!isUser && turnId && (
+                    <FeedbackControl
+                      vote={votes[turnId]}
+                      onVote={(feedback) => void submitFeedback(m, turnId, feedback)}
+                    />
                   )}
                 </div>
               );

@@ -1,6 +1,6 @@
 import {
   pgTable, serial, text, timestamp, integer, real, jsonb, boolean,
-  index, check, foreignKey, uniqueIndex,
+  index, check, foreignKey, uniqueIndex, uuid, smallint,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { vector, tsvector } from './schema-vector';
@@ -120,6 +120,7 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
 /** Append-only per-turn chat metrics. `mode` is `agentic` or `vector`. */
 export const chatEvents = pgTable('chat_events', {
   id: serial('id').primaryKey(),
+  turnId: uuid('turn_id').unique(),
   userId: text('user_id'),
   query: text('query'),
   mode: text('mode').notNull(),
@@ -144,8 +145,20 @@ export const chatEvents = pgTable('chat_events', {
   index('chat_events_user_id_idx').on(table.userId),
 ]);
 
+export const chatFeedback = pgTable('chat_feedback', {
+  turnId: uuid('turn_id').primaryKey().references(() => chatEvents.turnId),
+  feedback: smallint('feedback').notNull(),
+  documentIds: integer('document_ids').array().notNull().default(sql`'{}'`),
+  chunkIds: integer('chunk_ids').array().notNull().default(sql`'{}'`),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('chat_feedback_value_check', sql`${table.feedback} IN (1, -1)`),
+]);
+
 export type ChatEvent = typeof chatEvents.$inferSelect;
 export type NewChatEvent = typeof chatEvents.$inferInsert;
+export type ChatFeedback = typeof chatFeedback.$inferSelect;
+export type NewChatFeedback = typeof chatFeedback.$inferInsert;
 
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;

@@ -179,4 +179,33 @@ describe('ChatEventBatcher', () => {
     const result = await new ChatEventBatcher(client).getStuckSessions();
     expect(result).toEqual({ count: 0, samples: [] });
   });
+
+  it('getDocumentUtility joins meta.documentIds to documents with p95 similarity', async () => {
+    const { client, executed } = makeExecuteClient([
+      { document_id: 3, file_name: 'guide.pdf', retrieval_count: 12, p95_similarity: 0.88, ticket_conversion_rate: 0.25 },
+    ]);
+    const result = await new ChatEventBatcher(client).getDocumentUtility(20);
+    expect(result).toEqual([
+      { documentId: 3, fileName: 'guide.pdf', retrievalCount: 12, p95Similarity: 0.88, ticketConversionRate: 0.25 },
+    ]);
+    const sql = compiled(executed);
+    expect(sql).toContain('jsonb_array_elements_text');
+    expect(sql).toContain("-> 'documentids'");
+    expect(sql).toContain('join documents');
+    expect(sql).toContain('deleted_at is null');
+    expect(sql).toContain('percentile_cont(0.95)');
+    expect(sql).toContain('order by retrieval_count desc');
+  });
+
+  it('getZeroHitDocuments returns documents never referenced via meta containment', async () => {
+    const { client, executed } = makeExecuteClient([
+      { document_id: 7, file_name: 'stale.pdf', created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    const result = await new ChatEventBatcher(client).getZeroHitDocuments(20);
+    expect(result).toEqual([{ documentId: 7, fileName: 'stale.pdf', createdAt: '2026-01-01T00:00:00Z' }]);
+    const sql = compiled(executed);
+    expect(sql).toContain('not exists');
+    expect(sql).toContain('@> to_jsonb(d.id)');
+    expect(sql).toContain('deleted_at is null');
+  });
 });

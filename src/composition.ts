@@ -8,6 +8,7 @@ import {
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends, getTopicCoverage,
+  getDocumentAnalytics, submitChatFeedback,
   listAudit, logSettingsChange,
   prepareIngest,
   uploadPrechunkedMarkdown,
@@ -45,6 +46,7 @@ const documentRepo = Db.createDocumentRepo(Db.db);
 const chunkRepo = Db.createChunkRepo(Db.db);
 const settingsRepo = Db.createSettingsRepo(Db.db);
 const chatEventBatcher = Db.createChatEventsRepo(Db.db);
+const chatFeedbackRepo = Db.createChatFeedbackRepo(Db.db);
 
 const embeddingService = Llm.getEmbeddingService();
 
@@ -252,6 +254,10 @@ function createComposition() {
       bind(getAnalyticsTrends, input, { ...userDeps, chatEvents: chatEventBatcher }),
     getTopicCoverage: async (input: Parameters<typeof getTopicCoverage>[0]) =>
       bind(getTopicCoverage, input, { ...userDeps, chatEvents: chatEventBatcher, config: await getRuntimeConfig() }),
+    getDocumentAnalytics: (input: Parameters<typeof getDocumentAnalytics>[0]) =>
+      bind(getDocumentAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher, feedback: chatFeedbackRepo }),
+    submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
+      bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: Db.db,
     schema: Db.schema,

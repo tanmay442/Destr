@@ -141,18 +141,26 @@ export default async function AnalyticsPage() {
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
-  const [auditRes, chatRes, trendsRes, topicsRes, summaryRes] = await Promise.all([
+  const [auditRes, chatRes, trendsRes, topicsRes, summaryRes, documentsRes] = await Promise.all([
     comp.listAudit({ limit: 20, actorId }),
     comp.getChatAnalytics({ actorId, usageDays: 7 }),
     comp.getAnalyticsTrends({ actorId }),
     comp.getTopicCoverage({ actorId }),
     comp.getAnalyticsSummary({ actorId }),
+    comp.getDocumentAnalytics({ actorId }),
   ]);
   const audit = unwrap(auditRes);
   const chat = chatRes.ok ? chatRes.value : null;
   const trends = trendsRes.ok ? trendsRes.value : null;
   const topics = topicsRes.ok ? topicsRes.value : null;
   const summary = summaryRes.ok ? summaryRes.value : null;
+  const documents = documentsRes.ok ? documentsRes.value : null;
+
+  const feedback = documents?.feedback ?? null;
+  const feedbackRate =
+    feedback && feedback.summary.totalEvents > 0
+      ? feedback.summary.total / feedback.summary.totalEvents
+      : 0;
 
   const weekly = trends ? toWeekly(trends.points) : [];
   const hasTrends = weekly.some((w) => w.total > 0);
@@ -451,6 +459,165 @@ export default async function AnalyticsPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <Card className="gap-0" data-testid="analytics-document-utility">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle>Document utility</CardTitle>
+              <CardDescription>
+                Retrieval volume, match quality, and ticket conversion per document.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {documents && documents.utility.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Document</TableHead>
+                      <TableHead className="text-right">Retrievals</TableHead>
+                      <TableHead className="text-right">p95 similarity</TableHead>
+                      <TableHead className="text-right">Ticket conversion</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {documents.utility.map((d) => (
+                      <TableRow key={d.documentId}>
+                        <TableCell className="font-medium text-foreground">
+                          {d.fileName ?? `Document #${d.documentId}`}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {num(d.retrievalCount)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {d.p95Similarity.toFixed(3)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {pct(d.ticketConversionRate)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No document references yet. Populates as new chats reference documents.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0" data-testid="analytics-zero-hit-documents">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle>Zero-hit documents</CardTitle>
+              <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {documents && documents.zeroHit.length > 0 ? (
+                <ul className="flex flex-col gap-2">
+                  {documents.zeroHit.map((d) => (
+                    <li
+                      key={d.documentId}
+                      className="flex items-center justify-between gap-3 text-sm"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-destructive/70"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate font-medium text-foreground">
+                          {d.fileName ?? `Document #${d.documentId}`}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {new Date(d.createdAt).toLocaleDateString()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex flex-col gap-2" data-testid="analytics-feedback">
+          <h4 className="text-sm font-medium text-muted-foreground">Feedback</h4>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <MetricCard
+              label="👍 Helpful"
+              value={feedback ? num(feedback.summary.up) : '0'}
+            />
+            <MetricCard
+              label="👎 Unhelpful"
+              value={feedback ? num(feedback.summary.down) : '0'}
+            />
+            <MetricCard label="Feedback rate" value={pct(feedbackRate)} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Card className="gap-0" data-testid="analytics-document-sentiment">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Document sentiment</CardTitle>
+                <CardDescription>Votes on answers that cited each document.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {feedback && feedback.documentSentiment.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Document</TableHead>
+                        <TableHead className="text-right">👍</TableHead>
+                        <TableHead className="text-right">👎</TableHead>
+                        <TableHead className="text-right">Positive</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {feedback.documentSentiment.map((d) => (
+                        <TableRow key={d.documentId}>
+                          <TableCell className="font-medium text-foreground">
+                            {d.fileName ?? `Document #${d.documentId}`}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{num(d.up)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{num(d.down)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {d.up + d.down > 0 ? pct(d.up / (d.up + d.down)) : '—'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No feedback yet. Votes appear as users rate answers.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="gap-0" data-testid="analytics-thumbs-down-docs">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Thumbs-down hot docs</CardTitle>
+                <CardDescription>
+                  Cited most often in negative feedback — review for accuracy.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {feedback && feedback.thumbsDownDocs.length > 0 ? (
+                  <BarList
+                    unit=" 👎"
+                    items={feedback.thumbsDownDocs.map((d) => ({
+                      label: d.fileName ?? `Document #${d.documentId}`,
+                      value: d.down,
+                      barClassName: 'bg-destructive/70',
+                    }))}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No thumbs-down votes recorded.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

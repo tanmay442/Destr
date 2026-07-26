@@ -302,6 +302,7 @@ export interface ChatEventInput {
   userId: string | null;
   query: string | null;
   mode: 'agentic' | 'vector';
+  turnId?: string | null;
   retrieveMs?: number | null;
   generateMs?: number | null;
   totalMs?: number | null;
@@ -411,6 +412,42 @@ export interface StuckSessions {
   samples: StuckSessionSample[];
 }
 
+export interface DocumentUtilityRow {
+  documentId: number;
+  fileName: string | null;
+  retrievalCount: number;
+  p95Similarity: number;
+  ticketConversionRate: number;
+}
+
+export interface ZeroHitDocument {
+  documentId: number;
+  fileName: string | null;
+  createdAt: string;
+}
+
+export type FeedbackUpsertResult = 'ok' | 'not_found' | 'forbidden';
+
+export interface FeedbackSummary {
+  up: number;
+  down: number;
+  total: number;
+  totalEvents: number;
+}
+
+export interface DocumentSentiment {
+  documentId: number;
+  fileName: string | null;
+  up: number;
+  down: number;
+}
+
+export interface ThumbsDownDoc {
+  documentId: number;
+  fileName: string | null;
+  down: number;
+}
+
 /** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
@@ -423,10 +460,26 @@ export interface ChatEventsRepo {
   getCacheBusterQueries(limit: number, range?: ChatEventRange): Promise<CacheBusterQuery[]>;
   getQueryOutcomes(range?: ChatEventRange, limit?: number): Promise<QueryOutcome[]>;
   getStuckSessions(range?: ChatEventRange): Promise<StuckSessions>;
+  getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
+  getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]>;
   refreshDailyStats(): Promise<void>;
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
+}
+
+
+export interface ChatFeedbackRepo {
+  upsertFeedback(input: {
+    turnId: string;
+    userId: string;
+    feedback: 1 | -1;
+    documentIds: number[];
+    chunkIds: number[];
+  }): Promise<FeedbackUpsertResult>;
+  getFeedbackSummary(range?: ChatEventRange): Promise<FeedbackSummary>;
+  getDocumentSentiment(limit: number, range?: ChatEventRange): Promise<DocumentSentiment[]>;
+  getThumbsDownDocs(limit: number, range?: ChatEventRange): Promise<ThumbsDownDoc[]>;
 }
 
 

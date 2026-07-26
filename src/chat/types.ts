@@ -1,25 +1,22 @@
 import type { UIMessage } from 'ai';
 
+export interface CitationData {
+  id?: number;
+  documentId?: number;
+  similarity: number;
+  snippet: string;
+  fileName?: string | null;
+  page?: number | null;
+  sectionTitle?: string | null;
+  source?: string | null;
+}
+
 export type MyUIMessage = UIMessage<
   {
-    citations?: Array<{
-      similarity: number;
-      snippet: string;
-      fileName?: string | null;
-      page?: number | null;
-      sectionTitle?: string | null;
-      source?: string | null;
-    }>;
+    citations?: CitationData[];
   },
   {
-    citation: {
-      similarity: number;
-      snippet: string;
-      fileName?: string | null;
-      page?: number | null;
-      sectionTitle?: string | null;
-      source?: string | null;
-    };
+    citation: CitationData;
     guardrail: {
       outOfDomain: boolean;
       offerTicket: boolean;

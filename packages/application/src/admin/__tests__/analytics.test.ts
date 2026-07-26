@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { getChatAnalytics, getAnalyticsTrends } from '../analytics';
+import { getChatAnalytics, getAnalyticsTrends, getDocumentAnalytics } from '../analytics';
 import { unwrap, ForbiddenError } from '@app/domain';
-import type { UserRepository, ChatEventsRepo, ChatEventMetrics, ChatDailyTrendRow } from '@app/domain';
+import type { UserRepository, ChatEventsRepo, ChatFeedbackRepo, ChatEventMetrics, ChatDailyTrendRow } from '@app/domain';
 
 const adminUsers = {
   findByClerkId: async (id: string) => (id === 'admin' ? { role: 'admin' } : { role: 'user' }),
@@ -56,6 +56,46 @@ describe('getChatAnalytics', () => {
     expect(value.estimatedCostUsd).toBeCloseTo(0.15 + 0.3, 5);
     expect(value.cacheBusterQueries).toEqual([{ query: 'reset key', misses: 4 }]);
     expect(value.stuckSessions.count).toBe(2);
+  });
+});
+
+describe('getDocumentAnalytics', () => {
+  const documentChatEvents = {
+    getDocumentUtility: async () => [
+      { documentId: 1, fileName: 'a.pdf', retrievalCount: 5, p95Similarity: 0.8, ticketConversionRate: 0.2 },
+    ],
+    getZeroHitDocuments: async () => [
+      { documentId: 2, fileName: 'b.pdf', createdAt: '2026-01-01T00:00:00Z' },
+    ],
+  } as unknown as ChatEventsRepo;
+
+  const feedback = {
+    getFeedbackSummary: async () => ({ up: 8, down: 2, total: 10, totalEvents: 40 }),
+    getDocumentSentiment: async () => [{ documentId: 1, fileName: 'a.pdf', up: 6, down: 1 }],
+    getThumbsDownDocs: async () => [{ documentId: 3, fileName: 'c.pdf', down: 4 }],
+  } as unknown as ChatFeedbackRepo;
+
+  it('rejects a non-admin actor', async () => {
+    const res = await getDocumentAnalytics(
+      { actorId: 'user' },
+      { users: adminUsers, chatEvents: documentChatEvents, feedback },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBeInstanceOf(ForbiddenError);
+  });
+
+  it('returns utility, zero-hit and feedback sections for an admin', async () => {
+    const value = unwrap(
+      await getDocumentAnalytics(
+        { actorId: 'admin', limit: 10 },
+        { users: adminUsers, chatEvents: documentChatEvents, feedback },
+      ),
+    );
+    expect(value.utility).toHaveLength(1);
+    expect(value.zeroHit[0]!.documentId).toBe(2);
+    expect(value.feedback.summary).toEqual({ up: 8, down: 2, total: 10, totalEvents: 40 });
+    expect(value.feedback.documentSentiment[0]!.up).toBe(6);
+    expect(value.feedback.thumbsDownDocs[0]!.down).toBe(4);
   });
 });
 

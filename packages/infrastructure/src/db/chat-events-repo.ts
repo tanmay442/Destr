@@ -12,6 +12,8 @@ import type {
   CacheBusterQuery,
   QueryOutcome,
   StuckSessions,
+  DocumentUtilityRow,
+  ZeroHitDocument,
 } from '@app/domain';
 
 type Client = typeof db;
@@ -21,6 +23,7 @@ const FLUSH_INTERVAL_MS = 5_000;
 
 function toRow(event: ChatEventInput): NewChatEvent {
   return {
+    turnId: event.turnId ?? null,
     userId: event.userId,
     query: event.query,
     mode: event.mode,
@@ -324,6 +327,58 @@ export class ChatEventBatcher implements ChatEventsRepo {
         lastActivity: String(r.last_activity),
       })),
     };
+  }
+
+  async getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]> {
+    const capped = Math.min(Math.max(limit, 1), 100);
+    const result = await this.client.execute(sql`
+      select
+        d.id as document_id,
+        d.file_name as file_name,
+        count(*)::int as retrieval_count,
+        coalesce(percentile_cont(0.95) within group (order by ${chatEvents.maxSimilarity}), 0) as p95_similarity,
+        coalesce(count(*) filter (where ${chatEvents.ticketCreated})::numeric / nullif(count(*), 0), 0) as ticket_conversion_rate
+      from ${chatEvents}
+      cross join lateral jsonb_array_elements_text(${chatEvents.meta} -> 'documentIds') as ref(document_id)
+      join documents d on d.id = ref.document_id::int and d.deleted_at is null
+      where jsonb_typeof(${chatEvents.meta} -> 'documentIds') = 'array'${range?.from ? sql` and ${chatEvents.createdAt} >= ${range.from}` : sql``}${range?.to ? sql` and ${chatEvents.createdAt} <= ${range.to}` : sql``}
+      group by d.id, d.file_name
+      order by retrieval_count desc
+      limit ${capped}
+    `);
+    const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    return rows.map((r) => ({
+      documentId: Number(r.document_id),
+      fileName: r.file_name === null ? null : String(r.file_name),
+      retrievalCount: Number(r.retrieval_count),
+      p95Similarity: Number(r.p95_similarity),
+      ticketConversionRate: Number(r.ticket_conversion_rate),
+    }));
+  }
+
+  async getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]> {
+    const capped = Math.min(Math.max(limit, 1), 100);
+    const result = await this.client.execute(sql`
+      select
+        d.id as document_id,
+        d.file_name as file_name,
+        to_char(d.uploaded_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at
+      from documents d
+      where d.deleted_at is null
+        and not exists (
+          select 1 from ${chatEvents} e
+          where jsonb_typeof(e.meta -> 'documentIds') = 'array'
+            and e.meta -> 'documentIds' @> to_jsonb(d.id)
+        )
+      order by d.uploaded_at desc
+      limit ${capped}
+    `);
+    const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    return rows.map((r) => ({
+      documentId: Number(r.document_id),
+      fileName: r.file_name === null ? null : String(r.file_name),
+      createdAt: String(r.created_at),
+    }));
   }
 
   async refreshDailyStats(): Promise<void> {

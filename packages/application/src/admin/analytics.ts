@@ -3,8 +3,12 @@ import type {
   DocumentRepository, ChunkRepository, TicketRepository, UserRepository, QueryStats,
   ChatEventsRepo, ChatEventMetrics, ChatEventDailyUsage, ChatEventRange,
   ModeComparison, CacheBusterQuery, StuckSessions,
+  ChatFeedbackRepo, DocumentUtilityRow, ZeroHitDocument,
+  FeedbackSummary, DocumentSentiment, ThumbsDownDoc,
 } from '@app/domain';
 import { requireAdminActor } from './authz';
+
+const DEFAULT_DOCUMENT_LIMIT = 20;
 
 /** Rough blended token prices (USD per 1M tokens) for estimated-cost card. */
 const TOKEN_COST_PER_MILLION = { input: 0.15, output: 0.6 } as const;
@@ -109,6 +113,41 @@ export async function getAnalyticsTrends(
     return ok({ days, points });
   } catch (e) {
     return err(new ExternalServiceError('Failed to load analytics trends', e));
+  }
+}
+
+export interface DocumentAnalytics {
+  utility: DocumentUtilityRow[];
+  zeroHit: ZeroHitDocument[];
+  feedback: {
+    summary: FeedbackSummary;
+    documentSentiment: DocumentSentiment[];
+    thumbsDownDocs: ThumbsDownDoc[];
+  };
+}
+
+export async function getDocumentAnalytics(
+  input: { actorId: string; range?: ChatEventRange; limit?: number },
+  deps: { users: UserRepository; chatEvents: ChatEventsRepo; feedback: ChatFeedbackRepo },
+): Promise<Result<DocumentAnalytics>> {
+  const authz = await requireAdminActor(input.actorId, deps);
+  if (!authz.ok) return authz;
+  const limit = input.limit && input.limit > 0 ? Math.floor(input.limit) : DEFAULT_DOCUMENT_LIMIT;
+  try {
+    const [utility, zeroHit, summary, documentSentiment, thumbsDownDocs] = await Promise.all([
+      deps.chatEvents.getDocumentUtility(limit, input.range),
+      deps.chatEvents.getZeroHitDocuments(limit),
+      deps.feedback.getFeedbackSummary(input.range),
+      deps.feedback.getDocumentSentiment(limit, input.range),
+      deps.feedback.getThumbsDownDocs(limit, input.range),
+    ]);
+    return ok({
+      utility,
+      zeroHit,
+      feedback: { summary, documentSentiment, thumbsDownDocs },
+    });
+  } catch (e) {
+    return err(new ExternalServiceError('Failed to load document analytics', e));
   }
 }
 
