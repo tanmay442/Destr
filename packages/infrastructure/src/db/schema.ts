@@ -34,6 +34,7 @@ export const chunks = pgTable('chunks', {
   page: integer('page'),
   sectionTitle: text('section_title'),
   source: text('source'),
+  title: text('title'),
   parentChunkId: integer('parent_chunk_id'),
   kind: text('kind').notNull().default('child'),
   embeddingModel: text('embedding_model'),

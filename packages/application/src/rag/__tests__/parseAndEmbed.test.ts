@@ -16,7 +16,7 @@ function makeParseDeps(overrides?: Partial<ParseDeps>): ParseDeps {
 }
 
 describe('parseAndEmbed (Contextual Chunk Headers)', () => {
-  it('prepends the header to every chunk and embeds header+content when a summarizer is wired', async () => {
+  it('embeds header+content but keeps stored content clean when a summarizer is wired', async () => {
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),
     };
@@ -35,13 +35,13 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     ]);
     expect(result.value.rows).toEqual([
       expect.objectContaining({
-        content: 'Document: My Doc\nSummary: About things.\n\nAlpha text.',
+        content: 'Alpha text.',
         title: 'My Doc',
         summary: 'About things.',
         chunkIndex: 0,
       }),
       expect.objectContaining({
-        content: 'Document: My Doc\nSummary: About things.\n\nBeta text.',
+        content: 'Beta text.',
         title: 'My Doc',
         summary: 'About things.',
         chunkIndex: 1,
@@ -143,7 +143,7 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(child2!.embedding).toEqual([2, 0, 0]);
   });
 
-  it('composes the CCH header with the strategy path, carrying sectionTitle + source', async () => {
+  it('embeds the CCH header via the strategy path but stores clean content, carrying sectionTitle + source', async () => {
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),
     };
@@ -169,13 +169,13 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     ]);
     expect(result.value.rows).toEqual([
       expect.objectContaining({
-        content: 'Document: My Doc\nSummary: About things.\n\nSection A body.',
+        content: 'Section A body.',
         sectionTitle: 'Section A',
         source: 'Page 1 — Section A',
         title: 'My Doc',
       }),
       expect.objectContaining({
-        content: 'Document: My Doc\nSummary: About things.\n\nSection B body.',
+        content: 'Section B body.',
         sectionTitle: 'Section B',
         source: 'Page 1 — Section B',
         title: 'My Doc',

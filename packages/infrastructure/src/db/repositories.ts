@@ -137,6 +137,7 @@ export async function searchChunksByVector(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     similarity: number;
     parentChunkId: number | null;
@@ -166,6 +167,7 @@ export async function searchChunksByVector(
       c.page AS page,
       c.section_title AS "sectionTitle",
       c.source AS source,
+      c.title AS title,
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
@@ -187,6 +189,7 @@ export async function searchChunksByVector(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     parentChunkId: number | null;
     chunkIndex: number;
@@ -200,6 +203,7 @@ export async function searchChunksByVector(
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     content: r.content,
     parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
     chunkIndex: Number(r.chunkIndex),
@@ -219,6 +223,7 @@ export async function searchChunksByLexical(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     similarity: number;
     parentChunkId: number | null;
@@ -235,6 +240,7 @@ export async function searchChunksByLexical(
       c.page AS page,
       c.section_title AS "sectionTitle",
       c.source AS source,
+      c.title AS title,
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
@@ -255,6 +261,7 @@ export async function searchChunksByLexical(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     parentChunkId: number | null;
     chunkIndex: number;
@@ -268,6 +275,7 @@ export async function searchChunksByLexical(
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     content: r.content,
     parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
     chunkIndex: Number(r.chunkIndex),
@@ -284,6 +292,7 @@ function toChunkValues(r: {
   page?: number | null;
   sectionTitle?: string | null;
   source?: string | null;
+  title?: string | null;
   parentChunkId?: number | null;
   kind?: 'parent' | 'child' | 'summary';
   embeddingModel?: string | null;
@@ -297,6 +306,7 @@ function toChunkValues(r: {
     page: r.page ?? null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     parentChunkId: r.parentChunkId ?? null,
     kind: r.kind ?? 'child',
     embeddingModel: r.embeddingModel ?? null,
@@ -313,6 +323,7 @@ export async function insertChunks(
     page?: number | null;
     sectionTitle?: string | null;
     source?: string | null;
+    title?: string | null;
     parentChunkId?: number | null;
     kind?: 'parent' | 'child' | 'summary';
     embeddingModel?: string | null;
@@ -382,6 +393,7 @@ export async function getChunksByIds(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     similarity: number;
     parentChunkId: number | null;
@@ -397,6 +409,7 @@ export async function getChunksByIds(
       c.page AS page,
       c.section_title AS "sectionTitle",
       c.source AS source,
+      c.title AS title,
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
@@ -414,6 +427,7 @@ export async function getChunksByIds(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     parentChunkId: number | null;
     chunkIndex: number;
@@ -427,6 +441,7 @@ export async function getChunksByIds(
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     content: r.content,
     parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
     chunkIndex: Number(r.chunkIndex),
@@ -448,6 +463,7 @@ export async function getChunksByDocAndRange(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     similarity: number;
     parentChunkId: number | null;
@@ -462,6 +478,7 @@ export async function getChunksByDocAndRange(
       c.page AS page,
       c.section_title AS "sectionTitle",
       c.source AS source,
+      c.title AS title,
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
@@ -481,6 +498,7 @@ export async function getChunksByDocAndRange(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     parentChunkId: number | null;
     chunkIndex: number;
@@ -494,6 +512,7 @@ export async function getChunksByDocAndRange(
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     content: r.content,
     parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
     chunkIndex: Number(r.chunkIndex),
@@ -511,6 +530,7 @@ export async function getChunksByDocAndRanges(
   page: number | null;
   sectionTitle: string | null;
   source: string | null;
+  title: string | null;
   content: string;
   similarity: number;
   parentChunkId: number | null;
@@ -523,6 +543,7 @@ export async function getChunksByDocAndRanges(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     similarity: number;
     parentChunkId: number | null;
@@ -540,6 +561,7 @@ export async function getChunksByDocAndRanges(
       c.page AS page,
       c.section_title AS "sectionTitle",
       c.source AS source,
+      c.title AS title,
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
@@ -557,6 +579,7 @@ export async function getChunksByDocAndRanges(
     page: number | null;
     sectionTitle: string | null;
     source: string | null;
+    title: string | null;
     content: string;
     parentChunkId: number | null;
     chunkIndex: number;
@@ -570,6 +593,7 @@ export async function getChunksByDocAndRanges(
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,
     source: r.source ?? null,
+    title: r.title ?? null,
     content: r.content,
     parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
     chunkIndex: Number(r.chunkIndex),

@@ -66,6 +66,7 @@ describe('ingestFile', () => {
         page: null,
         sectionTitle: null,
         source: null,
+        title: null,
         parentChunkId: null,
         kind: 'child',
         embeddingModel: null,
@@ -130,6 +131,7 @@ describe('ingestFile', () => {
         page: null,
         sectionTitle: null,
         source: null,
+        title: null,
         parentChunkId: null,
         kind: 'child',
         embeddingModel: null,
@@ -197,7 +199,7 @@ describe('ingestFile', () => {
     }
   });
 
-  it('prepends the CCH header to each stored chunk and records title/summary metadata', async () => {
+  it('stores clean content, embeds header+content, and persists title metadata', async () => {
     const deps = makeDeps({
       summarizer: {
         generateDocContext: vi.fn().mockResolvedValue({ title: 'Quarterly Report', summary: 'Q2 financials.' }),
@@ -209,15 +211,19 @@ describe('ingestFile', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
+      'Document: Quarterly Report\nSummary: Q2 financials.\n\nSample PDF text content.',
+    ]);
     expect(deps.chunks.insertMany).toHaveBeenCalledWith([
       {
         documentId: 1,
-        content: 'Document: Quarterly Report\nSummary: Q2 financials.\n\nSample PDF text content.',
+        content: 'Sample PDF text content.',
         embedding: [0.1, 0.2, 0.3],
         chunkIndex: 0,
         page: null,
         sectionTitle: null,
         source: null,
+        title: 'Quarterly Report',
         parentChunkId: null,
         kind: 'child',
         embeddingModel: null,

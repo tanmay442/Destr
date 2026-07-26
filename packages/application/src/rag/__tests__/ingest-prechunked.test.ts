@@ -85,6 +85,28 @@ describe('ingestPrechunked', () => {
     ]);
   });
 
+  it('embeds header+content but stores clean content and title metadata when a summarizer is wired', async () => {
+    const deps = makeDeps({
+      summarizer: {
+        generateDocContext: vi.fn().mockResolvedValue({ title: 'Manual', summary: 'Product manual.' }),
+      },
+    });
+    const result = await ingestPrechunked(
+      { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
+      'Document: Manual\nSummary: Product manual.\n\nGetting started body.',
+      'Document: Manual\nSummary: Product manual.\n\nAuth body.',
+    ]);
+    expect(deps.chunks.insertMany).toHaveBeenCalledWith([
+      expect.objectContaining({ content: 'Getting started body.', title: 'Manual' }),
+      expect.objectContaining({ content: 'Auth body.', title: 'Manual' }),
+    ]);
+  });
+
   it('stores the companion PDF blob only when provided', async () => {
     const deps = makeDeps();
     const pdf = Buffer.from('%PDF-1.4');
