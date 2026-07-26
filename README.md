@@ -167,12 +167,32 @@ for detailed sign-up links and per-service walkthroughs.
   race conditions on concurrent creation.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
-- **`/admin/analytics`** — Rebuilt around per-turn `chat_events`: stat cards
-  for self-serve success, cache-hit, out-of-domain, zero-result, hallucination-blocked,
-  and agentic-retry rates plus estimated token cost; a latency `BarList`
-  (retrieve / generate / total p50 + p95); a 7-day usage `ActivityBars`; and
-  Top Queries (still powered by `QueryStats`) plus Top zero-result queries.
-  Graceful empty state when no chat data exists.
+- **`/admin/analytics`** — Organised into a Quality / Performance / Behavior
+  hierarchy over per-turn `chat_events` plus the `chat_daily_stats`
+  materialized view:
+  - **Quality** — stat cards (chat turns, hallucination-blocked, out-of-domain,
+    cache-hit, self-serve success) and a 12-week trend grid (hallucination with
+    a 5% threshold marker, OOD, avg similarity, cache hit, self-serve success,
+    latency p50/p95) rendered with hand-rolled SVG `LineChart`s.
+  - **Performance** — latency `BarList` (retrieve / generate / total p50 + p95),
+    agentic-vs-vector mode comparison cards (cost, similarity, ticket /
+    hallucination rates, latency, query-length buckets — populated once
+    `retrievalModeRolloutPercent` < 100), agentic-retry rate, and the top-5
+    cache-buster queries.
+  - **Behavior** — seeded keyword topic coverage (OOD + ticket rate with
+    frustration flags, configurable via `analyticsTopics`), stuck sessions
+    (5+ turns, no ticket, 30-min gap sessionization), document utility
+    (retrievals, p95 similarity, ticket conversion via `meta.documentIds`),
+    zero-hit documents, 👍/👎 feedback (rate, per-document sentiment,
+    thumbs-down hot docs), ticket intelligence (weekly volume, turns-to-ticket
+    distribution, first-response / resolution medians derived from audit
+    events), Top Queries (still powered by `QueryStats`), top zero-result
+    queries, 7-day usage `ActivityBars`, and estimated token cost.
+
+  Graceful empty states throughout when no chat data exists. Chat users can
+  vote 👍/👎 under any assistant answer; votes land in `chat_feedback` keyed
+  by the turn's client-generated `turnId` and carry the cited document/chunk
+  ids automatically.
 - **`/admin/audit`** — Full audit log over the single generic `audit_events`
   table, filterable by `kind` (document / ticket / user / **settings**),
   `action`, `actor`, date range, document id, or ticket id. Settings changes
@@ -247,9 +267,14 @@ Key tables (Drizzle on Postgres + pgvector):
   document / ticket / user / settings, `action`, `actor_id`, `details` JSONB).
   Replaced the old `document_audit` / `ticket_audit` / `user_audit` tables.
 - `chat_events` — append-only per-turn instrumentation (latency, hit/citation
-  counts, cache-hit, out-of-domain, hallucination-blocked, token usage, mode).
-- `chat_daily_stats` — materialized view (refresh via
-  `POST /api/admin/analytics/rollup`) for the 7-day usage chart.
+  counts, cache-hit, out-of-domain, hallucination-blocked, token usage, mode,
+  a unique client-generated `turn_id`, and a `meta` JSONB carrying
+  `rewritten` / `documentIds` / `ticketId` linkage).
+- `chat_feedback` — one 👍/👎 vote per turn (`turn_id` FK, upsertable so a
+  user can change their vote) with the cited `document_ids` / `chunk_ids`.
+- `chat_daily_stats` — materialized view behind the 12-week trend charts,
+  refreshed daily by a Vercel cron (`GET /api/admin/analytics/rollup`,
+  authenticated with `CRON_SECRET`; admins can also trigger it via `POST`).
 - `audit_dead_letter` — captures failed audit writes for replay.
 
 `QueryStats` is retained and still powers the "Top Queries" card; `chat_events`
@@ -258,7 +283,8 @@ is purely additive.
 ### Rate limit
 
 `packages/infrastructure/src/auth/lru-rate-limiter.ts` is a single-instance,
-in-memory sliding-window limiter keyed by `chat:${userId}`. Default budget:
+in-memory sliding-window limiter keyed per user and surface
+(`chat:${userId}`, `feedback:${userId}`). Default budget:
 30 requests / 60 s, max 5 000 keys. When the 5 000-key cap is exceeded,
 the least-recently-used keys are evicted (LRU). The 31st request returns HTTP 429 with a
 `Retry-After` header. When the app moves to a multi-region deployment, swap

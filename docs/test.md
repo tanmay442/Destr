@@ -2,7 +2,7 @@
 
 ## Unit + integration (Vitest)
 
-462 tests (454 passing, 8 DB-gated skips) across ~57 files. Run with
+535 tests (527 passing, 8 DB-gated skips) across 68 files. Run with
 `pnpm test` (single run) or `pnpm test:ui` (interactive). Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
@@ -30,16 +30,26 @@
   (`flex-1 min-h-0 overflow-y-auto`) + streaming / citations
   rendering, including citation provenance (fileName + `— p.N` page
   suffix, `§` section hidden when it matches the file name, source
-  URL never rendered, legacy citations without provenance fields)
+  URL never rendered, legacy citations without provenance fields),
+  plus the 👍/👎 feedback control (payload of the POST to
+  `/api/chat/feedback` incl. cited document/chunk ids, vote change
+  re-POST, optimistic state + revert on failure)
 - `src/chat/dedupe-citations.test.ts` — citation dedupe before
-  streaming (fileName + page + 60-char snippet-prefix key, first
-  occurrence wins, null/missing identity fields)
+  streaming (stable chunk-`id` key when present, falling back to
+  fileName + page + 60-char snippet-prefix, first occurrence wins,
+  null/missing identity fields)
+- `src/chat/emit-citations.test.ts` — enriched citation emission
+  (chunk `id` + `documentId` carried through, snippet truncation) and
+  `citationDocumentIds` dedup/filter
+- `src/chat/turn-id.test.ts` / `src/chat/__tests__/build-event-meta.test.ts` —
+  UUID validation for client-generated turn ids; `meta` construction
+  (`rewritten` / `documentIds` / `ticketId` merge and omission)
 - `src/app/api/admin/{users,documents,tickets}/...` — 403 / 400 / 404 /
   409 paths and the happy path
 - `src/app/(app)/admin/actions.test.ts` — every admin server action 403s for
   non-admin and forwards the right shape on success
 - `src/proxy.test.ts` — middleware route gating (public / signed-in /
-  admin)
+  admin, incl. the cron-authenticated rollup route bypass)
 - `packages/application/src/rag/__tests__/search.test.ts` —
   vector search error propagation and success path
 - `packages/application/src/rag/__tests__/ingest.integration.test.ts` —
@@ -108,8 +118,16 @@
 - `src/app/(app)/admin/settings/settings-client.test.tsx` — descriptor-driven render, env-locked disabled, diff preview, 409 → re-apply
 - `src/app/(app)/admin/audit/settings-revert-button.test.tsx` — one-click revert PUT body + version, error toast
 - `packages/infrastructure/src/db/__tests__/audit-backfill.test.ts` — `audit_events` backfill + drop of legacy tables + idempotent re-run (DB-gated)
-- `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` — `ChatEventBatcher` batching, size/interval auto-flush, dead-letter, purge / `purgeOlderThan` / `anonymizeUserData` (fake client, no live DB)
-- `packages/application/src/admin/__tests__/analytics.test.ts` — `getChatAnalytics` admin authz + estimated token cost
+- `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` — `ChatEventBatcher` batching, size/interval auto-flush, dead-letter, purge / `purgeOlderThan` / `anonymizeUserData`, plus SQL-shape assertions for the analytics queries (`getDailyTrends`, `getModeComparison`, `getCacheBusterQueries`, `getQueryOutcomes`, `getStuckSessions` LAG sessionization, `getTurnsToTicket` per-session turn numbering + bucket math, `getDocumentUtility` / `getZeroHitDocuments` jsonb joins) (fake client, no live DB)
+- `packages/infrastructure/src/db/__tests__/chat-feedback-repo.test.ts` — feedback upsert CTE (ownership check, vote change, not-found vs forbidden) + sentiment/hot-docs queries filter soft-deleted documents
+- `packages/infrastructure/src/db/__tests__/ticket-repo.test.ts` — `getTicketResponseTimes` derivation from `status_change` audit events (distinct first-response `min` vs resolution `max`, never-responded tickets excluded from medians, deterministic 5000-row bound)
+- `packages/application/src/admin/__tests__/analytics.test.ts` — `getChatAnalytics` admin authz + estimated token cost, `getAnalyticsTrends` rate math (division-by-zero safe), `getDocumentAnalytics` + `getTicketIntelligence` shapes
+- `packages/application/src/admin/__tests__/topics.test.ts` — seeded keyword topic classification (deterministic first-match, case-insensitive, word-boundary so `api` ≠ `rapid`, frustration-flag math, authz)
+- `packages/application/src/chat/__tests__/feedback.test.ts` — `submitChatFeedback` (ownership → Forbidden, unknown turn → NotFound, upsert happy path)
+- `src/app/api/chat/feedback/route.test.ts` — feedback POST (same-origin 403, 401, 415, zod 400, 404 unflushed turn, 429 rate limit, 200 upsert)
+- `src/app/api/admin/analytics/rollup/route.test.ts` — cron GET auth matrix (valid `CRON_SECRET` bearer without session, wrong bearer → 401, unset secret → admin-session fallback) + admin POST
+- `src/components/admin/Charts.test.tsx` — `LineChart` edge cases (empty state, single point, all-zero series without `NaN` paths, threshold marker + destructive recolor)
+- `src/lib/__tests__/format-duration.test.ts` — `formatDuration` boundaries (`45s` / `2m` / `3.2h` / `30d`, non-positive / non-finite → `0s`)
 - `src/app/api/chat/route.test.ts` — extended: `chat_events` mode mapping (`normal→vector` / `agentic→agentic`), `captureQueryText=false → query:null`, cache-hit event
 - `src/lib/__tests__/sanitize.test.ts` — `escapeHtml` / `sanitizeText`
 - `src/__tests__/chunking-strategy.test.ts` — chunking-strategy config
@@ -179,7 +197,7 @@ assertions, so the suite is green in any environment:
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes **454/454** (8 DB-gated tests skip) even when
+After this fix the full suite passes (currently **527 passing**, 8 DB-gated tests skip) even when
 `.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to
