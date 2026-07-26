@@ -33,6 +33,9 @@
   --color-warning: var(--warning);
   --color-accent-soft: var(--accent-soft);
   --color-glow-accent: var(--glow-accent);
+  --color-input-elevated: var(--input-elevated);
+  --color-accent-info: var(--accent-info);
+  --color-accent-info-soft: var(--accent-info-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -62,9 +65,12 @@
   --destructive: oklch(0.7 0.18 25);
   --destructive-foreground: #f5f5f5;
 
-  --border: #2a2a2a;
-  --input: #2a2a2a;
+  --border: #333333;
+  --input: #333333;
   --ring: rgba(229,229,229,0.55);
+
+  /* Elevated input containers — distinct from card surface */
+  --input-elevated: #1a1a1a;
 
   /* supplementary (kept) */
   --surface-elevated: #1c1c1c;
@@ -79,6 +85,10 @@
   --warning-soft: oklch(0.32 0.08 80);
   --accent-soft: rgba(229,229,229,0.12);
   --glow-accent: rgba(229,229,229,0.14);
+
+  /* Info callout accent — soft indigo */
+  --accent-info: oklch(0.65 0.12 265);
+  --accent-info-soft: oklch(0.25 0.06 265);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);

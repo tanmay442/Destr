@@ -20,6 +20,7 @@ import {
 import type { AppConfig } from '@app/domain';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -311,9 +312,9 @@ export function SettingsClient() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-100">SETTINGS</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Settings</h1>
           <p className="text-sm text-zinc-400">
-            Configure system persona, out-of-scope guardrails, chunking strategies, and retrieval options. (Version {version})
+            Configure persona, guardrails, chunking, and retrieval options. <span className="text-zinc-500">(v{version})</span>
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -360,14 +361,14 @@ export function SettingsClient() {
         <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-8">
           <div data-testid="group-Persona & Prompt" className="flex flex-col gap-8">
             {/* Section 1: Persona Configuration */}
-            <div className="flex flex-col gap-4">
-              <div className="border-b border-zinc-800 pb-3">
-                <h3 className="text-base font-semibold text-zinc-100">Persona Configuration</h3>
-                <p className="text-xs text-zinc-400">
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <CardTitle className="text-base">Persona Configuration</CardTitle>
+                <CardDescription>
                   Define agent persona details, tone, identity, and global custom instructions.
-                </p>
-              </div>
-
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
               {/* 2-Column Grid for Form Fields */}
               <div className="grid grid-cols-2 gap-4">
                 {/* Row 1: Agent Name | Response Tone */}
@@ -436,9 +437,11 @@ export function SettingsClient() {
                   )}
                 </div>
               </div>
+              </CardContent>
+            </Card>
 
               {/* Full-width rows at bottom */}
-              <div className="flex flex-col gap-4 mt-2">
+              <div className="flex flex-col gap-4">
                 {fieldMap.has('branding.description') && (
                   <FieldControl
                     field={fieldMap.get('branding.description')!}
@@ -467,7 +470,6 @@ export function SettingsClient() {
                   />
                 ))}
               </div>
-            </div>
 
             {/* Section 2: Out-of-Scope Topics */}
             {fieldMap.has('outOfScopeTopics') && (
@@ -479,31 +481,35 @@ export function SettingsClient() {
             )}
 
             {/* Section 3: Clean System Prompt Preview */}
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-                <div>
-                  <h3 className="text-base font-semibold text-zinc-100">System Prompt Preview</h3>
-                  <p className="text-xs text-zinc-400">
-                    Status: Assembled from in-flight edits (Safety blocks fixed)
-                  </p>
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base">System Prompt Preview</CardTitle>
+                    <CardDescription>
+                      Assembled from in-flight edits (safety blocks fixed)
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyPrompt}
+                    className="h-8 px-3 text-xs bg-zinc-900 border-border hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
+                  >
+                    {copiedPrompt ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
+                    {copiedPrompt ? 'Copied' : 'Copy Prompt'}
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopyPrompt}
-                  className="h-8 px-3 text-xs bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
+              </CardHeader>
+              <CardContent>
+                <pre
+                  data-testid="prompt-preview"
+                  className="bg-surface-sunken border border-border-subtle rounded-lg p-4 font-mono text-xs text-zinc-300 max-h-96 overflow-auto whitespace-pre-wrap"
                 >
-                  {copiedPrompt ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
-                  {copiedPrompt ? 'Copied' : 'Copy Prompt'}
-                </Button>
-              </div>
-              <pre
-                data-testid="prompt-preview"
-                className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-zinc-300 max-h-96 overflow-auto whitespace-pre-wrap"
-              >
-                {preview}
-              </pre>
-            </div>
+                  {preview}
+                </pre>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
@@ -511,164 +517,234 @@ export function SettingsClient() {
         <TabsContent value="chunking" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Chunking" className="flex flex-col gap-6">
             {/* Header & Re-ingest Button */}
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <div>
-                <h3 className="text-base font-semibold text-zinc-100">Chunking Strategy</h3>
-                <p className="text-xs text-zinc-400">
-                  Configure document chunking parameters and parent-child window resolution.
-                </p>
-              </div>
-              <Button
-                onClick={handleReingest}
-                disabled={reingestPending}
-                data-testid="reingest-button"
-                className="h-9 px-3 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md border border-zinc-700 flex items-center gap-2"
-              >
-                {reingestPending ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Re-ingesting…
-                  </>
-                ) : (
-                  <>
-                    <RotateCw className="size-3.5" />
-                    Re-ingest All
-                  </>
-                )}
-              </Button>
-            </div>
-
-            {/* Environment Notice Banner */}
-            <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-md text-xs text-zinc-400 flex items-start gap-2.5">
-              <Info className="size-4 text-zinc-400 shrink-0 mt-0.5" />
-              <div className="flex flex-col gap-1">
-                <div>
-                  Embedding model: <span className="font-semibold text-zinc-200">{String(embeddingModel ?? 'gemini-embedding-001')}</span> (Requires re-ingest if changed via env)
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base">Chunking Strategy</CardTitle>
+                    <CardDescription>
+                      Configure document chunking parameters and parent-child window resolution.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    onClick={handleReingest}
+                    disabled={reingestPending}
+                    data-testid="reingest-button"
+                    className="h-9 px-3 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md border border-border flex items-center gap-2"
+                  >
+                    {reingestPending ? (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin" />
+                        Re-ingesting…
+                      </>
+                    ) : (
+                      <>
+                        <RotateCw className="size-3.5" />
+                        Re-ingest All
+                      </>
+                    )}
+                  </Button>
                 </div>
-                <div>
-                  <code className="text-zinc-300">INGEST_CHUNK_SIZE</code> and <code className="text-zinc-300">INGEST_CHUNK_OVERLAP</code> are environment-driven and applied at deploy time.
+              </CardHeader>
+              <CardContent>
+                {/* Environment Notice Banner — accent left border */}
+                <div className="p-3 bg-accent-info-soft/30 border-l-2 border-accent-info rounded-r-md text-xs text-zinc-400 flex items-start gap-2.5">
+                  <Info className="size-4 text-accent-info shrink-0 mt-0.5" />
+                  <div className="flex flex-col gap-1">
+                    <div>
+                      Embedding model: <span className="font-semibold text-zinc-200">{String(embeddingModel ?? 'gemini-embedding-001')}</span> <span className="text-zinc-500">(requires re-ingest if changed via env)</span>
+                    </div>
+                    <div>
+                      <code className="text-zinc-300">INGEST_CHUNK_SIZE</code> and <code className="text-zinc-300">INGEST_CHUNK_OVERLAP</code> are environment-driven and applied at deploy time.
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Form Fields without Outer Cards */}
-            <div className="flex flex-col gap-4">
-              {/* Full Width Chunking Strategy Select */}
-              {fieldMap.has('chunkingStrategy') && (
-                <div className="w-full">
-                  <FieldControl
-                    field={fieldMap.get('chunkingStrategy')!}
-                    value={values['chunkingStrategy']}
-                    onChange={(v) => update('chunkingStrategy', v)}
-                    onReset={() => update('chunkingStrategy', fieldMap.get('chunkingStrategy')!.default)}
-                  />
-                </div>
-              )}
+                {/* Form Fields */}
+                <div className="flex flex-col gap-4 mt-4">
+                  {/* Full Width Chunking Strategy Select */}
+                  {fieldMap.has('chunkingStrategy') && (
+                    <div className="w-full">
+                      <FieldControl
+                        field={fieldMap.get('chunkingStrategy')!}
+                        value={values['chunkingStrategy']}
+                        onChange={(v) => update('chunkingStrategy', v)}
+                        onReset={() => update('chunkingStrategy', fieldMap.get('chunkingStrategy')!.default)}
+                      />
+                    </div>
+                  )}
 
-              {/* Strict 2-Column Grid for Numerical Parameters */}
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                {/* Row 1: Parent Chunk Size | Child Chunk Size */}
-                <div>
-                  {fieldMap.has('parentChunkSize') && (
-                    <FieldControl
-                      field={fieldMap.get('parentChunkSize')!}
-                      value={values['parentChunkSize']}
-                      onChange={(v) => update('parentChunkSize', v)}
-                      onReset={() => update('parentChunkSize', fieldMap.get('parentChunkSize')!.default)}
-                    />
+                  {/* Strict 2-Column Grid for Numerical Parameters */}
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    {/* Row 1: Parent Chunk Size | Child Chunk Size */}
+                    <div>
+                      {fieldMap.has('parentChunkSize') && (
+                        <FieldControl
+                          field={fieldMap.get('parentChunkSize')!}
+                          value={values['parentChunkSize']}
+                          onChange={(v) => update('parentChunkSize', v)}
+                          onReset={() => update('parentChunkSize', fieldMap.get('parentChunkSize')!.default)}
+                        />
+                      )}
+                    </div>
+                    <div>
+                      {fieldMap.has('childChunkSize') && (
+                        <FieldControl
+                          field={fieldMap.get('childChunkSize')!}
+                          value={values['childChunkSize']}
+                          onChange={(v) => update('childChunkSize', v)}
+                          onReset={() => update('childChunkSize', fieldMap.get('childChunkSize')!.default)}
+                        />
+                      )}
+                    </div>
+
+                    {/* Row 2: Parent/Child Resolve | Parent/Child Window */}
+                    <div>
+                      {fieldMap.has('parentChildMode') && (
+                        <FieldControl
+                          field={fieldMap.get('parentChildMode')!}
+                          value={values['parentChildMode']}
+                          onChange={(v) => update('parentChildMode', v)}
+                          onReset={() => update('parentChildMode', fieldMap.get('parentChildMode')!.default)}
+                        />
+                      )}
+                    </div>
+                    <div>
+                      {fieldMap.has('parentChildWindow') && (
+                        <FieldControl
+                          field={fieldMap.get('parentChildWindow')!}
+                          value={values['parentChildWindow']}
+                          onChange={(v) => update('parentChildWindow', v)}
+                          onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Extra Chunking Fields */}
+                  {extraChunkingFields.length > 0 && (
+                    <div className="grid grid-cols-2 gap-4 mt-4">
+                      {extraChunkingFields.map((field) => (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div>
-                  {fieldMap.has('childChunkSize') && (
-                    <FieldControl
-                      field={fieldMap.get('childChunkSize')!}
-                      value={values['childChunkSize']}
-                      onChange={(v) => update('childChunkSize', v)}
-                      onReset={() => update('childChunkSize', fieldMap.get('childChunkSize')!.default)}
-                    />
-                  )}
-                </div>
-
-                {/* Row 2: Parent/Child Resolve | Parent/Child Window */}
-                <div>
-                  {fieldMap.has('parentChildMode') && (
-                    <FieldControl
-                      field={fieldMap.get('parentChildMode')!}
-                      value={values['parentChildMode']}
-                      onChange={(v) => update('parentChildMode', v)}
-                      onReset={() => update('parentChildMode', fieldMap.get('parentChildMode')!.default)}
-                    />
-                  )}
-                </div>
-                <div>
-                  {fieldMap.has('parentChildWindow') && (
-                    <FieldControl
-                      field={fieldMap.get('parentChildWindow')!}
-                      value={values['parentChildWindow']}
-                      onChange={(v) => update('parentChildWindow', v)}
-                      onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
-                    />
-                  )}
-                </div>
-              </div>
-
-              {/* Extra Chunking Fields */}
-              {extraChunkingFields.length > 0 && (
-                <div className="grid grid-cols-2 gap-4 mt-4">
-                  {extraChunkingFields.map((field) => (
-                    <FieldControl
-                      key={field.key}
-                      field={field}
-                      value={values[field.key]}
-                      onChange={(v) => update(field.key, v)}
-                      onReset={() => update(field.key, field.default)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
         {/* TAB 3: Retrieval Strategy */}
         <TabsContent value="retrieval" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Retrieval" className="flex flex-col gap-6">
-            <div className="border-b border-zinc-800 pb-3">
-              <h3 className="text-base font-semibold text-zinc-100">Retrieval Settings</h3>
-              <p className="text-xs text-zinc-400">
-                Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {retrievalKeys.map((key) => {
-                const field = fieldMap.get(key);
-                if (!field) return null;
-                return (
-                  <FieldControl
-                    key={field.key}
-                    field={field}
-                    value={values[field.key]}
-                    onChange={(v) => update(field.key, v)}
-                    onReset={() => update(field.key, field.default)}
-                  />
-                );
-              })}
-            </div>
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <CardTitle className="text-base">Retrieval Settings</CardTitle>
+                <CardDescription>
+                  Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Search & Reranking */}
+                  <div className="flex flex-col gap-4">
+                    <h4 className="text-sm font-medium text-zinc-200">Search &amp; Reranking</h4>
+                    {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'gradeModel'].map((key) => {
+                      const field = fieldMap.get(key);
+                      if (!field) return null;
+                      return (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      );
+                    })}
+                  </div>
 
-            {/* Extra retrieval fields */}
-            {extraRetrievalFields.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-t border-zinc-800 pt-4">
-                {extraRetrievalFields.map((field) => (
-                  <FieldControl
-                    key={field.key}
-                    field={field}
-                    value={values[field.key]}
-                    onChange={(v) => update(field.key, v)}
-                    onReset={() => update(field.key, field.default)}
-                  />
-                ))}
-              </div>
-            )}
+                  {/* Agentic Budget Limits */}
+                  <div className="flex flex-col gap-4">
+                    <h4 className="text-sm font-medium text-zinc-200">Agentic Budget Limits</h4>
+                    {['agentStepBudget', 'agenticRetrieveLimit', 'agenticMaxRetries'].map((key) => {
+                      const field = fieldMap.get(key);
+                      if (!field) return null;
+                      return (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Cache Settings — full width row */}
+                <div className="mt-6 pt-6 border-t border-border">
+                  <h4 className="text-sm font-medium text-zinc-200 mb-4">Cache Settings</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {['answerCacheEnabled', 'answerCacheTtlSec'].map((key) => {
+                      const field = fieldMap.get(key);
+                      if (!field) return null;
+                      return (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Rollout & Misc */}
+                <div className="mt-6 pt-6 border-t border-border">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {['retrievalModeRolloutPercent', 'captureQueryText'].map((key) => {
+                      const field = fieldMap.get(key);
+                      if (!field) return null;
+                      return (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Extra retrieval fields */}
+                {extraRetrievalFields.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-border">
+                    {extraRetrievalFields.map((field) => (
+                      <FieldControl
+                        key={field.key}
+                        field={field}
+                        value={values[field.key]}
+                        onChange={(v) => update(field.key, v)}
+                        onReset={() => update(field.key, field.default)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
       </Tabs>
@@ -779,7 +855,7 @@ function FieldControl({
   const changed = serialize(value) !== serialize(field.default);
 
   return (
-    <div className="grid gap-1.5">
+    <div className="grid gap-1.5 group">
       <div className="flex items-center justify-between gap-2">
         <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
           {field.label ?? field.key}
@@ -791,7 +867,7 @@ function FieldControl({
             variant="ghost"
             size="sm"
             onClick={onReset}
-            className="h-5 px-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+            className="h-5 px-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
             data-testid={`reset-${field.key}`}
           >
             <Undo2 className="size-3 mr-1" />
@@ -807,7 +883,7 @@ function FieldControl({
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700 font-normal"
+          className="px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50 font-normal"
         />
       )}
 
@@ -817,7 +893,7 @@ function FieldControl({
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700"
+          className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50"
         />
       )}
 
@@ -831,7 +907,7 @@ function FieldControl({
           disabled={disabled}
           value={value === undefined || value === null ? '' : String(value)}
           onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
-          className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700"
+          className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50"
         />
       )}
 
@@ -841,10 +917,10 @@ function FieldControl({
           onValueChange={onChange}
           disabled={disabled}
         >
-          <SelectTrigger id={id} className="w-full h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 focus:ring-1 focus:ring-zinc-700">
+          <SelectTrigger id={id} className="w-full h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 focus:ring-1 focus:ring-ring/50">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200">
+          <SelectContent className="bg-card border-border text-zinc-200">
             {(field.options ?? []).map((opt) => (
               <SelectItem key={opt} value={opt} className="focus:bg-zinc-800 focus:text-zinc-100">
                 {opt}
@@ -924,28 +1000,30 @@ function OutOfScopeEditor({
   const currentEditing = editingIndex !== null && value[editingIndex] ? value[editingIndex] : null;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <div>
-          <h3 className="text-base font-semibold text-zinc-100">{field.label ?? 'Out-of-Scope Topics'}</h3>
-          <p className="text-xs text-zinc-400">
-            Define out-of-scope policies, declination summary, and routing rules.
-          </p>
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base">{field.label ?? 'Out-of-Scope Topics'}</CardTitle>
+            <CardDescription>
+              Define out-of-scope policies, declination summary, and routing rules.
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={handleAdd}
+            data-testid="oos-add"
+            className="h-8 px-3 text-xs bg-zinc-900 border-border hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
+          >
+            <Plus className="size-3.5" />
+            Add Policy
+          </Button>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled}
-          onClick={handleAdd}
-          data-testid="oos-add"
-          className="h-8 px-3 text-xs bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
-        >
-          <Plus className="size-3.5" />
-          Add Policy
-        </Button>
-      </div>
+      </CardHeader>
+      <CardContent>
 
       {/* Flat Vercel-style clean data table */}
       {value.length === 0 ? (
@@ -964,7 +1042,7 @@ function OutOfScopeEditor({
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
               {value.map((item, index) => (
-                <tr key={index} data-testid="oos-item" className="hover:bg-zinc-900/40 transition-colors">
+                <tr key={index} data-testid="oos-item" className="group hover:bg-surface-elevated/50 transition-colors">
                   <td className="py-3 px-2 font-medium text-zinc-200 w-1/4 truncate">
                     {item.topic || <span className="text-zinc-500 italic">Untitled</span>}
                   </td>
@@ -974,12 +1052,12 @@ function OutOfScopeEditor({
                     </div>
                   </td>
                   <td className="py-3 px-2 w-20 text-right">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="size-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md"
+                        className="size-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 rounded-md transition-colors"
                         onClick={() => setEditingIndex(index)}
                         title="Edit policy"
                       >
@@ -994,7 +1072,7 @@ function OutOfScopeEditor({
                           onChange(value.filter((_, i) => i !== index));
                           if (editingIndex === index) setEditingIndex(null);
                         }}
-                        className="size-7 text-zinc-400 hover:text-red-400 hover:bg-zinc-800 rounded-md"
+                        className="size-7 text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
                         data-testid={`oos-remove-${index}`}
                         title="Delete policy"
                       >
@@ -1009,9 +1087,11 @@ function OutOfScopeEditor({
         </div>
       )}
 
+      </CardContent>
+
       {/* Slide-over Drawer (Sheet) for focused policy editing */}
       <Sheet open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
-        <SheetContent side="right" className="sm:max-w-md bg-zinc-950 border-zinc-800 text-zinc-100">
+        <SheetContent side="right" className="sm:max-w-md bg-card border-border text-zinc-100">
           <SheetHeader>
             <SheetTitle className="text-zinc-100">
               {editingIndex !== null && value[editingIndex]?.topic
@@ -1031,7 +1111,7 @@ function OutOfScopeEditor({
                   placeholder="e.g. legal-advice"
                   value={currentEditing.topic}
                   onChange={(e) => updateAt(editingIndex!, { topic: e.target.value })}
-                  className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200"
+                  className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200"
                 />
               </div>
               <div className="grid gap-2">
@@ -1042,7 +1122,7 @@ function OutOfScopeEditor({
                   rows={6}
                   value={currentEditing.handling}
                   onChange={(e) => updateAt(editingIndex!, { handling: e.target.value })}
-                  className="px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200"
+                  className="px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200"
                 />
               </div>
             </div>
@@ -1052,6 +1132,6 @@ function OutOfScopeEditor({
           </SheetFooter>
         </SheetContent>
       </Sheet>
-    </div>
+    </Card>
   );
 }
