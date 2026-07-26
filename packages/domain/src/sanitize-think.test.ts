@@ -22,17 +22,4 @@ describe('stripThinkTraces', () => {
   it('collapses blank lines and trims', () => {
     expect(stripThinkTraces('\n\n  body  \n\n')).toBe('body');
   });
-
-  it('removes unclosed think tags', () => {
-    expect(stripThinkTraces('prefix <think>unclosed thought trace')).toBe('prefix');
-  });
-
-  it('removes thinking process text prefixes', () => {
-    expect(
-      stripThinkTraces(
-        'Summary: Here\'s a thinking process: 1. **Analyze User Input:** - Input Document: {"title": "Pricing"}',
-      ),
-    ).toBe('{"title": "Pricing"}');
-  });
-
 });

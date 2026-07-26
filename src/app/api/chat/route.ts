@@ -9,7 +9,6 @@ import type { ChatEventInput } from '@app/domain';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { stripThinkTraces } from '@app/domain/sanitize-think';
 import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 
@@ -17,20 +16,17 @@ function emitCitations(
   chunks: RetrievedChunk[],
   snippetMax = CITATION_SNIPPET_MAX,
 ): Array<{ similarity: number; snippet: string; fileName: string | null; page: number | null; sectionTitle: string | null; source: string | null }> {
-  return chunks.map((m) => {
-    const cleanContent = stripThinkTraces(m.content);
-    return {
-      similarity: m.similarity,
-      snippet:
-        cleanContent.length > snippetMax
-          ? cleanContent.slice(0, snippetMax) + '\u2026'
-          : cleanContent,
-      fileName: m.fileName,
-      page: m.page,
-      sectionTitle: m.sectionTitle,
-      source: m.source,
-    };
-  });
+  return chunks.map((m) => ({
+    similarity: m.similarity,
+    snippet:
+      m.content.length > snippetMax
+        ? m.content.slice(0, snippetMax) + '\u2026'
+        : m.content,
+    fileName: m.fileName,
+    page: m.page,
+    sectionTitle: m.sectionTitle,
+    source: m.source,
+  }));
 }
 
 /** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
@@ -102,16 +98,13 @@ function buildChatTools(deps: {
         for (const m of matches) {
           if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
-        const capped = matches.map((m) => {
-          const clean = stripThinkTraces(m.content);
-          return {
-            content:
-              clean.length > TOOL_CONTENT_CAP
-                ? clean.slice(0, TOOL_CONTENT_CAP) + '\u2026'
-                : clean,
-            similarity: m.similarity,
-          };
-        });
+        const capped = matches.map((m) => ({
+          content:
+            m.content.length > TOOL_CONTENT_CAP
+              ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
+              : m.content,
+          similarity: m.similarity,
+        }));
         for (const citation of emitCitations(matches)) {
           citationTarget.push(citation);
         }
@@ -325,28 +318,10 @@ async function streamChatResponse(req: Request): Promise<Response> {
       const reader = llmStream.getReader();
       (async () => {
         try {
-          let hasEmittedText = false;
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (value.type === 'text-delta') {
-              const cleanDelta = stripThinkTraces(value.delta);
-              if (cleanDelta.length > 0) {
-                hasEmittedText = true;
-                controller.enqueue({ ...value, delta: cleanDelta });
-              }
-              continue;
-            }
             controller.enqueue(value);
-          }
-          if (!hasEmittedText && capturedCitations.length > 0) {
-            const topSnippet = capturedCitations[0]?.snippet;
-            const fallbackText = topSnippet
-              ? `Based on the retrieved documentation:\n\n${topSnippet}`
-              : 'I retrieved relevant documentation for your question above.';
-            controller.enqueue({ type: 'text-start', id: 'fallback-text' } as InferUIMessageChunk<MyUIMessage>);
-            controller.enqueue({ type: 'text-delta', id: 'fallback-text', delta: fallbackText } as InferUIMessageChunk<MyUIMessage>);
-            controller.enqueue({ type: 'text-end', id: 'fallback-text' } as InferUIMessageChunk<MyUIMessage>);
           }
           for (const src of capturedCitations) {
             controller.enqueue({
