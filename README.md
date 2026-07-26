@@ -293,7 +293,7 @@ also backed by a sorted set); the call sites do not need to change.
 | `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
-| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top` |
+| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top`. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
 | `pnpm seed` | Seed the configured DB from `./documents/` (`tsx packages/cli/src/index.ts seed`) |
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |

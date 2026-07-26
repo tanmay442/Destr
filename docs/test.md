@@ -2,7 +2,7 @@
 
 ## Unit + integration (Vitest)
 
-440 tests (432 passing, 8 DB-gated skips) across ~55 files. Run with
+462 tests (454 passing, 8 DB-gated skips) across ~57 files. Run with
 `pnpm test` (single run) or `pnpm test:ui` (interactive). Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
@@ -28,7 +28,12 @@
   role update route (auth + invalid role + forbidden + happy path)
 - `src/components/ChatInterface.test.tsx` — chat frame layout
   (`flex-1 min-h-0 overflow-y-auto`) + streaming / citations
-  rendering
+  rendering, including citation provenance (fileName + `— p.N` page
+  suffix, `§` section hidden when it matches the file name, source
+  URL never rendered, legacy citations without provenance fields)
+- `src/chat/dedupe-citations.test.ts` — citation dedupe before
+  streaming (fileName + page + 60-char snippet-prefix key, first
+  occurrence wins, null/missing identity fields)
 - `src/app/api/admin/{users,documents,tickets}/...` — 403 / 400 / 404 /
   409 paths and the happy path
 - `src/app/(app)/admin/actions.test.ts` — every admin server action 403s for
@@ -42,7 +47,9 @@
   document replacement (insert-before-delete with TransactionRunner),
   empty-text and API-failure error paths
 - `packages/application/src/rag/__tests__/ingest-prechunked.test.ts` —
-  pre-chunked Markdown upload: parsing, embedding, metadata writing
+  pre-chunked Markdown upload: parsing, embedding, metadata writing,
+  embedding-only CCH prefix (header + content embedded, clean content
+  + title stored)
 - `packages/application/src/rag/__tests__/parseAndEmbed.test.ts` —
   chunk parse + embed helper
 - `packages/application/src/auth/__tests__/users.test.ts` —
@@ -60,7 +67,8 @@
   helpers (`ok`/`err`/`unwrap`)
 - `packages/cli/src/__tests__/init.test.ts` — CLI `init` command
 - `packages/domain/src/sanitize-think.test.ts` — `stripThinkTraces`
-  removes `<think>` reasoning blocks before ingest
+  removes `<think>`, `<thought>`, `<antThinking>`, `<reasoning>`,
+  `<scratchpad>`, and `[thinking]` reasoning blocks before ingest
 - `packages/infrastructure/src/chunking/shared.test.ts` — sentence
   splitting (ASCII + CJK `。！？` terminators, abbreviation guard,
   max-length hard-split fallback), overlap-capped/space-safe
@@ -74,7 +82,9 @@
   chunk insertion (note: one pre-existing `Client` import typecheck noise
   unrelated to the test logic)
 - `packages/infrastructure/src/llm/doc-summarizer.test.ts` — CCH header
-  title/summary generation
+  title/summary generation + sha256-keyed memoization (repeat input skips
+  the LLM, concurrent identical inputs share one in-flight call, failed
+  generations are not cached)
 - `packages/infrastructure/src/llm/graders.test.ts` — query-rewrite /
   document-grade / hallucination graders
 - `packages/infrastructure/src/llm/index.test.ts` — LLM adapter wiring
@@ -169,7 +179,7 @@ assertions, so the suite is green in any environment:
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes **432/432** (8 DB-gated tests skip) even when
+After this fix the full suite passes **454/454** (8 DB-gated tests skip) even when
 `.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to
@@ -183,3 +193,9 @@ suite, and tears the branch down. Requires `NEON_API_KEY` and
 `NEON_PROJECT_ID` in `.env.local`. When these are absent the
 branching step is skipped and the suite runs against whatever
 database `DATABASE_URL` points to.
+
+`.github/workflows/eval.yml` runs `pnpm eval` (mock mode, no keys) on
+pull requests to `master` that touch retrieval code
+(`packages/application/src/rag/**`, `packages/infrastructure/src/chunking/**`,
+`scripts/eval/**`, or the workflow itself), gating retrieval PRs on the
+20-question golden dataset.
