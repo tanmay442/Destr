@@ -19,13 +19,6 @@ import {
 } from 'lucide-react';
 import type { AppConfig } from '@app/domain';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -33,7 +26,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -63,14 +55,6 @@ import {
   TabsTrigger,
   TabsContent,
 } from '@/components/ui/tabs';
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from '@/components/ui/table';
 import { toast } from '@/components/ui/sonner';
 
 type InputType = 'text' | 'textarea' | 'select' | 'slider' | 'toggle' | 'number';
@@ -130,6 +114,7 @@ export function SettingsClient() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reingestPending, setReingestPending] = useState(false);
   const [conflictVersion, setConflictVersion] = useState<number | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
 
@@ -195,6 +180,20 @@ export function SettingsClient() {
     setTimeout(() => setCopiedPrompt(false), 2000);
   }
 
+  async function handleReingest() {
+    setReingestPending(true);
+    try {
+      const res = await fetch('/api/admin/reingest', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
+      toast.success(`${data.enqueued} document${data.enqueued === 1 ? '' : 's'} queued`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Re-ingest failed');
+    } finally {
+      setReingestPending(false);
+    }
+  }
+
   async function save(expectedVersion: number) {
     setSaving(true);
     try {
@@ -252,15 +251,32 @@ export function SettingsClient() {
 
   if (!descriptor || version === null) {
     return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 text-sm text-zinc-400">
         <Loader2 className="size-4 animate-spin" />
         Loading settings…
       </div>
     );
   }
 
-  const personaKeys = ['agentPersona.name', 'agentPersona.tone', 'orgName', 'orgShortName', 'audience', 'branding.title', 'branding.description'];
-  const chunkingKeys = ['chunkingStrategy', 'parentChunkSize', 'childChunkSize', 'parentChildMode', 'parentChildWindow'];
+  const personaGridKeys = [
+    'agentPersona.name',
+    'agentPersona.tone',
+    'orgName',
+    'orgShortName',
+    'audience',
+    'branding.title',
+    'branding.description',
+    'customInstructions',
+  ];
+
+  const chunkingGridKeys = [
+    'chunkingStrategy',
+    'parentChunkSize',
+    'childChunkSize',
+    'parentChildMode',
+    'parentChildWindow',
+  ];
+
   const retrievalKeys = [
     'retrievalMode',
     'hybridEnabled',
@@ -277,10 +293,14 @@ export function SettingsClient() {
   ];
 
   const extraPersonaFields = descriptor.filter(
-    (f) => f.group === 'Persona & Prompt' && f.inputType && !personaKeys.includes(f.key) && f.key !== 'customInstructions' && f.key !== 'outOfScopeTopics'
+    (f) =>
+      f.group === 'Persona & Prompt' &&
+      f.inputType &&
+      !personaGridKeys.includes(f.key) &&
+      f.key !== 'outOfScopeTopics'
   );
   const extraChunkingFields = descriptor.filter(
-    (f) => f.group === 'Chunking' && f.inputType && !chunkingKeys.includes(f.key)
+    (f) => f.group === 'Chunking' && f.inputType && !chunkingGridKeys.includes(f.key)
   );
   const extraRetrievalFields = descriptor.filter(
     (f) => f.group === 'Retrieval' && f.inputType && !retrievalKeys.includes(f.key)
@@ -289,10 +309,10 @@ export function SettingsClient() {
   return (
     <section className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">SETTINGS</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-100">SETTINGS</h1>
+          <p className="text-sm text-zinc-400">
             Configure system persona, out-of-scope guardrails, chunking strategies, and retrieval options. (Version {version})
           </p>
         </div>
@@ -302,6 +322,7 @@ export function SettingsClient() {
               variant="outline"
               onClick={() => setValues({ ...baseline })}
               disabled={saving}
+              className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-300"
             >
               <Undo2 className="size-4 mr-1" />
               Reset
@@ -311,6 +332,7 @@ export function SettingsClient() {
             onClick={() => setDiffOpen(true)}
             disabled={changedKeys.length === 0 || saving}
             data-testid="review-save"
+            className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200 font-medium"
           >
             Review &amp; Save {changedKeys.length > 0 ? `(${changedKeys.length})` : ''}
           </Button>
@@ -319,79 +341,135 @@ export function SettingsClient() {
 
       {/* 3-Tab Main Layout */}
       <Tabs defaultValue="persona" className="w-full space-y-6">
-        <TabsList className="grid w-full grid-cols-1 sm:grid-cols-3 max-w-2xl">
-          <TabsTrigger value="persona" className="flex items-center gap-2">
+        <TabsList className="grid w-full grid-cols-1 sm:grid-cols-3 max-w-2xl bg-zinc-900 border border-zinc-800">
+          <TabsTrigger value="persona" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
             <Shield className="size-4" />
             <span>Persona &amp; Guardrails</span>
           </TabsTrigger>
-          <TabsTrigger value="chunking" className="flex items-center gap-2">
+          <TabsTrigger value="chunking" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
             <Cpu className="size-4" />
             <span>Chunking Strategy</span>
           </TabsTrigger>
-          <TabsTrigger value="retrieval" className="flex items-center gap-2">
+          <TabsTrigger value="retrieval" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
             <Sliders className="size-4" />
             <span>Retrieval Strategy</span>
           </TabsTrigger>
         </TabsList>
 
         {/* TAB 1: Persona & Guardrails */}
-        <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
-          <div data-testid="group-Persona & Prompt" className="flex flex-col gap-6">
-            {/* Persona Configuration Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Persona Configuration</CardTitle>
-                <CardDescription>
+        <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-8">
+          <div data-testid="group-Persona & Prompt" className="flex flex-col gap-8">
+            {/* Section 1: Persona Configuration */}
+            <div className="flex flex-col gap-4">
+              <div className="border-b border-zinc-800 pb-3">
+                <h3 className="text-base font-semibold text-zinc-100">Persona Configuration</h3>
+                <p className="text-xs text-zinc-400">
                   Define agent persona details, tone, identity, and global custom instructions.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {personaKeys.map((key) => {
-                    const field = fieldMap.get(key);
-                    if (!field) return null;
-                    return (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    );
-                  })}
+                </p>
+              </div>
+
+              {/* 2-Column Grid for Form Fields */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Row 1: Agent Name | Response Tone */}
+                <div>
+                  {fieldMap.has('agentPersona.name') && (
+                    <FieldControl
+                      field={fieldMap.get('agentPersona.name')!}
+                      value={values['agentPersona.name']}
+                      onChange={(v) => update('agentPersona.name', v)}
+                      onReset={() => update('agentPersona.name', fieldMap.get('agentPersona.name')!.default)}
+                    />
+                  )}
+                </div>
+                <div>
+                  {fieldMap.has('agentPersona.tone') && (
+                    <FieldControl
+                      field={fieldMap.get('agentPersona.tone')!}
+                      value={values['agentPersona.tone']}
+                      onChange={(v) => update('agentPersona.tone', v)}
+                      onReset={() => update('agentPersona.tone', fieldMap.get('agentPersona.tone')!.default)}
+                    />
+                  )}
                 </div>
 
-                {/* Custom Instructions */}
-                {fieldMap.has('customInstructions') && (
-                  <div className="pt-2">
+                {/* Row 2: Organization Name | Short Name */}
+                <div>
+                  {fieldMap.has('orgName') && (
                     <FieldControl
-                      field={fieldMap.get('customInstructions')!}
-                      value={values['customInstructions']}
-                      onChange={(v) => update('customInstructions', v)}
-                      onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
+                      field={fieldMap.get('orgName')!}
+                      value={values['orgName']}
+                      onChange={(v) => update('orgName', v)}
+                      onReset={() => update('orgName', fieldMap.get('orgName')!.default)}
                     />
-                  </div>
+                  )}
+                </div>
+                <div>
+                  {fieldMap.has('orgShortName') && (
+                    <FieldControl
+                      field={fieldMap.get('orgShortName')!}
+                      value={values['orgShortName']}
+                      onChange={(v) => update('orgShortName', v)}
+                      onReset={() => update('orgShortName', fieldMap.get('orgShortName')!.default)}
+                    />
+                  )}
+                </div>
+
+                {/* Row 3: Audience | Browser Title */}
+                <div>
+                  {fieldMap.has('audience') && (
+                    <FieldControl
+                      field={fieldMap.get('audience')!}
+                      value={values['audience']}
+                      onChange={(v) => update('audience', v)}
+                      onReset={() => update('audience', fieldMap.get('audience')!.default)}
+                    />
+                  )}
+                </div>
+                <div>
+                  {fieldMap.has('branding.title') && (
+                    <FieldControl
+                      field={fieldMap.get('branding.title')!}
+                      value={values['branding.title']}
+                      onChange={(v) => update('branding.title', v)}
+                      onReset={() => update('branding.title', fieldMap.get('branding.title')!.default)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Full-width rows at bottom */}
+              <div className="flex flex-col gap-4 mt-2">
+                {fieldMap.has('branding.description') && (
+                  <FieldControl
+                    field={fieldMap.get('branding.description')!}
+                    value={values['branding.description']}
+                    onChange={(v) => update('branding.description', v)}
+                    onReset={() => update('branding.description', fieldMap.get('branding.description')!.default)}
+                  />
                 )}
 
-                {/* Any extra persona fields */}
-                {extraPersonaFields.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                    {extraPersonaFields.map((field) => (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    ))}
-                  </div>
+                {fieldMap.has('customInstructions') && (
+                  <FieldControl
+                    field={fieldMap.get('customInstructions')!}
+                    value={values['customInstructions']}
+                    onChange={(v) => update('customInstructions', v)}
+                    onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
+                  />
                 )}
-              </CardContent>
-            </Card>
 
-            {/* Out-of-Scope Topics Card */}
+                {extraPersonaFields.map((field) => (
+                  <FieldControl
+                    key={field.key}
+                    field={field}
+                    value={values[field.key]}
+                    onChange={(v) => update(field.key, v)}
+                    onReset={() => update(field.key, field.default)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Section 2: Out-of-Scope Topics */}
             {fieldMap.has('outOfScopeTopics') && (
               <OutOfScopeEditor
                 field={fieldMap.get('outOfScopeTopics')!}
@@ -400,185 +478,218 @@ export function SettingsClient() {
               />
             )}
 
-            {/* System Prompt Preview Card */}
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                <div className="space-y-1">
-                  <CardTitle>System Prompt Preview</CardTitle>
-                  <CardDescription>
+            {/* Section 3: Clean System Prompt Preview */}
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <div>
+                  <h3 className="text-base font-semibold text-zinc-100">System Prompt Preview</h3>
+                  <p className="text-xs text-zinc-400">
                     Status: Assembled from in-flight edits (Safety blocks fixed)
-                  </CardDescription>
+                  </p>
                 </div>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleCopyPrompt}
-                  className="flex items-center gap-1.5"
+                  className="h-8 px-3 text-xs bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
                 >
                   {copiedPrompt ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
                   {copiedPrompt ? 'Copied' : 'Copy Prompt'}
                 </Button>
-              </CardHeader>
-              <CardContent>
-                <pre
-                  data-testid="prompt-preview"
-                  className="max-h-96 overflow-auto rounded-md bg-muted/70 p-4 text-xs font-mono whitespace-pre-wrap border"
-                >
-                  {preview}
-                </pre>
-              </CardContent>
-            </Card>
+              </div>
+              <pre
+                data-testid="prompt-preview"
+                className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-zinc-300 max-h-96 overflow-auto whitespace-pre-wrap"
+              >
+                {preview}
+              </pre>
+            </div>
           </div>
         </TabsContent>
 
         {/* TAB 2: Chunking Strategy */}
         <TabsContent value="chunking" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Chunking" className="flex flex-col gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Chunking Configuration</CardTitle>
-                <CardDescription>
+            {/* Header & Re-ingest Button */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div>
+                <h3 className="text-base font-semibold text-zinc-100">Chunking Strategy</h3>
+                <p className="text-xs text-zinc-400">
                   Configure document chunking parameters and parent-child window resolution.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                {/* Info banner */}
-                <Alert variant="default" className="bg-muted/40 border-muted-foreground/20">
-                  <Info className="size-4 text-muted-foreground" />
-                  <AlertTitle className="text-sm font-medium">Environment &amp; Embedding Model</AlertTitle>
-                  <AlertDescription className="text-xs text-muted-foreground">
-                    Embedding model: <span className="font-semibold text-foreground">{String(embeddingModel ?? 'gemini-embedding-001')}</span> (Requires re-ingest if changed via env).
-                    <br />
-                    <code>INGEST_CHUNK_SIZE</code> and <code>INGEST_CHUNK_OVERLAP</code> are environment-driven and applied at deploy time.
-                  </AlertDescription>
-                </Alert>
+                </p>
+              </div>
+              <Button
+                onClick={handleReingest}
+                disabled={reingestPending}
+                data-testid="reingest-button"
+                className="h-9 px-3 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md border border-zinc-700 flex items-center gap-2"
+              >
+                {reingestPending ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Re-ingesting…
+                  </>
+                ) : (
+                  <>
+                    <RotateCw className="size-3.5" />
+                    Re-ingest All
+                  </>
+                )}
+              </Button>
+            </div>
 
-                {/* Strategy field */}
-                {fieldMap.has('chunkingStrategy') && (
-                  <div className="w-full">
+            {/* Environment Notice Banner */}
+            <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded-md text-xs text-zinc-400 flex items-start gap-2.5">
+              <Info className="size-4 text-zinc-400 shrink-0 mt-0.5" />
+              <div className="flex flex-col gap-1">
+                <div>
+                  Embedding model: <span className="font-semibold text-zinc-200">{String(embeddingModel ?? 'gemini-embedding-001')}</span> (Requires re-ingest if changed via env)
+                </div>
+                <div>
+                  <code className="text-zinc-300">INGEST_CHUNK_SIZE</code> and <code className="text-zinc-300">INGEST_CHUNK_OVERLAP</code> are environment-driven and applied at deploy time.
+                </div>
+              </div>
+            </div>
+
+            {/* Form Fields without Outer Cards */}
+            <div className="flex flex-col gap-4">
+              {/* Full Width Chunking Strategy Select */}
+              {fieldMap.has('chunkingStrategy') && (
+                <div className="w-full">
+                  <FieldControl
+                    field={fieldMap.get('chunkingStrategy')!}
+                    value={values['chunkingStrategy']}
+                    onChange={(v) => update('chunkingStrategy', v)}
+                    onReset={() => update('chunkingStrategy', fieldMap.get('chunkingStrategy')!.default)}
+                  />
+                </div>
+              )}
+
+              {/* Strict 2-Column Grid for Numerical Parameters */}
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                {/* Row 1: Parent Chunk Size | Child Chunk Size */}
+                <div>
+                  {fieldMap.has('parentChunkSize') && (
                     <FieldControl
-                      field={fieldMap.get('chunkingStrategy')!}
-                      value={values['chunkingStrategy']}
-                      onChange={(v) => update('chunkingStrategy', v)}
-                      onReset={() => update('chunkingStrategy', fieldMap.get('chunkingStrategy')!.default)}
+                      field={fieldMap.get('parentChunkSize')!}
+                      value={values['parentChunkSize']}
+                      onChange={(v) => update('parentChunkSize', v)}
+                      onReset={() => update('parentChunkSize', fieldMap.get('parentChunkSize')!.default)}
                     />
-                  </div>
-                )}
-
-                {/* Parent & Child Chunk Size */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {['parentChunkSize', 'childChunkSize'].map((key) => {
-                    const field = fieldMap.get(key);
-                    if (!field) return null;
-                    return (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    );
-                  })}
+                  )}
+                </div>
+                <div>
+                  {fieldMap.has('childChunkSize') && (
+                    <FieldControl
+                      field={fieldMap.get('childChunkSize')!}
+                      value={values['childChunkSize']}
+                      onChange={(v) => update('childChunkSize', v)}
+                      onReset={() => update('childChunkSize', fieldMap.get('childChunkSize')!.default)}
+                    />
+                  )}
                 </div>
 
-                {/* Parent/Child Resolve & Window */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {['parentChildMode', 'parentChildWindow'].map((key) => {
-                    const field = fieldMap.get(key);
-                    if (!field) return null;
-                    return (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    );
-                  })}
+                {/* Row 2: Parent/Child Resolve | Parent/Child Window */}
+                <div>
+                  {fieldMap.has('parentChildMode') && (
+                    <FieldControl
+                      field={fieldMap.get('parentChildMode')!}
+                      value={values['parentChildMode']}
+                      onChange={(v) => update('parentChildMode', v)}
+                      onReset={() => update('parentChildMode', fieldMap.get('parentChildMode')!.default)}
+                    />
+                  )}
                 </div>
+                <div>
+                  {fieldMap.has('parentChildWindow') && (
+                    <FieldControl
+                      field={fieldMap.get('parentChildWindow')!}
+                      value={values['parentChildWindow']}
+                      onChange={(v) => update('parentChildWindow', v)}
+                      onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
+                    />
+                  )}
+                </div>
+              </div>
 
-                {/* Extra chunking fields */}
-                {extraChunkingFields.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                    {extraChunkingFields.map((field) => (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Re-ingest Corpus Card isolated in Chunking tab */}
-            <ReingestCard />
+              {/* Extra Chunking Fields */}
+              {extraChunkingFields.length > 0 && (
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  {extraChunkingFields.map((field) => (
+                    <FieldControl
+                      key={field.key}
+                      field={field}
+                      value={values[field.key]}
+                      onChange={(v) => update(field.key, v)}
+                      onReset={() => update(field.key, field.default)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </TabsContent>
 
         {/* TAB 3: Retrieval Strategy */}
         <TabsContent value="retrieval" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Retrieval" className="flex flex-col gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Retrieval Settings</CardTitle>
-                <CardDescription>
-                  Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {retrievalKeys.map((key) => {
-                    const field = fieldMap.get(key);
-                    if (!field) return null;
-                    return (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    );
-                  })}
-                </div>
+            <div className="border-b border-zinc-800 pb-3">
+              <h3 className="text-base font-semibold text-zinc-100">Retrieval Settings</h3>
+              <p className="text-xs text-zinc-400">
+                Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {retrievalKeys.map((key) => {
+                const field = fieldMap.get(key);
+                if (!field) return null;
+                return (
+                  <FieldControl
+                    key={field.key}
+                    field={field}
+                    value={values[field.key]}
+                    onChange={(v) => update(field.key, v)}
+                    onReset={() => update(field.key, field.default)}
+                  />
+                );
+              })}
+            </div>
 
-                {/* Extra retrieval fields */}
-                {extraRetrievalFields.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                    {extraRetrievalFields.map((field) => (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            {/* Extra retrieval fields */}
+            {extraRetrievalFields.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-t border-zinc-800 pt-4">
+                {extraRetrievalFields.map((field) => (
+                  <FieldControl
+                    key={field.key}
+                    field={field}
+                    value={values[field.key]}
+                    onChange={(v) => update(field.key, v)}
+                    onReset={() => update(field.key, field.default)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </TabsContent>
       </Tabs>
 
       {/* Sticky Bottom Action Bar when there are unsaved edits */}
       {changedKeys.length > 0 && (
-        <div className="sticky bottom-4 z-40 flex items-center justify-between rounded-lg border bg-background/95 p-4 shadow-lg backdrop-blur">
-          <div className="text-sm">
-            <span className="font-semibold text-foreground">{changedKeys.length}</span> unsaved change{changedKeys.length === 1 ? '' : 's'} pending review
+        <div className="sticky bottom-4 z-40 flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/95 p-4 shadow-xl backdrop-blur">
+          <div className="text-sm text-zinc-200">
+            <span className="font-semibold text-zinc-100">{changedKeys.length}</span> unsaved change{changedKeys.length === 1 ? '' : 's'} pending review
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" onClick={() => setValues({ ...baseline })} disabled={saving}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setValues({ ...baseline })}
+              disabled={saving}
+              className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800"
+            >
               Reset All
             </Button>
-            <Button size="sm" onClick={() => setDiffOpen(true)} disabled={saving}>
+            <Button size="sm" onClick={() => setDiffOpen(true)} disabled={saving} className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">
               Review &amp; Save
             </Button>
           </div>
@@ -587,10 +698,10 @@ export function SettingsClient() {
 
       {/* Review & Save Diff Dialog */}
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
-        <DialogContent>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>Review changes</DialogTitle>
-            <DialogDescription>
+            <DialogTitle className="text-zinc-100">Review changes</DialogTitle>
+            <DialogDescription className="text-zinc-400">
               {changedKeys.length} field{changedKeys.length === 1 ? '' : 's'} will be updated.
             </DialogDescription>
           </DialogHeader>
@@ -598,22 +709,22 @@ export function SettingsClient() {
             {changedKeys.map((key) => {
               const field = descriptor.find((f) => f.key === key);
               return (
-                <div key={key} className="text-sm border-b pb-2 last:border-0">
-                  <div className="font-medium">{field?.label ?? key}</div>
-                  <div className="text-muted-foreground flex items-center gap-2 mt-0.5 text-xs">
-                    <span className="line-through">{serialize(baseline[key])}</span>
-                    <span aria-hidden className="text-primary font-bold">→</span>
-                    <span className="text-foreground font-medium">{serialize(values[key])}</span>
+                <div key={key} className="text-sm border-b border-zinc-800 pb-2 last:border-0">
+                  <div className="font-medium text-zinc-200">{field?.label ?? key}</div>
+                  <div className="text-zinc-400 flex items-center gap-2 mt-0.5 text-xs">
+                    <span className="line-through text-zinc-500">{serialize(baseline[key])}</span>
+                    <span aria-hidden className="text-zinc-400 font-bold">→</span>
+                    <span className="text-zinc-100 font-medium">{serialize(values[key])}</span>
                   </div>
                 </div>
               );
             })}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDiffOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => setDiffOpen(false)} disabled={saving} className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800">
               Cancel
             </Button>
-            <Button onClick={() => save(version)} disabled={saving} data-testid="confirm-save">
+            <Button onClick={() => save(version)} disabled={saving} data-testid="confirm-save" className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">
               {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
               Confirm &amp; Save
             </Button>
@@ -623,22 +734,23 @@ export function SettingsClient() {
 
       {/* 409 Conflict Resolution Dialog */}
       <Dialog open={conflictVersion !== null} onOpenChange={(o) => !o && setConflictVersion(null)}>
-        <DialogContent>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>Settings changed elsewhere</DialogTitle>
-            <DialogDescription>
+            <DialogTitle className="text-zinc-100">Settings changed elsewhere</DialogTitle>
+            <DialogDescription className="text-zinc-400">
               Another admin saved version {conflictVersion} while you were editing. Re-apply your
               changes on top of the latest version?
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConflictVersion(null)} disabled={saving}>
+            <Button variant="outline" onClick={() => setConflictVersion(null)} disabled={saving} className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800">
               Cancel
             </Button>
             <Button
               onClick={() => conflictVersion !== null && save(conflictVersion)}
               disabled={saving}
               data-testid="conflict-reapply"
+              className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
             >
               {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
               Re-apply
@@ -667,11 +779,11 @@ function FieldControl({
   const changed = serialize(value) !== serialize(field.default);
 
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={id} className="flex items-center gap-1.5 text-sm font-medium">
+        <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
           {field.label ?? field.key}
-          {locked && <Lock className="size-3 text-muted-foreground" aria-label="Environment-locked" />}
+          {locked && <Lock className="size-3 text-zinc-500" aria-label="Environment-locked" />}
         </Label>
         {!disabled && changed && (
           <Button
@@ -679,7 +791,7 @@ function FieldControl({
             variant="ghost"
             size="sm"
             onClick={onReset}
-            className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-5 px-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
             data-testid={`reset-${field.key}`}
           >
             <Undo2 className="size-3 mr-1" />
@@ -695,7 +807,7 @@ function FieldControl({
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="font-normal"
+          className="px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700 font-normal"
         />
       )}
 
@@ -705,6 +817,7 @@ function FieldControl({
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
+          className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700"
         />
       )}
 
@@ -718,6 +831,7 @@ function FieldControl({
           disabled={disabled}
           value={value === undefined || value === null ? '' : String(value)}
           onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
+          className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-700"
         />
       )}
 
@@ -727,12 +841,12 @@ function FieldControl({
           onValueChange={onChange}
           disabled={disabled}
         >
-          <SelectTrigger id={id} className="w-full">
+          <SelectTrigger id={id} className="w-full h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200 focus:ring-1 focus:ring-zinc-700">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200">
             {(field.options ?? []).map((opt) => (
-              <SelectItem key={opt} value={opt}>
+              <SelectItem key={opt} value={opt} className="focus:bg-zinc-800 focus:text-zinc-100">
                 {opt}
               </SelectItem>
             ))}
@@ -748,7 +862,7 @@ function FieldControl({
             checked={Boolean(value)}
             onCheckedChange={onChange}
           />
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-zinc-400">
             {Boolean(value) ? 'Enabled' : 'Disabled'}
           </span>
         </div>
@@ -766,20 +880,20 @@ function FieldControl({
             value={[Number(value ?? field.min ?? 0)]}
             onValueChange={(v) => onChange(v[0])}
           />
-          <span className="w-12 text-right text-sm tabular-nums text-muted-foreground font-mono">
+          <span className="w-12 text-right text-sm tabular-nums text-zinc-400 font-mono">
             {String(value)}
           </span>
         </div>
       )}
 
-      {field.helpText && <p className="text-xs text-muted-foreground leading-normal">{field.helpText}</p>}
+      {field.helpText && <p className="text-xs text-zinc-400 leading-normal">{field.helpText}</p>}
       {locked && (
-        <p className="text-xs text-muted-foreground leading-normal">
+        <p className="text-xs text-zinc-400 leading-normal">
           {field.readOnlyReason ?? 'Locked by environment configuration.'}
         </p>
       )}
       {field.available === false && field.unavailableReason && (
-        <p className="text-xs text-destructive leading-normal">{field.unavailableReason}</p>
+        <p className="text-xs text-red-400 leading-normal">{field.unavailableReason}</p>
       )}
     </div>
   );
@@ -810,13 +924,14 @@ function OutOfScopeEditor({
   const currentEditing = editingIndex !== null && value[editingIndex] ? value[editingIndex] : null;
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
         <div>
-          <CardTitle>{field.label ?? 'Out-of-Scope Topics'}</CardTitle>
-          <CardDescription>
+          <h3 className="text-base font-semibold text-zinc-100">{field.label ?? 'Out-of-Scope Topics'}</h3>
+          <p className="text-xs text-zinc-400">
             Define out-of-scope policies, declination summary, and routing rules.
-          </CardDescription>
+          </p>
         </div>
         <Button
           type="button"
@@ -825,172 +940,118 @@ function OutOfScopeEditor({
           disabled={disabled}
           onClick={handleAdd}
           data-testid="oos-add"
-          className="flex items-center gap-1.5"
+          className="h-8 px-3 text-xs bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
         >
-          <Plus className="size-4" />
+          <Plus className="size-3.5" />
           Add Policy
         </Button>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {value.length === 0 ? (
-          <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No out-of-scope policies configured. Click &quot;Add Policy&quot; to define a topic rule.
-          </div>
-        ) : (
-          <div className="rounded-md border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50">
-                  <TableHead className="w-[30%]">TOPIC</TableHead>
-                  <TableHead className="w-[50%]">ACTION SUMMARY / HANDLING</TableHead>
-                  <TableHead className="w-[20%] text-right">ACTIONS</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {value.map((item, index) => (
-                  <TableRow key={index} data-testid="oos-item">
-                    <TableCell className="font-medium align-top pt-3">
-                      <Input
-                        aria-label={`Topic ${index + 1}`}
-                        placeholder="Topic name"
-                        disabled={disabled}
-                        value={item.topic}
-                        onChange={(e) => updateAt(index, { topic: e.target.value })}
-                        className="h-8 text-xs"
-                      />
-                    </TableCell>
-                    <TableCell className="align-top pt-3">
-                      <Textarea
-                        aria-label={`Handling ${index + 1}`}
-                        placeholder="Decline message or handling action..."
-                        rows={1}
-                        disabled={disabled}
-                        value={item.handling}
-                        onChange={(e) => updateAt(index, { handling: e.target.value })}
-                        className="min-h-[32px] text-xs resize-none py-1.5"
-                      />
-                    </TableCell>
-                    <TableCell className="text-right align-top pt-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => setEditingIndex(index)}
-                        >
-                          <Pencil className="size-3.5 mr-1" />
-                          Edit
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={disabled}
-                          onClick={() => {
-                            onChange(value.filter((_, i) => i !== index));
-                            if (editingIndex === index) setEditingIndex(null);
-                          }}
-                          className="h-8 px-2 text-xs text-destructive hover:text-destructive"
-                          data-testid={`oos-remove-${index}`}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+      </div>
 
-        {/* Slide-over Drawer (Sheet) for focused policy editing */}
-        <Sheet open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
-          <SheetContent side="right" className="sm:max-w-md">
-            <SheetHeader>
-              <SheetTitle>
-                {editingIndex !== null && value[editingIndex]?.topic
-                  ? `Edit Policy: ${value[editingIndex].topic}`
-                  : 'Out-of-Scope Topic Policy'}
-              </SheetTitle>
-              <SheetDescription>
-                Specify the topic identifier and exact declination or routing guidelines for the agent.
-              </SheetDescription>
-            </SheetHeader>
-            {currentEditing && (
-              <div className="flex flex-col gap-5 py-6">
-                <div className="grid gap-2">
-                  <Label htmlFor="drawer-topic">Topic Name</Label>
-                  <Input
-                    id="drawer-topic"
-                    placeholder="e.g. security-incident"
-                    value={currentEditing.topic}
-                    onChange={(e) => updateAt(editingIndex!, { topic: e.target.value })}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="drawer-handling">Action Summary &amp; Handling</Label>
-                  <Textarea
-                    id="drawer-handling"
-                    placeholder="e.g. Decline request &amp; open security ticket..."
-                    rows={6}
-                    value={currentEditing.handling}
-                    onChange={(e) => updateAt(editingIndex!, { handling: e.target.value })}
-                  />
-                </div>
+      {/* Flat Vercel-style clean data table */}
+      {value.length === 0 ? (
+        <div className="py-8 text-center text-sm text-zinc-500">
+          No out-of-scope policies configured. Click &quot;Add Policy&quot; to define a topic rule.
+        </div>
+      ) : (
+        <div className="w-full overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-zinc-800 text-xs font-medium text-zinc-400">
+                <th className="py-2.5 px-2 w-1/4 font-medium text-zinc-200">TOPIC</th>
+                <th className="py-2.5 px-2 font-medium text-zinc-200">ACTION SUMMARY / HANDLING</th>
+                <th className="py-2.5 px-2 w-20 text-right font-medium text-zinc-200">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/60">
+              {value.map((item, index) => (
+                <tr key={index} data-testid="oos-item" className="hover:bg-zinc-900/40 transition-colors">
+                  <td className="py-3 px-2 font-medium text-zinc-200 w-1/4 truncate">
+                    {item.topic || <span className="text-zinc-500 italic">Untitled</span>}
+                  </td>
+                  <td className="py-3 px-2">
+                    <div className="truncate max-w-md text-zinc-400">
+                      {item.handling || <span className="text-zinc-500 italic">No handling summary</span>}
+                    </div>
+                  </td>
+                  <td className="py-3 px-2 w-20 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md"
+                        onClick={() => setEditingIndex(index)}
+                        title="Edit policy"
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={disabled}
+                        onClick={() => {
+                          onChange(value.filter((_, i) => i !== index));
+                          if (editingIndex === index) setEditingIndex(null);
+                        }}
+                        className="size-7 text-zinc-400 hover:text-red-400 hover:bg-zinc-800 rounded-md"
+                        data-testid={`oos-remove-${index}`}
+                        title="Delete policy"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Slide-over Drawer (Sheet) for focused policy editing */}
+      <Sheet open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
+        <SheetContent side="right" className="sm:max-w-md bg-zinc-950 border-zinc-800 text-zinc-100">
+          <SheetHeader>
+            <SheetTitle className="text-zinc-100">
+              {editingIndex !== null && value[editingIndex]?.topic
+                ? `Edit Policy: ${value[editingIndex].topic}`
+                : 'Out-of-Scope Topic Policy'}
+            </SheetTitle>
+            <SheetDescription className="text-zinc-400">
+              Specify the topic identifier and exact declination or routing guidelines for the agent.
+            </SheetDescription>
+          </SheetHeader>
+          {currentEditing && (
+            <div className="flex flex-col gap-5 py-6">
+              <div className="grid gap-2">
+                <Label htmlFor="drawer-topic" className="text-xs font-medium text-zinc-300">Topic Name</Label>
+                <Input
+                  id="drawer-topic"
+                  placeholder="e.g. legal-advice"
+                  value={currentEditing.topic}
+                  onChange={(e) => updateAt(editingIndex!, { topic: e.target.value })}
+                  className="h-10 px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200"
+                />
               </div>
-            )}
-            <SheetFooter>
-              <Button onClick={() => setEditingIndex(null)}>Done</Button>
-            </SheetFooter>
-          </SheetContent>
-        </Sheet>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ReingestCard() {
-  const [pending, setPending] = useState(false);
-
-  async function onReingest() {
-    setPending(true);
-    try {
-      const res = await fetch('/api/admin/reingest', { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
-      toast.success(`${data.enqueued} document${data.enqueued === 1 ? '' : 's'} queued`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Re-ingest failed');
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Re-ingest Corpus</CardTitle>
-        <CardDescription>
-          Applies chunking &amp; embedding changes to existing documents in the repository.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Button onClick={onReingest} disabled={pending} data-testid="reingest-button">
-          {pending ? (
-            <>
-              <Loader2 className="size-4 animate-spin mr-1" />
-              Re-ingesting…
-            </>
-          ) : (
-            <>
-              <RotateCw className="size-4 mr-1" />
-              Re-ingest All
-            </>
+              <div className="grid gap-2">
+                <Label htmlFor="drawer-handling" className="text-xs font-medium text-zinc-300">Action Summary &amp; Handling</Label>
+                <Textarea
+                  id="drawer-handling"
+                  placeholder="e.g. Decline request &amp; open security ticket..."
+                  rows={6}
+                  value={currentEditing.handling}
+                  onChange={(e) => updateAt(editingIndex!, { handling: e.target.value })}
+                  className="px-3 py-2 text-sm bg-zinc-900 border-zinc-800 rounded-md text-zinc-200"
+                />
+              </div>
+            </div>
           )}
-        </Button>
-      </CardContent>
-    </Card>
+          <SheetFooter>
+            <Button onClick={() => setEditingIndex(null)} className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">Done</Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    </div>
   );
 }
