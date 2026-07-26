@@ -260,13 +260,10 @@ export function SettingsClient() {
   }
 
   const personaGridKeys = [
-    'agentPersona.name',
     'agentPersona.tone',
     'orgName',
     'orgShortName',
     'audience',
-    'branding.title',
-    'branding.description',
     'customInstructions',
   ];
 
@@ -371,17 +368,7 @@ export function SettingsClient() {
               <CardContent>
               {/* 2-Column Grid for Form Fields */}
               <div className="grid grid-cols-2 gap-4">
-                {/* Row 1: Agent Name | Response Tone */}
-                <div>
-                  {fieldMap.has('agentPersona.name') && (
-                    <FieldControl
-                      field={fieldMap.get('agentPersona.name')!}
-                      value={values['agentPersona.name']}
-                      onChange={(v) => update('agentPersona.name', v)}
-                      onReset={() => update('agentPersona.name', fieldMap.get('agentPersona.name')!.default)}
-                    />
-                  )}
-                </div>
+                {/* Row 1: Response Tone */}
                 <div>
                   {fieldMap.has('agentPersona.tone') && (
                     <FieldControl
@@ -389,6 +376,16 @@ export function SettingsClient() {
                       value={values['agentPersona.tone']}
                       onChange={(v) => update('agentPersona.tone', v)}
                       onReset={() => update('agentPersona.tone', fieldMap.get('agentPersona.tone')!.default)}
+                    />
+                  )}
+                </div>
+                <div>
+                  {fieldMap.has('audience') && (
+                    <FieldControl
+                      field={fieldMap.get('audience')!}
+                      value={values['audience']}
+                      onChange={(v) => update('audience', v)}
+                      onReset={() => update('audience', fieldMap.get('audience')!.default)}
                     />
                   )}
                 </div>
@@ -414,43 +411,12 @@ export function SettingsClient() {
                     />
                   )}
                 </div>
-
-                {/* Row 3: Audience | Browser Title */}
-                <div>
-                  {fieldMap.has('audience') && (
-                    <FieldControl
-                      field={fieldMap.get('audience')!}
-                      value={values['audience']}
-                      onChange={(v) => update('audience', v)}
-                      onReset={() => update('audience', fieldMap.get('audience')!.default)}
-                    />
-                  )}
-                </div>
-                <div>
-                  {fieldMap.has('branding.title') && (
-                    <FieldControl
-                      field={fieldMap.get('branding.title')!}
-                      value={values['branding.title']}
-                      onChange={(v) => update('branding.title', v)}
-                      onReset={() => update('branding.title', fieldMap.get('branding.title')!.default)}
-                    />
-                  )}
-                </div>
               </div>
               </CardContent>
             </Card>
 
               {/* Full-width rows at bottom */}
               <div className="flex flex-col gap-4">
-                {fieldMap.has('branding.description') && (
-                  <FieldControl
-                    field={fieldMap.get('branding.description')!}
-                    value={values['branding.description']}
-                    onChange={(v) => update('branding.description', v)}
-                    onReset={() => update('branding.description', fieldMap.get('branding.description')!.default)}
-                  />
-                )}
-
                 {fieldMap.has('customInstructions') && (
                   <FieldControl
                     field={fieldMap.get('customInstructions')!}
