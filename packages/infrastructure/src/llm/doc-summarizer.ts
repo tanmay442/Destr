@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
 import type { DocSummarizer } from '@app/domain';
 import { getChatModel } from './index';
@@ -58,26 +59,53 @@ function parseDocContext(raw: string): { title: string; summary: string } {
   return { title, summary };
 }
 
+const cchCache = new Map<string, Promise<{ title: string; summary: string }>>();
+
+export function clearDocContextCache(): void {
+  cchCache.clear();
+}
+
+async function generateDocContext(excerpt: string): Promise<{ title: string; summary: string }> {
+  const model = getChatModel(CCH_MODEL || undefined);
+  try {
+    const { text: raw } = await generateText({
+      model,
+      system: SYSTEM_PROMPT,
+      prompt: USER_PROMPT(excerpt),
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+    });
+    return parseDocContext(raw);
+  } catch (err) {
+    console.error('[doc-summarizer] generation failed; returning empty context', String(err));
+    return { title: '', summary: '' };
+  }
+}
+
 /**
  * Provider-agnostic `DocSummarizer` — wraps the configured chat model with an
  * optional `CCH_MODEL` override. Produces one title + summary per document,
  * which `parseAndEmbed`/`ingestPrechunked` prepend as a header before
  * embedding. Never throws on malformed model output.
+ *
+ * Results are memoized by a sha256 hash of the truncated excerpt so re-ingesting
+ * unchanged documents skips redundant LLM calls. The in-flight promise is cached
+ * so concurrent ingests of identical documents share a single request.
  */
 export const docSummarizer: DocSummarizer = {
-  async generateDocContext(text: string): Promise<{ title: string; summary: string }> {
-    const model = getChatModel(CCH_MODEL || undefined);
-    try {
-      const { text: raw } = await generateText({
-        model,
-        system: SYSTEM_PROMPT,
-        prompt: USER_PROMPT(text.slice(0, CCH_CONTEXT_CHARS)),
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-      });
-      return parseDocContext(raw);
-    } catch (err) {
-      console.error('[doc-summarizer] generation failed; returning empty context', String(err));
-      return { title: '', summary: '' };
-    }
+  generateDocContext(text: string): Promise<{ title: string; summary: string }> {
+    const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
+    const key = createHash('sha256').update(excerpt).digest('hex');
+    const cached = cchCache.get(key);
+    if (cached) return cached;
+
+    const pending = generateDocContext(excerpt);
+    cchCache.set(key, pending);
+    pending.then(
+      (result) => {
+        if (!result.title && !result.summary) cchCache.delete(key);
+      },
+      () => cchCache.delete(key),
+    );
+    return pending;
   },
 };

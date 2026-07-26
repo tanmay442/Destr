@@ -11,6 +11,7 @@ import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
 import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
 import { getRuntimeConfig } from '@/lib/config/runtime';
+import { dedupeCitations } from '@/chat/dedupe-citations';
 
 function emitCitations(
   chunks: RetrievedChunk[],
@@ -325,7 +326,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             if (done) break;
             controller.enqueue(value);
           }
-          for (const src of capturedCitations) {
+          for (const src of dedupeCitations(capturedCitations)) {
             controller.enqueue({
               type: 'data-citation',
               data: src,

@@ -172,7 +172,13 @@ export function ChatInterface() {
                 (p) => p.type === 'data-citation',
               ) as Array<{
                 type: 'data-citation';
-                data: { similarity: number; snippet: string };
+                data: {
+                  similarity: number;
+                  snippet: string;
+                  fileName?: string | null;
+                  page?: number | null;
+                  sectionTitle?: string | null;
+                };
               }>;
               return (
                 <div
@@ -240,6 +246,33 @@ export function ChatInterface() {
                                 {simPct}% match
                               </span>
                             </div>
+                            {c.data.fileName && (
+                              <div className="flex flex-col gap-0.5">
+                                <span
+                                  className="truncate text-[11.5px] font-medium text-foreground"
+                                  title={c.data.fileName}
+                                  data-testid="chat-citation-file"
+                                >
+                                  {c.data.fileName}
+                                  {c.data.page != null && (
+                                    <span className="text-foreground-subtle">
+                                      {' '}
+                                      — p.{c.data.page}
+                                    </span>
+                                  )}
+                                </span>
+                                {c.data.sectionTitle &&
+                                  c.data.sectionTitle !== c.data.fileName && (
+                                    <span
+                                      className="truncate text-[11px] text-foreground-subtle"
+                                      title={c.data.sectionTitle}
+                                      data-testid="chat-citation-section"
+                                    >
+                                      § {c.data.sectionTitle}
+                                    </span>
+                                  )}
+                              </div>
+                            )}
                             <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
                               {c.data.snippet}
                             </p>

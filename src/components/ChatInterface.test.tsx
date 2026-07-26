@@ -21,7 +21,17 @@ type Msg = {
   role: 'user' | 'assistant';
   parts: Array<
     | { type: 'text'; text: string }
-    | { type: 'data-citation'; data: { similarity: number; snippet: string } }
+    | {
+        type: 'data-citation';
+        data: {
+          similarity: number;
+          snippet: string;
+          fileName?: string | null;
+          page?: number | null;
+          sectionTitle?: string | null;
+          source?: string | null;
+        };
+      }
   >;
 };
 
@@ -88,6 +98,113 @@ describe('ChatInterface', () => {
     expect(within(citation).getByText(/92% match/i)).toBeInTheDocument();
     expect(
       within(citation).getByText(/dental plan covers two cleanings/i),
+    ).toBeInTheDocument();
+  });
+
+  it('renders provenance metadata on citation cards when present', () => {
+    setupChat([
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-citation',
+            data: {
+              similarity: 0.92,
+              snippet: 'Two cleanings per year are covered.',
+              fileName: 'employee-benefits.pdf',
+              page: 5,
+              sectionTitle: 'Dental Coverage',
+              source: 'https://blob.example.com/employee-benefits.pdf',
+            },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface />);
+    const citation = screen.getByTestId('chat-citation');
+    expect(within(citation).getByTestId('chat-citation-file')).toHaveTextContent(
+      'employee-benefits.pdf — p.5',
+    );
+    expect(
+      within(citation).getByTestId('chat-citation-section'),
+    ).toHaveTextContent('§ Dental Coverage');
+    expect(citation.textContent).not.toContain('blob.example.com');
+  });
+
+  it('omits the page suffix when page is absent', () => {
+    setupChat([
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-citation',
+            data: {
+              similarity: 0.8,
+              snippet: 'Snippet.',
+              fileName: 'handbook.md',
+              page: null,
+              sectionTitle: null,
+            },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface />);
+    const citation = screen.getByTestId('chat-citation');
+    expect(within(citation).getByTestId('chat-citation-file')).toHaveTextContent(
+      /^handbook\.md$/,
+    );
+    expect(
+      within(citation).queryByTestId('chat-citation-section'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('hides the section title when it matches the file name', () => {
+    setupChat([
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-citation',
+            data: {
+              similarity: 0.7,
+              snippet: 'Snippet.',
+              fileName: 'policy.pdf',
+              sectionTitle: 'policy.pdf',
+            },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface />);
+    expect(
+      screen.queryByTestId('chat-citation-section'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders citations without provenance fields gracefully', () => {
+    setupChat([
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-citation',
+            data: { similarity: 0.65, snippet: 'Legacy citation snippet.' },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface />);
+    const citation = screen.getByTestId('chat-citation');
+    expect(
+      within(citation).queryByTestId('chat-citation-file'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(citation).getByText(/legacy citation snippet/i),
     ).toBeInTheDocument();
   });
 
