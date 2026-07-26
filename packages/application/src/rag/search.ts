@@ -1,5 +1,6 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type { ChunkRepository, EmbeddingService, Reranker, RetrievedChunkRow } from '@app/domain';
+import { stripThinkTraces } from '@app/domain/sanitize-think';
 import {
   SIMILARITY_THRESHOLD,
   PARENT_CHILD_MODE,
@@ -52,7 +53,7 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
     page: r.page,
     sectionTitle: r.sectionTitle,
     source: r.source,
-    content: r.content,
+    content: stripThinkTraces(r.content),
     similarity: Number(r.similarity),
   };
 }
@@ -91,7 +92,7 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
         page: child?.page ?? p.page,
         sectionTitle: child?.sectionTitle ?? p.sectionTitle,
         source: child?.source ?? p.source,
-        content: p.content,
+        content: stripThinkTraces(p.content),
         similarity: bestSim.get(p.id) ?? child?.similarity ?? 0,
       };
     })
@@ -117,7 +118,7 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
       page: h.page,
       sectionTitle: h.sectionTitle,
       source: h.source,
-      content: ordered.map((n) => n.content).join('\n\n'),
+      content: stripThinkTraces(ordered.map((n) => n.content).join('\n\n')),
       similarity: h.similarity,
     };
   });
