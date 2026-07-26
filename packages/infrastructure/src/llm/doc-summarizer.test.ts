@@ -5,12 +5,13 @@ vi.mock('ai', () => ({ generateText: (...args: unknown[]) => generateText(...arg
 
 vi.mock('./index', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
 
-import { docSummarizer } from './doc-summarizer';
+import { docSummarizer, clearDocContextCache } from './doc-summarizer';
 import { CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
 describe('docSummarizer (Contextual Chunk Headers)', () => {
   beforeEach(() => {
     generateText.mockReset();
+    clearDocContextCache();
   });
 
   it('parses JSON output and truncates the prompt to CCH_CONTEXT_CHARS', async () => {
@@ -42,5 +43,44 @@ describe('docSummarizer (Contextual Chunk Headers)', () => {
     expect(res).toHaveProperty('title');
     expect(res).toHaveProperty('summary');
     expect(res.title.length).toBeGreaterThan(0);
+  });
+
+  it('caches by input excerpt: same input skips the LLM, different input calls it', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"Cached","summary":"S."}' });
+
+    const first = await docSummarizer.generateDocContext('same document');
+    const second = await docSummarizer.generateDocContext('same document');
+
+    expect(first).toEqual({ title: 'Cached', summary: 'S.' });
+    expect(second).toEqual(first);
+    expect(generateText).toHaveBeenCalledTimes(1);
+
+    await docSummarizer.generateDocContext('different document');
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedupes concurrent identical inputs into a single in-flight call', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"Once","summary":"S."}' });
+
+    const [a, b] = await Promise.all([
+      docSummarizer.generateDocContext('concurrent'),
+      docSummarizer.generateDocContext('concurrent'),
+    ]);
+
+    expect(a).toEqual({ title: 'Once', summary: 'S.' });
+    expect(b).toEqual(a);
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache empty results from failed generations', async () => {
+    generateText.mockRejectedValueOnce(new Error('transient'));
+    generateText.mockResolvedValue({ text: '{"title":"Recovered","summary":"S."}' });
+
+    const first = await docSummarizer.generateDocContext('flaky document');
+    const second = await docSummarizer.generateDocContext('flaky document');
+
+    expect(first).toEqual({ title: '', summary: '' });
+    expect(second).toEqual({ title: 'Recovered', summary: 'S.' });
+    expect(generateText).toHaveBeenCalledTimes(2);
   });
 });
