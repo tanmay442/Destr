@@ -308,7 +308,7 @@ describe('/api/chat searchDocumentation tool', () => {
     return { tools: tools ?? null };
   }
 
-  it('returns up to 800 chars per chunk and a 150-char snippet per citation', async () => {
+  it('returns up to 800 chars per chunk and a 250-char snippet per citation', async () => {
     const longContent = 'x'.repeat(2000);
     const searchChunksSpy = vi
       .spyOn(compositionMock, 'searchChunks')
