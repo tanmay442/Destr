@@ -12,7 +12,6 @@ export interface FieldMeta {
 
 export const fieldConfig: Record<string, FieldMeta> = {
   'orgName':              { group: 'Persona & Prompt', label: 'Organization Name', inputType: 'text' },
-  'orgShortName':         { group: 'Persona & Prompt', label: 'Short Name', inputType: 'text' },
   'audience':             { group: 'Persona & Prompt', label: 'Audience', inputType: 'text' },
   'agentPersona.name':    { group: 'Persona & Prompt', label: 'Agent Name', inputType: 'text' },
   'agentPersona.tone':    { group: 'Persona & Prompt', label: 'Response Tone', inputType: 'select' },

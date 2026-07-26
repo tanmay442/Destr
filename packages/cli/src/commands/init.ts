@@ -113,7 +113,6 @@ export interface InitResult {
 async function promptOrg(rl: Interface, config: AppConfig): Promise<void> {
   banner('Organisation');
   config.orgName = await ask(rl, 'Company / org name', config.orgName);
-  config.orgShortName = await ask(rl, 'Short name (nav brand)', config.orgShortName);
   config.audience = await ask(
     rl,
     'Who does the agent talk to? (e.g. "your customers")',

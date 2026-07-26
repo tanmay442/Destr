@@ -9,7 +9,6 @@ const outOfScopeTopicSchema = z.object({
 
 export const appConfigSchema = z.object({
   orgName: z.string().min(1).default('Your Company'),
-  orgShortName: z.string().min(1).default('RAG Agent'),
   audience: z
     .string()
     .min(1)
@@ -97,7 +96,7 @@ export const appConfigSchema = z.object({
   answerCacheTtlSec: z.coerce.number().int().positive().default(3600),
   captureQueryText: z.boolean().default(true),
   retrievalModeRolloutPercent: z.coerce.number().min(0).max(100).default(100),
-});
+}).strip();
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 

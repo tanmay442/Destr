@@ -25,7 +25,6 @@ const { appConfigMock } = vi.hoisted(() => ({
   appConfigMock: {
     prefetchFirstTurn: false,
     orgName: 'Test Corp',
-    orgShortName: 'RAG Support',
     audience: 'test customers',
     agentPersona: { name: 'Astra', tone: 'friendly' as const },
     outOfScopeTopics: [],

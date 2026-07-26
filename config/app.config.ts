@@ -33,9 +33,6 @@ const config: AppConfig = {
   // system prompt and the landing page hero.
   orgName: 'Your Company',
 
-  // Short brand shown in the top nav and mobile sheet.
-  orgShortName: 'RAG Support',
-
   // Who the agent is talking to. Phrased as a noun phrase; the
   // system prompt builds "help <audience> find answers ...".
   audience: 'your customers',
