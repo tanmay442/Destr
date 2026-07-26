@@ -295,7 +295,10 @@ export function SettingsClient() {
       f.group === 'Persona & Prompt' &&
       f.inputType &&
       !personaGridKeys.includes(f.key) &&
-      f.key !== 'outOfScopeTopics'
+      f.key !== 'outOfScopeTopics' &&
+      f.key !== 'agentPersona.name' &&
+      f.key !== 'branding.title' &&
+      f.key !== 'branding.description'
   );
   const extraChunkingFields = descriptor.filter(
     (f) => f.group === 'Chunking' && f.inputType && !chunkingGridKeys.includes(f.key)
