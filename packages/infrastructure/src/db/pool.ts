@@ -19,17 +19,29 @@ export function isNeonUrl(url: string): boolean {
 }
 
 export function buildNeonPool(): NeonPool {
-  return new NeonPool({
+  const pool = new NeonPool({
     connectionString: process.env.DATABASE_URL ?? '',
     ...POOL_OPTS,
   });
+  // Neon's serverless Postgres aggressively terminates idle connections
+  // (error code 57P01). Without a listener the pool's 'error' event becomes
+  // an uncaught exception that kills the process — a crash Vercel surfaces
+  // as a 502 Bad Gateway instead of a graceful 500 response.
+  pool.on('error', (err) => {
+    console.error('[db-pool] Neon connection error:', err.message);
+  });
+  return pool;
 }
 
 export function buildPgPool(): pg.Pool {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL ?? '',
     ...POOL_OPTS,
   });
+  pool.on('error', (err) => {
+    console.error('[db-pool] PG connection error:', err.message);
+  });
+  return pool;
 }
 
 function makeMissingDatabasePool(): NeonPool {
