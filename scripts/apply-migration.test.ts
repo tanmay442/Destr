@@ -37,11 +37,14 @@ describe('applyMigrations', () => {
     const { query, end, factory } = makePoolFactory();
     await applyMigrations({ dir: tmp, poolFactory: factory, logger: silent });
 
-    // 1 extension + 2 migration statements
-    expect(query).toHaveBeenCalledTimes(3);
+    // extension + tracking table + load applied + 2 statements + record
+    expect(query).toHaveBeenCalledTimes(6);
     expect(query.mock.calls[0]?.[0]).toMatch(/CREATE EXTENSION IF NOT EXISTS vector/);
-    expect(query.mock.calls[1]?.[0]).toBe('CREATE TABLE foo (id int);');
-    expect(query.mock.calls[2]?.[0]).toBe('CREATE TABLE bar (id int);');
+    expect(query.mock.calls[1]?.[0]).toMatch(/CREATE TABLE IF NOT EXISTS .*_migrations/);
+    expect(query.mock.calls[2]?.[0]).toMatch(/SELECT file_name, hash FROM/);
+    expect(query.mock.calls[3]?.[0]).toBe('CREATE TABLE foo (id int);');
+    expect(query.mock.calls[4]?.[0]).toBe('CREATE TABLE bar (id int);');
+    expect(query.mock.calls[5]?.[0]).toMatch(/INSERT INTO .*_migrations/);
     expect(end).toHaveBeenCalledOnce();
   });
 
