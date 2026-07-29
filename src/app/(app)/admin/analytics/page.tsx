@@ -19,6 +19,8 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
 import { formatDuration } from '@/lib/format-duration';
+import type { ReactNode } from 'react';
+import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import type { AnalyticsTrendPoint } from '@app/application';
 import type { ModeComparison } from '@app/domain';
 
@@ -33,10 +35,21 @@ const MODE_LABELS: Record<ModeComparison['mode'], string> = {
   vector: 'Vector',
 };
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: ReactNode;
+}) {
   return (
     <Card className="gap-1 p-4 shadow-none">
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">
+        {icon}
+        {label}
+      </span>
       <span className="text-2xl font-semibold text-foreground">{value}</span>
     </Card>
   );
@@ -179,7 +192,7 @@ export default async function AnalyticsPage() {
 
       <Tabs defaultValue="quality" className="w-full flex flex-col gap-6">
         <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
-          <TabsTrigger value="quality">Quality</TabsTrigger>
+          <TabsTrigger value="quality">Statistics</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="behavior">Behavior</TabsTrigger>
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
@@ -191,7 +204,7 @@ export default async function AnalyticsPage() {
           className="data-[state=inactive]:hidden flex flex-col gap-4"
           data-testid="analytics-quality"
         >
-          <h3 className="text-lg font-medium">Quality</h3>
+          <h3 className="text-lg font-medium">Statistics</h3>
 
           {hasChat ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -202,6 +215,18 @@ export default async function AnalyticsPage() {
               <MetricCard label="Self-serve success" value={pct(chat.selfServeSuccessRate)} />
             </div>
           ) : null}
+
+          <Card className="gap-0">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle>Token cost</CardTitle>
+              <CardDescription>Estimated spend and token throughput.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <MetricCard label="Est. cost" value={chat ? usd(chat.estimatedCostUsd) : usd(0)} />
+              <MetricCard label="Tokens in" value={chat ? num(chat.tokensIn) : '0'} />
+              <MetricCard label="Tokens out" value={chat ? num(chat.tokensOut) : '0'} />
+            </CardContent>
+          </Card>
 
           {hasTrends ? (
             <div
@@ -689,38 +714,24 @@ export default async function AnalyticsPage() {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Usage</CardTitle>
-                <CardDescription>Chat turns over the last 7 days.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {chat ? (
-                  <ActivityBars
-                    buckets={chat.usageOverTime.map((d) => ({
-                      label: d.day.slice(5),
-                      value: d.total,
-                    }))}
-                  />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Token cost</CardTitle>
-                <CardDescription>Estimated spend and token throughput.</CardDescription>
-              </CardHeader>
-              <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <MetricCard label="Est. cost" value={chat ? usd(chat.estimatedCostUsd) : usd(0)} />
-                <MetricCard label="Tokens in" value={chat ? num(chat.tokensIn) : '0'} />
-                <MetricCard label="Tokens out" value={chat ? num(chat.tokensOut) : '0'} />
-              </CardContent>
-            </Card>
-          </div>
+          <Card className="gap-0">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle>Usage</CardTitle>
+              <CardDescription>Chat turns over the last 7 days.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {chat ? (
+                <ActivityBars
+                  buckets={chat.usageOverTime.map((d) => ({
+                    label: d.day.slice(5),
+                    value: d.total,
+                  }))}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent
@@ -735,11 +746,13 @@ export default async function AnalyticsPage() {
             <h4 className="text-sm font-medium text-muted-foreground">Feedback</h4>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <MetricCard
-                label="👍 Helpful"
+                label="Helpful"
+                icon={<ThumbsUp className="size-3.5" />}
                 value={feedback ? num(feedback.summary.up) : '0'}
               />
               <MetricCard
-                label="👎 Unhelpful"
+                label="Unhelpful"
+                icon={<ThumbsDown className="size-3.5" />}
                 value={feedback ? num(feedback.summary.down) : '0'}
               />
               <MetricCard label="Feedback rate" value={pct(feedbackRate)} />
@@ -756,8 +769,12 @@ export default async function AnalyticsPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Document</TableHead>
-                          <TableHead className="text-right">👍</TableHead>
-                          <TableHead className="text-right">👎</TableHead>
+                        <TableHead className="text-right">
+                          <ThumbsUp className="ml-auto size-4" />
+                        </TableHead>
+                        <TableHead className="text-right">
+                          <ThumbsDown className="ml-auto size-4" />
+                        </TableHead>
                           <TableHead className="text-right">Positive</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -794,7 +811,6 @@ export default async function AnalyticsPage() {
                 <CardContent>
                   {feedback && feedback.thumbsDownDocs.length > 0 ? (
                     <BarList
-                      unit=" 👎"
                       items={feedback.thumbsDownDocs.map((d) => ({
                         label: d.fileName ?? `Document #${d.documentId}`,
                         value: d.down,
