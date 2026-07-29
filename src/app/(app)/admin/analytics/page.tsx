@@ -1,5 +1,4 @@
-import { getComposition, getAppSession, unwrap } from '@/composition';
-import { AuditEventList } from '@/components/admin/AuditEventList';
+import { getComposition, getAppSession } from '@/composition';
 import {
   Card,
   CardHeader,
@@ -17,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
 import { formatDuration } from '@/lib/format-duration';
 import type { AnalyticsTrendPoint } from '@app/application';
@@ -144,8 +144,7 @@ export default async function AnalyticsPage() {
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
-  const [auditRes, chatRes, trendsRes, topicsRes, summaryRes, documentsRes, ticketsRes] = await Promise.all([
-    comp.listAudit({ limit: 20, actorId }),
+  const [chatRes, trendsRes, topicsRes, summaryRes, documentsRes, ticketsRes] = await Promise.all([
     comp.getChatAnalytics({ actorId, usageDays: 7 }),
     comp.getAnalyticsTrends({ actorId }),
     comp.getTopicCoverage({ actorId }),
@@ -153,7 +152,6 @@ export default async function AnalyticsPage() {
     comp.getDocumentAnalytics({ actorId }),
     comp.getTicketIntelligence({ actorId }),
   ]);
-  const audit = unwrap(auditRes);
   const chat = chatRes.ok ? chatRes.value : null;
   const trends = trendsRes.ok ? trendsRes.value : null;
   const topics = topicsRes.ok ? topicsRes.value : null;
@@ -176,502 +174,437 @@ export default async function AnalyticsPage() {
   const hasChat = chat != null && chat.total > 0;
 
   return (
-    <section className="flex flex-col gap-10">
+    <section className="flex flex-col gap-6">
       <h2 className="text-xl font-medium">Analytics</h2>
 
-      <section className="flex flex-col gap-4" data-testid="analytics-quality">
-        <h3 className="text-lg font-medium">Quality</h3>
+      <Tabs defaultValue="quality" className="w-full flex flex-col gap-6">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+          <TabsTrigger value="quality">Quality</TabsTrigger>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="behavior">Behavior</TabsTrigger>
+          <TabsTrigger value="feedback">Feedback</TabsTrigger>
+        </TabsList>
 
-        {hasChat ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <MetricCard label="Chat turns" value={num(chat.total)} />
-            <MetricCard label="Hallucination rate" value={pct(chat.hallucinationRate)} />
-            <MetricCard label="Out-of-domain rate" value={pct(chat.outOfDomainRate)} />
-            <MetricCard label="Cache hit rate" value={pct(chat.cacheHitRate)} />
-            <MetricCard label="Self-serve success" value={pct(chat.selfServeSuccessRate)} />
-          </div>
-        ) : null}
+        <TabsContent
+          value="quality"
+          forceMount
+          className="data-[state=inactive]:hidden flex flex-col gap-4"
+          data-testid="analytics-quality"
+        >
+          <h3 className="text-lg font-medium">Quality</h3>
 
-        {hasTrends ? (
-          <div
-            className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
-            data-testid="analytics-quality-trends"
-          >
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Hallucination rate</CardTitle>
-                <CardDescription>Weekly, threshold 5%.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart
-                  data={series((w) => w.hallucinationRate)}
-                  percentage
-                  threshold={0.05}
-                />
-              </CardContent>
-            </Card>
+          {hasChat ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <MetricCard label="Chat turns" value={num(chat.total)} />
+              <MetricCard label="Hallucination rate" value={pct(chat.hallucinationRate)} />
+              <MetricCard label="Out-of-domain rate" value={pct(chat.outOfDomainRate)} />
+              <MetricCard label="Cache hit rate" value={pct(chat.cacheHitRate)} />
+              <MetricCard label="Self-serve success" value={pct(chat.selfServeSuccessRate)} />
+            </div>
+          ) : null}
 
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Out-of-domain rate</CardTitle>
-                <CardDescription>Weekly coverage gap.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart data={series((w) => w.outOfDomainRate)} percentage />
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Avg similarity</CardTitle>
-                <CardDescription>Best-match cosine, weekly.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart
-                  data={series((w) => w.avgMaxSimilarity)}
-                  formatValue={(v) => v.toFixed(3)}
-                />
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Cache hit rate</CardTitle>
-                <CardDescription>Weekly cache warming.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart data={series((w) => w.cacheHitRate)} percentage />
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Self-serve success</CardTitle>
-                <CardDescription>Resolved without a ticket or gap.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Total latency</CardTitle>
-                <CardDescription>End-to-end p50 / p95, weekly.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground">p50</span>
-                  <LineChart data={series((w) => w.totalP50Ms)} valueSuffix=" ms" height={72} />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground">p95</span>
+          {hasTrends ? (
+            <div
+              className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
+              data-testid="analytics-quality-trends"
+            >
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Hallucination rate</CardTitle>
+                  <CardDescription>Weekly, threshold 5%.</CardDescription>
+                </CardHeader>
+                <CardContent>
                   <LineChart
-                    data={series((w) => w.totalP95Ms)}
-                    valueSuffix=" ms"
-                    height={72}
-                    className="text-foreground-subtle"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        ) : (
-          <Card className="gap-0">
-            <CardHeader className="gap-1">
-              <CardTitle>Trends</CardTitle>
-              <CardDescription>
-                No trend data yet. Weekly quality charts appear once the daily rollup has collected
-                history.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-4" data-testid="analytics-performance">
-        <h3 className="text-lg font-medium">Performance</h3>
-
-        {hasChat ? (
-          <>
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <Card className="gap-0">
-                <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Latency</CardTitle>
-                  <CardDescription>Retrieve vs generate, p50 / p95 (ms).</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <BarList
-                    unit="ms"
-                    items={[
-                      { label: 'Retrieve p50', value: chat.retrieveP50Ms },
-                      { label: 'Retrieve p95', value: chat.retrieveP95Ms },
-                      { label: 'Generate p50', value: chat.generateP50Ms },
-                      { label: 'Generate p95', value: chat.generateP95Ms },
-                      { label: 'Total p50', value: chat.totalP50Ms },
-                      { label: 'Total p95', value: chat.totalP95Ms },
-                    ]}
+                    data={series((w) => w.hallucinationRate)}
+                    percentage
+                    threshold={0.05}
                   />
                 </CardContent>
               </Card>
 
               <Card className="gap-0">
                 <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Cache-buster queries</CardTitle>
-                  <CardDescription>Repeatedly miss cache — candidates for new docs.</CardDescription>
+                  <CardTitle>Out-of-domain rate</CardTitle>
+                  <CardDescription>Weekly coverage gap.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {chat.cacheBusterQueries.length > 0 ? (
-                    <BarList
-                      unit=" misses"
-                      items={chat.cacheBusterQueries.map((q) => ({
-                        label: q.query,
-                        value: q.misses,
-                        barClassName: 'bg-foreground-subtle',
-                      }))}
+                  <LineChart data={series((w) => w.outOfDomainRate)} percentage />
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Avg similarity</CardTitle>
+                  <CardDescription>Best-match cosine, weekly.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <LineChart
+                    data={series((w) => w.avgMaxSimilarity)}
+                    formatValue={(v) => v.toFixed(3)}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Cache hit rate</CardTitle>
+                  <CardDescription>Weekly cache warming.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <LineChart data={series((w) => w.cacheHitRate)} percentage />
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Self-serve success</CardTitle>
+                  <CardDescription>Resolved without a ticket or gap.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Total latency</CardTitle>
+                  <CardDescription>End-to-end p50 / p95, weekly.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">p50</span>
+                    <LineChart data={series((w) => w.totalP50Ms)} valueSuffix=" ms" height={72} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">p95</span>
+                    <LineChart
+                      data={series((w) => w.totalP95Ms)}
+                      valueSuffix=" ms"
+                      height={72}
+                      className="text-foreground-subtle"
                     />
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No repeat cache misses.</p>
-                  )}
+                  </div>
                 </CardContent>
               </Card>
-            </div>
-
-            <div className="flex flex-col gap-2" data-testid="analytics-mode-comparison">
-              <h4 className="text-sm font-medium text-muted-foreground">Mode comparison</h4>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <MetricCard label="Agentic retry rate" value={pct(chat.agenticRetryRate)} />
-              </div>
-              {activeModes.length >= 2 ? (
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                  {activeModes.map((mode) => (
-                    <ModeComparisonCard key={mode.mode} mode={mode} />
-                  ))}
-                </div>
-              ) : (
-                <Card className="gap-0">
-                  <CardHeader className="gap-1">
-                    <CardTitle>Comparison unavailable</CardTitle>
-                    <CardDescription>
-                      Only {activeModes.length === 1 ? MODE_LABELS[activeModes[0]!.mode] : 'one'} mode
-                      has traffic. Set the retrieval mode rollout below 100% to collect A/B data.
-                    </CardDescription>
-                  </CardHeader>
-                </Card>
-              )}
-            </div>
-          </>
-        ) : (
-          <Card className="gap-0">
-            <CardHeader className="gap-1">
-              <CardTitle>Performance</CardTitle>
-              <CardDescription>No chat activity recorded yet.</CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-4" data-testid="analytics-behavior">
-        <h3 className="text-lg font-medium">Behavior</h3>
-
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="gap-0" data-testid="analytics-topic-coverage">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Topic coverage</CardTitle>
-              <CardDescription>Coverage and ticket rate per seeded topic.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              {topics && topics.topics.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Topic</TableHead>
-                      <TableHead className="text-right">Queries</TableHead>
-                      <TableHead className="text-right">Coverage</TableHead>
-                      <TableHead className="text-right">Ticket rate</TableHead>
-                      <TableHead className="text-right">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {topics.topics.map((t) => (
-                      <TableRow key={t.topic}>
-                        <TableCell className="font-medium text-foreground">{t.topic}</TableCell>
-                        <TableCell className="text-right tabular-nums">{num(t.queries)}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {t.queries > 0 ? pct(1 - t.oodRate) : '—'}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {t.queries > 0 ? pct(t.ticketRate) : '—'}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {t.frustrated ? (
-                            <Badge variant="destructive">Frustrated</Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-muted-foreground">No topic activity yet.</p>
-              )}
-              {topics && topics.unmatched > 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  {num(topics.unmatched)} queries matched no seeded topic.
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="gap-0" data-testid="analytics-stuck-sessions">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Stuck sessions</CardTitle>
-              <CardDescription>
-                Sessions with repeated turns and no resolution.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <span className="text-2xl font-semibold tabular-nums text-foreground">
-                {chat ? num(chat.stuckSessions.count) : '0'}
-              </span>
-              {chat && chat.stuckSessions.samples.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>User</TableHead>
-                      <TableHead className="text-right">Turns</TableHead>
-                      <TableHead className="text-right">Last activity</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {chat.stuckSessions.samples.map((s) => (
-                      <TableRow key={`${s.userId}-${s.sessionNo}`}>
-                        <TableCell className="font-mono text-xs text-foreground">
-                          {truncate(s.userId)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{num(s.turns)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {new Date(s.lastActivity).toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-muted-foreground">No stuck sessions detected.</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
-          <h4 className="text-sm font-medium text-muted-foreground">Ticket intelligence</h4>
-          {ticketIntel ? (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <Card className="gap-0" data-testid="analytics-ticket-volume">
-                <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Ticket volume</CardTitle>
-                  <CardDescription>Tickets created per week across the trend window.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {hasTrends ? (
-                    <LineChart data={series((w) => w.ticketsCreated)} />
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No trend data yet.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="gap-0" data-testid="analytics-turns-to-ticket">
-                <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Turns before a ticket</CardTitle>
-                  <CardDescription>Session turns up to the first ticket created.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {ticketIntel.turnsToTicket.ticketSessions > 0 ? (
-                    <div className="flex flex-col gap-3">
-                      <BarList
-                        items={ticketIntel.turnsToTicket.buckets.map((b) => ({
-                          label: b.label,
-                          value: b.count,
-                        }))}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Avg {ticketIntel.turnsToTicket.avgTurns} turns ·{' '}
-                        {num(ticketIntel.turnsToTicket.ticketSessions)} ticket sessions
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No ticket-creating sessions yet.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <div className="contents" data-testid="analytics-ticket-response-times">
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle>First response</CardTitle>
-                    <CardDescription>Median time to first status change.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {ticketIntel.responseTimes.respondedCount > 0 ? (
-                      <span className="text-2xl font-semibold tabular-nums text-foreground">
-                        {formatDuration(ticketIntel.responseTimes.medianFirstResponseMs)}
-                      </span>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No audit history of status changes yet.</p>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle>Resolution</CardTitle>
-                    <CardDescription>Median time to a closed status.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {ticketIntel.responseTimes.resolvedCount > 0 ? (
-                      <span className="text-2xl font-semibold tabular-nums text-foreground">
-                        {formatDuration(ticketIntel.responseTimes.medianResolutionMs)}
-                      </span>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No resolved tickets yet.</p>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
+            <Card className="gap-0">
+              <CardHeader className="gap-1">
+                <CardTitle>Trends</CardTitle>
+                <CardDescription>
+                  No trend data yet. Weekly quality charts appear once the daily rollup has collected
+                  history.
+                </CardDescription>
+              </CardHeader>
+            </Card>
           )}
-          <p className="text-xs text-muted-foreground">
-            Topic-level ticket rates are shown in the Topic coverage card above.
-          </p>
-        </div>
+        </TabsContent>
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="gap-0" data-testid="analytics-document-utility">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Document utility</CardTitle>
-              <CardDescription>
-                Retrieval volume, match quality, and ticket conversion per document.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {documents && documents.utility.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Document</TableHead>
-                      <TableHead className="text-right">Retrievals</TableHead>
-                      <TableHead className="text-right">p95 similarity</TableHead>
-                      <TableHead className="text-right">Ticket conversion</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {documents.utility.map((d) => (
-                      <TableRow key={d.documentId}>
-                        <TableCell className="font-medium text-foreground">
-                          {d.fileName ?? `Document #${d.documentId}`}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {num(d.retrievalCount)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {d.p95Similarity.toFixed(3)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {pct(d.ticketConversionRate)}
-                        </TableCell>
-                      </TableRow>
+        <TabsContent
+          value="performance"
+          forceMount
+          className="data-[state=inactive]:hidden flex flex-col gap-4"
+          data-testid="analytics-performance"
+        >
+          <h3 className="text-lg font-medium">Performance</h3>
+
+          {hasChat ? (
+            <>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>Latency</CardTitle>
+                    <CardDescription>Retrieve vs generate, p50 / p95 (ms).</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <BarList
+                      unit="ms"
+                      items={[
+                        { label: 'Retrieve p50', value: chat.retrieveP50Ms },
+                        { label: 'Retrieve p95', value: chat.retrieveP95Ms },
+                        { label: 'Generate p50', value: chat.generateP50Ms },
+                        { label: 'Generate p95', value: chat.generateP95Ms },
+                        { label: 'Total p50', value: chat.totalP50Ms },
+                        { label: 'Total p95', value: chat.totalP95Ms },
+                      ]}
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>Cache-buster queries</CardTitle>
+                    <CardDescription>Repeatedly miss cache — candidates for new docs.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {chat.cacheBusterQueries.length > 0 ? (
+                      <BarList
+                        unit=" misses"
+                        items={chat.cacheBusterQueries.map((q) => ({
+                          label: q.query,
+                          value: q.misses,
+                          barClassName: 'bg-foreground-subtle',
+                        }))}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No repeat cache misses.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="flex flex-col gap-2" data-testid="analytics-mode-comparison">
+                <h4 className="text-sm font-medium text-muted-foreground">Mode comparison</h4>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <MetricCard label="Agentic retry rate" value={pct(chat.agenticRetryRate)} />
+                </div>
+                {activeModes.length >= 2 ? (
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {activeModes.map((mode) => (
+                      <ModeComparisonCard key={mode.mode} mode={mode} />
                     ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  No document references yet. Populates as new chats reference documents.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+                  </div>
+                ) : (
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1">
+                      <CardTitle>Comparison unavailable</CardTitle>
+                      <CardDescription>
+                        Only {activeModes.length === 1 ? MODE_LABELS[activeModes[0]!.mode] : 'one'} mode
+                        has traffic. Set the retrieval mode rollout below 100% to collect A/B data.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                )}
+              </div>
+            </>
+          ) : (
+            <Card className="gap-0">
+              <CardHeader className="gap-1">
+                <CardTitle>Performance</CardTitle>
+                <CardDescription>No chat activity recorded yet.</CardDescription>
+              </CardHeader>
+            </Card>
+          )}
+        </TabsContent>
 
-          <Card className="gap-0" data-testid="analytics-zero-hit-documents">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Zero-hit documents</CardTitle>
-              <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {documents && documents.zeroHit.length > 0 ? (
-                <ul className="flex flex-col gap-2">
-                  {documents.zeroHit.map((d) => (
-                    <li
-                      key={d.documentId}
-                      className="flex items-center justify-between gap-3 text-sm"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span
-                          className="size-1.5 shrink-0 rounded-full bg-destructive/70"
-                          aria-hidden="true"
-                        />
-                        <span className="truncate font-medium text-foreground">
-                          {d.fileName ?? `Document #${d.documentId}`}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {new Date(d.createdAt).toLocaleDateString()}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <TabsContent
+          value="behavior"
+          forceMount
+          className="data-[state=inactive]:hidden flex flex-col gap-4"
+          data-testid="analytics-behavior"
+        >
+          <h3 className="text-lg font-medium">Behavior</h3>
 
-        <div className="flex flex-col gap-2" data-testid="analytics-feedback">
-          <h4 className="text-sm font-medium text-muted-foreground">Feedback</h4>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <MetricCard
-              label="👍 Helpful"
-              value={feedback ? num(feedback.summary.up) : '0'}
-            />
-            <MetricCard
-              label="👎 Unhelpful"
-              value={feedback ? num(feedback.summary.down) : '0'}
-            />
-            <MetricCard label="Feedback rate" value={pct(feedbackRate)} />
-          </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Card className="gap-0" data-testid="analytics-document-sentiment">
+            <Card className="gap-0" data-testid="analytics-topic-coverage">
               <CardHeader className="gap-1 pb-4">
-                <CardTitle>Document sentiment</CardTitle>
-                <CardDescription>Votes on answers that cited each document.</CardDescription>
+                <CardTitle>Topic coverage</CardTitle>
+                <CardDescription>Coverage and ticket rate per seeded topic.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {topics && topics.topics.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Topic</TableHead>
+                        <TableHead className="text-right">Queries</TableHead>
+                        <TableHead className="text-right">Coverage</TableHead>
+                        <TableHead className="text-right">Ticket rate</TableHead>
+                        <TableHead className="text-right">Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {topics.topics.map((t) => (
+                        <TableRow key={t.topic}>
+                          <TableCell className="font-medium text-foreground">{t.topic}</TableCell>
+                          <TableCell className="text-right tabular-nums">{num(t.queries)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {t.queries > 0 ? pct(1 - t.oodRate) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {t.queries > 0 ? pct(t.ticketRate) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {t.frustrated ? (
+                              <Badge variant="destructive">Frustrated</Badge>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No topic activity yet.</p>
+                )}
+                {topics && topics.unmatched > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {num(topics.unmatched)} queries matched no seeded topic.
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="gap-0" data-testid="analytics-stuck-sessions">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Stuck sessions</CardTitle>
+                <CardDescription>
+                  Sessions with repeated turns and no resolution.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <span className="text-2xl font-semibold tabular-nums text-foreground">
+                  {chat ? num(chat.stuckSessions.count) : '0'}
+                </span>
+                {chat && chat.stuckSessions.samples.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>User</TableHead>
+                        <TableHead className="text-right">Turns</TableHead>
+                        <TableHead className="text-right">Last activity</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {chat.stuckSessions.samples.map((s) => (
+                        <TableRow key={`${s.userId}-${s.sessionNo}`}>
+                          <TableCell className="font-mono text-xs text-foreground">
+                            {truncate(s.userId)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{num(s.turns)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {new Date(s.lastActivity).toLocaleString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No stuck sessions detected.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
+            <h4 className="text-sm font-medium text-muted-foreground">Ticket intelligence</h4>
+            {ticketIntel ? (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <Card className="gap-0" data-testid="analytics-ticket-volume">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>Ticket volume</CardTitle>
+                    <CardDescription>Tickets created per week across the trend window.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {hasTrends ? (
+                      <LineChart data={series((w) => w.ticketsCreated)} />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No trend data yet.</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0" data-testid="analytics-turns-to-ticket">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle>Turns before a ticket</CardTitle>
+                    <CardDescription>Session turns up to the first ticket created.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {ticketIntel.turnsToTicket.ticketSessions > 0 ? (
+                      <div className="flex flex-col gap-3">
+                        <BarList
+                          items={ticketIntel.turnsToTicket.buckets.map((b) => ({
+                            label: b.label,
+                            value: b.count,
+                          }))}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Avg {ticketIntel.turnsToTicket.avgTurns} turns ·{' '}
+                          {num(ticketIntel.turnsToTicket.ticketSessions)} ticket sessions
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No ticket-creating sessions yet.</p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <div className="contents" data-testid="analytics-ticket-response-times">
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1 pb-4">
+                      <CardTitle>First response</CardTitle>
+                      <CardDescription>Median time to first status change.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {ticketIntel.responseTimes.respondedCount > 0 ? (
+                        <span className="text-2xl font-semibold tabular-nums text-foreground">
+                          {formatDuration(ticketIntel.responseTimes.medianFirstResponseMs)}
+                        </span>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No audit history of status changes yet.</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1 pb-4">
+                      <CardTitle>Resolution</CardTitle>
+                      <CardDescription>Median time to a closed status.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {ticketIntel.responseTimes.resolvedCount > 0 ? (
+                        <span className="text-2xl font-semibold tabular-nums text-foreground">
+                          {formatDuration(ticketIntel.responseTimes.medianResolutionMs)}
+                        </span>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No resolved tickets yet.</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Topic-level ticket rates are shown in the Topic coverage card above.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Card className="gap-0" data-testid="analytics-document-utility">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Document utility</CardTitle>
+                <CardDescription>
+                  Retrieval volume, match quality, and ticket conversion per document.
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {feedback && feedback.documentSentiment.length > 0 ? (
+                {documents && documents.utility.length > 0 ? (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Document</TableHead>
-                        <TableHead className="text-right">👍</TableHead>
-                        <TableHead className="text-right">👎</TableHead>
-                        <TableHead className="text-right">Positive</TableHead>
+                        <TableHead className="text-right">Retrievals</TableHead>
+                        <TableHead className="text-right">p95 similarity</TableHead>
+                        <TableHead className="text-right">Ticket conversion</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {feedback.documentSentiment.map((d) => (
+                      {documents.utility.map((d) => (
                         <TableRow key={d.documentId}>
                           <TableCell className="font-medium text-foreground">
                             {d.fileName ?? `Document #${d.documentId}`}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">{num(d.up)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{num(d.down)}</TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {d.up + d.down > 0 ? pct(d.up / (d.up + d.down)) : '—'}
+                            {num(d.retrievalCount)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {d.p95Similarity.toFixed(3)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {pct(d.ticketConversionRate)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -679,111 +612,204 @@ export default async function AnalyticsPage() {
                   </Table>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    No feedback yet. Votes appear as users rate answers.
+                    No document references yet. Populates as new chats reference documents.
                   </p>
                 )}
               </CardContent>
             </Card>
 
-            <Card className="gap-0" data-testid="analytics-thumbs-down-docs">
+            <Card className="gap-0" data-testid="analytics-zero-hit-documents">
               <CardHeader className="gap-1 pb-4">
-                <CardTitle>Thumbs-down hot docs</CardTitle>
-                <CardDescription>
-                  Cited most often in negative feedback — review for accuracy.
-                </CardDescription>
+                <CardTitle>Zero-hit documents</CardTitle>
+                <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
               </CardHeader>
               <CardContent>
-                {feedback && feedback.thumbsDownDocs.length > 0 ? (
-                  <BarList
-                    unit=" 👎"
-                    items={feedback.thumbsDownDocs.map((d) => ({
-                      label: d.fileName ?? `Document #${d.documentId}`,
-                      value: d.down,
-                      barClassName: 'bg-destructive/70',
-                    }))}
-                  />
+                {documents && documents.zeroHit.length > 0 ? (
+                  <ul className="flex flex-col gap-2">
+                    {documents.zeroHit.map((d) => (
+                      <li
+                        key={d.documentId}
+                        className="flex items-center justify-between gap-3 text-sm"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            className="size-1.5 shrink-0 rounded-full bg-destructive/70"
+                            aria-hidden="true"
+                          />
+                          <span className="truncate font-medium text-foreground">
+                            {d.fileName ?? `Document #${d.documentId}`}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {new Date(d.createdAt).toLocaleDateString()}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No thumbs-down votes recorded.</p>
+                  <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
                 )}
               </CardContent>
             </Card>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Top queries</CardTitle>
-              <CardDescription>Most frequent questions.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {summary && summary.topQueries.length > 0 ? (
-                <BarList items={summary.topQueries.map((q) => ({ label: q.q, value: q.count }))} />
-              ) : (
-                <p className="text-sm text-muted-foreground">No queries recorded yet.</p>
-              )}
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Card className="gap-0">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Top queries</CardTitle>
+                <CardDescription>Most frequent questions.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {summary && summary.topQueries.length > 0 ? (
+                  <BarList items={summary.topQueries.map((q) => ({ label: q.q, value: q.count }))} />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No queries recorded yet.</p>
+                )}
+              </CardContent>
+            </Card>
 
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Top zero-result queries</CardTitle>
-              <CardDescription>Questions that returned no matching docs.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {chat && chat.topZeroResultQueries.length > 0 ? (
-                <BarList
-                  items={chat.topZeroResultQueries.map((q) => ({
-                    label: q.q,
-                    value: q.count,
-                    barClassName: 'bg-foreground-subtle',
-                  }))}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">No zero-result queries.</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+            <Card className="gap-0">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Top zero-result queries</CardTitle>
+                <CardDescription>Questions that returned no matching docs.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {chat && chat.topZeroResultQueries.length > 0 ? (
+                  <BarList
+                    items={chat.topZeroResultQueries.map((q) => ({
+                      label: q.q,
+                      value: q.count,
+                      barClassName: 'bg-foreground-subtle',
+                    }))}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No zero-result queries.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Usage</CardTitle>
-              <CardDescription>Chat turns over the last 7 days.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {chat ? (
-                <ActivityBars
-                  buckets={chat.usageOverTime.map((d) => ({
-                    label: d.day.slice(5),
-                    value: d.total,
-                  }))}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
-              )}
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Card className="gap-0">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Usage</CardTitle>
+                <CardDescription>Chat turns over the last 7 days.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {chat ? (
+                  <ActivityBars
+                    buckets={chat.usageOverTime.map((d) => ({
+                      label: d.day.slice(5),
+                      value: d.total,
+                    }))}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
+                )}
+              </CardContent>
+            </Card>
 
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Token cost</CardTitle>
-              <CardDescription>Estimated spend and token throughput.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <MetricCard label="Est. cost" value={chat ? usd(chat.estimatedCostUsd) : usd(0)} />
-              <MetricCard label="Tokens in" value={chat ? num(chat.tokensIn) : '0'} />
-              <MetricCard label="Tokens out" value={chat ? num(chat.tokensOut) : '0'} />
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+            <Card className="gap-0">
+              <CardHeader className="gap-1 pb-4">
+                <CardTitle>Token cost</CardTitle>
+                <CardDescription>Estimated spend and token throughput.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <MetricCard label="Est. cost" value={chat ? usd(chat.estimatedCostUsd) : usd(0)} />
+                <MetricCard label="Tokens in" value={chat ? num(chat.tokensIn) : '0'} />
+                <MetricCard label="Tokens out" value={chat ? num(chat.tokensOut) : '0'} />
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
 
-      <div className="flex flex-col gap-2">
-        <h3 className="text-lg font-medium">Recent activity</h3>
-        <AuditEventList events={audit.events} testId="analytics-recent-activity" />
-      </div>
+        <TabsContent
+          value="feedback"
+          forceMount
+          className="data-[state=inactive]:hidden flex flex-col gap-4"
+          data-testid="analytics-feedback"
+        >
+          <h3 className="text-lg font-medium">Feedback</h3>
+
+          <div className="flex flex-col gap-2">
+            <h4 className="text-sm font-medium text-muted-foreground">Feedback</h4>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <MetricCard
+                label="👍 Helpful"
+                value={feedback ? num(feedback.summary.up) : '0'}
+              />
+              <MetricCard
+                label="👎 Unhelpful"
+                value={feedback ? num(feedback.summary.down) : '0'}
+              />
+              <MetricCard label="Feedback rate" value={pct(feedbackRate)} />
+            </div>
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Card className="gap-0" data-testid="analytics-document-sentiment">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Document sentiment</CardTitle>
+                  <CardDescription>Votes on answers that cited each document.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {feedback && feedback.documentSentiment.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Document</TableHead>
+                          <TableHead className="text-right">👍</TableHead>
+                          <TableHead className="text-right">👎</TableHead>
+                          <TableHead className="text-right">Positive</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {feedback.documentSentiment.map((d) => (
+                          <TableRow key={d.documentId}>
+                            <TableCell className="font-medium text-foreground">
+                              {d.fileName ?? `Document #${d.documentId}`}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{num(d.up)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{num(d.down)}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {d.up + d.down > 0 ? pct(d.up / (d.up + d.down)) : '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No feedback yet. Votes appear as users rate answers.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0" data-testid="analytics-thumbs-down-docs">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Thumbs-down hot docs</CardTitle>
+                  <CardDescription>
+                    Cited most often in negative feedback — review for accuracy.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {feedback && feedback.thumbsDownDocs.length > 0 ? (
+                    <BarList
+                      unit=" 👎"
+                      items={feedback.thumbsDownDocs.map((d) => ({
+                        label: d.fileName ?? `Document #${d.documentId}`,
+                        value: d.down,
+                        barClassName: 'bg-destructive/70',
+                      }))}
+                    />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No thumbs-down votes recorded.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }
