@@ -185,7 +185,7 @@ export default async function AnalyticsPage() {
         <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
           <TabsTrigger value="quality">Statistics</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
-          <TabsTrigger value="behavior">Behavior</TabsTrigger>
+          <TabsTrigger value="tickets">Tickets</TabsTrigger>
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
         </TabsList>
 
@@ -198,11 +198,10 @@ export default async function AnalyticsPage() {
           <h3 className="text-lg font-medium">Statistics</h3>
 
           {hasChat ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <MetricCard label="Chat turns" value={num(chat.total)} />
               <MetricCard label="Hallucination rate" value={pct(chat.hallucinationRate)} />
               <MetricCard label="Out-of-domain rate" value={pct(chat.outOfDomainRate)} />
-              <MetricCard label="Cache hit rate" value={pct(chat.cacheHitRate)} />
               <MetricCard label="Self-serve success" value={pct(chat.selfServeSuccessRate)} />
             </div>
           ) : null}
@@ -221,7 +220,7 @@ export default async function AnalyticsPage() {
 
           {hasTrends ? (
             <div
-              className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
+              className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
               data-testid="analytics-quality-trends"
             >
               <Card className="gap-0">
@@ -263,16 +262,6 @@ export default async function AnalyticsPage() {
 
               <Card className="gap-0">
                 <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Cache hit rate</CardTitle>
-                  <CardDescription>Weekly cache warming.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <LineChart data={series((w) => w.cacheHitRate)} percentage />
-                </CardContent>
-              </Card>
-
-              <Card className="gap-0">
-                <CardHeader className="gap-1 pb-4">
                   <CardTitle>Self-serve success</CardTitle>
                   <CardDescription>Resolved without a ticket or gap.</CardDescription>
                 </CardHeader>
@@ -283,23 +272,11 @@ export default async function AnalyticsPage() {
 
               <Card className="gap-0">
                 <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Total latency</CardTitle>
-                  <CardDescription>End-to-end p50 / p95, weekly.</CardDescription>
+                  <CardTitle>Self-serve success</CardTitle>
+                  <CardDescription>Resolved without a ticket or gap.</CardDescription>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">p50</span>
-                    <LineChart data={series((w) => w.totalP50Ms)} valueSuffix=" ms" height={72} />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">p95</span>
-                    <LineChart
-                      data={series((w) => w.totalP95Ms)}
-                      valueSuffix=" ms"
-                      height={72}
-                      className="text-foreground-subtle"
-                    />
-                  </div>
+                <CardContent>
+                  <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
                 </CardContent>
               </Card>
             </div>
@@ -314,6 +291,25 @@ export default async function AnalyticsPage() {
               </CardHeader>
             </Card>
           )}
+
+          <Card className="gap-0">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle>Usage</CardTitle>
+              <CardDescription>Chat turns over the last 7 days.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {chat ? (
+                <ActivityBars
+                  buckets={chat.usageOverTime.map((d) => ({
+                    label: d.day.slice(5),
+                    value: d.total,
+                  }))}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent
@@ -326,6 +322,11 @@ export default async function AnalyticsPage() {
 
           {hasChat ? (
             <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <MetricCard label="Cache hit rate" value={pct(chat.cacheHitRate)} />
+                <MetricCard label="Agentic retry rate" value={pct(chat.agenticRetryRate)} />
+              </div>
+
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                 <Card className="gap-0">
                   <CardHeader className="gap-1 pb-4">
@@ -371,9 +372,6 @@ export default async function AnalyticsPage() {
 
               <div className="flex flex-col gap-2" data-testid="analytics-mode-comparison">
                 <h4 className="text-sm font-medium text-muted-foreground">Mode comparison</h4>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <MetricCard label="Agentic retry rate" value={pct(chat.agenticRetryRate)} />
-                </div>
                 {activeModes.length >= 2 ? (
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                     {activeModes.map((mode) => (
@@ -392,6 +390,52 @@ export default async function AnalyticsPage() {
                   </Card>
                 )}
               </div>
+
+              {hasTrends ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1 pb-4">
+                      <CardTitle>Cache hit rate</CardTitle>
+                      <CardDescription>Weekly cache warming.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <LineChart data={series((w) => w.cacheHitRate)} percentage />
+                    </CardContent>
+                  </Card>
+
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1 pb-4">
+                      <CardTitle>Total latency</CardTitle>
+                      <CardDescription>End-to-end p50 / p95, weekly.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground">p50</span>
+                        <LineChart data={series((w) => w.totalP50Ms)} valueSuffix=" ms" height={72} />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground">p95</span>
+                        <LineChart
+                          data={series((w) => w.totalP95Ms)}
+                          valueSuffix=" ms"
+                          height={72}
+                          className="text-foreground-subtle"
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              ) : (
+                <Card className="gap-0">
+                  <CardHeader className="gap-1">
+                    <CardTitle>Trends</CardTitle>
+                    <CardDescription>
+                      No trend data yet. Weekly performance charts appear once the daily rollup has
+                      collected history.
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+              )}
             </>
           ) : (
             <Card className="gap-0">
@@ -404,12 +448,12 @@ export default async function AnalyticsPage() {
         </TabsContent>
 
         <TabsContent
-          value="behavior"
+          value="tickets"
           forceMount
           className="data-[state=inactive]:hidden flex flex-col gap-4"
-          data-testid="analytics-behavior"
+          data-testid="analytics-tickets"
         >
-          <h3 className="text-lg font-medium">Behavior</h3>
+          <h3 className="text-lg font-medium">Tickets</h3>
 
           <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
             <h4 className="text-sm font-medium text-muted-foreground">Ticket intelligence</h4>
@@ -492,106 +536,6 @@ export default async function AnalyticsPage() {
               <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
             )}
           </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Card className="gap-0" data-testid="analytics-document-utility">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Document utility</CardTitle>
-                <CardDescription>
-                  Retrieval volume, match quality, and ticket conversion per document.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {documents && documents.utility.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Document</TableHead>
-                        <TableHead className="text-right">Retrievals</TableHead>
-                        <TableHead className="text-right">p95 similarity</TableHead>
-                        <TableHead className="text-right">Ticket conversion</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {documents.utility.map((d) => (
-                        <TableRow key={d.documentId}>
-                          <TableCell className="font-medium text-foreground">
-                            {d.fileName ?? `Document #${d.documentId}`}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {num(d.retrievalCount)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {d.p95Similarity.toFixed(3)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {pct(d.ticketConversionRate)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No document references yet. Populates as new chats reference documents.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0" data-testid="analytics-zero-hit-documents">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Zero-hit documents</CardTitle>
-                <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {documents && documents.zeroHit.length > 0 ? (
-                  <ul className="flex flex-col gap-2">
-                    {documents.zeroHit.map((d) => (
-                      <li
-                        key={d.documentId}
-                        className="flex items-center justify-between gap-3 text-sm"
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span
-                            className="size-1.5 shrink-0 rounded-full bg-destructive/70"
-                            aria-hidden="true"
-                          />
-                          <span className="truncate font-medium text-foreground">
-                            {d.fileName ?? `Document #${d.documentId}`}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                          {new Date(d.createdAt).toLocaleDateString()}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Usage</CardTitle>
-              <CardDescription>Chat turns over the last 7 days.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {chat ? (
-                <ActivityBars
-                  buckets={chat.usageOverTime.map((d) => ({
-                    label: d.day.slice(5),
-                    value: d.total,
-                  }))}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent
@@ -679,6 +623,87 @@ export default async function AnalyticsPage() {
                     />
                   ) : (
                     <p className="text-sm text-muted-foreground">No thumbs-down votes recorded.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Card className="gap-0" data-testid="analytics-document-utility">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Document utility</CardTitle>
+                  <CardDescription>
+                    Retrieval volume, match quality, and ticket conversion per document.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {documents && documents.utility.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Document</TableHead>
+                          <TableHead className="text-right">Retrievals</TableHead>
+                          <TableHead className="text-right">p95 similarity</TableHead>
+                          <TableHead className="text-right">Ticket conversion</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {documents.utility.map((d) => (
+                          <TableRow key={d.documentId}>
+                            <TableCell className="font-medium text-foreground">
+                              {d.fileName ?? `Document #${d.documentId}`}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {num(d.retrievalCount)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {d.p95Similarity.toFixed(3)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {pct(d.ticketConversionRate)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No document references yet. Populates as new chats reference documents.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0" data-testid="analytics-zero-hit-documents">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle>Zero-hit documents</CardTitle>
+                  <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {documents && documents.zeroHit.length > 0 ? (
+                    <ul className="flex flex-col gap-2">
+                      {documents.zeroHit.map((d) => (
+                        <li
+                          key={d.documentId}
+                          className="flex items-center justify-between gap-3 text-sm"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              className="size-1.5 shrink-0 rounded-full bg-destructive/70"
+                              aria-hidden="true"
+                            />
+                            <span className="truncate font-medium text-foreground">
+                              {d.fileName ?? `Document #${d.documentId}`}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                            {new Date(d.createdAt).toLocaleDateString()}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
                   )}
                 </CardContent>
               </Card>

@@ -167,24 +167,25 @@ for detailed sign-up links and per-service walkthroughs.
   race conditions on concurrent creation.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
-- **`/admin/analytics`** — Organised into a Quality / Performance / Behavior
-  hierarchy over per-turn `chat_events` plus the `chat_daily_stats`
+- **`/admin/analytics`** — Organised into a Statistics / Performance / Feedback /
+  Tickets hierarchy over per-turn `chat_events` plus the `chat_daily_stats`
   materialized view:
-  - **Quality** — stat cards (chat turns, hallucination-blocked, out-of-domain,
-    cache-hit, self-serve success) and a 12-week trend grid (hallucination with
-    a 5% threshold marker, OOD, avg similarity, cache hit, self-serve success,
-    latency p50/p95) rendered with hand-rolled SVG `LineChart`s.
-  - **Performance** — latency `BarList` (retrieve / generate / total p50 + p95),
-    agentic-vs-vector mode comparison cards (cost, similarity, ticket /
+  - **Statistics** — stat cards (chat turns, hallucination-blocked, out-of-domain,
+    self-serve success) and a 12-week trend grid (hallucination with a 5% threshold
+    marker, OOD, avg similarity, self-serve success) rendered with hand-rolled SVG
+    `LineChart`s, plus the token-cost panel and a 7-day usage `ActivityBars`.
+  - **Performance** — cache-hit rate stat + weekly trend, latency `BarList`
+    (retrieve / generate / total p50 + p95) with a weekly total-latency p50/p95
+    trend, agentic-vs-vector mode comparison cards (cost, similarity, ticket /
     hallucination rates, latency, query-length buckets — populated once
     `retrievalModeRolloutPercent` < 100), agentic-retry rate, and the top-5
     cache-buster queries.
-  - **Behavior** — document utility (retrievals, p95 similarity, ticket
-    conversion via `meta.documentIds`), zero-hit documents, 👍/👎 feedback
-    (rate, per-document sentiment, thumbs-down hot docs), ticket intelligence
-    (weekly volume, turns-to-ticket distribution, first-response / resolution
-    medians derived from audit events), 7-day usage `ActivityBars`, and
-    estimated token cost.
+  - **Feedback** — 👍/👎 vote summary (helpful, unhelpful, feedback rate),
+    per-document sentiment and thumbs-down hot docs, plus document utility
+    (retrievals, p95 similarity, ticket conversion via `meta.documentIds`) and
+    zero-hit documents.
+  - **Tickets** — ticket intelligence (weekly volume, turns-to-ticket
+    distribution, first-response / resolution medians derived from audit events).
 
   Graceful empty states throughout when no chat data exists. Chat users can
   vote 👍/👎 under any assistant answer; votes land in `chat_feedback` keyed
