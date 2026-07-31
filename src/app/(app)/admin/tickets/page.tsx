@@ -109,7 +109,7 @@ export default async function TicketsPage({
           </div>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border-subtle">
+        <div className="overflow-x-auto rounded-xl border border-border">
           <Table data-testid="tickets-table" aria-label="Tickets">
             <TableHeader>
               <TableRow>
@@ -179,8 +179,11 @@ export default async function TicketsPage({
                       ) : null}
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-md">
-                    <span className="line-clamp-2 text-sm text-muted-foreground">
+                  <TableCell className="max-w-52">
+                    <span
+                      className="block truncate text-sm text-muted-foreground"
+                      title={t.issue}
+                    >
                       {t.issue}
                     </span>
                   </TableCell>
@@ -192,11 +195,13 @@ export default async function TicketsPage({
                       {t.status.replace('_', ' ')}
                     </Badge>
                   </TableCell>
-                  <TableCell
-                    className="hidden truncate text-sm text-muted-foreground md:table-cell"
-                    title={t.assignedTo ?? undefined}
-                  >
-                    {t.assignedTo ?? '—'}
+                  <TableCell className="hidden md:table-cell">
+                    <span
+                      className="block max-w-40 truncate text-sm text-muted-foreground"
+                      title={t.assignedTo ?? undefined}
+                    >
+                      {t.assignedTo ?? '—'}
+                    </span>
                   </TableCell>
                   <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums md:table-cell">
                     <time dateTime={t.createdAt.toISOString()} title={t.createdAt.toISOString()}>

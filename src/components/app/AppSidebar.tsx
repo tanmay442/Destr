@@ -62,8 +62,8 @@ export function AppSidebar({
   const { signOut } = useClerk();
 
   const onAdmin = pathname?.startsWith('/admin') ?? false;
-  const [adminToggled, setAdminToggled] = useState<boolean>(false);
-  const adminOpen = onAdmin || adminToggled;
+  const [adminToggled, setAdminToggled] = useState<boolean | null>(null);
+  const adminOpen = adminToggled ?? onAdmin;
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
   const handleNavigate = () => {
@@ -71,7 +71,7 @@ export function AppSidebar({
   };
 
   const toggleAdmin = () => {
-    setAdminToggled((open) => !open);
+    setAdminToggled((open) => !(open ?? onAdmin));
   };
 
   const isActive = (href: string) => {

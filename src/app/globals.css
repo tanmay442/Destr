@@ -86,35 +86,35 @@
   }
 }
 
+@utility animate-in {
+  animation: var(--animate-in);
+}
+@utility animate-out {
+  animation: var(--animate-out);
+}
+
+@utility fade-in-0 { --tw-enter-opacity: 0; }
+@utility fade-out-0 { --tw-exit-opacity: 0; }
+
+@utility zoom-in-95 { --tw-enter-scale: 0.95; }
+@utility zoom-out-95 { --tw-exit-scale: 0.95; }
+
+@utility slide-in-from-top { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-bottom { --tw-enter-translate-y: 100%; }
+@utility slide-in-from-left { --tw-enter-translate-x: -100%; }
+@utility slide-in-from-right { --tw-enter-translate-x: 100%; }
+
+@utility slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
+@utility slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
+@utility slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
+@utility slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
+
+@utility slide-out-to-top { --tw-exit-translate-y: -100%; }
+@utility slide-out-to-bottom { --tw-exit-translate-y: 100%; }
+@utility slide-out-to-left { --tw-exit-translate-x: -100%; }
+@utility slide-out-to-right { --tw-exit-translate-x: 100%; }
+
 @layer utilities {
-  .animate-in {
-    animation: var(--animate-in);
-  }
-  .animate-out {
-    animation: var(--animate-out);
-  }
-
-  .fade-in-0 { --tw-enter-opacity: 0; }
-  .fade-out-0 { --tw-exit-opacity: 0; }
-
-  .zoom-in-95 { --tw-enter-scale: 0.95; }
-  .zoom-out-95 { --tw-exit-scale: 0.95; }
-
-  .slide-in-from-top { --tw-enter-translate-y: -100%; }
-  .slide-in-from-bottom { --tw-enter-translate-y: 100%; }
-  .slide-in-from-left { --tw-enter-translate-x: -100%; }
-  .slide-in-from-right { --tw-enter-translate-x: 100%; }
-
-  .slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
-  .slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
-  .slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
-  .slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
-
-  .slide-out-to-top { --tw-exit-translate-y: -100%; }
-  .slide-out-to-bottom { --tw-exit-translate-y: 100%; }
-  .slide-out-to-left { --tw-exit-translate-x: -100%; }
-  .slide-out-to-right { --tw-exit-translate-x: 100%; }
-
   /* Duration helpers used by the shadcn data-state variants */
   .duration-150 { animation-duration: 150ms; }
   .duration-200 { animation-duration: 200ms; }

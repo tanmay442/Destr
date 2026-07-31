@@ -98,7 +98,7 @@ export default async function DocumentsPage({
         </form>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border-subtle">
+      <div className="overflow-x-auto rounded-xl border border-border">
         <Table data-testid="documents-table" aria-label="Documents">
           <TableHeader>
             <TableRow>
