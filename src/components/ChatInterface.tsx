@@ -279,7 +279,7 @@ export function ChatInterface() {
                 </div>
               </div>
 
-              <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="hidden w-full max-w-2xl grid-cols-1 gap-2 sm:grid sm:grid-cols-2">
                 {QUICK_PROMPTS.map((q) => (
                   <button
                     key={q.label}

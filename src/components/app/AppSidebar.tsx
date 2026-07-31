@@ -227,7 +227,7 @@ function SidebarBody({
               onClick={toggleAdmin}
               aria-expanded={adminOpen}
               className={cn(
-                'w-full justify-start gap-2.5 rounded-lg px-3 transition-colors duration-150',
+                'w-full justify-start gap-2.5 rounded-lg px-3',
                 isActive('/admin')
                   ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
                   : 'text-muted-foreground hover:bg-card hover:text-foreground',
@@ -238,7 +238,7 @@ function SidebarBody({
               <span className="flex-1 text-left">Admin</span>
               <ChevronRight
                 className={cn(
-                  'text-foreground-subtle transition-transform duration-200 ease-out',
+                  'text-foreground-subtle transition-transform duration-200',
                   adminOpen && 'rotate-90',
                 )}
                 aria-hidden
@@ -247,7 +247,7 @@ function SidebarBody({
 
             {adminOpen ? (
               <ul
-                className="mt-1 ml-3 flex animate-in flex-col gap-0.5 border-l border-border-subtle pl-2 fade-in-0 slide-in-from-top duration-200"
+                className="mt-1 ml-3 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
                 data-testid="app-sidebar-admin-list"
               >
                 {ADMIN_LINKS.map((link) => {
@@ -259,7 +259,7 @@ function SidebarBody({
                         variant="ghost"
                         size="sm"
                         className={cn(
-                          'h-auto w-full justify-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors duration-150',
+                          'h-auto w-full justify-start gap-2.5 rounded-lg px-2.5 py-1.5',
                           isActive(link.href)
                             ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
                             : 'text-muted-foreground hover:bg-card hover:text-foreground',
@@ -355,7 +355,7 @@ function NavItem({
       variant="ghost"
       size="sm"
       className={cn(
-        'w-full justify-start gap-2.5 rounded-lg px-3 transition-colors duration-150',
+        'w-full justify-start gap-2.5 rounded-lg px-3',
         active
           ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
           : 'text-muted-foreground hover:bg-card hover:text-foreground',
