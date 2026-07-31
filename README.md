@@ -179,15 +179,12 @@ for detailed sign-up links and per-service walkthroughs.
     hallucination rates, latency, query-length buckets — populated once
     `retrievalModeRolloutPercent` < 100), agentic-retry rate, and the top-5
     cache-buster queries.
-  - **Behavior** — seeded keyword topic coverage (OOD + ticket rate with
-    frustration flags, configurable via `analyticsTopics`), stuck sessions
-    (5+ turns, no ticket, 30-min gap sessionization), document utility
-    (retrievals, p95 similarity, ticket conversion via `meta.documentIds`),
-    zero-hit documents, 👍/👎 feedback (rate, per-document sentiment,
-    thumbs-down hot docs), ticket intelligence (weekly volume, turns-to-ticket
-    distribution, first-response / resolution medians derived from audit
-    events), Top Queries (still powered by `QueryStats`), top zero-result
-    queries, 7-day usage `ActivityBars`, and estimated token cost.
+  - **Behavior** — document utility (retrievals, p95 similarity, ticket
+    conversion via `meta.documentIds`), zero-hit documents, 👍/👎 feedback
+    (rate, per-document sentiment, thumbs-down hot docs), ticket intelligence
+    (weekly volume, turns-to-ticket distribution, first-response / resolution
+    medians derived from audit events), 7-day usage `ActivityBars`, and
+    estimated token cost.
 
   Graceful empty states throughout when no chat data exists. Chat users can
   vote 👍/👎 under any assistant answer; votes land in `chat_feedback` keyed
@@ -277,9 +274,6 @@ Key tables (Drizzle on Postgres + pgvector):
   authenticated with `CRON_SECRET`; admins can also trigger it via `POST`).
 - `audit_dead_letter` — captures failed audit writes for replay.
 
-`QueryStats` is retained and still powers the "Top Queries" card; `chat_events`
-is purely additive.
-
 ### Rate limit
 
 `packages/infrastructure/src/auth/lru-rate-limiter.ts` is a single-instance,
@@ -319,7 +313,7 @@ also backed by a sorted set); the call sites do not need to change.
 | `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
-| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top`. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
+| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
 | `pnpm seed` | Seed the configured DB from `./documents/` (`tsx packages/cli/src/index.ts seed`) |
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |
