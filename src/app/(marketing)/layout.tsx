@@ -6,7 +6,7 @@ export default function MarketingLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative flex flex-1 flex-col">
+    <div className="relative flex min-h-full flex-1 flex-col">
       <div
         aria-hidden
         className="pointer-events-none fixed inset-0 z-0"

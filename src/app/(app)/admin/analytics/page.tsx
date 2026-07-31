@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
 import { formatDuration } from '@/lib/format-duration';
 import type { ReactNode } from 'react';
-import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox, BarChart3, Gauge, Sparkles } from 'lucide-react';
 import type { AnalyticsTrendPoint } from '@app/application';
 import type { ModeComparison } from '@app/domain';
 
@@ -269,11 +269,35 @@ export default async function AnalyticsPage() {
       </div>
 
       <Tabs defaultValue="quality" className="w-full flex flex-col gap-6">
-        <TabsList className="h-auto w-full grid-cols-2 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
-          <TabsTrigger value="quality">Statistics</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
-          <TabsTrigger value="tickets">Tickets</TabsTrigger>
-          <TabsTrigger value="feedback">Feedback</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
+          <TabsTrigger
+            value="quality"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <BarChart3 data-icon="inline-start" />
+            Statistics
+          </TabsTrigger>
+          <TabsTrigger
+            value="performance"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Gauge data-icon="inline-start" />
+            Performance
+          </TabsTrigger>
+          <TabsTrigger
+            value="tickets"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Ticket data-icon="inline-start" />
+            Tickets
+          </TabsTrigger>
+          <TabsTrigger
+            value="feedback"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Sparkles data-icon="inline-start" />
+            Feedback
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent
@@ -758,6 +782,8 @@ export default async function AnalyticsPage() {
                 </CardContent>
               </Card>
             </div>
+
+            <Separator className="my-2" />
 
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <Card className="gap-0" data-testid="analytics-document-utility">

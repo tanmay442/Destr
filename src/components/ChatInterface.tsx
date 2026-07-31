@@ -260,7 +260,7 @@ export function ChatInterface() {
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
           {messages.length === 0 ? (
-            <div className="flex flex-col items-center gap-10 pt-[18vh] text-center">
+            <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center fade-in-0 slide-in-from-bottom-2 duration-500">
               <div className="flex flex-col items-center gap-4">
                 <span
                   aria-hidden
@@ -315,7 +315,7 @@ export function ChatInterface() {
                 <div
                   key={m.id}
                   className={cn(
-                    'flex w-full flex-col gap-3',
+                    'flex w-full animate-in flex-col gap-3 fade-in-0 slide-in-from-bottom-2 duration-300',
                     isUser ? 'items-end' : 'items-start',
                   )}
                   data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
@@ -471,7 +471,7 @@ export function ChatInterface() {
       <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6 sm:pb-6">
         <form
           onSubmit={onSubmit}
-          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-3xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-colors focus-within:border-primary/40"
+          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-3xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-xl focus-within:shadow-primary/5"
           data-testid="chat-composer"
         >
           <textarea

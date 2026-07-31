@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Table,
   TableHeader,
@@ -43,29 +42,12 @@ export default async function DocumentsPage({
   searchParams: Promise<{
     search?: string;
     page?: string;
-    recountedDocs?: string;
-    recountedTotal?: string;
   }>;
 }) {
   const params = await searchParams;
   const search = params.search?.trim() ?? '';
   const page = parsePageParam(params.page);
   const offset = (page - 1) * PAGE_SIZE;
-  const recountedDocsRaw = params.recountedDocs;
-  const recountedTotalRaw = params.recountedTotal;
-  const recountedDocs =
-    recountedDocsRaw !== undefined && recountedDocsRaw !== ''
-      ? Number(recountedDocsRaw)
-      : null;
-  const recountedTotal =
-    recountedTotalRaw !== undefined && recountedTotalRaw !== ''
-      ? Number(recountedTotalRaw)
-      : null;
-  const showRecountBanner =
-    recountedDocs !== null &&
-    !Number.isNaN(recountedDocs) &&
-    recountedTotal !== null &&
-    !Number.isNaN(recountedTotal);
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
   const result = unwrap(await getComposition().listDocuments({
@@ -114,18 +96,6 @@ export default async function DocumentsPage({
             <UploadDocumentDialog />
           </div>
         </form>
-        {showRecountBanner ? (
-          <Alert
-            className="border-success/40 bg-success/10 py-2 text-success"
-            data-testid="documents-recount-banner"
-            role="status"
-          >
-            <AlertDescription className="text-xs">
-              Recounted {recountedDocs} document{recountedDocs === 1 ? '' : 's'}, total{' '}
-              {recountedTotal} chunk{recountedTotal === 1 ? '' : 's'}.
-            </AlertDescription>
-          </Alert>
-        ) : null}
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-border-subtle">

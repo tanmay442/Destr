@@ -23,12 +23,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
     >
       <div className="flex flex-col gap-5 p-6">
         <div className="flex flex-col gap-3">
-          <span
-            aria-hidden
-            className="inline-flex size-9 w-fit items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-inset ring-primary/25"
-          >
-            <Sparkles className="size-4" />
-          </span>
+          <Sparkles className="size-5 text-muted-foreground" aria-hidden />
           <div className="flex flex-col gap-2">
             <h2 className="text-xl font-semibold tracking-tight text-foreground">
               Get started
