@@ -134,12 +134,15 @@ export function ActivityBars({
       aria-label={label}
     >
       {buckets.map((bucket, i) => (
-        <div key={i} className="flex h-full flex-1 flex-col items-center gap-2">
+        <div key={i} className="flex h-full flex-1 flex-col items-center gap-1">
+          <span className="text-[10px] font-medium tabular-nums text-foreground">
+            {bucket.value > 0 ? bucket.value.toLocaleString() : ''}
+          </span>
           <div className="flex w-full flex-1 items-end">
             <div
               className="w-full rounded-md bg-primary/80 transition-[height] duration-500 ease-out-quart hover:bg-primary"
               style={{
-                height: `${(bucket.value / max) * 100}%`,
+                height: `${bucket.value > 0 ? (bucket.value / max) * 100 : 0}%`,
                 minHeight: bucket.value > 0 ? "3px" : "0px",
               }}
             />

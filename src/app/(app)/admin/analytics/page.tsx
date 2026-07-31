@@ -93,6 +93,20 @@ function toWeekly(points: AnalyticsTrendPoint[], maxWeeks = 12): WeeklyPoint[] {
   return weeks.slice(-maxWeeks);
 }
 
+function padUsage(rows: { day: string; total: number }[], days: number) {
+  const map = new Map(rows.map((r) => [r.day, r.total]));
+  const out: { label: string; value: number }[] = [];
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    out.push({ label: key.slice(5), value: map.get(key) ?? 0 });
+  }
+  return out;
+}
+
 function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
   const buckets = mode.queryLengthBuckets;
   const bucketTotal = Math.max(1, buckets.short + buckets.medium + buckets.long);
@@ -173,6 +187,8 @@ export default async function AnalyticsPage() {
   const hasTrends = weekly.some((w) => w.total > 0);
   const series = (pick: (w: WeeklyPoint) => number) =>
     weekly.map((w) => ({ label: w.label, value: pick(w) }));
+
+  const usageBuckets = chat ? padUsage(chat.usageOverTime, 7) : [];
 
   const activeModes = chat ? chat.modeComparison.filter((m) => m.total > 0) : [];
   const hasChat = chat != null && chat.total > 0;
@@ -270,15 +286,6 @@ export default async function AnalyticsPage() {
                 </CardContent>
               </Card>
 
-              <Card className="gap-0">
-                <CardHeader className="gap-1 pb-4">
-                  <CardTitle>Self-serve success</CardTitle>
-                  <CardDescription>Resolved without a ticket or gap.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
-                </CardContent>
-              </Card>
             </div>
           ) : (
             <Card className="gap-0">
@@ -299,12 +306,7 @@ export default async function AnalyticsPage() {
             </CardHeader>
             <CardContent>
               {chat ? (
-                <ActivityBars
-                  buckets={chat.usageOverTime.map((d) => ({
-                    label: d.day.slice(5),
-                    value: d.total,
-                  }))}
-                />
+                <ActivityBars buckets={usageBuckets} />
               ) : (
                 <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
               )}
@@ -370,27 +372,6 @@ export default async function AnalyticsPage() {
                 </Card>
               </div>
 
-              <div className="flex flex-col gap-2" data-testid="analytics-mode-comparison">
-                <h4 className="text-sm font-medium text-muted-foreground">Mode comparison</h4>
-                {activeModes.length >= 2 ? (
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                    {activeModes.map((mode) => (
-                      <ModeComparisonCard key={mode.mode} mode={mode} />
-                    ))}
-                  </div>
-                ) : (
-                  <Card className="gap-0">
-                    <CardHeader className="gap-1">
-                      <CardTitle>Comparison unavailable</CardTitle>
-                      <CardDescription>
-                        Only {activeModes.length === 1 ? MODE_LABELS[activeModes[0]!.mode] : 'one'} mode
-                        has traffic. Set the retrieval mode rollout below 100% to collect A/B data.
-                      </CardDescription>
-                    </CardHeader>
-                  </Card>
-                )}
-              </div>
-
               {hasTrends ? (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <Card className="gap-0">
@@ -436,6 +417,27 @@ export default async function AnalyticsPage() {
                   </CardHeader>
                 </Card>
               )}
+
+              <div className="flex flex-col gap-2" data-testid="analytics-mode-comparison">
+                <h4 className="text-sm font-medium text-muted-foreground">Mode comparison</h4>
+                {activeModes.length >= 2 ? (
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {activeModes.map((mode) => (
+                      <ModeComparisonCard key={mode.mode} mode={mode} />
+                    ))}
+                  </div>
+                ) : (
+                  <Card className="gap-0">
+                    <CardHeader className="gap-1">
+                      <CardTitle>Comparison unavailable</CardTitle>
+                      <CardDescription>
+                        Only {activeModes.length === 1 ? MODE_LABELS[activeModes[0]!.mode] : 'one'} mode
+                        has traffic. Set the retrieval mode rollout below 100% to collect A/B data.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                )}
+              </div>
             </>
           ) : (
             <Card className="gap-0">
