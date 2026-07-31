@@ -21,7 +21,7 @@ export function DonutChart({
     `Donut chart: ` +
     segments
       .map((s) => `${s.label} ${total > 0 ? Math.round((s.value / total) * 100) : 0}%`)
-      .join(', ');
+      .join(", ");
   let offset = 0;
 
   return (
@@ -87,26 +87,36 @@ export function DonutChart({
 export function BarList({
   items,
   unit,
+  className,
 }: {
   items: { label: string; value: number; barClassName?: string }[];
   unit?: string;
+  className?: string;
 }) {
   const max = Math.max(1, ...items.map((i) => i.value));
   return (
-    <ul className="flex flex-col gap-4">
+    <ul className={cn("flex flex-col gap-3.5", className)}>
       {items.map((item) => (
-        <li key={item.label} className="flex flex-col gap-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">{item.label}</span>
+        <li key={item.label} className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="min-w-0 truncate text-muted-foreground">{item.label}</span>
             <span className="font-medium tabular-nums text-foreground">
               {item.value.toLocaleString()}
-              {unit ? <span className="ml-0.5 text-xs text-foreground-faint">{unit}</span> : null}
+              {unit ? (
+                <span className="ml-0.5 text-xs text-foreground-faint">{unit}</span>
+              ) : null}
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-surface-elevated">
+          <div
+            className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={max}
+            aria-valuenow={item.value}
+          >
             <div
               className={cn(
-                "h-full rounded-full transition-[width] duration-500 ease-out-quart",
+                "h-full rounded-full transition-[width] duration-500 ease-out",
                 item.barClassName ?? "bg-primary",
               )}
               style={{ width: `${(item.value / max) * 100}%` }}
@@ -120,38 +130,48 @@ export function BarList({
 
 export function ActivityBars({
   buckets,
+  height = 160,
 }: {
   buckets: { label: string; value: number }[];
+  height?: number;
 }) {
   const max = Math.max(1, ...buckets.map((b) => b.value));
   const label =
     `Activity chart: ` +
-    buckets.map((b) => `${b.label} ${b.value}`).join(', ');
+    buckets.map((b) => `${b.label} ${b.value}`).join(", ");
   return (
     <div
-      className="flex h-44 items-end gap-2"
+      className="flex items-end gap-2"
+      style={{ height }}
       role="img"
       aria-label={label}
     >
-      {buckets.map((bucket, i) => (
-        <div key={i} className="flex h-full flex-1 flex-col items-center gap-1">
-          <span className="text-[10px] font-medium tabular-nums text-foreground">
-            {bucket.value > 0 ? bucket.value.toLocaleString() : ''}
-          </span>
-          <div className="flex w-full flex-1 items-end">
-            <div
-              className="w-full rounded-md bg-primary/80 transition-[height] duration-500 ease-out-quart hover:bg-primary"
-              style={{
-                height: `${bucket.value > 0 ? (bucket.value / max) * 100 : 0}%`,
-                minHeight: bucket.value > 0 ? "3px" : "0px",
-              }}
-            />
+      {buckets.map((bucket, i) => {
+        const hasValue = bucket.value > 0;
+        const heightPct = hasValue ? (bucket.value / max) * 100 : 0;
+        return (
+          <div key={i} className="flex h-full flex-1 flex-col items-stretch gap-1.5">
+            <span className="h-4 text-center text-[10px] font-medium tabular-nums text-foreground">
+              {hasValue ? bucket.value.toLocaleString() : ""}
+            </span>
+            <div className="flex flex-1 items-end">
+              <div
+                className={cn(
+                  "w-full rounded-t-md bg-primary/70 transition-[height,background-color] duration-500 ease-out",
+                  hasValue && "hover:bg-primary",
+                )}
+                style={{
+                  height: `${heightPct}%`,
+                  minHeight: hasValue ? "3px" : "0px",
+                }}
+              />
+            </div>
+            <span className="text-center text-[10px] tabular-nums text-muted-foreground">
+              {bucket.label}
+            </span>
           </div>
-          <span className="text-[10px] tabular-nums text-muted-foreground">
-            {bucket.label}
-          </span>
-        </div>
-      ))}
+        );
+      })}
       <ul className="sr-only">
         {buckets.map((bucket) => (
           <li key={bucket.label}>
@@ -165,7 +185,7 @@ export function ActivityBars({
 
 export function LineChart({
   data,
-  height = 96,
+  height = 112,
   formatValue,
   percentage = false,
   valueSuffix,
@@ -195,7 +215,7 @@ export function LineChart({
   if (n === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-md bg-surface-sunken text-xs text-muted-foreground"
+        className="flex items-center justify-center rounded-md border border-dashed border-border-subtle bg-surface-sunken/40 text-xs text-muted-foreground"
         style={{ height }}
       >
         No data yet
@@ -234,10 +254,14 @@ export function LineChart({
   const ticks = data.filter((_, i) => i % tickStep === 0 || i === n - 1);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between">
-        <span className={cn("text-lg font-semibold tabular-nums", colorClass)}>{fmt(latest)}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">peak {fmt(domainMax)}</span>
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={cn("text-lg font-semibold tabular-nums", colorClass)}>
+          {fmt(latest)}
+        </span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          peak {fmt(domainMax)}
+        </span>
       </div>
       <svg
         viewBox={`0 0 100 ${height}`}
@@ -282,9 +306,12 @@ export function LineChart({
           vectorEffect="non-scaling-stroke"
         />
       </svg>
-      <div className="flex justify-between">
+      <div className="flex justify-between gap-1">
         {ticks.map((t, i) => (
-          <span key={`${t.label}-${i}`} className="text-[10px] text-muted-foreground tabular-nums">
+          <span
+            key={`${t.label}-${i}`}
+            className="text-[10px] text-muted-foreground tabular-nums"
+          >
             {t.label}
           </span>
         ))}
@@ -295,15 +322,17 @@ export function LineChart({
 
 export function ChartLegend({
   items,
+  className,
 }: {
   items: { label: string; className: string }[];
+  className?: string;
 }) {
   return (
-    <ul className="flex flex-wrap items-center gap-x-4 gap-y-2">
+    <ul className={cn("flex flex-wrap items-center gap-x-4 gap-y-2", className)}>
       {items.map((item) => (
         <li key={item.label} className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className={cn("size-2.5 rounded-full", item.className)} />
-          {item.label}
+          <span className={cn("size-2 rounded-full", item.className)} aria-hidden />
+          <span className="tabular-nums">{item.label}</span>
         </li>
       ))}
     </ul>

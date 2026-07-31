@@ -17,18 +17,19 @@ import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import {
-  ArrowUpIcon,
-  SquareIcon,
+  ArrowUp,
+  Square,
   Search,
   FileStack,
   FileCheck,
   Clock,
   ThumbsUp,
   ThumbsDown,
+  Sparkles,
+  AlertCircle,
 } from 'lucide-react';
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
@@ -60,7 +61,7 @@ function FeedbackControl({
   onVote: (feedback: FeedbackVote) => void;
 }) {
   return (
-    <div className="flex items-center" data-testid="chat-feedback">
+    <div className="flex items-center gap-0.5" data-testid="chat-feedback">
       <Button
         type="button"
         variant="ghost"
@@ -70,11 +71,11 @@ function FeedbackControl({
         onClick={() => onVote(1)}
         className={cn(
           'text-muted-foreground hover:text-foreground',
-          vote === 1 && 'text-primary hover:text-primary [&_svg]:fill-current',
+          vote === 1 && 'text-success hover:text-success',
         )}
         data-testid="chat-feedback-up"
       >
-        <ThumbsUp />
+        <ThumbsUp className={cn(vote === 1 && '[&_svg]:fill-current')} />
       </Button>
       <Button
         type="button"
@@ -85,11 +86,11 @@ function FeedbackControl({
         onClick={() => onVote(-1)}
         className={cn(
           'text-muted-foreground hover:text-foreground',
-          vote === -1 && 'text-destructive hover:text-destructive [&_svg]:fill-current',
+          vote === -1 && 'text-destructive hover:text-destructive',
         )}
         data-testid="chat-feedback-down"
       >
-        <ThumbsDown />
+        <ThumbsDown className={cn(vote === -1 && '[&_svg]:fill-current')} />
       </Button>
     </div>
   );
@@ -119,14 +120,12 @@ function StatusStages() {
       className="flex items-center gap-2 text-sm text-muted-foreground"
       data-testid="chat-thinking"
     >
-      <Icon className="size-4 animate-pulse" aria-hidden="true" />
+      <Icon className="size-4 animate-pulse" aria-hidden />
       <span>{label}</span>
     </span>
   );
 }
 
-// Renders markdown links safely: forces a new tab with noopener, and
-// neutralises javascript:/data: URLs to avoid phishing / XSS surface.
 function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
   const url = typeof href === 'string' ? href.trim() : '';
   if (/^(javascript:|data:)/i.test(url)) {
@@ -215,7 +214,7 @@ export function ChatInterface() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit(input);
     }
@@ -228,7 +227,7 @@ export function ChatInterface() {
     const el = composerRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [input]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -259,30 +258,44 @@ export function ChatInterface() {
         aria-live="polite"
         aria-atomic="false"
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
           {messages.length === 0 ? (
-            <div className="flex flex-col items-center gap-8 text-center mt-[22vh]">
-              <div className="flex flex-col gap-3">
-                <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-                  Answers grounded in your docs
-                </h1>
-                <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
-                  I&apos;ll answer from the official documentation and cite the
-                  source I used — or raise a ticket if I can&apos;t help.
-                </p>
+            <div className="flex flex-col items-center gap-10 pt-[18vh] text-center">
+              <div className="flex flex-col items-center gap-4">
+                <span
+                  aria-hidden
+                  className="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/25"
+                >
+                  <Sparkles className="size-6" />
+                </span>
+                <div className="flex flex-col gap-2">
+                  <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                    Answers grounded in your docs
+                  </h1>
+                  <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+                    I&apos;ll answer from the official documentation and cite the
+                    source I used — or raise a ticket if I can&apos;t help.
+                  </p>
+                </div>
               </div>
 
-              <div className="grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
-          {QUICK_PROMPTS.map((q) => (
-            <button
-              key={q.label}
-              type="button"
-              disabled={isStreaming}
-              onClick={() => submit(q.text)}
-                    className="flex h-auto items-start justify-between gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
+                {QUICK_PROMPTS.map((q) => (
+                  <button
+                    key={q.label}
+                    type="button"
+                    disabled={isStreaming}
+                    onClick={() => submit(q.text)}
+                    className="group flex h-auto items-start gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-left text-sm text-foreground transition-colors hover:border-primary/40 hover:bg-surface-elevated disabled:opacity-50"
                     data-testid="chat-quick-prompt"
                   >
-                    <span className="text-[13.5px] leading-relaxed">{q.text}</span>
+                    <span
+                      aria-hidden
+                      className="mt-0.5 size-1.5 shrink-0 rounded-full bg-foreground-subtle transition-colors group-hover:bg-primary"
+                    />
+                    <span className="text-[13.5px] leading-relaxed text-muted-foreground group-hover:text-foreground">
+                      {q.text}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -302,7 +315,7 @@ export function ChatInterface() {
                 <div
                   key={m.id}
                   className={cn(
-                    'flex flex-col gap-2.5',
+                    'flex w-full flex-col gap-3',
                     isUser ? 'items-end' : 'items-start',
                   )}
                   data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
@@ -323,13 +336,15 @@ export function ChatInterface() {
                           className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
                           data-testid="chat-text"
                         >
-                          <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>{part.text}</Markdown>
+                          <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>
+                            {part.text}
+                          </Markdown>
                         </div>
                       )
                     ) : null,
                   )}
 
-                  {citations.length > 0 && !isUser && (
+                  {citations.length > 0 && !isUser ? (
                     <div
                       className="-mx-1 flex w-full max-w-none snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
                       data-testid="chat-citations"
@@ -346,11 +361,11 @@ export function ChatInterface() {
                         return (
                           <div
                             key={i}
-                            className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/70 p-3"
+                            className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/60 p-3"
                             data-testid="chat-citation"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                                 Source {i + 1}
                               </span>
                               <span
@@ -364,7 +379,7 @@ export function ChatInterface() {
                                 {simPct}% match
                               </span>
                             </div>
-                            {c.data.fileName && (
+                            {c.data.fileName ? (
                               <div className="flex flex-col gap-0.5">
                                 <span
                                   className="truncate text-[11.5px] font-medium text-foreground"
@@ -372,25 +387,25 @@ export function ChatInterface() {
                                   data-testid="chat-citation-file"
                                 >
                                   {c.data.fileName}
-                                  {c.data.page != null && (
-                                    <span className="text-foreground-subtle">
+                                  {c.data.page != null ? (
+                                    <span className="text-muted-foreground">
                                       {' '}
                                       — p.{c.data.page}
                                     </span>
-                                  )}
+                                  ) : null}
                                 </span>
                                 {c.data.sectionTitle &&
-                                  c.data.sectionTitle !== c.data.fileName && (
+                                  c.data.sectionTitle !== c.data.fileName ? (
                                     <span
-                                      className="truncate text-[11px] text-foreground-subtle"
+                                      className="truncate text-[11px] text-muted-foreground"
                                       title={c.data.sectionTitle}
                                       data-testid="chat-citation-section"
                                     >
                                       § {c.data.sectionTitle}
                                     </span>
-                                  )}
+                                  ) : null}
                               </div>
-                            )}
+                            ) : null}
                             <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
                               {c.data.snippet}
                             </p>
@@ -398,14 +413,14 @@ export function ChatInterface() {
                         );
                       })}
                     </div>
-                  )}
+                  ) : null}
 
-                  {!isUser && turnId && (
+                  {!isUser && turnId ? (
                     <FeedbackControl
                       vote={votes[turnId]}
                       onVote={(feedback) => void submitFeedback(m, turnId, feedback)}
                     />
-                  )}
+                  ) : null}
                 </div>
               );
             })
@@ -431,32 +446,35 @@ export function ChatInterface() {
 
           <div ref={anchorRef} />
 
-          {error && !(error instanceof Error && error.name === 'AbortError') && (
+          {error && !(error instanceof Error && error.name === 'AbortError') ? (
             <Alert
               variant="destructive"
-              className="flex items-start gap-2.5 rounded-xl border-destructive/30 bg-destructive/10 p-3 text-destructive"
+              className="border-destructive/30 bg-destructive/10 text-destructive"
               data-testid="chat-error"
             >
+              <AlertCircle aria-hidden />
               <div className="flex flex-col gap-0.5">
-                <AlertTitle className="font-medium">
-                  {error instanceof Error ? error.message || 'Something went wrong.' : 'Something went wrong.'}
+                <AlertTitle>
+                  {error instanceof Error
+                    ? error.message || 'Something went wrong.'
+                    : 'Something went wrong.'}
                 </AlertTitle>
-                <AlertDescription className="text-[12px] text-destructive/80">
+                <AlertDescription className="text-xs text-destructive/80">
                   Try again in a moment.
                 </AlertDescription>
               </div>
             </Alert>
-          )}
+          ) : null}
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+      <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6 sm:pb-6">
         <form
           onSubmit={onSubmit}
-          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-border-subtle bg-card/70 p-2 backdrop-blur-md transition-colors focus-within:border-primary/50"
+          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-3xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-colors focus-within:border-primary/40"
           data-testid="chat-composer"
         >
-          <Textarea
+          <textarea
             ref={composerRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -464,8 +482,12 @@ export function ChatInterface() {
             disabled={isStreaming}
             placeholder="Message the support assistant…"
             rows={1}
-            className="min-h-[24px] max-h-[200px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground placeholder:text-foreground-subtle focus-visible:ring-0 disabled:opacity-60"
+            className={cn(
+              'min-h-[36px] max-h-[220px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-[15px] leading-relaxed text-foreground shadow-none outline-none transition-colors',
+              'placeholder:text-foreground-faint focus:outline-none focus:ring-0 focus-visible:ring-0 disabled:opacity-60',
+            )}
             data-testid="chat-input"
+            aria-label="Chat message"
           />
           <Button
             type={isStreaming ? 'button' : 'submit'}
@@ -473,16 +495,29 @@ export function ChatInterface() {
             aria-label={isStreaming ? 'Stop generating' : 'Send message'}
             onClick={isStreaming ? () => stop() : undefined}
             size="icon"
-            className="size-9 shrink-0 rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            className={cn(
+              'size-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed',
+              isStreaming
+                ? 'bg-secondary text-foreground hover:bg-surface-elevated'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40',
+            )}
             data-testid="chat-send"
           >
             {isStreaming ? (
-              <SquareIcon data-icon="inline" className="size-4" />
+              <Square className="size-3.5" fill="currentColor" />
             ) : (
-              <ArrowUpIcon data-icon="inline" className="size-4" />
+              <ArrowUp className="size-4" />
             )}
           </Button>
         </form>
+        <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-foreground-faint">
+          Press <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Enter</kbd>{' '}
+          to send ·{' '}
+          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Shift</kbd>{' '}
+          +{' '}
+          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Enter</kbd>{' '}
+          for a new line
+        </p>
       </div>
     </div>
   );

@@ -31,7 +31,7 @@ export function AuditFilterForm({
   const [kindValue, setKindValue] = useState(kind ?? '');
   return (
     <form
-      className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+      className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6"
       method="get"
       aria-label="Filter audit log"
     >
@@ -40,7 +40,7 @@ export function AuditFilterForm({
         Kind
       </Label>
       <Select value={kindValue} onValueChange={(v) => setKindValue(v === ALL ? '' : v)}>
-        <SelectTrigger id="audit-filter-kind" data-testid="audit-filter-kind">
+        <SelectTrigger id="audit-filter-kind" data-testid="audit-filter-kind" className="w-full">
           <SelectValue placeholder="All kinds" />
         </SelectTrigger>
         <SelectContent>
@@ -61,7 +61,6 @@ export function AuditFilterForm({
         name="action"
         defaultValue={action ?? ''}
         placeholder="Action (e.g. upload)"
-        className="bg-background"
       />
       <Label className="sr-only" htmlFor="audit-filter-actor">
         Actor
@@ -72,7 +71,6 @@ export function AuditFilterForm({
         name="actor"
         defaultValue={actor ?? ''}
         placeholder="Actor id"
-        className="bg-background"
       />
       <Label className="sr-only" htmlFor="audit-filter-from">
         From date
@@ -82,7 +80,6 @@ export function AuditFilterForm({
         type="date"
         name="from"
         defaultValue={from ?? ''}
-        className="bg-background"
       />
       <Label className="sr-only" htmlFor="audit-filter-to">
         To date
@@ -92,9 +89,10 @@ export function AuditFilterForm({
         type="date"
         name="to"
         defaultValue={to ?? ''}
-        className="bg-background"
       />
-      <Button type="submit">Filter</Button>
+      <Button type="submit" size="sm" className="sm:col-span-2 lg:col-span-1">
+        Filter
+      </Button>
     </form>
   );
 }

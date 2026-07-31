@@ -4,6 +4,7 @@ import { TicketOverlay, type TicketRow } from './ticket-overlay';
 import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Table,
   TableHeader,
@@ -16,6 +17,18 @@ import {
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 25;
+
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case 'closed':
+      return 'border-success/40 text-success';
+    case 'in_progress':
+      return 'border-warning/40 text-warning';
+    case 'created':
+    default:
+      return 'border-primary/40 text-primary';
+  }
+}
 
 export default async function TicketsPage({
   searchParams,
@@ -71,9 +84,14 @@ export default async function TicketsPage({
     notes: t.notes,
   }));
   return (
-    <section className="flex flex-col gap-4">
+    <section className="flex flex-col gap-5">
       <TicketOverlay tickets={rows} userOptions={userList.users} />
-      <h2 className="text-xl font-medium">Tickets</h2>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Tickets</h2>
+        <p className="text-sm text-muted-foreground">
+          Review, assign, and resolve support tickets. Click a ticket to view details.
+        </p>
+      </div>
       <TicketsFilterForm
         statuses={TICKET_STATUSES}
         users={userList.users}
@@ -81,48 +99,35 @@ export default async function TicketsPage({
         assignee={assignee}
         search={search}
       />
-      <div className="overflow-x-auto rounded border border-border-subtle">
-        <Table className="w-full table-fixed text-sm" data-testid="tickets-table">
-          <TableHeader className="bg-surface-elevated text-left text-xs uppercase text-muted-foreground">
-            <TableRow>
-              <TableHead className="w-24 px-3 py-2 text-muted-foreground">
-                Ticket
-              </TableHead>
-              <TableHead className="w-44 px-3 py-2 text-muted-foreground">
-                User
-              </TableHead>
-              <TableHead className="px-3 py-2 text-muted-foreground">
-                Issue
-              </TableHead>
-              <TableHead className="w-28 px-3 py-2 text-muted-foreground">
-                Status
-              </TableHead>
-              <TableHead className="w-40 px-3 py-2 text-muted-foreground">
-                Assignee
-              </TableHead>
-              <TableHead className="w-32 px-3 py-2 text-right text-muted-foreground">
-                Created
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.tickets.length === 0 ? (
+      {result.tickets.length === 0 ? (
+        <Card className="border-dashed p-8 shadow-none">
+          <div className="flex flex-col items-center gap-1 text-center">
+            <CardTitle className="text-base">No tickets</CardTitle>
+            <CardDescription>
+              No tickets matched your filters. Adjust the filters to see more.
+            </CardDescription>
+          </div>
+        </Card>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-border-subtle">
+          <Table data-testid="tickets-table" aria-label="Tickets">
+            <TableHeader>
               <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="px-3 py-4 text-center text-muted-foreground"
-                >
-                  No tickets.
-                </TableCell>
+                <TableHead className="w-28">Ticket</TableHead>
+                <TableHead className="w-48">User</TableHead>
+                <TableHead>Issue</TableHead>
+                <TableHead className="w-32">Status</TableHead>
+                <TableHead className="hidden w-40 md:table-cell">Assignee</TableHead>
+                <TableHead className="hidden w-32 text-right md:table-cell">Created</TableHead>
               </TableRow>
-            ) : (
-              result.tickets.map((t) => (
+            </TableHeader>
+            <TableBody>
+              {result.tickets.map((t) => (
                 <TableRow
                   key={t.ticketId}
-                  className="border-t border-border-subtle hover:bg-transparent"
                   data-testid={`tickets-row-${t.ticketId}`}
                 >
-                  <TableCell className="px-3 py-2 font-medium">
+                  <TableCell className="font-medium">
                     <Link
                       href={{
                         pathname: '/admin/tickets',
@@ -134,9 +139,9 @@ export default async function TicketsPage({
                       {t.ticketId}
                     </Link>
                   </TableCell>
-                  <TableCell className="px-3 py-2">
+                  <TableCell>
                     <div className="flex min-w-0 flex-col">
-                      <span className="truncate">
+                      <span className="truncate text-sm text-foreground">
                         {(() => {
                           const looksLikeClerkId = t.userId.startsWith('user_');
                           const nameLooksPlaceholder =
@@ -146,10 +151,7 @@ export default async function TicketsPage({
                             nameLooksPlaceholder &&
                             userByClerkId.has(t.userId)
                           ) {
-                            return (
-                              userByClerkId.get(t.userId)?.name ??
-                              t.name
-                            );
+                            return userByClerkId.get(t.userId)?.name ?? t.name;
                           }
                           return t.name;
                         })()}
@@ -168,45 +170,51 @@ export default async function TicketsPage({
                         })()}
                       </span>
                       {t.userId === 'anonymous' ? (
-                        <Badge className="mt-1 bg-warning/10 text-[10px] text-warning">
-                          (anonymous)
+                        <Badge
+                          variant="outline"
+                          className="mt-1 w-fit border-warning/40 text-[10px] text-warning"
+                        >
+                          anonymous
                         </Badge>
                       ) : null}
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-md truncate px-3 py-2 text-xs">
-                    {t.issue}
+                  <TableCell className="max-w-md">
+                    <span className="line-clamp-2 text-sm text-muted-foreground">
+                      {t.issue}
+                    </span>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap px-3 py-2 text-xs">
-                    <Badge className="bg-surface-elevated text-foreground">
-                      {t.status}
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] font-medium uppercase tracking-[0.05em] ${statusBadgeClass(t.status)}`}
+                    >
+                      {t.status.replace('_', ' ')}
                     </Badge>
                   </TableCell>
                   <TableCell
-                    className="truncate px-3 py-2 text-xs"
+                    className="hidden truncate text-sm text-muted-foreground md:table-cell"
                     title={t.assignedTo ?? undefined}
                   >
                     {t.assignedTo ?? '—'}
                   </TableCell>
-                  <TableCell
-                    className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground"
-                    title={t.createdAt.toISOString()}
-                  >
-                    {t.createdAt.toISOString().slice(0, 16).replace('T', ' ')}
+                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums md:table-cell">
+                    <time dateTime={t.createdAt.toISOString()} title={t.createdAt.toISOString()}>
+                      {t.createdAt.toISOString().slice(0, 10)}
+                    </time>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
       <Pagination
         page={page}
         totalPages={totalPages}
         total={result.total}
         pathname="/admin/tickets"
         query={{ status, assignee, q: search }}
-        linkClassName="rounded-md border border-border px-3 py-1 text-muted-foreground hover:bg-card hover:text-foreground"
       />
     </section>
   );

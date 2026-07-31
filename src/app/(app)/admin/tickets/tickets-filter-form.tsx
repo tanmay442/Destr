@@ -32,7 +32,7 @@ export function TicketsFilterForm({
   const [assigneeValue, setAssigneeValue] = useState(assignee ?? '');
   return (
     <form
-      className="grid grid-cols-1 gap-2 sm:grid-cols-4"
+      className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
       method="get"
       aria-label="Filter tickets"
     >
@@ -48,6 +48,7 @@ export function TicketsFilterForm({
         <SelectTrigger
           id="tickets-filter-status"
           data-testid="tickets-filter-status"
+          className="w-full"
         >
           <SelectValue placeholder="All statuses" />
         </SelectTrigger>
@@ -70,6 +71,7 @@ export function TicketsFilterForm({
         <SelectTrigger
           id="tickets-filter-assignee"
           data-testid="tickets-filter-assignee"
+          className="w-full"
         >
           <SelectValue placeholder="Any assignee" />
         </SelectTrigger>
@@ -93,7 +95,9 @@ export function TicketsFilterForm({
         placeholder="Search issue…"
         data-testid="tickets-search"
       />
-      <Button type="submit">Apply</Button>
+      <Button type="submit" size="sm">
+        Apply
+      </Button>
     </form>
   );
 }

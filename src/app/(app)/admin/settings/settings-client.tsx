@@ -27,6 +27,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -55,6 +57,14 @@ import {
   TabsTrigger,
   TabsContent,
 } from '@/components/ui/tabs';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import { toast } from '@/components/ui/sonner';
 
 type InputType = 'text' | 'textarea' | 'select' | 'slider' | 'toggle' | 'number';
@@ -251,8 +261,8 @@ export function SettingsClient() {
 
   if (!descriptor || version === null) {
     return (
-      <div className="flex items-center gap-2 text-sm text-zinc-400">
-        <Loader2 className="size-4 animate-spin" />
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" aria-hidden />
         Loading settings…
       </div>
     );
@@ -307,116 +317,120 @@ export function SettingsClient() {
 
   return (
     <section className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Settings</h1>
-          <p className="text-sm text-zinc-400">
-            Configure persona, guardrails, chunking, and retrieval options. <span className="text-zinc-500">(v{version})</span>
+      <div className="flex flex-col gap-3 border-b border-border-subtle pb-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Configure persona, guardrails, chunking, and retrieval options.
+            <Badge variant="outline" className="ml-2 align-middle text-[10px] font-medium text-muted-foreground">
+              v{version}
+            </Badge>
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {changedKeys.length > 0 && (
+        <div className="flex items-center gap-2">
+          {changedKeys.length > 0 ? (
             <Button
               variant="outline"
+              size="sm"
               onClick={() => setValues({ ...baseline })}
               disabled={saving}
-              className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-300"
             >
-              <Undo2 className="size-4 mr-1" />
+              <Undo2 data-icon="inline-start" />
               Reset
             </Button>
-          )}
+          ) : null}
           <Button
+            size="sm"
             onClick={() => setDiffOpen(true)}
             disabled={changedKeys.length === 0 || saving}
             data-testid="review-save"
-            className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200 font-medium"
           >
-            Review &amp; Save {changedKeys.length > 0 ? `(${changedKeys.length})` : ''}
+            Review &amp; Save
+            {changedKeys.length > 0 ? (
+              <Badge
+                variant="secondary"
+                className="ml-1 bg-primary-foreground/20 text-primary-foreground"
+              >
+                {changedKeys.length}
+              </Badge>
+            ) : null}
           </Button>
         </div>
       </div>
 
-      {/* 3-Tab Main Layout */}
-      <Tabs defaultValue="persona" className="w-full space-y-6">
-        <TabsList className="grid w-full grid-cols-1 sm:grid-cols-3 max-w-2xl bg-zinc-900 border border-zinc-800">
-          <TabsTrigger value="persona" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
-            <Shield className="size-4" />
-            <span>Persona &amp; Guardrails</span>
+      <Tabs defaultValue="persona" className="w-full flex flex-col gap-6">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-3 sm:gap-0">
+          <TabsTrigger
+            value="persona"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Shield data-icon="inline-start" />
+            Persona &amp; Guardrails
           </TabsTrigger>
-          <TabsTrigger value="chunking" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
-            <Cpu className="size-4" />
-            <span>Chunking Strategy</span>
+          <TabsTrigger
+            value="chunking"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Cpu data-icon="inline-start" />
+            Chunking Strategy
           </TabsTrigger>
-          <TabsTrigger value="retrieval" className="flex items-center gap-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-400">
-            <Sliders className="size-4" />
-            <span>Retrieval Strategy</span>
+          <TabsTrigger
+            value="retrieval"
+            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
+          >
+            <Sliders data-icon="inline-start" />
+            Retrieval Strategy
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB 1: Persona & Guardrails */}
-        <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-8">
-          <div data-testid="group-Persona & Prompt" className="flex flex-col gap-8">
-            {/* Section 1: Persona Configuration */}
-            <Card className="bg-card border-border">
+        <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
+          <div data-testid="group-Persona & Prompt" className="flex flex-col gap-6">
+            <Card className="gap-0">
               <CardHeader>
-                <CardTitle className="text-base">Persona Configuration</CardTitle>
+                <CardTitle className="text-base">Persona configuration</CardTitle>
                 <CardDescription>
                   Define agent persona details, tone, identity, and global custom instructions.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-              {/* 2-Column Grid for Form Fields */}
-              <div className="grid grid-cols-2 gap-4">
-                {/* Row 1: Response Tone */}
-                <div>
-                  {fieldMap.has('agentPersona.tone') && (
-                    <FieldControl
-                      field={fieldMap.get('agentPersona.tone')!}
-                      value={values['agentPersona.tone']}
-                      onChange={(v) => update('agentPersona.tone', v)}
-                      onReset={() => update('agentPersona.tone', fieldMap.get('agentPersona.tone')!.default)}
-                    />
-                  )}
-                </div>
-                <div>
-                  {fieldMap.has('audience') && (
-                    <FieldControl
-                      field={fieldMap.get('audience')!}
-                      value={values['audience']}
-                      onChange={(v) => update('audience', v)}
-                      onReset={() => update('audience', fieldMap.get('audience')!.default)}
-                    />
-                  )}
-                </div>
-
-                {/* Row 2: Organization Name */}
-                <div>
-                  {fieldMap.has('orgName') && (
-                    <FieldControl
-                      field={fieldMap.get('orgName')!}
-                      value={values['orgName']}
-                      onChange={(v) => update('orgName', v)}
-                      onReset={() => update('orgName', fieldMap.get('orgName')!.default)}
-                    />
-                  )}
-                </div>
-              </div>
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {fieldMap.has('agentPersona.tone') ? (
+                  <FieldControl
+                    field={fieldMap.get('agentPersona.tone')!}
+                    value={values['agentPersona.tone']}
+                    onChange={(v) => update('agentPersona.tone', v)}
+                    onReset={() => update('agentPersona.tone', fieldMap.get('agentPersona.tone')!.default)}
+                  />
+                ) : null}
+                {fieldMap.has('audience') ? (
+                  <FieldControl
+                    field={fieldMap.get('audience')!}
+                    value={values['audience']}
+                    onChange={(v) => update('audience', v)}
+                    onReset={() => update('audience', fieldMap.get('audience')!.default)}
+                  />
+                ) : null}
+                {fieldMap.has('orgName') ? (
+                  <FieldControl
+                    field={fieldMap.get('orgName')!}
+                    value={values['orgName']}
+                    onChange={(v) => update('orgName', v)}
+                    onReset={() => update('orgName', fieldMap.get('orgName')!.default)}
+                  />
+                ) : null}
               </CardContent>
             </Card>
 
-              {/* Full-width rows at bottom */}
-              <div className="flex flex-col gap-4">
-                {fieldMap.has('customInstructions') && (
-                  <FieldControl
-                    field={fieldMap.get('customInstructions')!}
-                    value={values['customInstructions']}
-                    onChange={(v) => update('customInstructions', v)}
-                    onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
-                  />
-                )}
+            {fieldMap.has('customInstructions') ? (
+              <FieldControl
+                field={fieldMap.get('customInstructions')!}
+                value={values['customInstructions']}
+                onChange={(v) => update('customInstructions', v)}
+                onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
+              />
+            ) : null}
 
+            {extraPersonaFields.length > 0 ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {extraPersonaFields.map((field) => (
                   <FieldControl
                     key={field.key}
@@ -427,22 +441,21 @@ export function SettingsClient() {
                   />
                 ))}
               </div>
+            ) : null}
 
-            {/* Section 2: Out-of-Scope Topics */}
-            {fieldMap.has('outOfScopeTopics') && (
+            {fieldMap.has('outOfScopeTopics') ? (
               <OutOfScopeEditor
                 field={fieldMap.get('outOfScopeTopics')!}
                 value={(values['outOfScopeTopics'] as OutOfScopeTopic[]) ?? []}
                 onChange={(v) => update('outOfScopeTopics', v)}
               />
-            )}
+            ) : null}
 
-            {/* Section 3: Clean System Prompt Preview */}
-            <Card className="bg-card border-border">
+            <Card className="gap-0">
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-base">System Prompt Preview</CardTitle>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex flex-col gap-1">
+                    <CardTitle className="text-base">System prompt preview</CardTitle>
                     <CardDescription>
                       Assembled from in-flight edits (safety blocks fixed)
                     </CardDescription>
@@ -451,17 +464,17 @@ export function SettingsClient() {
                     variant="outline"
                     size="sm"
                     onClick={handleCopyPrompt}
-                    className="h-8 px-3 text-xs bg-zinc-900 border-border hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
+                    data-testid="copy-prompt"
                   >
-                    {copiedPrompt ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
-                    {copiedPrompt ? 'Copied' : 'Copy Prompt'}
+                    {copiedPrompt ? <Check /> : <Copy />}
+                    {copiedPrompt ? 'Copied' : 'Copy prompt'}
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
                 <pre
                   data-testid="prompt-preview"
-                  className="bg-surface-sunken border border-border-subtle rounded-lg p-4 font-mono text-xs text-zinc-300 max-h-96 overflow-auto whitespace-pre-wrap"
+                  className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border-subtle bg-surface-sunken p-4 font-mono text-xs text-foreground"
                 >
                   {preview}
                 </pre>
@@ -470,58 +483,59 @@ export function SettingsClient() {
           </div>
         </TabsContent>
 
-        {/* TAB 2: Chunking Strategy */}
         <TabsContent value="chunking" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Chunking" className="flex flex-col gap-6">
-            {/* Header & Re-ingest Button */}
-            <Card className="bg-card border-border">
+            <Card className="gap-0">
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-base">Chunking Strategy</CardTitle>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex flex-col gap-1">
+                    <CardTitle className="text-base">Chunking strategy</CardTitle>
                     <CardDescription>
                       Configure document chunking parameters and parent-child window resolution.
                     </CardDescription>
                   </div>
                   <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handleReingest}
                     disabled={reingestPending}
                     data-testid="reingest-button"
-                    className="h-9 px-3 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md border border-border flex items-center gap-2"
                   >
                     {reingestPending ? (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" />
-                        Re-ingesting…
-                      </>
+                      <Loader2 className="animate-spin" data-icon="inline-start" />
                     ) : (
-                      <>
-                        <RotateCw className="size-3.5" />
-                        Re-ingest All
-                      </>
+                      <RotateCw data-icon="inline-start" />
                     )}
+                    {reingestPending ? 'Re-ingesting…' : 'Re-ingest all'}
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
-                {/* Environment Notice Banner — accent left border */}
-                <div className="p-3 bg-accent-info-soft/30 border-l-2 border-accent-info rounded-r-md text-xs text-zinc-400 flex items-start gap-2.5">
-                  <Info className="size-4 text-accent-info shrink-0 mt-0.5" />
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex items-start gap-2.5 rounded-md border-l-2 border-accent-info bg-accent-info-soft/30 p-3 text-xs text-muted-foreground">
+                  <Info className="size-4 shrink-0 text-accent-info" aria-hidden />
                   <div className="flex flex-col gap-1">
-                    <div>
-                      Embedding model: <span className="font-semibold text-zinc-200">{String(embeddingModel ?? 'gemini-embedding-001')}</span> <span className="text-zinc-500">(requires re-ingest if changed via env)</span>
-                    </div>
-                    <div>
-                      <code className="text-zinc-300">INGEST_CHUNK_SIZE</code> and <code className="text-zinc-300">INGEST_CHUNK_OVERLAP</code> are environment-driven and applied at deploy time.
-                    </div>
+                    <span>
+                      Embedding model:{' '}
+                      <span className="font-semibold text-foreground">
+                        {String(embeddingModel ?? 'gemini-embedding-001')}
+                      </span>{' '}
+                      <span className="text-foreground-faint">
+                        (requires re-ingest if changed via env)
+                      </span>
+                    </span>
+                    <span>
+                      <code className="font-mono text-foreground">INGEST_CHUNK_SIZE</code> and{' '}
+                      <code className="font-mono text-foreground">INGEST_CHUNK_OVERLAP</code> are
+                      environment-driven and applied at deploy time.
+                    </span>
                   </div>
                 </div>
 
-                {/* Form Fields */}
-                <div className="flex flex-col gap-4 mt-4">
-                  {/* Full Width Chunking Strategy Select */}
-                  {fieldMap.has('chunkingStrategy') && (
-                    <div className="w-full">
+                <Separator />
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {fieldMap.has('chunkingStrategy') ? (
+                    <div className="sm:col-span-2">
                       <FieldControl
                         field={fieldMap.get('chunkingStrategy')!}
                         value={values['chunkingStrategy']}
@@ -529,58 +543,45 @@ export function SettingsClient() {
                         onReset={() => update('chunkingStrategy', fieldMap.get('chunkingStrategy')!.default)}
                       />
                     </div>
-                  )}
+                  ) : null}
+                  {fieldMap.has('parentChunkSize') ? (
+                    <FieldControl
+                      field={fieldMap.get('parentChunkSize')!}
+                      value={values['parentChunkSize']}
+                      onChange={(v) => update('parentChunkSize', v)}
+                      onReset={() => update('parentChunkSize', fieldMap.get('parentChunkSize')!.default)}
+                    />
+                  ) : null}
+                  {fieldMap.has('childChunkSize') ? (
+                    <FieldControl
+                      field={fieldMap.get('childChunkSize')!}
+                      value={values['childChunkSize']}
+                      onChange={(v) => update('childChunkSize', v)}
+                      onReset={() => update('childChunkSize', fieldMap.get('childChunkSize')!.default)}
+                    />
+                  ) : null}
+                  {fieldMap.has('parentChildMode') ? (
+                    <FieldControl
+                      field={fieldMap.get('parentChildMode')!}
+                      value={values['parentChildMode']}
+                      onChange={(v) => update('parentChildMode', v)}
+                      onReset={() => update('parentChildMode', fieldMap.get('parentChildMode')!.default)}
+                    />
+                  ) : null}
+                  {fieldMap.has('parentChildWindow') ? (
+                    <FieldControl
+                      field={fieldMap.get('parentChildWindow')!}
+                      value={values['parentChildWindow']}
+                      onChange={(v) => update('parentChildWindow', v)}
+                      onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
+                    />
+                  ) : null}
+                </div>
 
-                  {/* Strict 2-Column Grid for Numerical Parameters */}
-                  <div className="grid grid-cols-2 gap-4 mt-4">
-                    {/* Row 1: Parent Chunk Size | Child Chunk Size */}
-                    <div>
-                      {fieldMap.has('parentChunkSize') && (
-                        <FieldControl
-                          field={fieldMap.get('parentChunkSize')!}
-                          value={values['parentChunkSize']}
-                          onChange={(v) => update('parentChunkSize', v)}
-                          onReset={() => update('parentChunkSize', fieldMap.get('parentChunkSize')!.default)}
-                        />
-                      )}
-                    </div>
-                    <div>
-                      {fieldMap.has('childChunkSize') && (
-                        <FieldControl
-                          field={fieldMap.get('childChunkSize')!}
-                          value={values['childChunkSize']}
-                          onChange={(v) => update('childChunkSize', v)}
-                          onReset={() => update('childChunkSize', fieldMap.get('childChunkSize')!.default)}
-                        />
-                      )}
-                    </div>
-
-                    {/* Row 2: Parent/Child Resolve | Parent/Child Window */}
-                    <div>
-                      {fieldMap.has('parentChildMode') && (
-                        <FieldControl
-                          field={fieldMap.get('parentChildMode')!}
-                          value={values['parentChildMode']}
-                          onChange={(v) => update('parentChildMode', v)}
-                          onReset={() => update('parentChildMode', fieldMap.get('parentChildMode')!.default)}
-                        />
-                      )}
-                    </div>
-                    <div>
-                      {fieldMap.has('parentChildWindow') && (
-                        <FieldControl
-                          field={fieldMap.get('parentChildWindow')!}
-                          value={values['parentChildWindow']}
-                          onChange={(v) => update('parentChildWindow', v)}
-                          onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
-                        />
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Extra Chunking Fields */}
-                  {extraChunkingFields.length > 0 && (
-                    <div className="grid grid-cols-2 gap-4 mt-4">
+                {extraChunkingFields.length > 0 ? (
+                  <>
+                    <Separator />
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       {extraChunkingFields.map((field) => (
                         <FieldControl
                           key={field.key}
@@ -591,28 +592,26 @@ export function SettingsClient() {
                         />
                       ))}
                     </div>
-                  )}
-                </div>
+                  </>
+                ) : null}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
 
-        {/* TAB 3: Retrieval Strategy */}
         <TabsContent value="retrieval" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
           <div data-testid="group-Retrieval" className="flex flex-col gap-6">
-            <Card className="bg-card border-border">
+            <Card className="gap-0">
               <CardHeader>
-                <CardTitle className="text-base">Retrieval Settings</CardTitle>
+                <CardTitle className="text-base">Retrieval settings</CardTitle>
                 <CardDescription>
                   Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Search & Reranking */}
+              <CardContent className="flex flex-col gap-6">
+                <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
                   <div className="flex flex-col gap-4">
-                    <h4 className="text-sm font-medium text-zinc-200">Search &amp; Reranking</h4>
+                    <h4 className="text-sm font-medium text-foreground">Search &amp; reranking</h4>
                     {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'gradeModel'].map((key) => {
                       const field = fieldMap.get(key);
                       if (!field) return null;
@@ -628,9 +627,8 @@ export function SettingsClient() {
                     })}
                   </div>
 
-                  {/* Agentic Budget Limits */}
                   <div className="flex flex-col gap-4">
-                    <h4 className="text-sm font-medium text-zinc-200">Agentic Budget Limits</h4>
+                    <h4 className="text-sm font-medium text-foreground">Agentic budget limits</h4>
                     {['agentStepBudget', 'agenticRetrieveLimit', 'agenticMaxRetries'].map((key) => {
                       const field = fieldMap.get(key);
                       if (!field) return null;
@@ -647,10 +645,11 @@ export function SettingsClient() {
                   </div>
                 </div>
 
-                {/* Cache Settings — full width row */}
-                <div className="mt-6 pt-6 border-t border-border">
-                  <h4 className="text-sm font-medium text-zinc-200 mb-4">Cache Settings</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Separator />
+
+                <div className="flex flex-col gap-4">
+                  <h4 className="text-sm font-medium text-foreground">Cache settings</h4>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     {['answerCacheEnabled', 'answerCacheTtlSec'].map((key) => {
                       const field = fieldMap.get(key);
                       if (!field) return null;
@@ -667,29 +666,13 @@ export function SettingsClient() {
                   </div>
                 </div>
 
-                {/* Rollout & Misc */}
-                <div className="mt-6 pt-6 border-t border-border">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {['retrievalModeRolloutPercent', 'captureQueryText'].map((key) => {
-                      const field = fieldMap.get(key);
-                      if (!field) return null;
-                      return (
-                        <FieldControl
-                          key={field.key}
-                          field={field}
-                          value={values[field.key]}
-                          onChange={(v) => update(field.key, v)}
-                          onReset={() => update(field.key, field.default)}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
+                <Separator />
 
-                {/* Extra retrieval fields */}
-                {extraRetrievalFields.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-border">
-                    {extraRetrievalFields.map((field) => (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {['retrievalModeRolloutPercent', 'captureQueryText'].map((key) => {
+                    const field = fieldMap.get(key);
+                    if (!field) return null;
+                    return (
                       <FieldControl
                         key={field.key}
                         field={field}
@@ -697,44 +680,63 @@ export function SettingsClient() {
                         onChange={(v) => update(field.key, v)}
                         onReset={() => update(field.key, field.default)}
                       />
-                    ))}
-                  </div>
-                )}
+                    );
+                  })}
+                </div>
+
+                {extraRetrievalFields.length > 0 ? (
+                  <>
+                    <Separator />
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {extraRetrievalFields.map((field) => (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* Sticky Bottom Action Bar when there are unsaved edits */}
-      {changedKeys.length > 0 && (
-        <div className="sticky bottom-4 z-40 flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/95 p-4 shadow-xl backdrop-blur">
-          <div className="text-sm text-zinc-200">
-            <span className="font-semibold text-zinc-100">{changedKeys.length}</span> unsaved change{changedKeys.length === 1 ? '' : 's'} pending review
+      {changedKeys.length > 0 ? (
+        <div className="sticky bottom-4 z-40 flex flex-col items-stretch gap-3 rounded-lg border border-border-subtle bg-card/95 p-3 shadow-xl backdrop-blur-md sm:flex-row sm:items-center sm:justify-between sm:p-4">
+          <div className="flex items-center gap-2 text-sm text-foreground">
+            <Badge variant="default" className="h-5 px-1.5 text-[10px]">
+              {changedKeys.length}
+            </Badge>
+            <span>
+              unsaved change{changedKeys.length === 1 ? '' : 's'} pending review
+            </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:justify-end">
             <Button
               variant="outline"
               size="sm"
               onClick={() => setValues({ ...baseline })}
               disabled={saving}
-              className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800"
             >
-              Reset All
+              Reset all
             </Button>
-            <Button size="sm" onClick={() => setDiffOpen(true)} disabled={saving} className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">
-              Review &amp; Save
+            <Button size="sm" onClick={() => setDiffOpen(true)} disabled={saving}>
+              Review &amp; save
             </Button>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Review & Save Diff Dialog */}
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
-        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-zinc-100">Review changes</DialogTitle>
-            <DialogDescription className="text-zinc-400">
+            <DialogTitle>Review changes</DialogTitle>
+            <DialogDescription>
               {changedKeys.length} field{changedKeys.length === 1 ? '' : 's'} will be updated.
             </DialogDescription>
           </DialogHeader>
@@ -742,50 +744,62 @@ export function SettingsClient() {
             {changedKeys.map((key) => {
               const field = descriptor.find((f) => f.key === key);
               return (
-                <div key={key} className="text-sm border-b border-zinc-800 pb-2 last:border-0">
-                  <div className="font-medium text-zinc-200">{field?.label ?? key}</div>
-                  <div className="text-zinc-400 flex items-center gap-2 mt-0.5 text-xs">
-                    <span className="line-through text-zinc-500">{serialize(baseline[key])}</span>
-                    <span aria-hidden className="text-zinc-400 font-bold">→</span>
-                    <span className="text-zinc-100 font-medium">{serialize(values[key])}</span>
+                <div
+                  key={key}
+                  className="border-b border-border-subtle pb-2 text-sm last:border-b-0"
+                >
+                  <div className="font-medium text-foreground">{field?.label ?? key}</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="line-through text-foreground-faint">{serialize(baseline[key])}</span>
+                    <span aria-hidden className="font-bold">→</span>
+                    <span className="font-medium text-foreground">{serialize(values[key])}</span>
                   </div>
                 </div>
               );
             })}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDiffOpen(false)} disabled={saving} className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800">
+            <Button variant="outline" onClick={() => setDiffOpen(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={() => save(version)} disabled={saving} data-testid="confirm-save" className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200">
-              {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
-              Confirm &amp; Save
+            <Button
+              onClick={() => save(version)}
+              disabled={saving}
+              data-testid="confirm-save"
+            >
+              {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}
+              Confirm &amp; save
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 409 Conflict Resolution Dialog */}
-      <Dialog open={conflictVersion !== null} onOpenChange={(o) => !o && setConflictVersion(null)}>
-        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100">
+      <Dialog
+        open={conflictVersion !== null}
+        onOpenChange={(o) => !o && setConflictVersion(null)}
+      >
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-zinc-100">Settings changed elsewhere</DialogTitle>
-            <DialogDescription className="text-zinc-400">
+            <DialogTitle>Settings changed elsewhere</DialogTitle>
+            <DialogDescription>
               Another admin saved version {conflictVersion} while you were editing. Re-apply your
               changes on top of the latest version?
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConflictVersion(null)} disabled={saving} className="bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800">
+            <Button
+              variant="outline"
+              onClick={() => setConflictVersion(null)}
+              disabled={saving}
+            >
               Cancel
             </Button>
             <Button
               onClick={() => conflictVersion !== null && save(conflictVersion)}
               disabled={saving}
               data-testid="conflict-reapply"
-              className="bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
             >
-              {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
+              {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}
               Re-apply
             </Button>
           </DialogFooter>
@@ -812,49 +826,52 @@ function FieldControl({
   const changed = serialize(value) !== serialize(field.default);
 
   return (
-    <div className="grid gap-1.5 group">
+    <div className="group/field flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={id} className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
+        <Label
+          htmlFor={id}
+          className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+        >
           {field.label ?? field.key}
-          {locked && <Lock className="size-3 text-zinc-500" aria-label="Environment-locked" />}
+          {locked ? (
+            <Lock className="size-3 text-foreground-faint" aria-label="Environment-locked" />
+          ) : null}
         </Label>
-        {!disabled && changed && (
+        {!disabled && changed ? (
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="xs"
             onClick={onReset}
-            className="h-5 px-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+            className="opacity-0 transition-opacity duration-150 group-hover/field:opacity-100"
             data-testid={`reset-${field.key}`}
           >
-            <Undo2 className="size-3 mr-1" />
+            <Undo2 data-icon="inline-start" />
             Reset
           </Button>
-        )}
+        ) : null}
       </div>
 
-      {field.inputType === 'textarea' && (
+      {field.inputType === 'textarea' ? (
         <Textarea
           id={id}
           rows={field.rows ?? 4}
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50 font-normal"
         />
-      )}
+      ) : null}
 
-      {field.inputType === 'text' && (
+      {field.inputType === 'text' ? (
         <Input
           id={id}
           disabled={disabled}
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50"
         />
-      )}
+      ) : null}
 
-      {field.inputType === 'number' && (
+      {field.inputType === 'number' ? (
         <Input
           id={id}
           type="number"
@@ -864,30 +881,29 @@ function FieldControl({
           disabled={disabled}
           value={value === undefined || value === null ? '' : String(value)}
           onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
-          className="h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-ring/50"
         />
-      )}
+      ) : null}
 
-      {field.inputType === 'select' && (
+      {field.inputType === 'select' ? (
         <Select
           value={(value as string) ?? ''}
           onValueChange={onChange}
           disabled={disabled}
         >
-          <SelectTrigger id={id} className="w-full h-10 px-3 py-2 text-sm bg-input-elevated border-border rounded-md text-zinc-200 focus:ring-1 focus:ring-ring/50">
+          <SelectTrigger id={id} className="w-full">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="bg-card border-border text-zinc-200">
+          <SelectContent>
             {(field.options ?? []).map((opt) => (
-              <SelectItem key={opt} value={opt} className="focus:bg-zinc-800 focus:text-zinc-100">
+              <SelectItem key={opt} value={opt}>
                 {opt}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-      )}
+      ) : null}
 
-      {field.inputType === 'toggle' && (
+      {field.inputType === 'toggle' ? (
         <div className="flex items-center gap-3 pt-1">
           <Switch
             id={id}
@@ -895,13 +911,13 @@ function FieldControl({
             checked={Boolean(value)}
             onCheckedChange={onChange}
           />
-          <span className="text-xs text-zinc-400">
+          <span className="text-xs text-muted-foreground">
             {Boolean(value) ? 'Enabled' : 'Disabled'}
           </span>
         </div>
-      )}
+      ) : null}
 
-      {field.inputType === 'slider' && (
+      {field.inputType === 'slider' ? (
         <div className="flex items-center gap-4 pt-1">
           <Slider
             id={id}
@@ -913,21 +929,23 @@ function FieldControl({
             value={[Number(value ?? field.min ?? 0)]}
             onValueChange={(v) => onChange(v[0])}
           />
-          <span className="w-12 text-right text-sm tabular-nums text-zinc-400 font-mono">
+          <span className="w-12 text-right font-mono text-sm tabular-nums text-muted-foreground">
             {String(value)}
           </span>
         </div>
-      )}
+      ) : null}
 
-      {field.helpText && <p className="text-xs text-zinc-400 leading-normal">{field.helpText}</p>}
-      {locked && (
-        <p className="text-xs text-zinc-400 leading-normal">
+      {field.helpText ? (
+        <p className="text-xs leading-normal text-muted-foreground">{field.helpText}</p>
+      ) : null}
+      {locked ? (
+        <p className="text-xs leading-normal text-muted-foreground">
           {field.readOnlyReason ?? 'Locked by environment configuration.'}
         </p>
-      )}
-      {field.available === false && field.unavailableReason && (
-        <p className="text-xs text-red-400 leading-normal">{field.unavailableReason}</p>
-      )}
+      ) : null}
+      {field.available === false && field.unavailableReason ? (
+        <p className="text-xs leading-normal text-destructive">{field.unavailableReason}</p>
+      ) : null}
     </div>
   );
 }
@@ -957,11 +975,13 @@ function OutOfScopeEditor({
   const currentEditing = editingIndex !== null && value[editingIndex] ? value[editingIndex] : null;
 
   return (
-    <Card className="bg-card border-border">
+    <Card className="gap-0">
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-base">{field.label ?? 'Out-of-Scope Topics'}</CardTitle>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-1">
+            <CardTitle className="text-base">
+              {field.label ?? 'Out-of-scope topics'}
+            </CardTitle>
             <CardDescription>
               Define out-of-scope policies, declination summary, and routing rules.
             </CardDescription>
@@ -973,131 +993,133 @@ function OutOfScopeEditor({
             disabled={disabled}
             onClick={handleAdd}
             data-testid="oos-add"
-            className="h-8 px-3 text-xs bg-zinc-900 border-border hover:bg-zinc-800 text-zinc-200 flex items-center gap-1.5"
           >
-            <Plus className="size-3.5" />
-            Add Policy
+            <Plus data-icon="inline-start" />
+            Add policy
           </Button>
         </div>
       </CardHeader>
       <CardContent>
-
-      {/* Flat Vercel-style clean data table */}
-      {value.length === 0 ? (
-        <div className="py-8 text-center text-sm text-zinc-500">
-          No out-of-scope policies configured. Click &quot;Add Policy&quot; to define a topic rule.
-        </div>
-      ) : (
-        <div className="w-full overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-zinc-800 text-xs font-medium text-zinc-400">
-                <th className="py-2.5 px-2 w-1/4 font-medium text-zinc-200">TOPIC</th>
-                <th className="py-2.5 px-2 font-medium text-zinc-200">ACTION SUMMARY / HANDLING</th>
-                <th className="py-2.5 px-2 w-20 text-right font-medium text-zinc-200">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/60">
-              {value.map((item, index) => (
-                <tr key={index} data-testid="oos-item" className="group hover:bg-surface-elevated/50 transition-colors">
-                  <td className="py-3 px-2 font-medium text-zinc-200 w-1/4 truncate">
-                    {item.topic || <span className="text-zinc-500 italic">Untitled</span>}
-                  </td>
-                  <td className="py-3 px-2">
-                    <div className="truncate max-w-md text-zinc-400">
-                      {item.handling || <span className="text-zinc-500 italic">No handling summary</span>}
-                    </div>
-                  </td>
-                  <td className="py-3 px-2 w-20 text-right">
-                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 rounded-md transition-colors"
-                        onClick={() => setEditingIndex(index)}
-                        title="Edit policy"
-                      >
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        disabled={disabled}
-                        onClick={() => {
-                          onChange(value.filter((_, i) => i !== index));
-                          if (editingIndex === index) setEditingIndex(null);
-                        }}
-                        className="size-7 text-zinc-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
-                        data-testid={`oos-remove-${index}`}
-                        title="Delete policy"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
+        {value.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border-subtle py-8 text-center text-sm text-muted-foreground">
+            No out-of-scope policies configured. Click &quot;Add policy&quot; to define a topic rule.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border-subtle">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-1/4">Topic</TableHead>
+                  <TableHead>Action summary / handling</TableHead>
+                  <TableHead className="w-20 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {value.map((item, index) => (
+                  <TableRow key={index} data-testid="oos-item">
+                    <TableCell className="w-1/4 font-medium text-foreground">
+                      {item.topic || <span className="italic text-foreground-faint">Untitled</span>}
+                    </TableCell>
+                    <TableCell className="max-w-md text-muted-foreground">
+                      <span className="line-clamp-2">
+                        {item.handling || (
+                          <span className="italic text-foreground-faint">No handling summary</span>
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell className="w-20 text-right">
+                      <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover/row:opacity-100">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => setEditingIndex(index)}
+                          aria-label={`Edit ${item.topic || 'policy'}`}
+                          title="Edit policy"
+                        >
+                          <Pencil />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={disabled}
+                          onClick={() => {
+                            onChange(value.filter((_, i) => i !== index));
+                            if (editingIndex === index) setEditingIndex(null);
+                          }}
+                          aria-label={`Delete ${item.topic || 'policy'}`}
+                          title="Delete policy"
+                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          data-testid={`oos-remove-${index}`}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </CardContent>
 
-      {/* Slide-over Drawer (Sheet) for focused policy editing */}
-      <Sheet open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
-        <SheetContent side="right" className="sm:max-w-md bg-card border-border text-zinc-100 flex flex-col">
-          <SheetHeader className="pb-4 border-b border-zinc-800">
-            <SheetTitle className="text-zinc-100">
+      <Sheet
+        open={editingIndex !== null}
+        onOpenChange={(open) => !open && setEditingIndex(null)}
+      >
+        <SheetContent side="right" className="flex flex-col">
+          <SheetHeader>
+            <SheetTitle>
               {editingIndex !== null && value[editingIndex]?.topic
-                ? `Edit Policy: ${value[editingIndex].topic}`
-                : 'Out-of-Scope Topic Policy'}
+                ? `Edit policy: ${value[editingIndex].topic}`
+                : 'Out-of-scope topic policy'}
             </SheetTitle>
-            <SheetDescription className="text-zinc-400">
+            <SheetDescription>
               Specify the topic identifier and exact declination or routing guidelines for the agent.
             </SheetDescription>
           </SheetHeader>
-          {currentEditing && (
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              <div className="space-y-1.5">
-                <Label htmlFor="drawer-topic" className="text-xs font-medium text-zinc-400">Topic Name</Label>
+          {currentEditing ? (
+            <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="drawer-topic" className="text-xs font-medium text-muted-foreground">
+                  Topic name
+                </Label>
                 <Input
                   id="drawer-topic"
                   placeholder="e.g. legal-advice"
                   value={currentEditing.topic}
                   onChange={(e) => updateAt(editingIndex!, { topic: e.target.value })}
-                  className="h-10 px-3 py-2 text-sm border border-zinc-800 bg-zinc-900/50 text-zinc-200 placeholder:text-zinc-500"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="drawer-handling" className="text-xs font-medium text-zinc-400">Action Summary &amp; Handling</Label>
+              <div className="flex flex-col gap-1.5">
+                <Label
+                  htmlFor="drawer-handling"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  Action summary &amp; handling
+                </Label>
                 <Textarea
                   id="drawer-handling"
-                  placeholder="e.g. Decline request &amp; open security ticket..."
+                  placeholder="e.g. Decline request &amp; open security ticket…"
                   rows={5}
-                  className="min-h-[120px] px-3 py-2 text-sm border border-zinc-800 bg-zinc-900/50 text-zinc-200 placeholder:text-zinc-500 leading-relaxed"
+                  className="min-h-[120px] leading-relaxed"
                   value={currentEditing.handling}
                   onChange={(e) => updateAt(editingIndex!, { handling: e.target.value })}
                 />
               </div>
             </div>
-          )}
-          <div className="flex items-center justify-between gap-3 border-t border-zinc-800 p-4">
+          ) : null}
+          <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
             <Button
               type="button"
               variant="outline"
               onClick={() => setEditingIndex(null)}
-              className="h-9 px-4 text-sm font-medium border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
             >
               Cancel
             </Button>
-            <Button
-              type="button"
-              onClick={() => setEditingIndex(null)}
-              className="h-9 px-4 text-sm font-medium bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
-            >
+            <Button type="button" onClick={() => setEditingIndex(null)}>
               Save
             </Button>
           </div>

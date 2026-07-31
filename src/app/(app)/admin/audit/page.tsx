@@ -4,6 +4,11 @@ import { Pagination } from '@/components/admin/Pagination';
 import { Badge } from '@/components/ui/badge';
 import { auditTargetLabel } from '@/components/admin/AuditEventList';
 import {
+  Card,
+  CardTitle,
+  CardDescription,
+} from '@/components/ui/card';
+import {
   Table,
   TableHeader,
   TableBody,
@@ -48,10 +53,14 @@ function EventDetails({
 }) {
   if (kind === 'user') {
     return (
-      <span className="flex items-center gap-1">
-        <Badge variant="outline">{formatValue(details.fromRole)}</Badge>
-        <span aria-hidden>→</span>
-        <Badge variant="outline">{formatValue(details.toRole)}</Badge>
+      <span className="flex items-center gap-1.5">
+        <Badge variant="outline" className="font-normal">
+          {formatValue(details.fromRole)}
+        </Badge>
+        <span aria-hidden className="text-foreground-faint">→</span>
+        <Badge variant="outline" className="font-normal">
+          {formatValue(details.toRole)}
+        </Badge>
       </span>
     );
   }
@@ -59,12 +68,14 @@ function EventDetails({
     const changes = settingsChanges(details);
     return (
       <div className="flex flex-col gap-2">
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-1">
           {changes.map((c) => (
-            <li key={c.key} className="flex flex-wrap items-baseline gap-1">
+            <li key={c.key} className="flex flex-wrap items-baseline gap-1.5">
               <span className="font-medium text-foreground">{c.key}</span>
-              <span className="text-muted-foreground">
-                {formatValue(c.old)} → {formatValue(c.new)}
+              <span className="font-mono text-xs text-muted-foreground">
+                <span className="line-through opacity-70">{formatValue(c.old)}</span>
+                <span className="mx-1 text-foreground-faint" aria-hidden>→</span>
+                <span className="text-foreground">{formatValue(c.new)}</span>
               </span>
             </li>
           ))}
@@ -76,6 +87,19 @@ function EventDetails({
     );
   }
   return <span className="text-muted-foreground">—</span>;
+}
+
+function kindBadgeClass(kind: AuditKind): string {
+  switch (kind) {
+    case 'document':
+      return 'border-primary/40 text-primary';
+    case 'ticket':
+      return 'border-warning/40 text-warning';
+    case 'user':
+      return 'border-accent-info/40 text-accent-info';
+    case 'settings':
+      return 'border-border text-muted-foreground';
+  }
 }
 
 export default async function AuditPage({
@@ -116,8 +140,13 @@ export default async function AuditPage({
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-xl font-medium">Audit log</h2>
+    <section className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Audit log</h2>
+        <p className="text-sm text-muted-foreground">
+          Recent admin and system actions. Filter by kind, actor, or date.
+        </p>
+      </div>
       <AuditFilterForm
         kind={kind}
         action={action}
@@ -125,70 +154,59 @@ export default async function AuditPage({
         from={params.from}
         to={params.to}
       />
-      <div className="overflow-x-auto rounded-xl border border-border-subtle">
-        <Table data-testid="audit-table" aria-label="Audit events">
-          <TableHeader className="bg-secondary text-muted-foreground">
-            <TableRow>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                When
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Kind
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Action
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Target
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Actor
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Details
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.events.length === 0 ? (
+      {result.events.length === 0 ? (
+        <Card className="border-dashed p-8 shadow-none">
+          <div className="flex flex-col items-center gap-1 text-center">
+            <CardTitle className="text-base">No audit events</CardTitle>
+            <CardDescription>
+              Try widening the filters or pick a wider date range.
+            </CardDescription>
+          </div>
+        </Card>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-border-subtle">
+          <Table data-testid="audit-table" aria-label="Audit events">
+            <TableHeader>
               <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="px-3 py-4 text-center text-muted-foreground"
-                >
-                  No audit events.
-                </TableCell>
+                <TableHead className="w-44">When</TableHead>
+                <TableHead className="w-24">Kind</TableHead>
+                <TableHead className="w-40">Action</TableHead>
+                <TableHead className="w-40">Target</TableHead>
+                <TableHead>Actor</TableHead>
+                <TableHead>Details</TableHead>
               </TableRow>
-            ) : (
-              result.events.map((e) => (
-                <TableRow
-                  key={e.id}
-                  className="border-border-subtle hover:bg-secondary/40"
-                >
-                  <TableCell className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                    {e.at.toISOString()}
+            </TableHeader>
+            <TableBody>
+              {result.events.map((e) => (
+                <TableRow key={e.id}>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                    <time dateTime={e.at.toISOString()} title={e.at.toISOString()}>
+                      {e.at.toISOString().slice(0, 16).replace('T', ' ')}
+                    </time>
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-foreground">
-                    {e.kind}
+                  <TableCell>
+                    <Badge variant="outline" className={`font-normal ${kindBadgeClass(e.kind)}`}>
+                      {e.kind}
+                    </Badge>
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-xs font-medium text-foreground">
+                  <TableCell className="text-sm font-medium text-foreground">
                     {e.action}
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
+                  <TableCell className="text-sm text-muted-foreground">
                     {auditTargetLabel(e)}
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
+                  <TableCell className="text-sm text-muted-foreground">
                     {e.actorName ?? e.actorId}
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-xs">
+                  <TableCell className="text-sm">
                     <EventDetails kind={e.kind} details={e.details} />
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
       <Pagination
         page={page}
         totalPages={totalPages}

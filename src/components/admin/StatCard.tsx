@@ -12,11 +12,11 @@ interface StatCardProps {
 export function StatCard({ label, value, href, testId }: StatCardProps) {
   const content = (
     <>
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+      <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </span>
-      <span className="text-2xl font-semibold text-foreground">
-        {value}
+      <span className="text-2xl font-semibold tabular-nums text-foreground">
+        {value.toLocaleString()}
       </span>
     </>
   );
@@ -25,13 +25,13 @@ export function StatCard({ label, value, href, testId }: StatCardProps) {
     return (
       <Link
         href={href}
-        className="group block"
+        className="group block rounded-xl focus-visible:outline-none"
         data-testid={testId}
       >
         <Card
           className={cn(
-            'gap-1 p-4 shadow-none transition-all duration-200',
-            'group-hover:-translate-y-0.5 group-hover:border-primary/60 group-hover:bg-surface-elevated group-hover:shadow-lg',
+            'gap-2 p-4 shadow-none transition-colors duration-200',
+            'group-hover:border-primary/40 group-hover:bg-surface-elevated',
           )}
         >
           {content}
@@ -41,6 +41,6 @@ export function StatCard({ label, value, href, testId }: StatCardProps) {
   }
 
   return (
-    <Card className="gap-1 p-4 shadow-none">{content}</Card>
+    <Card className="gap-2 p-4 shadow-none">{content}</Card>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Calculator } from 'lucide-react';
 import { recountAllChunksAction } from '../actions';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
@@ -14,6 +15,7 @@ export function RecountAllButton() {
     <Button
       type="button"
       variant="outline"
+      size="sm"
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
@@ -34,7 +36,8 @@ export function RecountAllButton() {
       }
       data-testid="documents-recount-all"
     >
-      {pending ? 'Recounting…' : 'Recount all chunks'}
+      <Calculator data-icon="inline-start" />
+      {pending ? 'Recounting…' : 'Recount'}
     </Button>
   );
 }
