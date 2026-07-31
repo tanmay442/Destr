@@ -14,7 +14,6 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
@@ -94,10 +93,6 @@ function toWeekly(points: AnalyticsTrendPoint[], maxWeeks = 12): WeeklyPoint[] {
   return weeks.slice(-maxWeeks);
 }
 
-function truncate(value: string, max = 14) {
-  return value.length > max ? `${value.slice(0, max)}…` : value;
-}
-
 function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
   const buckets = mode.queryLengthBuckets;
   const bucketTotal = Math.max(1, buckets.short + buckets.medium + buckets.long);
@@ -157,18 +152,14 @@ export default async function AnalyticsPage() {
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
-  const [chatRes, trendsRes, topicsRes, summaryRes, documentsRes, ticketsRes] = await Promise.all([
+  const [chatRes, trendsRes, documentsRes, ticketsRes] = await Promise.all([
     comp.getChatAnalytics({ actorId, usageDays: 7 }),
     comp.getAnalyticsTrends({ actorId }),
-    comp.getTopicCoverage({ actorId }),
-    comp.getAnalyticsSummary({ actorId }),
     comp.getDocumentAnalytics({ actorId }),
     comp.getTicketIntelligence({ actorId }),
   ]);
   const chat = chatRes.ok ? chatRes.value : null;
   const trends = trendsRes.ok ? trendsRes.value : null;
-  const topics = topicsRes.ok ? topicsRes.value : null;
-  const summary = summaryRes.ok ? summaryRes.value : null;
   const documents = documentsRes.ok ? documentsRes.value : null;
   const ticketIntel = ticketsRes.ok ? ticketsRes.value : null;
 
@@ -420,98 +411,6 @@ export default async function AnalyticsPage() {
         >
           <h3 className="text-lg font-medium">Behavior</h3>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Card className="gap-0" data-testid="analytics-topic-coverage">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Topic coverage</CardTitle>
-                <CardDescription>Coverage and ticket rate per seeded topic.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                {topics && topics.topics.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Topic</TableHead>
-                        <TableHead className="text-right">Queries</TableHead>
-                        <TableHead className="text-right">Coverage</TableHead>
-                        <TableHead className="text-right">Ticket rate</TableHead>
-                        <TableHead className="text-right">Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {topics.topics.map((t) => (
-                        <TableRow key={t.topic}>
-                          <TableCell className="font-medium text-foreground">{t.topic}</TableCell>
-                          <TableCell className="text-right tabular-nums">{num(t.queries)}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {t.queries > 0 ? pct(1 - t.oodRate) : '—'}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {t.queries > 0 ? pct(t.ticketRate) : '—'}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {t.frustrated ? (
-                              <Badge variant="destructive">Frustrated</Badge>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No topic activity yet.</p>
-                )}
-                {topics && topics.unmatched > 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    {num(topics.unmatched)} queries matched no seeded topic.
-                  </p>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0" data-testid="analytics-stuck-sessions">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Stuck sessions</CardTitle>
-                <CardDescription>
-                  Sessions with repeated turns and no resolution.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <span className="text-2xl font-semibold tabular-nums text-foreground">
-                  {chat ? num(chat.stuckSessions.count) : '0'}
-                </span>
-                {chat && chat.stuckSessions.samples.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>User</TableHead>
-                        <TableHead className="text-right">Turns</TableHead>
-                        <TableHead className="text-right">Last activity</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {chat.stuckSessions.samples.map((s) => (
-                        <TableRow key={`${s.userId}-${s.sessionNo}`}>
-                          <TableCell className="font-mono text-xs text-foreground">
-                            {truncate(s.userId)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">{num(s.turns)}</TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                            {new Date(s.lastActivity).toLocaleString()}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No stuck sessions detected.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
           <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
             <h4 className="text-sm font-medium text-muted-foreground">Ticket intelligence</h4>
             {ticketIntel ? (
@@ -592,9 +491,6 @@ export default async function AnalyticsPage() {
             ) : (
               <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
             )}
-            <p className="text-xs text-muted-foreground">
-              Topic-level ticket rates are shown in the Topic coverage card above.
-            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -673,42 +569,6 @@ export default async function AnalyticsPage() {
                   </ul>
                 ) : (
                   <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Top queries</CardTitle>
-                <CardDescription>Most frequent questions.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {summary && summary.topQueries.length > 0 ? (
-                  <BarList items={summary.topQueries.map((q) => ({ label: q.q, value: q.count }))} />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No queries recorded yet.</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="gap-0">
-              <CardHeader className="gap-1 pb-4">
-                <CardTitle>Top zero-result queries</CardTitle>
-                <CardDescription>Questions that returned no matching docs.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {chat && chat.topZeroResultQueries.length > 0 ? (
-                  <BarList
-                    items={chat.topZeroResultQueries.map((q) => ({
-                      label: q.q,
-                      value: q.count,
-                      barClassName: 'bg-foreground-subtle',
-                    }))}
-                  />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No zero-result queries.</p>
                 )}
               </CardContent>
             </Card>

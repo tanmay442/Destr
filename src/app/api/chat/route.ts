@@ -214,10 +214,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
         .join('\n')
     : '';
 
-  if (lastUserText) {
-    void comp.recordQuery(userId, lastUserText).catch(() => {});
-  }
-
   const capturedCitations: EmittedCitation[] = [];
 
   const turnId = resolveTurnId(parsed.data.turnId);

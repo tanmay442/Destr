@@ -73,7 +73,6 @@ type MockComposition = {
   rateLimit: () => typeof rateLimitResult;
   searchChunks: ReturnType<typeof vi.fn>;
   createTicket: ReturnType<typeof vi.fn>;
-  recordQuery: ReturnType<typeof vi.fn>;
   getChatModel: ReturnType<typeof vi.fn>;
   getEmbeddingModel: ReturnType<typeof vi.fn>;
   getEmbeddingModelId: ReturnType<typeof vi.fn>;
@@ -93,7 +92,6 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     rateLimit: () => rateLimitResult,
     searchChunks: vi.fn(async () => ok(searchValue) as never),
     createTicket: createTicketMock,
-    recordQuery: vi.fn(() => Promise.resolve()),
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     getEmbeddingModelId: vi.fn(() => 'mock-embed'),

@@ -150,36 +150,6 @@ describe('ChatEventBatcher', () => {
     expect(sql).toContain('limit');
   });
 
-  it('getStuckSessions sessionizes with lag and reports count + samples', async () => {
-    const rows = Array.from({ length: 10 }, (_, i) => ({
-      total_count: 12,
-      user_id: `u${i}`,
-      session_no: i + 1,
-      turns: 6,
-      last_activity: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
-    }));
-    const { client, executed } = makeExecuteClient(rows);
-    const result = await new ChatEventBatcher(client).getStuckSessions();
-    expect(result.count).toBe(12);
-    expect(result.samples).toHaveLength(10);
-    expect(result.samples[0]).toEqual({ userId: 'u0', sessionNo: 1, turns: 6, lastActivity: '2026-01-01T00:00:00Z' });
-    const sql = compiled(executed);
-    expect(sql).toContain('lag(');
-    expect(sql).toContain('partition by');
-    expect(sql).toContain("interval '30 minutes'");
-    expect(sql).toContain('having count(*) >= 5');
-    expect(sql).toContain('is not null');
-    expect(sql).toContain('order by last_activity desc');
-    expect(sql).toContain('limit 10');
-    expect(sql).not.toContain('any_ticket');
-  });
-
-  it('getStuckSessions returns zero count with no rows', async () => {
-    const { client } = makeExecuteClient([]);
-    const result = await new ChatEventBatcher(client).getStuckSessions();
-    expect(result).toEqual({ count: 0, samples: [] });
-  });
-
   it('getDocumentUtility joins meta.documentIds to documents with p95 similarity', async () => {
     const { client, executed } = makeExecuteClient([
       { document_id: 3, file_name: 'guide.pdf', retrieval_count: 12, p95_similarity: 0.88, ticket_conversion_rate: 0.25 },

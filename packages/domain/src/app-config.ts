@@ -96,15 +96,6 @@ export const appConfigSchema = z.object({
   answerCacheTtlSec: z.coerce.number().int().positive().default(3600),
   captureQueryText: z.boolean().default(true),
   retrievalModeRolloutPercent: z.coerce.number().min(0).max(100).default(100),
-  analyticsTopics: z
-    .record(z.string().min(1), z.array(z.string().min(1)))
-    .default({
-      'password reset': ['password', 'reset password', 'forgot password', 'locked out'],
-      billing: ['billing', 'invoice', 'payment', 'refund', 'charge', 'subscription'],
-      installation: ['install', 'installation', 'setup', 'download'],
-      api: ['api', 'endpoint', 'token', 'webhook', 'rate limit'],
-      account: ['account', 'login', 'sign in', 'sign up', 'profile'],
-    }),
 }).strip();
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

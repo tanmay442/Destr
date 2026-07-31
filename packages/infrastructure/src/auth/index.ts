@@ -1,8 +1,6 @@
 export { clerkSessionStore, clerkClient } from './clerk-session';
 export { lruRateLimiter } from './lru-rate-limiter';
-export { inMemoryQueryStats } from './in-memory-query-stats';
 export { createUpstashRateLimiter } from './upstash-rate-limiter';
-export { createUpstashQueryStats } from './upstash-query-stats';
 export { createUpstashAnswerCache } from './upstash-answer-cache';
 export { createInMemoryAnswerCache } from './in-memory-answer-cache';
 export { answerCacheKey } from './answer-cache-key';
