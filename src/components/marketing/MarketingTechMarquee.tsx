@@ -78,7 +78,10 @@ export function MarketingTechMarquee() {
   });
 
   return (
-    <section data-testid="landing-marquee">
+    <section
+      data-testid="landing-marquee"
+      className="mt-14 w-full sm:mt-16"
+    >
       <LogoLoop
         logos={logos}
         speed={80}

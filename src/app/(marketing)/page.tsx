@@ -8,9 +8,9 @@ export default function MarketingHome() {
     <>
       <main
         data-testid="landing-main"
-        className="relative flex flex-1 flex-col items-center overflow-x-clip px-5 pb-16 pt-12 sm:px-6 sm:pb-20 sm:pt-20"
+        className="relative flex flex-1 flex-col items-center overflow-x-clip pb-16 pt-12 sm:pb-20 sm:pt-20"
       >
-        <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-14 sm:gap-16">
+        <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-14 px-5 sm:gap-16 sm:px-6">
           <section className="grid w-full items-center gap-10 md:grid-cols-[3fr_2fr] md:gap-12 lg:gap-16">
             <MarketingHero />
 
@@ -23,9 +23,9 @@ export default function MarketingHome() {
           </section>
 
           <MarketingQuickStart />
-
-          <MarketingTechMarquee />
         </div>
+
+        <MarketingTechMarquee />
       </main>
     </>
   );
