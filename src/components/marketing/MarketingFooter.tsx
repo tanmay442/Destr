@@ -4,7 +4,7 @@ import { FOOTER_LINKS } from '@/components/marketing/marketing-content';
 export function MarketingFooter() {
   return (
     <footer
-      className="mt-auto border-t border-border-subtle bg-background/80 backdrop-blur"
+      className="mt-auto border-t border-border-subtle bg-background"
       data-testid="landing-footer"
     >
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-8">
