@@ -36,9 +36,3 @@ export const QUICK_START = {
   ],
   note: 'Clerk keys are still required for sign-in. For a zero-key local setup use the Ollama profile; see the README "Deploy to Vercel" section for production.',
 };
-
-export const FOOTER_LINKS = [
-  { label: 'Source', href: 'https://github.com/tanmay442/rag_agent' },
-  { label: 'README', href: 'https://github.com/tanmay442/rag_agent#readme' },
-  { label: 'Contributing', href: '/CONTRIBUTING' },
-];

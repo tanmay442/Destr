@@ -158,8 +158,7 @@ src/
 ├── components/
 │   ├── ChatInterface.tsx
 │   ├── app/AppSidebar.tsx  # Unified sidebar + mobile drawer (Client)
-│   ├── marketing/          # MarketingHero, MarketingFooter, MarketingAuthCard, MarketingTechMarquee, MarketingQuickStart
-│   └── icons/GithubIcon.tsx
+│   ├── marketing/          # MarketingHero, MarketingAuthCard, MarketingTechMarquee, MarketingQuickStart
 ├── lib/
 │   ├── http.ts             # respond() + respondResult() + toSafeError() + toActionResult() + isActionError()
 │   ├── logger.ts           # Structured JSON logger
