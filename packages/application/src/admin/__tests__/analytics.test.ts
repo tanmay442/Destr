@@ -31,11 +31,9 @@ const metrics: ChatEventMetrics = {
 
 const chatEvents = {
   getMetrics: async () => metrics,
-  getTopZeroResultQueries: async () => [{ q: 'refund', count: 5 }],
   getUsageOverTime: async () => [{ day: '2026-01-01', total: 10, uniqueUsers: 3 }],
   getModeComparison: async () => [],
   getCacheBusterQueries: async () => [{ query: 'reset key', misses: 4 }],
-  getStuckSessions: async () => ({ count: 2, samples: [] }),
 } as unknown as ChatEventsRepo;
 
 describe('getChatAnalytics', () => {
@@ -45,17 +43,15 @@ describe('getChatAnalytics', () => {
     if (!res.ok) expect(res.error).toBeInstanceOf(ForbiddenError);
   });
 
-  it('returns metrics, zero-result queries, usage, and an estimated cost', async () => {
+  it('returns metrics, usage, and an estimated cost', async () => {
     const res = await getChatAnalytics({ actorId: 'admin' }, { users: adminUsers, chatEvents });
     const value = unwrap(res);
     expect(value.total).toBe(100);
     expect(value.ticketCreationRate).toBe(0.1);
     expect(value.selfServeSuccessRate).toBe(0.7);
-    expect(value.topZeroResultQueries).toEqual([{ q: 'refund', count: 5 }]);
     expect(value.usageOverTime).toHaveLength(1);
     expect(value.estimatedCostUsd).toBeCloseTo(0.15 + 0.3, 5);
     expect(value.cacheBusterQueries).toEqual([{ query: 'reset key', misses: 4 }]);
-    expect(value.stuckSessions.count).toBe(2);
   });
 });
 

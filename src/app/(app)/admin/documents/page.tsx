@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Alert } from '@/components/ui/alert';
 import {
   Table,
   TableHeader,
@@ -26,14 +25,14 @@ const PAGE_SIZE = 25;
 function ingestBadgeClass(status: IngestStatus): string {
   switch (status) {
     case 'queued':
-      return 'rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs text-warning';
+      return 'border-warning/40 bg-warning/10 text-warning';
     case 'ingesting':
-      return 'rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary';
+      return 'border-primary/40 bg-primary/10 text-primary';
     case 'failed':
-      return 'rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive';
+      return 'border-destructive/40 bg-destructive/10 text-destructive';
     case 'done':
     default:
-      return 'rounded-full border border-muted-foreground/30 px-2 py-0.5 text-xs text-muted-foreground';
+      return 'border-border text-muted-foreground';
   }
 }
 
@@ -43,29 +42,12 @@ export default async function DocumentsPage({
   searchParams: Promise<{
     search?: string;
     page?: string;
-    recountedDocs?: string;
-    recountedTotal?: string;
   }>;
 }) {
   const params = await searchParams;
   const search = params.search?.trim() ?? '';
   const page = parsePageParam(params.page);
   const offset = (page - 1) * PAGE_SIZE;
-  const recountedDocsRaw = params.recountedDocs;
-  const recountedTotalRaw = params.recountedTotal;
-  const recountedDocs =
-    recountedDocsRaw !== undefined && recountedDocsRaw !== ''
-      ? Number(recountedDocsRaw)
-      : null;
-  const recountedTotal =
-    recountedTotalRaw !== undefined && recountedTotalRaw !== ''
-      ? Number(recountedTotalRaw)
-      : null;
-  const showRecountBanner =
-    recountedDocs !== null &&
-    !Number.isNaN(recountedDocs) &&
-    recountedTotal !== null &&
-    !Number.isNaN(recountedTotal);
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
   const result = unwrap(await getComposition().listDocuments({
@@ -80,10 +62,20 @@ export default async function DocumentsPage({
     (d) => d.ingestStatus === 'queued' || d.ingestStatus === 'ingesting',
   );
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-xl font-medium">Documents</h2>
-      <div className="flex flex-col gap-2">
-        <form className="flex gap-2" method="get" aria-label="Search documents">
+    <section className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Documents</h2>
+        <p className="text-sm text-muted-foreground">
+          Manage uploaded PDFs and their ingestion status.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <form
+          className="flex flex-col gap-2 sm:flex-row sm:items-center"
+          method="get"
+          aria-label="Search documents"
+        >
           <Label className="sr-only" htmlFor="documents-search">
             Search documents
           </Label>
@@ -93,57 +85,36 @@ export default async function DocumentsPage({
             name="search"
             defaultValue={search}
             placeholder="Search file name…"
-            className="flex-1 bg-background"
+            className="flex-1"
             data-testid="documents-search"
           />
-          <Button type="submit">Search</Button>
-          <RecountAllButton />
-          <UploadDocumentDialog />
+          <div className="flex items-center gap-2">
+            <Button type="submit" size="sm">
+              Search
+            </Button>
+            <RecountAllButton />
+            <UploadDocumentDialog />
+          </div>
         </form>
-        {showRecountBanner ? (
-          <Alert
-            className="border-success/40 bg-success/10 px-3 py-2 text-success"
-            data-testid="documents-recount-banner"
-            role="status"
-          >
-            Recounted {recountedDocs} document{recountedDocs === 1 ? '' : 's'}, total {recountedTotal} chunk{recountedTotal === 1 ? '' : 's'}.
-          </Alert>
-        ) : null}
       </div>
-      <div className="overflow-x-auto rounded-xl border border-border-subtle">
+
+      <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
         <Table data-testid="documents-table" aria-label="Documents">
-          <TableHeader className="bg-secondary text-muted-foreground">
+          <TableHeader>
             <TableRow>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                File
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Uploaded by
-              </TableHead>
-              <TableHead className="px-3 py-2 text-right text-xs uppercase">
-                At
-              </TableHead>
-              <TableHead className="px-3 py-2 text-right text-xs uppercase">
-                Chunks
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Status
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Ingest
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Actions
-              </TableHead>
+              <TableHead>File</TableHead>
+              <TableHead className="hidden md:table-cell">Uploaded by</TableHead>
+              <TableHead className="hidden text-right lg:table-cell">At</TableHead>
+              <TableHead className="text-right">Chunks</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Ingest</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {result.documents.length === 0 ? (
               <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className="px-3 py-4 text-center text-muted-foreground"
-                >
+                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                   No documents.
                 </TableCell>
               </TableRow>
@@ -151,41 +122,50 @@ export default async function DocumentsPage({
               result.documents.map((d) => (
                 <TableRow
                   key={d.id}
-                  className="border-border-subtle hover:bg-secondary/40"
                   data-testid={`documents-row-${d.id}`}
                 >
-                  <TableCell className="px-3 py-2 font-medium text-foreground">
-                    {d.fileName}
+                  <TableCell className="max-w-[260px] font-medium text-foreground">
+                    <div className="flex flex-col">
+                      <span className="truncate" title={d.fileName}>
+                        {d.fileName}
+                      </span>
+                      <span className="text-xs text-muted-foreground md:hidden">
+                        {d.uploaderName ?? d.uploadedBy}
+                      </span>
+                    </div>
                   </TableCell>
-                  <TableCell className="px-3 py-2 text-muted-foreground">
+                  <TableCell className="hidden text-muted-foreground md:table-cell">
                     {d.uploaderName ?? d.uploadedBy}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-xs text-muted-foreground">
-                    {d.uploadedAt.toISOString()}
+                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums lg:table-cell">
+                    <time dateTime={d.uploadedAt.toISOString()} title={d.uploadedAt.toISOString()}>
+                      {d.uploadedAt.toISOString().slice(0, 10)}
+                    </time>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap px-3 py-2 text-right text-foreground">
-                    {d.chunkCount}
+                  <TableCell className="whitespace-nowrap text-right text-foreground tabular-nums">
+                    {d.chunkCount.toLocaleString()}
                   </TableCell>
-                  <TableCell className="px-3 py-2">
+                  <TableCell>
                     {d.deletedAt ? (
-                      <Badge className="rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
+                      <Badge variant="outline" className="border-destructive/40 text-destructive">
                         deleted
                       </Badge>
                     ) : (
-                      <Badge className="rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs text-success">
+                      <Badge variant="outline" className="border-success/40 text-success">
                         live
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="px-3 py-2">
+                  <TableCell>
                     <Badge
+                      variant="outline"
                       className={ingestBadgeClass(d.ingestStatus)}
                       data-testid={`documents-ingest-status-${d.id}`}
                     >
                       {d.ingestStatus}
                     </Badge>
                   </TableCell>
-                  <TableCell className="px-3 py-2">
+                  <TableCell className="text-right">
                     <DocumentRowActions
                       id={d.id}
                       fileName={d.fileName}

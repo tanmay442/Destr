@@ -3,7 +3,7 @@ import { appConfigSchema, type AppConfig } from '@app/domain/app-config';
 import { appConfig } from '@/lib/config';
 import { fieldConfig, type FieldMeta } from './field-config';
 
-export const NON_EDITABLE_FIELDS = ['adminEmails', 'seedDocsDir', 'prefetchFirstTurn', 'analyticsTopics'] as const;
+export const NON_EDITABLE_FIELDS = ['adminEmails', 'seedDocsDir', 'prefetchFirstTurn'] as const;
 
 export const IMMUTABLE_FIELDS = ['embeddingModel', ...NON_EDITABLE_FIELDS] as const;
 

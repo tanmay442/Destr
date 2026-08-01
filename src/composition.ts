@@ -1,13 +1,13 @@
 import {
   ingestFile, searchChunks, listUsers, setUserRole, touchLastSeen,
-  getUserByClerkId, logDocumentEvent, logTicketEvent, recordQuery,
-  getTopQueries, enforceRateLimit, listDocuments, uploadPdf,
+  getUserByClerkId, logDocumentEvent, logTicketEvent,
+  enforceRateLimit, listDocuments, uploadPdf,
   softDeleteDocument, restoreDocument, listTickets, updateTicket,
   createTicket,
   isTicketStatus, TICKET_STATUSES,
   getDocumentById, hardDeleteDocument, replacePdf,
   recountChunksForDocument, recountChunksForAllDocuments,
-  getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends, getTopicCoverage,
+  getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends,
   getDocumentAnalytics, submitChatFeedback,
   getTicketIntelligence,
   listAudit, logSettingsChange,
@@ -24,7 +24,7 @@ const authAdapter = Auth.createAuthAdapter();
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type QueryStats, type Reranker } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
 import type { MyUIMessage } from '@/chat/types';
 import type { DocumentRow } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
@@ -166,9 +166,6 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
 const rateLimiter: RateLimiter =
   process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashRateLimiter() : Auth.lruRateLimiter;
 
-const queryStats: QueryStats =
-  process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashQueryStats() : Auth.inMemoryQueryStats;
-
 function createAnswerCache() {
   if (process.env.UPSTASH_REDIS_REST_URL) {
     try {
@@ -204,8 +201,6 @@ function createComposition() {
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logSettingsChange: (input: Parameters<typeof logSettingsChange>[0]) => logSettingsChange(input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    recordQuery: (userId: string, query: string) => recordQuery(userId, query, { stats: queryStats }),
-    getTopQueries: (limit: number) => getTopQueries(limit, { stats: queryStats }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
@@ -248,13 +243,11 @@ function createComposition() {
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
     getAnalyticsSummary: (input: { actorId: string }) =>
-      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps, stats: queryStats }),
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
     getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
       bind(getAnalyticsTrends, input, { ...userDeps, chatEvents: chatEventBatcher }),
-    getTopicCoverage: async (input: Parameters<typeof getTopicCoverage>[0]) =>
-      bind(getTopicCoverage, input, { ...userDeps, chatEvents: chatEventBatcher, config: await getRuntimeConfig() }),
     getDocumentAnalytics: (input: Parameters<typeof getDocumentAnalytics>[0]) =>
       bind(getDocumentAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher, feedback: chatFeedbackRepo }),
     getTicketIntelligence: (input: Parameters<typeof getTicketIntelligence>[0]) =>

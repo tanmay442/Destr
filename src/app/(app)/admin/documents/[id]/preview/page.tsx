@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ArrowLeft, FileWarning } from 'lucide-react';
 import { getComposition, unwrap } from '@/composition';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
 export const dynamic = 'force-dynamic';
@@ -19,33 +20,47 @@ export default async function PreviewPage({
   if (!doc) notFound();
   if (doc.deletedAt) {
     return (
-      <section className="flex flex-col gap-3" data-testid="document-preview">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-medium">{doc.fileName}</h2>
-            <p className="text-xs text-muted-foreground">This document has been deleted. Restore it to preview.</p>
+      <section className="flex flex-col gap-4" data-testid="document-preview">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+              {doc.fileName}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              This document has been deleted. Restore it to preview.
+            </p>
           </div>
           <Button asChild variant="outline" size="sm">
-            <Link href="/admin/documents">Back</Link>
+            <Link href="/admin/documents">
+              <ArrowLeft data-icon="inline-start" />
+              Back
+            </Link>
           </Button>
         </div>
       </section>
     );
   }
   return (
-    <section className="flex flex-col gap-3" data-testid="document-preview">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-medium">{doc.fileName}</h2>
-          <p className="text-xs text-muted-foreground">
+    <section className="flex flex-col gap-4" data-testid="document-preview">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            {doc.fileName}
+          </h2>
+          <p className="text-sm text-muted-foreground">
             {doc.storageKey
               ? 'PDF stored in object storage'
               : 'Preview unavailable (no stored file)'}
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href="/admin/documents">Back</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/documents">
+              <ArrowLeft data-icon="inline-start" />
+              Back
+            </Link>
+          </Button>
+        </div>
       </div>
       {doc.storageKey ? (
         <Card className="overflow-hidden p-0 shadow-none">
@@ -57,8 +72,11 @@ export default async function PreviewPage({
           />
         </Card>
       ) : (
-        <Card className="border-dashed p-6 text-center text-sm text-muted-foreground">
-          Preview unavailable.
+        <Card className="border-dashed p-8 shadow-none">
+          <CardContent className="flex flex-col items-center gap-2 text-center text-sm text-muted-foreground">
+            <FileWarning className="size-8 text-muted-foreground" aria-hidden />
+            <p>Preview unavailable.</p>
+          </CardContent>
         </Card>
       )}
     </section>

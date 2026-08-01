@@ -1,18 +1,8 @@
 import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
 import type { AuditKind } from '@app/domain';
 import { Pagination } from '@/components/admin/Pagination';
-import { Badge } from '@/components/ui/badge';
-import { auditTargetLabel } from '@/components/admin/AuditEventList';
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from '@/components/ui/table';
+import { AuditLogTable } from '@/components/admin/AuditLogTable';
 import { AuditFilterForm } from './audit-filter-form';
-import { SettingsRevertButton, type SettingsChange } from './settings-revert-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,55 +17,6 @@ function parseDate(raw: string | undefined, endOfDay = false): Date | undefined 
   if (!raw) return undefined;
   const d = new Date(endOfDay ? `${raw}T23:59:59.999Z` : raw);
   return Number.isNaN(d.getTime()) ? undefined : d;
-}
-
-function formatValue(v: unknown): string {
-  if (v === undefined) return '—';
-  return typeof v === 'string' ? v : JSON.stringify(v);
-}
-
-function settingsChanges(details: Record<string, unknown>): SettingsChange[] {
-  const changes = details.changes;
-  return Array.isArray(changes) ? (changes as SettingsChange[]) : [];
-}
-
-function EventDetails({
-  kind,
-  details,
-}: {
-  kind: AuditKind;
-  details: Record<string, unknown>;
-}) {
-  if (kind === 'user') {
-    return (
-      <span className="flex items-center gap-1">
-        <Badge variant="outline">{formatValue(details.fromRole)}</Badge>
-        <span aria-hidden>→</span>
-        <Badge variant="outline">{formatValue(details.toRole)}</Badge>
-      </span>
-    );
-  }
-  if (kind === 'settings') {
-    const changes = settingsChanges(details);
-    return (
-      <div className="flex flex-col gap-2">
-        <ul className="flex flex-col gap-0.5">
-          {changes.map((c) => (
-            <li key={c.key} className="flex flex-wrap items-baseline gap-1">
-              <span className="font-medium text-foreground">{c.key}</span>
-              <span className="text-muted-foreground">
-                {formatValue(c.old)} → {formatValue(c.new)}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <div>
-          <SettingsRevertButton changes={changes} />
-        </div>
-      </div>
-    );
-  }
-  return <span className="text-muted-foreground">—</span>;
 }
 
 export default async function AuditPage({
@@ -116,8 +57,13 @@ export default async function AuditPage({
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-xl font-medium">Audit log</h2>
+    <section className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Audit log</h2>
+        <p className="text-sm text-muted-foreground">
+          Recent admin and system actions. Filter by kind, actor, or date.
+        </p>
+      </div>
       <AuditFilterForm
         kind={kind}
         action={action}
@@ -125,70 +71,7 @@ export default async function AuditPage({
         from={params.from}
         to={params.to}
       />
-      <div className="overflow-x-auto rounded-xl border border-border-subtle">
-        <Table data-testid="audit-table" aria-label="Audit events">
-          <TableHeader className="bg-secondary text-muted-foreground">
-            <TableRow>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                When
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Kind
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Action
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Target
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Actor
-              </TableHead>
-              <TableHead className="px-3 py-2 text-left text-xs uppercase">
-                Details
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.events.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="px-3 py-4 text-center text-muted-foreground"
-                >
-                  No audit events.
-                </TableCell>
-              </TableRow>
-            ) : (
-              result.events.map((e) => (
-                <TableRow
-                  key={e.id}
-                  className="border-border-subtle hover:bg-secondary/40"
-                >
-                  <TableCell className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                    {e.at.toISOString()}
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-foreground">
-                    {e.kind}
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-xs font-medium text-foreground">
-                    {e.action}
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
-                    {auditTargetLabel(e)}
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-xs text-muted-foreground">
-                    {e.actorName ?? e.actorId}
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-xs">
-                    <EventDetails kind={e.kind} details={e.details} />
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <AuditLogTable events={result.events} />
       <Pagination
         page={page}
         totalPages={totalPages}

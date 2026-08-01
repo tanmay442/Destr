@@ -11,7 +11,7 @@ import {
   FileText,
   Inbox,
   Users,
-  BarChart,
+  BarChart3,
   ScrollText,
   Settings,
   Menu,
@@ -21,6 +21,7 @@ import {
 import { BrandMark } from '@/components/icons/BrandMark';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import { Separator } from '@/components/ui/separator';
 import {
   Sheet,
   SheetOverlay,
@@ -37,8 +38,8 @@ const ADMIN_LINKS = [
   { href: '/admin/documents', label: 'Documents', icon: FileText },
   { href: '/admin/tickets', label: 'Tickets', icon: Inbox },
   { href: '/admin/users', label: 'Users', icon: Users },
-  { href: '/admin/analytics', label: 'Analytics', icon: BarChart },
-  { href: '/admin/audit', label: 'Audit Log', icon: ScrollText },
+  { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/admin/audit', label: 'Audit log', icon: ScrollText },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ] as const;
 
@@ -61,8 +62,8 @@ export function AppSidebar({
   const { signOut } = useClerk();
 
   const onAdmin = pathname?.startsWith('/admin') ?? false;
-  const [adminToggled, setAdminToggled] = useState<boolean>(false);
-  const adminOpen = onAdmin || adminToggled;
+  const [adminToggled, setAdminToggled] = useState<boolean | null>(null);
+  const adminOpen = adminToggled ?? onAdmin;
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
   const handleNavigate = () => {
@@ -70,7 +71,7 @@ export function AppSidebar({
   };
 
   const toggleAdmin = () => {
-    setAdminToggled((open) => !open);
+    setAdminToggled((open) => !(open ?? onAdmin));
   };
 
   const isActive = (href: string) => {
@@ -129,42 +130,48 @@ export function AppSidebar({
       <SheetContent
         side="left"
         showCloseButton={false}
-        className="fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-border-subtle bg-card p-4 shadow-2xl outline-none data-[state=closed]:duration-300 data-[state=open]:duration-500 md:hidden"
+        className="fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col gap-0 border-r border-border-subtle bg-card p-0 shadow-2xl outline-none data-[state=closed]:duration-300 data-[state=open]:duration-500 md:hidden"
         data-testid="app-mobile-drawer"
       >
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SheetDescription className="sr-only">
-            Primary navigation menu
-          </SheetDescription>
-          <div className="mb-3 flex items-center justify-between px-1">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle">
-              Menu
-            </span>
-            <SheetClose asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Close navigation"
-                className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
-              >
-                <X aria-hidden />
-              </Button>
-            </SheetClose>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <SidebarBody
-              user={user}
-              role={role}
-              adminOpen={adminOpen}
-              setAdminOpen={setAdminToggled}
-              toggleAdmin={toggleAdmin}
-              isActive={isActive}
-              onNavigate={handleNavigate}
-              onSignOut={() => signOut({ redirectUrl: '/' })}
-            />
-          </div>
-        </SheetContent>
+        <SheetTitle className="sr-only">Navigation</SheetTitle>
+        <SheetDescription className="sr-only">
+          Primary navigation menu
+        </SheetDescription>
+        <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+          <Link
+            href="/chat"
+            onClick={handleNavigate}
+            className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
+            data-testid="app-mobile-brand"
+          >
+            <BrandMark size="sm" />
+            <span>RAG Support</span>
+          </Link>
+          <SheetClose asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close navigation"
+              className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
+            >
+              <X aria-hidden />
+            </Button>
+          </SheetClose>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <SidebarBody
+            user={user}
+            role={role}
+            adminOpen={adminOpen}
+            setAdminOpen={setAdminToggled}
+            toggleAdmin={toggleAdmin}
+            isActive={isActive}
+            onNavigate={handleNavigate}
+            onSignOut={() => signOut({ redirectUrl: '/' })}
+          />
+        </div>
+      </SheetContent>
     </Sheet>
   );
 }
@@ -190,7 +197,7 @@ function SidebarBody({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center border-b border-border-subtle px-4">
+      <div className="hidden h-14 items-center border-b border-border-subtle px-4 md:flex">
         <Link
           href="/chat"
           className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
@@ -223,7 +230,7 @@ function SidebarBody({
                 'w-full justify-start gap-2.5 rounded-lg px-3',
                 isActive('/admin')
                   ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
-                  : 'text-muted-foreground hover:bg-card hover:text-foreground'
+                  : 'text-muted-foreground hover:bg-card hover:text-foreground',
               )}
               data-testid="app-sidebar-admin-toggle"
             >
@@ -232,7 +239,7 @@ function SidebarBody({
               <ChevronRight
                 className={cn(
                   'text-foreground-subtle transition-transform duration-200',
-                  adminOpen && 'rotate-90'
+                  adminOpen && 'rotate-90',
                 )}
                 aria-hidden
               />
@@ -240,7 +247,7 @@ function SidebarBody({
 
             {adminOpen ? (
               <ul
-                className="mt-1 ml-4 flex flex-col border-l border-border-subtle pl-3"
+                className="mt-1 ml-3 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
                 data-testid="app-sidebar-admin-list"
               >
                 {ADMIN_LINKS.map((link) => {
@@ -252,16 +259,22 @@ function SidebarBody({
                         variant="ghost"
                         size="sm"
                         className={cn(
-                          'h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-1.5',
+                          'h-auto w-full justify-start gap-2.5 rounded-lg px-2.5 py-1.5',
                           isActive(link.href)
                             ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
-                            : 'text-muted-foreground hover:bg-card hover:text-foreground'
+                            : 'text-muted-foreground hover:bg-card hover:text-foreground',
                         )}
                         data-testid={`app-sidebar-admin-${link.label
                           .toLowerCase()
                           .replace(/\s+/g, '-')}`}
                       >
-                        <Link href={link.href} onClick={() => { setAdminOpen(true); onNavigate(); }}>
+                        <Link
+                          href={link.href}
+                          onClick={() => {
+                            setAdminOpen(true);
+                            onNavigate();
+                          }}
+                        >
                           <Icon
                             className="shrink-0 text-foreground-subtle"
                             aria-hidden
@@ -278,7 +291,8 @@ function SidebarBody({
         ) : null}
       </nav>
 
-      <div className="border-t border-border-subtle p-3">
+      <Separator className="opacity-50" />
+      <div className="p-3">
         {user ? (
           <div
             className="flex items-center gap-2.5 rounded-lg px-2 py-2"
@@ -304,13 +318,14 @@ function SidebarBody({
               onClick={onSignOut}
               className="h-auto gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
               data-testid="app-sidebar-sign-out"
+              aria-label="Sign out"
             >
               <LogOut aria-hidden />
-              <span>Sign out</span>
+              <span className="hidden lg:inline">Sign out</span>
             </Button>
           </div>
         ) : (
-          <p className="px-2 py-1 text-xs text-foreground-subtle">
+          <p className="px-2 py-1 text-xs text-muted-foreground">
             Not signed in
           </p>
         )}
@@ -343,7 +358,7 @@ function NavItem({
         'w-full justify-start gap-2.5 rounded-lg px-3',
         active
           ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
-          : 'text-muted-foreground hover:bg-card hover:text-foreground'
+          : 'text-muted-foreground hover:bg-card hover:text-foreground',
       )}
       data-testid={testId}
       aria-current={active ? 'page' : undefined}

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Button } from '@/components/ui/button';
 
 export default function RootNotFound() {
   return (
@@ -11,12 +12,9 @@ export default function RootNotFound() {
         <p className="mt-2 text-sm text-muted-foreground">
           The page you&apos;re looking for doesn&apos;t exist or has been moved.
         </p>
-        <Link
-          href="/"
-          className="mt-6 inline-block rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary"
-        >
-          Go home
-        </Link>
+        <Button asChild className="mt-6">
+          <Link href="/">Go home</Link>
+        </Button>
       </div>
     </div>
   );

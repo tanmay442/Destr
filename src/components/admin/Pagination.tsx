@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface PaginationProps {
   page: number;
@@ -21,25 +23,33 @@ export function Pagination({
   linkClassName = defaultLinkClass,
 }: PaginationProps) {
   return (
-    <nav className="flex items-center justify-between text-sm" aria-label="Pagination">
-      <span>
-        Page {page} of {totalPages} ({total} total)
+    <nav
+      className="flex flex-col-reverse items-stretch gap-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+      aria-label="Pagination"
+    >
+      <span className="text-muted-foreground tabular-nums">
+        Page <span className="text-foreground">{page}</span> of {totalPages} ·{' '}
+        {total.toLocaleString()} total
       </span>
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         {page > 1 ? (
           <Link
             href={{ pathname, query: { ...query, page: page - 1 } }}
-            className={linkClassName}
+            className={cn(linkClassName)}
+            aria-label="Previous page"
           >
+            <ChevronLeft data-icon="inline-start" />
             Previous
           </Link>
         ) : null}
         {page < totalPages ? (
           <Link
             href={{ pathname, query: { ...query, page: page + 1 } }}
-            className={linkClassName}
+            className={cn(linkClassName)}
+            aria-label="Next page"
           >
             Next
+            <ChevronRight data-icon="inline-end" />
           </Link>
         ) : null}
       </div>

@@ -14,7 +14,6 @@
     "./auth": "./src/auth/index.ts",
     "./auth/audit": "./src/auth/audit.ts",
     "./auth/rate-limit": "./src/auth/rate-limit.ts",
-    "./auth/query-stats": "./src/auth/query-stats.ts",
     "./auth/users": "./src/auth/users.ts",
     "./admin": "./src/admin/index.ts",
     "./admin/documents": "./src/admin/documents.ts",

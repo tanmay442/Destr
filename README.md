@@ -167,27 +167,25 @@ for detailed sign-up links and per-service walkthroughs.
   race conditions on concurrent creation.
 - **`/admin/users`** — Searchable, paginated list of all Clerk users.
   Per-row *Promote / Demote* buttons.
-- **`/admin/analytics`** — Organised into a Quality / Performance / Behavior
-  hierarchy over per-turn `chat_events` plus the `chat_daily_stats`
+- **`/admin/analytics`** — Organised into a Statistics / Performance / Feedback /
+  Tickets hierarchy over per-turn `chat_events` plus the `chat_daily_stats`
   materialized view:
-  - **Quality** — stat cards (chat turns, hallucination-blocked, out-of-domain,
-    cache-hit, self-serve success) and a 12-week trend grid (hallucination with
-    a 5% threshold marker, OOD, avg similarity, cache hit, self-serve success,
-    latency p50/p95) rendered with hand-rolled SVG `LineChart`s.
-  - **Performance** — latency `BarList` (retrieve / generate / total p50 + p95),
-    agentic-vs-vector mode comparison cards (cost, similarity, ticket /
+  - **Statistics** — stat cards (chat turns, hallucination-blocked, out-of-domain,
+    self-serve success) and a 12-week trend grid (hallucination with a 5% threshold
+    marker, OOD, avg similarity, self-serve success) rendered with hand-rolled SVG
+    `LineChart`s, plus the token-cost panel and a 7-day usage `ActivityBars`.
+  - **Performance** — cache-hit rate stat + weekly trend, latency `BarList`
+    (retrieve / generate / total p50 + p95) with a weekly total-latency p50/p95
+    trend, agentic-vs-vector mode comparison cards (cost, similarity, ticket /
     hallucination rates, latency, query-length buckets — populated once
     `retrievalModeRolloutPercent` < 100), agentic-retry rate, and the top-5
     cache-buster queries.
-  - **Behavior** — seeded keyword topic coverage (OOD + ticket rate with
-    frustration flags, configurable via `analyticsTopics`), stuck sessions
-    (5+ turns, no ticket, 30-min gap sessionization), document utility
-    (retrievals, p95 similarity, ticket conversion via `meta.documentIds`),
-    zero-hit documents, 👍/👎 feedback (rate, per-document sentiment,
-    thumbs-down hot docs), ticket intelligence (weekly volume, turns-to-ticket
-    distribution, first-response / resolution medians derived from audit
-    events), Top Queries (still powered by `QueryStats`), top zero-result
-    queries, 7-day usage `ActivityBars`, and estimated token cost.
+  - **Feedback** — 👍/👎 vote summary (helpful, unhelpful, feedback rate),
+    per-document sentiment and thumbs-down hot docs, plus document utility
+    (retrievals, p95 similarity, ticket conversion via `meta.documentIds`) and
+    zero-hit documents.
+  - **Tickets** — ticket intelligence (weekly volume, turns-to-ticket
+    distribution, first-response / resolution medians derived from audit events).
 
   Graceful empty states throughout when no chat data exists. Chat users can
   vote 👍/👎 under any assistant answer; votes land in `chat_feedback` keyed
@@ -277,9 +275,6 @@ Key tables (Drizzle on Postgres + pgvector):
   authenticated with `CRON_SECRET`; admins can also trigger it via `POST`).
 - `audit_dead_letter` — captures failed audit writes for replay.
 
-`QueryStats` is retained and still powers the "Top Queries" card; `chat_events`
-is purely additive.
-
 ### Rate limit
 
 `packages/infrastructure/src/auth/lru-rate-limiter.ts` is a single-instance,
@@ -319,7 +314,7 @@ also backed by a sorted set); the call sites do not need to change.
 | `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
-| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider; `EVAL_AUTOSEED=1` mines `QueryStats.top`. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
+| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
 | `pnpm seed` | Seed the configured DB from `./documents/` (`tsx packages/cli/src/index.ts seed`) |
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |

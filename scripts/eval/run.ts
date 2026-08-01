@@ -2,7 +2,7 @@
  * `pnpm eval` entrypoint.
  *
  * Wires the evaluation harness to real adapters when the env is present
- * (Upstash Redis for stats, embedding/chat LLM providers, Postgres chunks),
+ * (embedding/chat LLM providers, Postgres chunks),
  * and otherwise runs a fully mocked harness so CI can gate the wiring without
  * any provider keys. The faithful scoring path requires a keyed provider; when
  * none is configured it logs a warning and uses the mock grader so the script
@@ -11,7 +11,6 @@
  * Usage:
  *   pnpm eval                 # mock harness (CI-safe)
  *   EVAL_REAL=1 pnpm eval    # wire real search + generation + graders
- *   EVAL_AUTOSEED=1 pnpm eval# prepend golden Qs mined from QueryStats.top
  */
 import { goldenQuestions } from './golden';
 import { runEval, mockEvalDeps, type EvalDeps } from './harness';
@@ -57,27 +56,10 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
   };
 }
 
-async function maybeAutoseed(): Promise<typeof goldenQuestions> {
-  if (process.env.EVAL_AUTOSEED !== '1') return goldenQuestions;
-  try {
-    const { Auth } = await import('@app/infrastructure');
-    const stats = Auth.createUpstashQueryStats();
-    const top = await stats.top(20);
-    const seeded = top
-      .filter((t) => t.q && t.count > 0)
-      .map((t, i) => ({ id: `stats-${i}`, question: t.q, mustMention: [] }));
-    console.log(`[eval] auto-seeded ${seeded.length} questions from QueryStats.top`);
-    return [...seeded, ...goldenQuestions];
-  } catch (err) {
-    console.warn('[eval] auto-seed failed; using static golden set.', { error: String(err) });
-    return goldenQuestions;
-  }
-}
-
 async function main() {
   const threshold = Number(process.env.EVAL_FAITHFULNESS_THRESHOLD ?? 0.7);
   const useReal = process.env.EVAL_REAL === '1';
-  const questions = await maybeAutoseed();
+  const questions = goldenQuestions;
   const deps = await buildDeps(useReal);
   const report = await runEval(questions, deps, threshold);
 

@@ -1,8 +1,8 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type {
-  DocumentRepository, ChunkRepository, TicketRepository, UserRepository, QueryStats,
+  DocumentRepository, ChunkRepository, TicketRepository, UserRepository,
   ChatEventsRepo, ChatEventMetrics, ChatEventDailyUsage, ChatEventRange,
-  ModeComparison, CacheBusterQuery, StuckSessions,
+  ModeComparison, CacheBusterQuery,
   ChatFeedbackRepo, DocumentUtilityRow, ZeroHitDocument,
   FeedbackSummary, DocumentSentiment, ThumbsDownDoc,
   TurnsToTicket, TicketResponseTimes,
@@ -18,12 +18,10 @@ const DEFAULT_TREND_DAYS = 84;
 const CACHE_BUSTER_LIMIT = 5;
 
 export interface ChatAnalytics extends ChatEventMetrics {
-  topZeroResultQueries: Array<{ q: string; count: number }>;
   usageOverTime: ChatEventDailyUsage[];
   estimatedCostUsd: number;
   modeComparison: ModeComparison[];
   cacheBusterQueries: CacheBusterQuery[];
-  stuckSessions: StuckSessions;
 }
 
 export async function getChatAnalytics(
@@ -33,26 +31,22 @@ export async function getChatAnalytics(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   try {
-    const [metrics, topZeroResultQueries, usageOverTime, modeComparison, cacheBusterQueries, stuckSessions] =
+    const [metrics, usageOverTime, modeComparison, cacheBusterQueries] =
       await Promise.all([
         deps.chatEvents.getMetrics(input.range),
-        deps.chatEvents.getTopZeroResultQueries(10, input.range),
         deps.chatEvents.getUsageOverTime(input.usageDays ?? 7),
         deps.chatEvents.getModeComparison(input.range),
         deps.chatEvents.getCacheBusterQueries(CACHE_BUSTER_LIMIT, input.range),
-        deps.chatEvents.getStuckSessions(input.range),
       ]);
     const estimatedCostUsd =
       (metrics.tokensIn / 1_000_000) * TOKEN_COST_PER_MILLION.input +
       (metrics.tokensOut / 1_000_000) * TOKEN_COST_PER_MILLION.output;
     return ok({
       ...metrics,
-      topZeroResultQueries,
       usageOverTime,
       estimatedCostUsd,
       modeComparison,
       cacheBusterQueries,
-      stuckSessions,
     });
   } catch (e) {
     return err(new ExternalServiceError('Failed to load chat analytics', e));
@@ -160,7 +154,6 @@ export interface AnalyticsSummary {
   ticketCount: number;
   openTicketCount: number;
   usersCount: number;
-  topQueries: Array<{ q: string; count: number }>;
   coldStart: boolean;
 }
 
@@ -193,7 +186,6 @@ export async function getAnalyticsSummary(
     chunks: ChunkRepository;
     tickets: TicketRepository;
     users: UserRepository;
-    stats: QueryStats;
   },
 ): Promise<Result<AnalyticsSummary>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -206,14 +198,12 @@ export async function getAnalyticsSummary(
       deps.tickets.countOpen(),
       deps.users.countAll(),
     ]);
-    const topQueries = await deps.stats.top(10);
     return ok({
       documentCount: docCount,
       chunkCount,
       ticketCount,
       openTicketCount,
       usersCount,
-      topQueries,
       coldStart: docCount === 0,
     });
   } catch (e) {

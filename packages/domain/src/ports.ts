@@ -395,24 +395,6 @@ export interface CacheBusterQuery {
   misses: number;
 }
 
-export interface QueryOutcome {
-  query: string;
-  outOfDomain: boolean;
-  ticketCreated: boolean;
-}
-
-export interface StuckSessionSample {
-  userId: string;
-  sessionNo: number;
-  turns: number;
-  lastActivity: string;
-}
-
-export interface StuckSessions {
-  count: number;
-  samples: StuckSessionSample[];
-}
-
 export interface DocumentUtilityRow {
   documentId: number;
   fileName: string | null;
@@ -473,13 +455,10 @@ export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
-  getTopZeroResultQueries(limit: number, range?: ChatEventRange): Promise<Array<{ q: string; count: number }>>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
   getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
   getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
   getCacheBusterQueries(limit: number, range?: ChatEventRange): Promise<CacheBusterQuery[]>;
-  getQueryOutcomes(range?: ChatEventRange, limit?: number): Promise<QueryOutcome[]>;
-  getStuckSessions(range?: ChatEventRange): Promise<StuckSessions>;
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
   getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]>;
   getTurnsToTicket(range?: ChatEventRange): Promise<TurnsToTicket>;
@@ -509,11 +488,6 @@ export interface RateLimiter {
     key: string,
     opts: { limit: number; windowMs: number },
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
-}
-
-export interface QueryStats {
-  record(userId: string, query: string): Promise<void>;
-  top(limit: number): Promise<Array<{ q: string; count: number }>>;
 }
 
 /** Cache for query-keyed answers. Callers MUST pin model ids into the key. */

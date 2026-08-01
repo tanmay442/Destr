@@ -1,19 +1,18 @@
 'use client';
 
 import { useTransition } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { Calculator } from 'lucide-react';
 import { recountAllChunksAction } from '../actions';
 import { Button } from '@/components/ui/button';
-import { toast } from '@/components/ui/sonner';
+import { toast } from 'sonner';
 
 export function RecountAllButton() {
   const [pending, startTransition] = useTransition();
-  const router = useRouter();
-  const params = useSearchParams();
   return (
     <Button
       type="button"
       variant="outline"
+      size="sm"
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
@@ -22,19 +21,15 @@ export function RecountAllButton() {
             toast.error(res.error);
             return;
           }
-          const next = new URLSearchParams(params.toString());
-          if (typeof res.documents === 'number') {
-            next.set('recountedDocs', String(res.documents));
-          }
-          if (typeof res.total === 'number') {
-            next.set('recountedTotal', String(res.total));
-          }
-          router.push(`/admin/documents?${next.toString()}`);
+          toast.success(
+            `Recounted ${res.documents ?? 0} document${res.documents === 1 ? '' : 's'} — ${(res.total ?? 0).toLocaleString()} total chunks`,
+          );
         })
       }
       data-testid="documents-recount-all"
     >
-      {pending ? 'Recounting…' : 'Recount all chunks'}
+      <Calculator data-icon="inline-start" />
+      {pending ? 'Recounting…' : 'Recount'}
     </Button>
   );
 }

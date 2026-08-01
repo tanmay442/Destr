@@ -1,6 +1,6 @@
 import { getComposition, getAppSession, unwrap } from '@/composition';
 import { StatCard } from '@/components/admin/StatCard';
-import { AuditEventList } from '@/components/admin/AuditEventList';
+import { AuditLogTable } from '@/components/admin/AuditLogTable';
 import {
   Card,
   CardHeader,
@@ -13,6 +13,7 @@ import {
   BarList,
   ChartLegend,
 } from '@/components/admin/Charts';
+import { Separator } from '@/components/ui/separator';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,8 +53,14 @@ export default async function AdminOverviewPage() {
 
   return (
     <section className="flex flex-col gap-6">
-      <h2 className="text-xl font-medium">Overview</h2>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Overview</h2>
+        <p className="text-sm text-muted-foreground">
+          High-level view of your support agent and knowledge base.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           href="/admin/documents"
           label="Documents"
@@ -94,7 +101,7 @@ export default async function AdminOverviewPage() {
               Share of support tickets still awaiting a response.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col items-center gap-4">
+          <CardContent className="flex flex-col items-center gap-5">
             <DonutChart
               segments={[
                 { label: 'Open', value: openTickets, stroke: 'stroke-primary' },
@@ -110,15 +117,16 @@ export default async function AdminOverviewPage() {
                   ? `${Math.round((openTickets / summary.ticketCount) * 100)}%`
                   : '—'}
               </span>
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
                 {hasTickets ? 'open' : 'no tickets'}
               </span>
             </DonutChart>
+            <Separator className="opacity-50" />
             <ChartLegend
               items={[
-                { label: `Open (${openTickets})`, className: 'bg-primary' },
+                { label: `Open (${openTickets.toLocaleString()})`, className: 'bg-primary' },
                 {
-                  label: `Resolved (${resolvedTickets})`,
+                  label: `Resolved (${resolvedTickets.toLocaleString()})`,
                   className: 'bg-border-strong',
                 },
               ]}
@@ -139,9 +147,12 @@ export default async function AdminOverviewPage() {
         </Card>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <h3 className="text-lg font-medium">Latest audit events</h3>
-        <AuditEventList events={audit.events} testId="admin-latest-audit" />
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-foreground">Latest audit events</h3>
+          <span className="text-xs text-muted-foreground">Last 10</span>
+        </div>
+        <AuditLogTable events={audit.events} testId="admin-latest-audit" />
       </div>
     </section>
   );

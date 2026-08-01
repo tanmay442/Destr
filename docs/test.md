@@ -118,11 +118,10 @@
 - `src/app/(app)/admin/settings/settings-client.test.tsx` — descriptor-driven render, env-locked disabled, diff preview, 409 → re-apply
 - `src/app/(app)/admin/audit/settings-revert-button.test.tsx` — one-click revert PUT body + version, error toast
 - `packages/infrastructure/src/db/__tests__/audit-backfill.test.ts` — `audit_events` backfill + drop of legacy tables + idempotent re-run (DB-gated)
-- `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` — `ChatEventBatcher` batching, size/interval auto-flush, dead-letter, purge / `purgeOlderThan` / `anonymizeUserData`, plus SQL-shape assertions for the analytics queries (`getDailyTrends`, `getModeComparison`, `getCacheBusterQueries`, `getQueryOutcomes`, `getStuckSessions` LAG sessionization, `getTurnsToTicket` per-session turn numbering + bucket math, `getDocumentUtility` / `getZeroHitDocuments` jsonb joins) (fake client, no live DB)
+- `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` — `ChatEventBatcher` batching, size/interval auto-flush, dead-letter, purge / `purgeOlderThan` / `anonymizeUserData`, plus SQL-shape assertions for the analytics queries (`getDailyTrends`, `getModeComparison`, `getCacheBusterQueries`, `getTurnsToTicket` per-session turn numbering + bucket math, `getDocumentUtility` / `getZeroHitDocuments` jsonb joins) (fake client, no live DB)
 - `packages/infrastructure/src/db/__tests__/chat-feedback-repo.test.ts` — feedback upsert CTE (ownership check, vote change, not-found vs forbidden) + sentiment/hot-docs queries filter soft-deleted documents
 - `packages/infrastructure/src/db/__tests__/ticket-repo.test.ts` — `getTicketResponseTimes` derivation from `status_change` audit events (distinct first-response `min` vs resolution `max`, never-responded tickets excluded from medians, deterministic 5000-row bound)
 - `packages/application/src/admin/__tests__/analytics.test.ts` — `getChatAnalytics` admin authz + estimated token cost, `getAnalyticsTrends` rate math (division-by-zero safe), `getDocumentAnalytics` + `getTicketIntelligence` shapes
-- `packages/application/src/admin/__tests__/topics.test.ts` — seeded keyword topic classification (deterministic first-match, case-insensitive, word-boundary so `api` ≠ `rapid`, frustration-flag math, authz)
 - `packages/application/src/chat/__tests__/feedback.test.ts` — `submitChatFeedback` (ownership → Forbidden, unknown turn → NotFound, upsert happy path)
 - `src/app/api/chat/feedback/route.test.ts` — feedback POST (same-origin 403, 401, 415, zod 400, 404 unflushed turn, 429 rate limit, 200 upsert)
 - `src/app/api/admin/analytics/rollup/route.test.ts` — cron GET auth matrix (valid `CRON_SECRET` bearer without session, wrong bearer → 401, unset secret → admin-session fallback) + admin POST
@@ -159,8 +158,7 @@ src/
 ├── components/
 │   ├── ChatInterface.tsx
 │   ├── app/AppSidebar.tsx  # Unified sidebar + mobile drawer (Client)
-│   ├── marketing/          # MarketingHero, MarketingFooter, MarketingAuthCard, MarketingTechMarquee, MarketingQuickStart
-│   └── icons/GithubIcon.tsx
+│   ├── marketing/          # MarketingHero, MarketingAuthCard, MarketingTechMarquee, MarketingQuickStart
 ├── lib/
 │   ├── http.ts             # respond() + respondResult() + toSafeError() + toActionResult() + isActionError()
 │   ├── logger.ts           # Structured JSON logger
@@ -177,7 +175,7 @@ scripts/                    # setup, seed, migration scripts
 ## Running tests with real credentials present
 
 Some unit tests assert a "missing env var" / "should throw when absent"
-path (e.g. the Upstash query-stats / rate-limiter "throws when env vars
+path (e.g. the Upstash rate-limiter "throws when env vars
 are missing" tests, and `validateEnv` requiring QStash signing keys when
 `QSTASH_TOKEN` is set). These tests are **environment-sensitive**: they only
 pass when the relevant vars are genuinely absent.
@@ -193,11 +191,10 @@ These tests were made **self-isolating** (no behavior change, test files
 only) by explicitly stubbing the relevant vars to `''` inside the affected
 assertions, so the suite is green in any environment:
 
-- `packages/infrastructure/src/auth/upstash-query-stats.test.ts`
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes (currently **527 passing**, 8 DB-gated tests skip) even when
+After this fix the full suite passes (currently **517 passing**, 8 DB-gated tests skip) even when
 `.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to

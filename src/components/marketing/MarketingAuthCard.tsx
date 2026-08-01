@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { SignInButton } from '@clerk/nextjs';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 import BorderGlow from '@/components/react-bits/BorderGlow';
 import { Button } from '@/components/ui/button';
 
@@ -22,14 +22,17 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
       className="backdrop-blur-md"
     >
       <div className="flex flex-col gap-5 p-6">
-        <div>
-          <h2 className="text-xl font-semibold tracking-tight text-foreground">
-            Get started
-          </h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Open the chat to talk with the assistant, or sign in to save your
-            session history and track support tickets.
-          </p>
+        <div className="flex flex-col gap-3">
+          <Sparkles className="size-5 text-muted-foreground" aria-hidden />
+          <div className="flex flex-col gap-2">
+            <h2 className="text-xl font-semibold tracking-tight text-foreground">
+              Get started
+            </h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Open the chat to talk with the assistant, or sign in to save your
+              session history and track support tickets.
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2.5">
@@ -43,7 +46,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           <SignInButton mode="modal">
             <button
               type="button"
-              className="inline-flex w-full items-center justify-center rounded-xl border border-border bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-primary/50 hover:bg-surface-elevated"
+              className="inline-flex w-full items-center justify-center rounded-xl border border-border-subtle bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-primary/50 hover:bg-surface-elevated"
               data-testid="home-sign-in"
             >
               Sign in
@@ -51,7 +54,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           </SignInButton>
         </div>
 
-        <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-foreground-subtle">
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-foreground-subtle">
           Auth by Clerk
         </p>
       </div>

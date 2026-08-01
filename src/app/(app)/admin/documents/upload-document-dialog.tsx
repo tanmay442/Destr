@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useActionState, useRef, useState, type DragEvent } from 'react';
+import { UploadCloud, FileText, RotateCw } from 'lucide-react';
 import { uploadPdfAction, type UploadState } from '../actions';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
-import { Upload } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from '@/components/ui/dialog';
 
 const initial: UploadState = {};
@@ -96,9 +97,14 @@ export function UploadDocumentDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button type="button" variant="outline" data-testid="documents-upload-trigger">
-          <Upload data-icon="inline-start" />
-          Upload document
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="documents-upload-trigger"
+        >
+          <UploadCloud data-icon="inline-start" />
+          Upload
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
@@ -111,12 +117,12 @@ export function UploadDocumentDialog() {
         <form action={formAction} className="flex flex-col gap-3">
           <div
             className={cn(
-              'cursor-pointer rounded-lg border-2 border-dashed transition-colors',
+              'rounded-lg border-2 border-dashed transition-colors',
               dragOver
                 ? 'border-primary bg-primary/10'
                 : fileName
-                  ? 'border bg-surface-elevated'
-                  : 'border bg-card hover:border-primary/60',
+                  ? 'border-border-subtle bg-surface-elevated'
+                  : 'border-border-subtle bg-card hover:border-primary/60',
             )}
             data-testid="upload-dropzone"
           >
@@ -130,12 +136,11 @@ export function UploadDocumentDialog() {
             >
               {fileName ? (
                 <div className="flex flex-col items-center gap-2 text-sm">
-                  <span className="text-base font-medium text-foreground">
-                    {fileName}
-                  </span>
+                  <FileText className="size-8 text-foreground" aria-hidden />
+                  <span className="text-sm font-medium text-foreground">{fileName}</span>
                   {fileSize !== null ? (
-                    <span className="text-xs text-muted-foreground">
-                      {Math.max(1, Math.round(fileSize / 1024))} KB
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {Math.max(1, Math.round(fileSize / 1024)).toLocaleString()} KB
                     </span>
                   ) : null}
                   <Button
@@ -147,29 +152,15 @@ export function UploadDocumentDialog() {
                       clearFile();
                     }}
                   >
+                    <RotateCw data-icon="inline-start" />
                     Replace
                   </Button>
                 </div>
               ) : (
                 <>
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="size-8 text-muted-foreground"
-                    aria-hidden
-                  >
-                    <path d="M12 3v12" />
-                    <path d="M7 8l5-5 5 5" />
-                    <path d="M5 21h14" />
-                  </svg>
+                  <UploadCloud className="size-8 text-muted-foreground" aria-hidden />
                   <span className="text-sm font-medium text-foreground">
-                    {dragOver
-                      ? 'Release to upload'
-                      : 'Drop a PDF here or click to browse'}
+                    {dragOver ? 'Release to upload' : 'Drop a PDF here or click to browse'}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     PDF only · up to 20 MB
@@ -192,13 +183,24 @@ export function UploadDocumentDialog() {
             }}
             data-testid="upload-input"
           />
-          <Button
-            type="submit"
-            disabled={pending || !fileName}
-            data-testid="upload-submit"
-          >
-            {pending ? 'Uploading…' : 'Upload'}
-          </Button>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={pending || !fileName}
+              data-testid="upload-submit"
+            >
+              {pending ? 'Uploading…' : 'Upload PDF'}
+            </Button>
+          </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

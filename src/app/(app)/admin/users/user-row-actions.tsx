@@ -2,12 +2,10 @@
 
 import { useTransition } from 'react';
 import { useSession } from '@clerk/nextjs';
+import { ShieldCheck, ShieldOff } from 'lucide-react';
 import { setRoleAction } from '../actions';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
-
-const btn =
-  'text-muted-foreground hover:bg-surface-elevated hover:text-foreground';
 
 export function UserRowActions({
   clerkUserId,
@@ -18,28 +16,29 @@ export function UserRowActions({
 }) {
   const { session } = useSession();
   const [pending, startTransition] = useTransition();
+  const isAdmin = role === 'admin';
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      <Button
-        variant="outline"
-        size="xs"
-        className={btn}
-        disabled={pending}
-        onClick={() =>
-          startTransition(async () => {
-            const next: 'admin' | 'user' = role === 'admin' ? 'user' : 'admin';
-            const res = await setRoleAction(clerkUserId, next);
-            if (res.error) toast.error(res.error);
-            else {
-              await session?.reload();
-              toast.success(`Role set to ${next}`);
-            }
-          })
-        }
-        data-testid={`users-toggle-role-${clerkUserId}`}
-      >
-        {pending ? '…' : role === 'admin' ? 'Demote' : 'Promote'}
-      </Button>
-    </div>
+    <Button
+      variant="outline"
+      size="xs"
+      disabled={pending}
+      onClick={() =>
+        startTransition(async () => {
+          const next: 'admin' | 'user' = isAdmin ? 'user' : 'admin';
+          const res = await setRoleAction(clerkUserId, next);
+          if (res.error) {
+            toast.error(res.error);
+            return;
+          }
+          await session?.reload();
+          toast.success(`Role set to ${next}`);
+        })
+      }
+      data-testid={`users-toggle-role-${clerkUserId}`}
+      className="text-muted-foreground hover:text-foreground"
+    >
+      {isAdmin ? <ShieldOff data-icon="inline-start" /> : <ShieldCheck data-icon="inline-start" />}
+      {pending ? '…' : isAdmin ? 'Demote' : 'Promote'}
+    </Button>
   );
 }
