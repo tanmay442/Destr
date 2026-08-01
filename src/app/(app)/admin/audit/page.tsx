@@ -164,7 +164,7 @@ export default async function AuditPage({
           </div>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
           <Table data-testid="audit-table" aria-label="Audit events">
             <TableHeader>
               <TableRow>

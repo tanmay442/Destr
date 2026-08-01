@@ -109,7 +109,7 @@ export default async function TicketsPage({
           </div>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
           <Table data-testid="tickets-table" aria-label="Tickets">
             <TableHeader>
               <TableRow>

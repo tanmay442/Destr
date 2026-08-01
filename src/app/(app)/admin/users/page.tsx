@@ -82,7 +82,7 @@ export default async function UsersPage({
           </div>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
           <Table data-testid="users-table" aria-label="Users">
             <TableHeader>
               <TableRow>
