@@ -1,6 +1,6 @@
 import { getComposition, getAppSession, unwrap } from '@/composition';
 import { StatCard } from '@/components/admin/StatCard';
-import { AuditEventList } from '@/components/admin/AuditEventList';
+import { AuditLogTable } from '@/components/admin/AuditLogTable';
 import {
   Card,
   CardHeader,
@@ -152,7 +152,7 @@ export default async function AdminOverviewPage() {
           <h3 className="text-sm font-medium text-foreground">Latest audit events</h3>
           <span className="text-xs text-muted-foreground">Last 10</span>
         </div>
-        <AuditEventList events={audit.events} testId="admin-latest-audit" />
+        <AuditLogTable events={audit.events} testId="admin-latest-audit" />
       </div>
     </section>
   );
