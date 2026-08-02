@@ -20,7 +20,6 @@ function makeDeps(overrides?: {
       syncClerkRole: vi.fn().mockResolvedValue(undefined),
       ...overrides?.users,
     } as UserRepository,
-    syncClerkRole: vi.fn().mockResolvedValue(undefined),
     audit: {
       logDocumentEvent: vi.fn(),
       logTicketEvent,

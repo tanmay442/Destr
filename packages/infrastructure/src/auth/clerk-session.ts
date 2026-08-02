@@ -1,3 +1,5 @@
+// Read-only SSR session; does NOT upsert, but promotes admin-email users so the
+// SSR role stays consistent with the API role resolved in clerk-adapter.ts.
 import { auth, currentUser, clerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
@@ -38,10 +40,5 @@ export const clerkSessionStore: SessionStore = {
     };
   },
 };
-
-export async function syncClerkUserRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void> {
-  const clerk = await clerkClient();
-  await clerk.users.updateUserMetadata(clerkUserId, { publicMetadata: { role } });
-}
 
 export { clerkClient };

@@ -1,4 +1,4 @@
-export { clerkSessionStore, clerkClient, syncClerkUserRole } from './clerk-session';
+export { clerkSessionStore, clerkClient } from './clerk-session';
 export { lruRateLimiter } from './lru-rate-limiter';
 export { createUpstashRateLimiter } from './upstash-rate-limiter';
 export { createUpstashAnswerCache } from './upstash-answer-cache';

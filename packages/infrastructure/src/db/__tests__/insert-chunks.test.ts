@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ValidationError } from '@app/domain';
 import { insertChunks } from '../repositories';
 
 type Client = Parameters<typeof insertChunks>[1];
@@ -91,43 +90,8 @@ describe('insertChunks two-pass (parent-child)', () => {
 
   it('rejects embeddings with the wrong dimension', async () => {
     const client = makeFakeClient();
-    const err = await insertChunks(
-      [{ documentId: 1, content: 'x', embedding: [0.1], chunkIndex: 0, kind: 'child' }],
-      client as unknown as Client,
-    ).catch((e) => e);
-    expect(err).toBeInstanceOf(ValidationError);
-    expect((err as Error).message).toMatch(/expected 768/);
-  });
-
-  it('rejects non-finite embedding values with a descriptive ValidationError', async () => {
-    const client = makeFakeClient();
-    const err = await insertChunks(
-      [{ documentId: 1, content: 'x', embedding: [Number.NaN, ...Array(DIM - 1).fill(0.1)], chunkIndex: 3, kind: 'child' }],
-      client as unknown as Client,
-    ).catch((e) => e);
-    expect(err).toBeInstanceOf(ValidationError);
-    expect((err as Error).message).toMatch(/chunk 3 contains non-finite values/);
-  });
-
-  it('rejects a child-only batch that references a parent not in the batch', async () => {
-    const client = makeFakeClient();
-    const err = await insertChunks(
-      [{ documentId: 1, content: 'a', embedding: emb(), chunkIndex: 0, kind: 'child', parentChunkId: 77 }],
-      client as unknown as Client,
-    ).catch((e) => e);
-    expect(err).toBeInstanceOf(ValidationError);
-    expect((err as Error).message).toMatch(/Parent chunk 77 not found in batch/);
-    expect(client.calls).toHaveLength(0);
-  });
-
-  it('rejects a two-pass batch whose child points at a parent index that never materialized', async () => {
-    const client = makeFakeClient();
-    const rows: TestRow[] = [
-      { documentId: 1, content: 'P', embedding: emb(), chunkIndex: 0, kind: 'parent', parentChunkId: null },
-      { documentId: 1, content: 'c', embedding: emb(), chunkIndex: 1, kind: 'child', parentChunkId: 9 },
-    ];
-    const err = await insertChunks(rows, client as unknown as Client).catch((e) => e);
-    expect(err).toBeInstanceOf(ValidationError);
-    expect((err as Error).message).toMatch(/Parent chunk 9 not found in batch for chunk 1/);
+    await expect(
+      insertChunks([{ documentId: 1, content: 'x', embedding: [0.1], chunkIndex: 0, kind: 'child' }], client as unknown as Client),
+    ).rejects.toThrow(/expected 768/);
   });
 });

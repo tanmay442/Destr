@@ -217,6 +217,7 @@ export interface UserRepository {
   }): Promise<{ rows: UserRow[]; total: number }>;
   countAll(): Promise<number>;
   countAdmins(): Promise<number>;
+  syncClerkRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void>;
 }
 
 
