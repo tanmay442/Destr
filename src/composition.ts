@@ -195,7 +195,8 @@ function createComposition() {
     resolveReranker,
     availableRerankers,
     listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
-    setUserRole: (input: Parameters<typeof setUserRole>[0]) => bind(setUserRole, input, { ...userDeps, ...auditDeps }),
+    setUserRole: (input: Parameters<typeof setUserRole>[0]) =>
+      bind(setUserRole, input, { ...userDeps, ...auditDeps, syncClerkRole: Auth.syncClerkUserRole }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),

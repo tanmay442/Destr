@@ -21,7 +21,7 @@ export async function listUsers(
 
 export async function setUserRole(
   input: { clerkUserId: string; role: 'admin' | 'user'; actorId: string },
-  deps: { users: UserRepository; audit: AuditLog },
+  deps: { users: UserRepository; audit: AuditLog; syncClerkRole: (clerkUserId: string, role: 'admin' | 'user') => Promise<void> },
 ): Promise<Result<{ user: { clerkUserId: string; role: string } }>> {
   if (input.role !== 'admin' && input.role !== 'user') {
     return err(new ValidationError(`Invalid role: ${input.role}`));
@@ -43,7 +43,7 @@ export async function setUserRole(
       }
     }
     try {
-      await deps.users.syncClerkRole(input.clerkUserId, input.role);
+      await deps.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {
       return err(new ExternalServiceError('Failed to sync Clerk role', e));
     }
