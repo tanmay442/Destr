@@ -68,3 +68,8 @@ docs/adminplanv3.md
 
 # Execution plan (kept locally, never committed/pushed)
 docs/execution-plan/
+
+# Audit plan/findings/handoff docs (kept locally, never committed/pushed)
+docs/audit-findings.md
+docs/audit-fix-plan.md
+docs/audit-wp1-handoff.md

@@ -10,12 +10,15 @@ const POOL_OPTS = {
 
 // Neon's serverless driver can't reach plain TCP Postgres; route Neon URLs to it, everything else via `pg`.
 export function isNeonUrl(url: string): boolean {
+  if (!url) return false;
+  let parsed: URL;
   try {
-    const host = new URL(url).hostname;
-    return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
+    parsed = new URL(url);
   } catch {
-    return false;
+    throw new Error(`Invalid DATABASE_URL: "${url}". Expected a valid postgres connection string.`);
   }
+  const host = parsed.hostname;
+  return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
 }
 
 export function buildNeonPool(): NeonPool {

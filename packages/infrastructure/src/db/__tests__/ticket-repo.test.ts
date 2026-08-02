@@ -38,9 +38,25 @@ describe('ticketRepo.getTicketResponseTimes', () => {
     expect(sql).toContain('extract(epoch');
     expect(sql).toContain('min(c.changed_at) as first_change');
     expect(sql).toContain('max(c.changed_at) as last_change');
-    expect(sql).toContain('f.last_change - f.created_at');
+    expect(sql).toContain("at time zone 'utc') - f.created_at");
+    expect(sql).toContain('extract(epoch from ((f.first_change');
     expect(sql).toContain('order by t.created_at desc');
     expect(sql).toContain('limit 5000');
+  });
+
+  it('executes with a from/to range and scopes the filter by the t alias', async () => {
+    const { client, executed } = makeExecuteClient([{ first_response_ms: 1_000, resolution_ms: null }]);
+    const from = new Date('2026-01-01T00:00:00Z');
+    const to = new Date('2026-12-31T00:00:00Z');
+    const result = await ticketRepo.getTicketResponseTimes({ from, to }, client);
+    expect(result.respondedCount).toBe(1);
+    const q = dialect.sqlToQuery(executed[executed.length - 1]!);
+    expect(executed).toHaveLength(1);
+    expect(q.sql).toContain('t.created_at >= ');
+    expect(q.sql).toContain('t.created_at <= ');
+    expect(q.sql).toContain('from "tickets" t');
+    expect(q.sql).not.toContain('"tickets"."created_at"');
+    expect(q.params).toEqual([from, to]);
   });
 
   it('yields distinct first response and resolution for a ticket with two status changes', async () => {

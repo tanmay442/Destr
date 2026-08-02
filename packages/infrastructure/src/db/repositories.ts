@@ -11,7 +11,7 @@ import {
   type Document,
 } from './schema';
 import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
-import { MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
+import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -43,9 +43,27 @@ export async function findDocumentById(
   return (row as Document | undefined) ?? null;
 }
 
+function isUniqueViolation(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '23505';
+}
+
 export async function insertDocument(
   input: { fileName: string; fileHash: string; uploadedBy: string },
   client: Client = db,
+): Promise<Document> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await tryInsert(input, client);
+    } catch (e) {
+      if (!isUniqueViolation(e) || attempt === 1) throw e;
+    }
+  }
+  throw new Error('Failed to insert document');
+}
+
+async function tryInsert(
+  input: { fileName: string; fileHash: string; uploadedBy: string },
+  client: Client,
 ): Promise<Document> {
   const existing = await client.query.documents.findFirst({
     where: eq(documents.fileName, input.fileName),
@@ -60,19 +78,24 @@ export async function insertDocument(
     return row as Document;
   }
   if (existing && existing.deletedAt != null) {
-    await client.delete(chunks).where(eq(chunks.documentId, existing.id));
-    const [row] = await client
-      .update(documents)
-      .set({
-        fileHash: input.fileHash,
-        uploadedBy: input.uploadedBy,
-        deletedAt: null,
-        ingestStatus: 'done',
-      })
-      .where(eq(documents.id, existing.id))
-      .returning();
-    if (!row) throw new Error('Failed to insert document');
-    return row as Document;
+    const existingId = existing.id;
+    const resurrect = async () => {
+      await client.delete(chunks).where(eq(chunks.documentId, existingId));
+      const [row] = await client
+        .update(documents)
+        .set({
+          fileHash: input.fileHash,
+          uploadedBy: input.uploadedBy,
+          deletedAt: null,
+          ingestStatus: 'done',
+        })
+        .where(eq(documents.id, existingId))
+        .returning();
+      if (!row) throw new Error('Failed to insert document');
+      return row as Document;
+    };
+    if (client === db) return db.transaction(resurrect);
+    return resurrect();
   }
   const [row] = await client.insert(documents).values(input).returning();
   if (!row) throw new Error('Failed to insert document');
@@ -154,10 +177,12 @@ export async function searchChunksByVector(
   const candidatePool = Math.max(opts.limit * 10, 50);
   const result = await client.execute(sql`
     WITH candidates AS (
-      SELECT id
-      FROM chunks
-      WHERE kind <> 'parent'
-      ORDER BY embedding <=> ${vectorLiteral}::vector
+      SELECT ch.id
+      FROM chunks ch
+      JOIN documents doc ON doc.id = ch.document_id
+      WHERE doc.deleted_at IS NULL
+        AND ch.kind <> 'parent'
+      ORDER BY ch.embedding <=> ${vectorLiteral}::vector
       LIMIT ${candidatePool}
     )
     SELECT
@@ -283,7 +308,6 @@ export async function searchChunksByLexical(
   }));
 }
 
-/** Map a prepared chunk row to its `chunks` insert values. */
 function toChunkValues(r: {
   documentId: number;
   content: string;
@@ -333,15 +357,24 @@ export async function insertChunks(
 ): Promise<void> {
   if (rows.length === 0) return;
   for (const r of rows) {
-    if (r.embedding.length !== VECTOR_DIM) {
-      throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${r.embedding.length}`);
+    if (!Array.isArray(r.embedding) || r.embedding.length !== VECTOR_DIM) {
+      throw new ValidationError(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${r.embedding.length}`);
+    }
+    if (!r.embedding.every((v) => Number.isFinite(v))) {
+      throw new ValidationError(`Invalid embedding: chunk ${r.chunkIndex} contains non-finite values`);
     }
   }
   const BATCH_SIZE = 500;
 
-  // Two-pass insert: parents first to capture real IDs, then rewrite children's parentChunkId.
   const parents = rows.filter((r) => r.kind === 'parent');
   if (parents.length === 0) {
+    for (const r of rows) {
+      if (r.parentChunkId != null) {
+        throw new ValidationError(
+          `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
+        );
+      }
+    }
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE).map(toChunkValues));
     }
@@ -375,13 +408,17 @@ export async function insertChunks(
       batch.map((r) => {
         const realParentId =
           r.parentChunkId != null ? indexToId.get(r.parentChunkId) ?? null : null;
+        if (r.parentChunkId != null && realParentId == null) {
+          throw new ValidationError(
+            `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
+          );
+        }
         return { ...toChunkValues(r), parentChunkId: realParentId };
       }),
     );
   }
 }
 
-/** Fetch chunks by surrogate id (used to resolve child hits to parent blocks). */
 export async function getChunksByIds(
   ids: number[],
   client: Client = db,
@@ -417,7 +454,7 @@ export async function getChunksByIds(
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.deleted_at IS NULL
-      AND ${inArray(chunks.id, ids)}
+      AND c.id = ANY(${ids})
     ORDER BY c.id
   `);
   type RawRow = {
@@ -449,7 +486,6 @@ export async function getChunksByIds(
   }));
 }
 
-/** Fetch chunks of a document whose `chunkIndex` lies in `[start, end]`. */
 export async function getChunksByDocAndRange(
   documentId: number,
   start: number,
@@ -551,7 +587,7 @@ export async function getChunksByDocAndRanges(
   }>>();
   if (ranges.length === 0) return map;
   const conditions = ranges.map((r) =>
-    and(eq(chunks.documentId, r.documentId), sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
+    and(sql`c.document_id = ${r.documentId}`, sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
   );
   const result = await client.execute(sql`
     SELECT
@@ -765,8 +801,8 @@ export const ticketRepo = {
   },
   async getTicketResponseTimes(range?: ChatEventRange, client: Client = db): Promise<TicketResponseTimes> {
     const whereParts: ReturnType<typeof sql>[] = [];
-    if (range?.from) whereParts.push(sql`${tickets.createdAt} >= ${range.from}`);
-    if (range?.to) whereParts.push(sql`${tickets.createdAt} <= ${range.to}`);
+    if (range?.from) whereParts.push(sql`t.created_at >= ${range.from}`);
+    if (range?.to) whereParts.push(sql`t.created_at <= ${range.to}`);
     const where = whereParts.length ? sql`where ${sql.join(whereParts, sql` and `)}` : sql``;
     const rows = (await client.execute(sql`
       with scoped as (
@@ -794,9 +830,9 @@ export const ticketRepo = {
       )
       select
         f.ticket_id,
-        extract(epoch from (f.first_change - f.created_at)) * 1000 as first_response_ms,
+        extract(epoch from ((f.first_change AT TIME ZONE 'UTC') - f.created_at)) * 1000 as first_response_ms,
         case when f.is_closed and f.last_change is not null
-          then extract(epoch from (f.last_change - f.created_at)) * 1000
+          then extract(epoch from ((f.last_change AT TIME ZONE 'UTC') - f.created_at)) * 1000
           else null end as resolution_ms
       from firsts f
     `)) as unknown as { rows: Array<{ first_response_ms: number | null; resolution_ms: number | null }> };
@@ -900,14 +936,6 @@ export const userRepo = {
       .where(eq(users.role, 'admin'));
     return row?.count ?? 0;
   },
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature matches other repo methods; not needed for Clerk metadata update
-  async syncClerkRole(clerkUserId: string, role: 'admin' | 'user', _client: Client = db): Promise<void> {
-    const { clerkClient } = await import('../auth');
-    const clerk = await clerkClient();
-    await clerk.users.updateUserMetadata(clerkUserId, {
-      publicMetadata: { role },
-    });
-  },
 };
 
 export const auditRepo = {
@@ -956,6 +984,18 @@ export const auditRepo = {
     );
   },
   async list(input: AuditListFilter, client: Client = db): Promise<{ events: AuditEventRecord[]; total: number }> {
+    if (input.kind !== undefined && !['document', 'ticket', 'user', 'settings'].includes(input.kind)) {
+      throw new ValidationError(`Invalid audit kind: ${input.kind}`);
+    }
+    if (input.kind === 'document' && input.ticketId !== undefined) {
+      throw new ValidationError('Cannot filter by both kind=document and ticketId');
+    }
+    if (input.kind === 'ticket' && input.documentId !== undefined) {
+      throw new ValidationError('Cannot filter by both kind=ticket and documentId');
+    }
+    if (input.documentId !== undefined && input.kind !== undefined && input.kind !== 'document') {
+      throw new ValidationError('Cannot filter by documentId with kind different from document');
+    }
     const parts = [] as ReturnType<typeof eq>[];
     if (input.kind) parts.push(eq(auditEvents.kind, input.kind));
     if (input.action) parts.push(eq(auditEvents.action, input.action));
@@ -1088,7 +1128,6 @@ function createUserRepo(client: Client): UserRepository {
     list: (opts) => userRepo.list(opts, client),
     countAll: () => userRepo.countAll(client),
     countAdmins: () => userRepo.countAdmins(client),
-    syncClerkRole: (clerkUserId, role) => userRepo.syncClerkRole(clerkUserId, role, client),
   };
 }
 

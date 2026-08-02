@@ -46,7 +46,9 @@ export const chunks = pgTable('chunks', {
     .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
     .where(sql`${table.kind} <> 'parent'`),
   index('chunks_document_id_idx').on(table.documentId),
+  index('chunks_document_id_chunk_index_idx').on(table.documentId, table.chunkIndex),
   index('chunks_tsv_idx').using('gin', sql`${table.tsv}`),
+  check('chunks_kind_check', sql`${table.kind} IN ('parent','child','summary')`),
   foreignKey({
     columns: [table.parentChunkId],
     foreignColumns: [table.id],
@@ -68,6 +70,7 @@ export const tickets = pgTable('tickets', {
 }, (table) => [
   index('tickets_status_idx').on(table.status),
   check('tickets_status_check', sql`${table.status} IN ('created','in_progress','closed')`),
+  index('tickets_assigned_to_idx').on(table.assignedTo),
 ]);
 
 export const users = pgTable('users', {
@@ -98,6 +101,7 @@ export const auditEvents = pgTable('audit_events', {
   index('audit_events_kind_idx').on(table.kind),
   index('audit_events_at_idx').on(table.at.desc()),
   index('audit_events_actor_id_idx').on(table.actorId),
+  index('audit_events_kind_target_id_idx').on(table.kind, table.targetId),
   uniqueIndex('idx_audit_events_source_ref')
     .on(table.sourceRef)
     .where(sql`${table.sourceRef} IS NOT NULL`),
@@ -146,13 +150,14 @@ export const chatEvents = pgTable('chat_events', {
 ]);
 
 export const chatFeedback = pgTable('chat_feedback', {
-  turnId: uuid('turn_id').primaryKey().references(() => chatEvents.turnId),
+  turnId: uuid('turn_id').primaryKey().references(() => chatEvents.turnId, { onDelete: 'cascade' }),
   feedback: smallint('feedback').notNull(),
   documentIds: integer('document_ids').array().notNull().default(sql`'{}'`),
   chunkIds: integer('chunk_ids').array().notNull().default(sql`'{}'`),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   check('chat_feedback_value_check', sql`${table.feedback} IN (1, -1)`),
+  index('chat_feedback_created_at_idx').on(table.createdAt),
 ]);
 
 export type ChatEvent = typeof chatEvents.$inferSelect;
