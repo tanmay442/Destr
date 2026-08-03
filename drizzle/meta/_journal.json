@@ -113,6 +113,13 @@
       "when": 1785738360439,
       "tag": "0015_schema_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785746978195,
+      "tag": "0016_chat_daily_stats_utc",
+      "breakpoints": true
     }
   ]
 }
