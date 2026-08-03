@@ -78,6 +78,41 @@
       "when": 1784988745374,
       "tag": "0010_pale_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784989215000,
+      "tag": "0011_chat_daily_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785057266000,
+      "tag": "0012_chunk_title",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785074210000,
+      "tag": "0013_chat_daily_stats_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785076624000,
+      "tag": "0014_chat_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1785738360439,
+      "tag": "0015_schema_integrity",
+      "breakpoints": true
     }
   ]
 }

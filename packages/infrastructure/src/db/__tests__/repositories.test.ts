@@ -32,12 +32,12 @@ function queryOf(executed: SQL[]) {
 }
 
 describe('getChunksByIds', () => {
-  it('emits a parameterized ANY over the aliased column, never the quoted table', async () => {
+  it('emits a parameterized IN over the aliased column, never the quoted table', async () => {
     const { client, executed } = makeExecuteClient([]);
     const result = await getChunksByIds([1, 2, 3], client);
     expect(result).toEqual([]);
     const q = queryOf(executed);
-    expect(q.sql).toContain('c.id = ANY(($1, $2, $3))');
+    expect(q.sql).toContain('c.id IN ($1, $2, $3)');
     expect(q.sql).not.toContain('"chunks"."id"');
     expect(q.params).toEqual([1, 2, 3]);
   });

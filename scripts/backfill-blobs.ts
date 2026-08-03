@@ -12,14 +12,19 @@ async function main() {
   const blobStorage = Storage.createBlobStorage();
   const { db, schema, setDocumentStorageKey } = Db;
   const documents = schema.documents;
+  const pending = and(isNull(documents.storageKey), isNotNull(documents.blob));
 
   let migrated = 0;
   let skipped = 0;
-  let offset = 0;
+  let lastId = 0;
   let batch = await db.query.documents.findMany({
-    where: and(isNull(documents.storageKey), isNotNull(documents.blob)),
+    // Keyset pagination: `id > lastId` is stable even though the filter
+    // mutates as we set storage_key on each migrated row. Offset counting
+    // over a shrinking filter set would silently skip rows (M25).
+    where: (cols, { and: andFn, gt: gtFn }) =>
+      andFn(pending, gtFn(cols.id, lastId)),
+    orderBy: (cols, { asc }) => [asc(cols.id)],
     limit: BATCH_SIZE,
-    offset,
   });
   if (batch.length === 0) {
     console.log('backfill: no documents to migrate.');
@@ -51,12 +56,26 @@ async function main() {
         throw err;
       }
     }
-    offset += BATCH_SIZE;
+    lastId = batch[batch.length - 1]?.id ?? lastId;
     batch = await db.query.documents.findMany({
-      where: and(isNull(documents.storageKey), isNotNull(documents.blob)),
+      where: (cols, { and: andFn, gt: gtFn }) =>
+        andFn(pending, gtFn(cols.id, lastId)),
+      orderBy: (cols, { asc }) => [asc(cols.id)],
       limit: BATCH_SIZE,
-      offset,
     });
+  }
+
+  // No rows may remain un-migrated (they would have matched `pending` while
+  // lastId advanced past them only if the pagination had drifted).
+  const remaining = await db.query.documents.findMany({
+    where: pending,
+    columns: { id: true },
+    limit: 1,
+  });
+  if (remaining.length > 0) {
+    throw new Error(
+      `backfill incomplete: ${remaining.length}+ documents still lack a storage key`,
+    );
   }
   console.log(`backfill done: migrated=${migrated} skipped=${skipped}`);
 }

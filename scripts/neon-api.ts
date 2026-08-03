@@ -7,7 +7,7 @@ export function neonHeaders(apiKey: string): Record<string, string> {
 }
 
 export function neonApiUrl(projectId: string, path: string): string {
-  return `https://console.neon.tech/api/v2/projects/${projectId}${path}`;
+  return `https://console.neon.tech/api/v2/projects/${encodeURIComponent(projectId)}${path}`;
 }
 
 export async function fetchBranches(
@@ -17,7 +17,7 @@ export async function fetchBranches(
 ): Promise<Array<{ id: string; name: string; primary?: boolean }>> {
   const headers = neonHeaders(apiKey);
   const list = await fetch(
-    neonApiUrl(projectId, `/branches?search=${testBranch}`),
+    neonApiUrl(projectId, `/branches?search=${encodeURIComponent(testBranch)}`),
     { headers },
   );
   if (!list.ok) {
