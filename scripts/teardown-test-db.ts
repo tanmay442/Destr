@@ -1,10 +1,20 @@
 import 'dotenv/config';
+import { existsSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { neonHeaders, neonApiUrl, fetchBranches, isMainModule } from './neon-api';
 
 export async function main() {
   const PROJECT_ID = process.env.NEON_PROJECT_ID;
   const API_KEY = process.env.NEON_API_KEY;
   const TEST_BRANCH = process.env.NEON_TEST_BRANCH ?? 'dev-test';
+
+
+  const envPath = resolve(process.cwd(), '.env.test');
+  if (existsSync(envPath)) {
+    rmSync(envPath, { force: true });
+    console.log(`[teardown-test-db] Removed ${envPath}`);
+  }
+
   if (!PROJECT_ID || !API_KEY) {
     console.warn(
       '[teardown-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping.',

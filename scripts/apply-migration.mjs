@@ -10,6 +10,10 @@ const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 // Applied migrations tracked by file name + content hash for idempotent re-runs.
 const MIGRATIONS_TABLE = 'public._migrations';
 
+// Arbitrary fixed key unique to this project, guards concurrent runners
+// (e.g. Vercel preview builds, CI) from racing the same DDL.
+const ADVISORY_LOCK_KEY = 2654840719;
+
 async function ensureTrackingTable(pool, logger) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
@@ -66,10 +70,14 @@ async function safeQuery(pool, sql, logger) {
 }
 
 /**
- * Structural shape of the pool the migrator needs. The real
- *  satisfies it; tests can pass a minimal fake.
+ * Structural shape of the pool the migrator needs. The real `pg.Pool`
+ * satisfies it; tests can pass a minimal fake.
  *
- * @typedef {{ query: (sql: string) => Promise<unknown>; end: () => Promise<unknown> }} PoolLike
+ * @typedef {{
+ *   connect: () => Promise<ClientLike>;
+ *   end: () => Promise<unknown>;
+ * }} PoolLike
+ * @typedef {{ query: (sql: string, params?: unknown[]) => any; release: () => unknown }} ClientLike
  */
 
 /**
@@ -87,55 +95,89 @@ export async function applyMigrations({
   logger = console,
 } = {}) {
   const pool = poolFactory();
+  const client = await pool.connect();
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
 
   logger.log(`applying ${files.length} migration(s)...`);
 
-  try {
-    // Enable pgvector extension before any schema operations.
-    logger.log('-- enabling pgvector extension...');
-    await safeQuery(pool, EXTENSION_SQL, logger);
+try {
+      logger.log('-- taking advisory lock...');
+      await client.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK_KEY]);
+      try {
+        logger.log('-- enabling pgvector extension...');
+        await safeQuery(client, EXTENSION_SQL, logger);
 
-    // Create tracking table and load already-applied set.
-    logger.log('-- migration tracking...');
-    await ensureTrackingTable(pool, logger);
-    const applied = await getApplied(pool);
-    logger.log(`  ${applied.size} previously applied`);
+        logger.log('-- migration tracking...');
+        await ensureTrackingTable(client, logger);
+      const applied = await getApplied(client);
+      logger.log(`  ${applied.size} previously applied`);
 
-    for (const file of files) {
-      // Skip if already applied with the same content hash.
-      const content = readFileSync(join(dir, file), 'utf8');
-      const hash = simpleHash(content);
+      for (const file of files) {
+        const content = readFileSync(join(dir, file), 'utf8');
+        const hash = simpleHash(content);
 
-      const prevHash = applied.get(file);
-      if (prevHash === hash) {
-        logger.log(`-- ${file}: already applied, skipping`);
-        continue;
-      }
+        const prevHash = applied.get(file);
+        if (prevHash === hash) {
+          logger.log(`-- ${file}: already applied, skipping`);
+          continue;
+        }
+        // M30: an applied migration file must never be edited in place.
+        if (prevHash !== undefined) {
+          const err = new Error(
+            `Migration file ${file} is already applied but its content ` +
+              'changed (hash mismatch). Create a new migration instead of ' +
+              'editing applied files.',
+          );
+          logger.error(`  REFUSE: ${err.message}`);
+          throw err;
+        }
 
-      const statements = content
-        .split(/-->\s*statement-breakpoint/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      logger.log(`-- ${file}: ${statements.length} statements`);
+        const statements = content
+          .split(/-->\s*statement-breakpoint/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        logger.log(`-- ${file}: ${statements.length} statements`);
 
-      for (const stmt of statements) {
+        // Per-file transaction: a failure rolls back the whole file so the
+        // schema never lands half-applied while the file stays "unapplied".
+        await client.query('BEGIN');
         try {
-          await pool.query(stmt);
-        } catch (err) {
-          if (isBenignError(err)) {
-            logger.log('  skip:', err.message.split('\n')[0]);
-          } else {
-            logger.log('  ERROR:', err.message.split('\n')[0]);
-            throw err;
+          for (const stmt of statements) {
+            try {
+              await client.query(stmt);
+              logger.log('  ok');
+            } catch (err) {
+              if (!isBenignError(err)) {
+                throw err;
+              }
+              // A benign "already exists" means the object predates this run.
+              // Since unchanged files are skipped and edited ones are refused
+              // above, this can only happen when the schema drifted from the
+              // migration history — silently skipping and recording the file
+              // would hide real drift (C5: the 0011-0014 gap).
+              logger.error(
+                `  REFUSE: "${file}" hit "${err.message.split('\n')[0]}" — ` +
+                  'refusing benign skip so drift is never masked. ' +
+                  'Reconcile the DB (or record the file) before retrying.',
+              );
+              throw new Error(
+                `Refusing benign skip for migration file ${file}`,
+              );
+            }
           }
+          await recordApplied(client, file, hash);
+          await client.query('COMMIT');
+          logger.log(`  recorded (${hash})`);
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
         }
       }
-
-      await recordApplied(pool, file, hash);
-      logger.log(`  recorded`);
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]).catch(() => {});
     }
   } finally {
+    await client.release();
     await pool.end();
   }
   logger.log('done');

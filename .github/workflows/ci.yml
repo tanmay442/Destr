@@ -50,6 +50,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # ---- 0. Migration journal consistency ---------------------------
+      - name: Drizzle journal check
+        run: node scripts/check-drizzle-journal.mjs
+
       # ---- 1. Typecheck -------------------------------------------------
       - name: Typecheck
         run: pnpm typecheck
@@ -68,7 +72,7 @@ jobs:
 
       # ---- 4. Production build ------------------------------------------
       - name: Build
-        run: NEXT_SKIP_MIGRATIONS=1 pnpm build
+        run: pnpm exec next build
         env:
           # The build doesn't actually need these (the runtime
           # fetches them on first request) but the env-validation

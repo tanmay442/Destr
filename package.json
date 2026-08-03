@@ -13,6 +13,7 @@
     "test:ci": "bash -c \"tsx scripts/setup-test-db.ts && trap \\\"tsx scripts/teardown-test-db.ts\\\" EXIT; vitest run --reporter=dot\"",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
+    "db:check": "node scripts/check-drizzle-journal.mjs",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "tsx scripts/migrate.ts",
     "seed": "tsx packages/cli/src/index.ts seed",

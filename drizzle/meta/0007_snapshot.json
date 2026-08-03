@@ -1,55 +1,9 @@
 {
-  "id": "0d7ffa91-6f78-4778-8936-687aeadf0521",
-  "prevId": "9796c20d-4864-4fa8-a690-b08b7a2050a0",
+  "id": "9796c20d-4864-4fa8-a690-b08b7a2050a0",
+  "prevId": "60ae5a9d-1030-4928-881b-0ec513e7c95f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.app_settings": {
-      "name": "app_settings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "overrides": {
-          "name": "overrides",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "updated_by": {
-          "name": "updated_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.audit_dead_letter": {
       "name": "audit_dead_letter",
       "schema": "",

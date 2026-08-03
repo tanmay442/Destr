@@ -2,7 +2,7 @@ DROP MATERIALIZED VIEW IF EXISTS chat_daily_stats;
 --> statement-breakpoint
 CREATE MATERIALIZED VIEW IF NOT EXISTS chat_daily_stats AS
 SELECT
-  date_trunc('day', created_at) AS day,
+  date_trunc('day', created_at AT TIME ZONE 'UTC') AS day,
   mode,
   count(*) AS total,
   percentile_cont(0.5) WITHIN GROUP (ORDER BY total_ms) AS p50_ms,
