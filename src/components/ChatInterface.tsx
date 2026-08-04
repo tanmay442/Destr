@@ -261,18 +261,13 @@ export function ChatInterface() {
           {messages.length === 0 ? (
             <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center fade-in-0 slide-in-from-bottom-2 duration-500">
               <div className="flex flex-col items-center gap-4">
-                <span
+                <img
+                  src="/logo.svg"
+                  alt=""
                   aria-hidden
-                  className="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/25"
-                >
-                  <img
-                    src="/logo.svg"
-                    alt=""
-                    aria-hidden
-                    className="size-7"
-                    decoding="async"
-                  />
-                </span>
+                  className="h-[42px] w-[42px]"
+                  decoding="async"
+                />
                 <div className="flex flex-col gap-2">
                   <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
                     Answers grounded in your docs

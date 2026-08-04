@@ -1,5 +1,9 @@
 # RAG Knowledge Agent
 
+<p align="center">
+  <img src="public/logo.svg" alt="RAG Knowledge Agent" width="128" height="128">
+</p>
+
 Serverless AI knowledge agent built on Next.js 16, the Vercel AI
 SDK v6, and Drizzle ORM on Neon Serverless Postgres with pgvector.
 Users sign in with Clerk, ask questions in a chat UI, and receive

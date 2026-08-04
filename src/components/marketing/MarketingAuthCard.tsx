@@ -27,7 +27,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
             src="/logo.svg"
             alt=""
             aria-hidden
-            className="size-8"
+            className="size-12"
             decoding="async"
           />
           <div className="flex flex-col gap-2">
