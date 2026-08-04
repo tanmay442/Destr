@@ -1,6 +1,6 @@
-import { and, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, gte, lte, sql } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, auditDeadLetter, type NewChatEvent } from './schema';
+import { chatEvents, chatFeedback, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
   ChatEventInput,
@@ -80,6 +80,8 @@ function rangeWhere(range?: ChatEventRange) {
 export class ChatEventBatcher implements ChatEventsRepo {
   private buffer: NewChatEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private inFlight: Promise<void> | null = null;
+  private droppedBatches = 0;
 
   constructor(private readonly client: Client = db) {}
 
@@ -89,17 +91,36 @@ export class ChatEventBatcher implements ChatEventsRepo {
       void this.flush();
     } else if (!this.timer) {
       this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
+      // Keep the event loop free in serverless; explicit flushes run via after().
       this.timer.unref?.();
     }
   }
 
+  /** Metrics counter; batches lost when both the primary and dead-letter inserts fail. */
+  get droppedBatchCount(): number {
+    return this.droppedBatches;
+  }
+
   async flush(): Promise<void> {
+    while (this.inFlight) {
+      await this.inFlight;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     const batch = this.buffer.splice(0);
     if (batch.length === 0) return;
+    const run = this.persist(batch);
+    this.inFlight = run;
+    try {
+      await run;
+    } finally {
+      this.inFlight = null;
+    }
+  }
+
+  private async persist(batch: NewChatEvent[]): Promise<void> {
     try {
       await this.client.insert(chatEvents).values(batch);
     } catch (e) {
@@ -110,7 +131,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
           error: e instanceof Error ? e.message : String(e),
         });
       } catch {
-        // A dead-letter outage must never surface on the request path.
+        this.droppedBatches += 1;
       }
     }
   }
@@ -121,12 +142,13 @@ export class ChatEventBatcher implements ChatEventsRepo {
       .select({
         total: sql<number>`count(*)::int`,
         ticketsCreated: sql<number>`count(*) filter (where ${chatEvents.ticketCreated})::int`,
-        selfServe: sql<number>`count(*) filter (where not ${chatEvents.ticketCreated} and not ${chatEvents.outOfDomain})::int`,
+        selfServe: sql<number>`count(*) filter (where not ${chatEvents.ticketCreated} and not ${chatEvents.outOfDomain} and ${chatEvents.hitCount} > 0)::int`,
         outOfDomain: sql<number>`count(*) filter (where ${chatEvents.outOfDomain})::int`,
-        zeroResult: sql<number>`count(*) filter (where ${chatEvents.hitCount} = 0)::int`,
+        zeroResult: sql<number>`count(*) filter (where ${chatEvents.hitCount} = 0 or ${chatEvents.hitCount} is null)::int`,
         cacheHits: sql<number>`count(*) filter (where ${chatEvents.cacheHit})::int`,
         hallucinations: sql<number>`count(*) filter (where ${chatEvents.hallucinationBlocked})::int`,
         agenticTotal: sql<number>`count(*) filter (where ${chatEvents.mode} = 'agentic')::int`,
+        // meta.rewritten records rewrite passes; real retry passes are not recorded yet.
         agenticRetries: sql<number>`count(*) filter (where ${chatEvents.mode} = 'agentic' and (${chatEvents.meta} ->> 'rewritten') = 'true')::int`,
         retrieveP50: sql<number>`coalesce(percentile_cont(0.5) within group (order by ${chatEvents.retrieveMs}), 0)`,
         retrieveP95: sql<number>`coalesce(percentile_cont(0.95) within group (order by ${chatEvents.retrieveMs}), 0)`,
@@ -411,28 +433,53 @@ export class ChatEventBatcher implements ChatEventsRepo {
   }
 
   async purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }> {
-    const result = await this.client
-      .delete(chatEvents)
-      .where(lte(chatEvents.createdAt, cutoff))
-      .returning({ id: chatEvents.id });
-    return { deletedCount: result.length };
+    const result = await this.client.execute(sql`
+      with removed_feedback as (
+        delete from ${chatFeedback}
+        where ${chatFeedback.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
+        )
+        returning ${chatFeedback.turnId}
+      )
+      delete from ${chatEvents}
+      where ${chatEvents.createdAt} <= ${cutoff}
+      returning ${chatEvents.id}
+    `);
+    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    return { deletedCount: rows.length };
   }
 
   async purgeUserData(userId: string): Promise<{ deletedCount: number }> {
-    const result = await this.client
-      .delete(chatEvents)
-      .where(eq(chatEvents.userId, userId))
-      .returning({ id: chatEvents.id });
-    return { deletedCount: result.length };
+    const result = await this.client.execute(sql`
+      with removed_feedback as (
+        delete from ${chatFeedback}
+        where ${chatFeedback.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
+        )
+        returning ${chatFeedback.turnId}
+      )
+      delete from ${chatEvents}
+      where ${chatEvents.userId} = ${userId}
+      returning ${chatEvents.id}
+    `);
+    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    return { deletedCount: rows.length };
   }
 
   async anonymizeUserData(userId: string): Promise<{ updatedCount: number }> {
-    const result = await this.client
-      .update(chatEvents)
-      .set({ userId: 'REDACTED', query: null })
-      .where(eq(chatEvents.userId, userId))
-      .returning({ id: chatEvents.id });
-    return { updatedCount: result.length };
+    const result = await this.client.execute(sql`
+      update ${chatEvents}
+      set
+        user_id = 'REDACTED',
+        query = null,
+        meta = ${chatEvents.meta} - 'documentIds' - 'ticketId'
+      where ${chatEvents.userId} = ${userId}
+      returning ${chatEvents.id}
+    `);
+    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    return { updatedCount: rows.length };
   }
 }
 
