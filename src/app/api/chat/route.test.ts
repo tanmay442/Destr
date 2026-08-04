@@ -95,7 +95,9 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     getEmbeddingModelId: vi.fn(() => 'mock-embed'),
-    answerCacheKey: vi.fn((query: string) => `rag:answer:${Buffer.from(query).toString('hex').slice(0, 32)}`),
+    answerCacheKey: vi.fn((query: string, opts?: { userId?: string; fingerprint?: string }) =>
+      `rag:answer:${Buffer.from(query + (opts?.userId ?? '') + (opts?.fingerprint ?? '')).toString('hex').slice(0, 32)}`,
+    ),
     answerCache: {
       get: vi.fn(async () => null),
       set: vi.fn(async () => undefined),
@@ -140,7 +142,7 @@ async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
     new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [] }),
+      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
     }),
   );
   expect(res.status).toBe(200);
@@ -187,7 +189,7 @@ describe('/api/chat', () => {
       new Request('http://localhost/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [] }),
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
       }),
     );
     expect(res.status).toBe(401);
@@ -201,7 +203,7 @@ describe('/api/chat', () => {
       new Request('http://localhost/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [] }),
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
       }),
     );
     expect(res.status).toBe(429);
@@ -356,7 +358,7 @@ describe('/api/chat searchDocumentation tool', () => {
       new Request('http://localhost/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [] }),
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
       }),
     );
     expect(res.status).toBe(200);
@@ -414,7 +416,9 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
   });
 
   it('respects appConfig.prefetchFirstTurn = false on empty lastUserText', async () => {
-    const { system } = await captureSystemForBody({ messages: [] });
+    const { system } = await captureSystemForBody({
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: '' }] }],
+    });
     expect(typeof system).toBe('string');
     expect(system as string).not.toMatch(/Pre-fetched Reference Data/);
   });
@@ -599,7 +603,7 @@ async function captureToolsForAgentic() {
     new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [] }),
+      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
     }),
   );
   expect(res.status).toBe(200);
@@ -731,6 +735,7 @@ describe('/api/chat answer cache (Session 10)', () => {
 
   beforeEach(() => {
     vi.stubEnv('ANSWER_CACHE_ENABLED', 'true');
+    retrievalConfig.retrievalMode = 'normal';
     compositionMock.answerCache.get.mockReset();
     compositionMock.answerCache.set.mockReset();
     compositionMock.answerCache.get.mockResolvedValue(null);
@@ -799,6 +804,106 @@ describe('/api/chat answer cache (Session 10)', () => {
     );
     expect(res.status).toBe(200);
     await readBody(res);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('includes the user id and retrieval fingerprint in the cache key', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    authMock.mockResolvedValue({ userId: 'user_fp' });
+    retrievalConfig.retrievalMode = 'agentic';
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'fingerprint me' }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    await readBody(res);
+    const [, opts] = compositionMock.answerCacheKey.mock.calls.at(-1)! as unknown as [
+      unknown,
+      { userId: string; fingerprint: string },
+    ];
+    expect(opts.userId).toBe('user_fp');
+    expect(opts.fingerprint).toContain('"mode":"agentic"');
+    expect(opts.fingerprint).toContain('"retrievalMode":"agentic"');
+    expect(opts.fingerprint).toContain('"similarityThreshold":0.5');
+  });
+
+  it('does not cache an out-of-domain answer', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    retrievalConfig.retrievalMode = 'agentic';
+    graderHolder.fn = vi.fn(async () => 'no' as const);
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({ chunks: [], rewrittenQuery: '', outOfDomain: true }) as never,
+    );
+    const body = await runAgenticStreamAndRead('where is my refund?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('does not cache an answer the hallucination grader blocked', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    retrievalConfig.retrievalMode = 'agentic';
+    graderHolder.fn = vi.fn(async () => 'no' as const);
+    const chunk = { content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok({ chunks: [chunk], rewrittenQuery: '', outOfDomain: false }) as never,
+    );
+    const body = await runAgenticStreamAndRead('what is the policy?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('does not cache a turn that opened a support ticket', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    authMock.mockResolvedValue({ userId: 'user_tkt' });
+    createTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
+    currentUserMock.mockResolvedValue({
+      id: 'user_tkt',
+      emailAddresses: [{ emailAddress: 't@example.com' }],
+      fullName: 'Tester',
+      firstName: 'T',
+      username: 't',
+    });
+    let ticketFinished: () => void = () => {};
+    const ticketPromise = new Promise<void>((resolve) => {
+      ticketFinished = resolve;
+    });
+    let streamController: ReadableStreamDefaultController<{ type: string }> | null = null;
+    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
+      const tools = (opts?.tools as {
+        createSupportTicket?: {
+          execute: (a: { name: string; email: string; issue: string }) => Promise<unknown>;
+        };
+      }) ?? {};
+      if (tools.createSupportTicket) {
+        void tools.createSupportTicket
+          .execute({ name: 'A', email: 'a@a.com', issue: 'please open a ticket' })
+          .finally(ticketFinished);
+      }
+      return {
+        toUIMessageStream: () =>
+          new ReadableStream<{ type: string }>({
+            start(controller) {
+              streamController = controller;
+            },
+          }),
+        text: Promise.resolve('I opened a ticket for you.'),
+      };
+    });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'open a ticket please' }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    await ticketPromise;
+    streamController!.close();
+    await readBody(res);
+    expect(createTicketMock).toHaveBeenCalled();
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
 });

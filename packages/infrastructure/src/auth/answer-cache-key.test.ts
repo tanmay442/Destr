@@ -31,4 +31,19 @@ describe('answerCacheKey', () => {
     const key = answerCacheKey('anything', models);
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
   });
+
+  it('namespaces keys by user id', () => {
+    const a = answerCacheKey('same question', { ...models, userId: 'user_a' });
+    const b = answerCacheKey('same question', { ...models, userId: 'user_b' });
+    const c = answerCacheKey('same question', models);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+  });
+
+  it('busts the key when the config fingerprint changes', () => {
+    const base = { ...models };
+    const a = answerCacheKey('same question', { ...base, fingerprint: 'fp-v1' });
+    const b = answerCacheKey('same question', { ...base, fingerprint: 'fp-v2' });
+    expect(a).not.toBe(b);
+  });
 });

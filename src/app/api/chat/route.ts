@@ -11,10 +11,26 @@ import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
 import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
 import { getRuntimeConfig } from '@/lib/config/runtime';
+import type { AppConfig } from '@app/domain/app-config';
 import { dedupeCitations } from '@/chat/dedupe-citations';
 import { emitCitations, citationDocumentIds, type EmittedCitation } from '@/chat/emit-citations';
 import { resolveTurnId } from '@/chat/turn-id';
 import { buildEventMeta } from '@/chat/build-event-meta';
+
+/** Bump when the system prompt or retrieval defaults change materially — busts cached answers. */
+const SYSTEM_PROMPT_VERSION = 1;
+
+function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'normal'): string {
+  return JSON.stringify({
+    promptVersion: SYSTEM_PROMPT_VERSION,
+    mode: effectiveMode,
+    retrievalMode: cfg.retrievalMode,
+    similarityThreshold: cfg.similarityThreshold,
+    hybridEnabled: cfg.hybridEnabled,
+    rerankerProvider: cfg.rerankerProvider,
+    prefetchFirstTurn: cfg.prefetchFirstTurn,
+  });
+}
 
 /** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
 interface TurnMetrics {
@@ -201,6 +217,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
     logger.debug('JSON parse failed', { error: String(e) });
     return null;
   });
+  if (raw !== null && JSON.stringify(raw).length > CHAT_MAX_BODY_BYTES) {
+    return new Response('Payload too large', { status: 413 });
+  }
   const parsed = ChatRequestSchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json({ error: 'invalid_request', issues: parsed.error.issues }, { status: 400 });
@@ -239,6 +258,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
     ? comp.answerCacheKey(lastUserText, {
         embeddingModel: comp.getEmbeddingModelId(),
         chatModel: (comp.getChatModel() as { modelId?: string })?.modelId ?? 'unknown',
+        userId,
+        fingerprint: cacheFingerprint(cfg, effectiveMode),
       })
     : null;
   if (cacheKey) {
@@ -313,7 +334,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
             if (done) break;
             controller.enqueue(value);
           }
-          for (const src of dedupeCitations(capturedCitations)) {
+          const finalCitations = dedupeCitations(capturedCitations);
+          for (const src of finalCitations) {
             controller.enqueue({
               type: 'data-citation',
               data: src,
@@ -322,11 +344,11 @@ async function streamChatResponse(req: Request): Promise<Response> {
           const hallucinationBlocked = await runHallucinationCheck({
             controller,
             result,
-            capturedCitations,
+            capturedCitations: finalCitations,
             hallucinationGrader: comp.getHallucinationGrader(cfg),
             outOfDomain: outOfDomainRef.value,
           });
-          if (cacheKey) {
+          if (cacheKey && !hallucinationBlocked && !outOfDomainRef.value && !metrics.ticketCreated) {
             try {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
@@ -352,12 +374,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
             outOfDomain: outOfDomainRef.value,
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
-            citationCount: capturedCitations.length,
+            citationCount: finalCitations.length,
             tokensIn: usage?.inputTokens ?? 0,
             tokensOut: usage?.outputTokens ?? 0,
             meta: buildEventMeta({
               rewritten: metrics.rewritten,
-              documentIds: citationDocumentIds(capturedCitations),
+              documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
             }),
           });

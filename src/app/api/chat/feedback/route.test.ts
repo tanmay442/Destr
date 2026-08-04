@@ -72,6 +72,21 @@ describe('POST /api/chat/feedback', () => {
     expect(submitMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 for a non-v4 uuid', async () => {
+    const v1 = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const res = await route.POST(post({ turnId: v1, feedback: 1 }));
+    expect(res.status).toBe(400);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 413 when the declared content-length exceeds the cap', async () => {
+    const res = await route.POST(
+      post({ turnId: TURN, feedback: 1 }, { 'content-length': '99999999' }),
+    );
+    expect(res.status).toBe(413);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
   it('returns 400 for an out-of-range feedback value', async () => {
     const res = await route.POST(post({ turnId: TURN, feedback: 2 }));
     expect(res.status).toBe(400);
