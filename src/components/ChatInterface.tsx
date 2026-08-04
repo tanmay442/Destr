@@ -28,7 +28,6 @@ import {
   Clock,
   ThumbsUp,
   ThumbsDown,
-  Sparkles,
   AlertCircle,
 } from 'lucide-react';
 
@@ -266,7 +265,13 @@ export function ChatInterface() {
                   aria-hidden
                   className="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/25"
                 >
-                  <Sparkles className="size-6" />
+                  <img
+                    src="/logo.svg"
+                    alt=""
+                    aria-hidden
+                    className="size-7"
+                    decoding="async"
+                  />
                 </span>
                 <div className="flex flex-col gap-2">
                   <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">

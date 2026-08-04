@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { SignInButton } from '@clerk/nextjs';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import BorderGlow from '@/components/react-bits/BorderGlow';
 import { Button } from '@/components/ui/button';
 
@@ -23,7 +23,13 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
     >
       <div className="flex flex-col gap-5 p-6">
         <div className="flex flex-col gap-3">
-          <Sparkles className="size-5 text-muted-foreground" aria-hidden />
+          <img
+            src="/logo.svg"
+            alt=""
+            aria-hidden
+            className="size-8"
+            decoding="async"
+          />
           <div className="flex flex-col gap-2">
             <h2 className="text-xl font-semibold tracking-tight text-foreground">
               Get started

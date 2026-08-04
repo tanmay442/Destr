@@ -99,6 +99,20 @@ for detailed sign-up links and per-service walkthroughs.
 - **Variants:** component variants use `class-variance-authority`; sizes/intents are Tailwind utility classes rather than bespoke CSS.
 - **Structure:** the marketing landing lives in `src/components/marketing/`; the authenticated app shell (sidebar + mobile drawer) is `src/components/app/AppSidebar.tsx`.
 
+### Branding
+
+- **Logo:** `public/logo.svg` is the single source of truth for brand
+  artwork and is served to the client at `/logo.svg`.
+- **Where it appears:** the sidebar brand mark (desktop sidebar, mobile
+  topbar, and mobile drawer — all via `src/components/icons/BrandMark.tsx`),
+  the "Get started" card on the marketing landing
+  (`src/components/marketing/MarketingAuthCard.tsx`), and the chat empty
+  state (`src/components/ChatInterface.tsx`).
+- **Replacing it:** drop a new file over `public/logo.svg` (a square SVG
+  works best at the sizes used — 28 px in the sidebar, 32 px in the auth
+  card, 28 px in the chat empty state). No component changes required;
+  every surface picks it up automatically.
+
 ## Reference
 
 ### Identity, auth, and roles
