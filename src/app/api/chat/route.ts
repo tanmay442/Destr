@@ -117,9 +117,9 @@ function buildChatTools(deps: {
         return capped;
       },
     }),
-    createSupportTicket: tool({
+    createKnowledgeTicket: tool({
       description:
-        'Open a support ticket. Invoke this tool when the user\'s issue cannot be resolved via the available documentation content or the user has explicitly asked to open one, file one, escalate, talk to a human, or submit a complaint. When invoking, provide a structured `issue` summary with appropriate context so the reviewer can understand the full situation without reading the transcript: Product / Question / What was tried / Docs searched / User context.',
+        'Open a knowledge ticket. Invoke this tool when the user\'s issue cannot be resolved via the available documentation content or the user has explicitly asked to open one, file one, escalate, talk to a human, or submit a complaint. When invoking, provide a structured `issue` summary with appropriate context so the reviewer can understand the full situation without reading the transcript: Product / Question / What was tried / Docs searched / User context.',
       inputSchema: z.object({
         name: z
           .string()
@@ -154,7 +154,7 @@ function buildChatTools(deps: {
             ? primaryEmail
             : `${clerkUser.id}@clerk.user`;
         } else {
-          logger.warn('createSupportTicket: currentUser() returned null after auth() succeeded');
+          logger.warn('createKnowledgeTicket: currentUser() returned null after auth() succeeded');
           realName = 'Unknown';
           realEmail = `${uid}@clerk.user`;
         }
@@ -165,7 +165,7 @@ function buildChatTools(deps: {
           issue: sanitizeText(issue),
         });
         if (!result.ok) {
-          logger.error('createSupportTicket: createTicket failed', { error: result.error });
+          logger.error('createKnowledgeTicket: createTicket failed', { error: result.error });
           return { ticketId: null, status: 'error' };
         }
         metrics.ticketCreated = true;
@@ -399,7 +399,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
 /**
  * Post-generation guardrail: if retrieval was out-of-domain or the grounded-grader
- * flags the answer as not supported, nudge the client toward a support ticket.
+ * flags the answer as not supported, nudge the client toward a knowledge ticket.
  */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;

@@ -1,7 +1,7 @@
 // Open Graph share image (1200x630); used by social link previews.
 import { ImageResponse } from 'next/og';
 
-export const alt = 'RAG Support';
+export const alt = 'RAG Knowledge Agent';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -54,7 +54,7 @@ export default function OpengraphImage() {
             letterSpacing: '-0.02em',
           }}
         >
-          RAG Support
+          RAG Knowledge Agent
         </div>
       </div>
     ),

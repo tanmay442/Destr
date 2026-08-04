@@ -1,5 +1,5 @@
 {
-  "name": "rag-support-agent",
+  "name": "rag-knowledge-agent",
   "version": "0.1.0",
   "private": true,
   "scripts": {

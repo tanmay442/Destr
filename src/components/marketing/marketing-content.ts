@@ -1,6 +1,6 @@
 export const HERO = {
   eyebrow: 'SERVERLESS · GROUNDED · READY',
-  headline: 'Serverless AI customer support.',
+  headline: 'Serverless AI knowledge agent.',
   subcopy:
     'A RAG agent that answers with cited docs, clarifies vague prompts, ' +
     'and escalates to a human ticket — built on Next.js 16, Vercel AI SDK v6, ' +
@@ -10,7 +10,7 @@ export const HERO = {
 export const FEATURES = [
   { title: 'Grounded Answers', description: 'Cited, high-accuracy RAG answers.' },
   { title: 'Multi-step Workflows', description: 'Clarifies, searches, and synthesizes.' },
-  { title: 'Human Escalation', description: 'Escalates to a structured support ticket.' },
+  { title: 'Human Escalation', description: 'Escalates to a structured knowledge ticket.' },
   { title: 'Serverless Architecture', description: 'Edge-ready, pay-as-you-go infra.' },
   {
     title: 'Admin Console & Observability',

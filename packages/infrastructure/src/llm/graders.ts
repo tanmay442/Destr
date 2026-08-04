@@ -16,7 +16,7 @@ function redact(message: unknown): string {
 }
 
 const REWRITE_SYSTEM =
-  'You rewrite end-user support questions into a tight, specific search query ' +
+  'You rewrite end-user questions into a tight, specific search query ' +
   'for a documentation retrieval system. Keep product names, feature terms, and ' +
   'error codes. Remove chatter. Output only the rewritten query, no quotes. ' +
   'If the input is already a good query, return it unchanged.';

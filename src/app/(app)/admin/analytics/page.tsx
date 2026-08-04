@@ -264,7 +264,7 @@ export default async function AnalyticsPage() {
       <div className="flex flex-col gap-1">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
         <p className="text-sm text-muted-foreground">
-          Quality, performance, and feedback across your support agent.
+          Quality, performance, and feedback across your knowledge agent.
         </p>
       </div>
 

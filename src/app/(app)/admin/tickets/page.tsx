@@ -89,7 +89,7 @@ export default async function TicketsPage({
       <div className="flex flex-col gap-1">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Tickets</h2>
         <p className="text-sm text-muted-foreground">
-          Review, assign, and resolve support tickets. Click a ticket to view details.
+          Review, assign, and resolve knowledge tickets. Click a ticket to view details.
         </p>
       </div>
       <TicketsFilterForm

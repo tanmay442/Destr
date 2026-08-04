@@ -18,7 +18,7 @@ Ollama replaces the LLM providers.
 ## Clerk (auth — always required, even locally)
 
 1. Go to https://dashboard.clerk.com → **Create application**.
-2. Name it (e.g. "RAG Support Agent"). Select your preferred sign-in
+2. Name it (e.g. "RAG Knowledge Agent"). Select your preferred sign-in
    methods (Email + Google at minimum).
 3. From the application's **API Keys** page, copy:
    - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — starts with `pk_test_`

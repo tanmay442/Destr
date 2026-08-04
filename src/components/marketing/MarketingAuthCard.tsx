@@ -36,7 +36,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
             </h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
               Open the chat to talk with the assistant, or sign in to save your
-              session history and track support tickets.
+              session history and track knowledge tickets.
             </p>
           </div>
         </div>

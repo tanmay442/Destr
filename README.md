@@ -1,6 +1,6 @@
-# RAG Support Agent
+# RAG Knowledge Agent
 
-Serverless AI customer support agent built on Next.js 16, the Vercel AI
+Serverless AI knowledge agent built on Next.js 16, the Vercel AI
 SDK v6, and Drizzle ORM on Neon Serverless Postgres with pgvector.
 Users sign in with Clerk, ask questions in a chat UI, and receive
 cited answers drawn from uploaded PDF documentation.

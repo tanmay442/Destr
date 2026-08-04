@@ -141,7 +141,7 @@ const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
   { label: 'Reset password', text: 'How do I change my password?' },
   { label: 'Invite teammate', text: 'How do I invite a teammate to my workspace?' },
   { label: 'API rate limit', text: "What's the API rate limit on the Team plan?" },
-  { label: 'Open a ticket', text: "I'd like to open a support ticket." },
+  { label: 'Open a ticket', text: "I'd like to open a knowledge ticket." },
 ];
 
 export function ChatInterface() {
@@ -485,7 +485,7 @@ export function ChatInterface() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={isStreaming}
-            placeholder="Message the support assistant…"
+            placeholder="Message the knowledge assistant…"
             rows={1}
             className={cn(
               'min-h-[36px] max-h-[220px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-[15px] leading-relaxed text-foreground shadow-none outline-none transition-colors',

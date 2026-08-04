@@ -36,7 +36,7 @@ export const appConfigSchema = z.object({
       {
         topic: 'refund or chargeback negotiation',
         handling:
-          'Decline to negotiate. Open a standard support or billing ticket for review. Avoid making promises regarding credits, refunds, or policy waivers.',
+          'Decline to negotiate. Open a standard knowledge or billing ticket for review. Avoid making promises regarding credits, refunds, or policy waivers.',
       },
       {
         topic: 'custom contract terms / DPAs / legal review',

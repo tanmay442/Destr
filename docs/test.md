@@ -6,10 +6,10 @@
 `pnpm test` (single run) or `pnpm test:ui` (interactive). Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
-  `searchDocumentation` and `createSupportTicket` tool wiring
+  `searchDocumentation` and `createKnowledgeTicket` tool wiring
   (searchChunks shape, 800-char cap, user-supplied limit, captured-
   citation emission), the Clerk identity override in
-  `createSupportTicket`, the first-turn pre-fetch (no header on
+  `createKnowledgeTicket`, the first-turn pre-fetch (no header on
   empty `lastUserText`, chunks injected on the first turn,
   pre-fetched chunks surface as `data-citation` parts without a
   tool call, no pre-fetch on follow-up turns), and the Session-10

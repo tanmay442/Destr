@@ -56,7 +56,7 @@ export default async function AdminOverviewPage() {
       <div className="flex flex-col gap-1">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Overview</h2>
         <p className="text-sm text-muted-foreground">
-          High-level view of your support agent and knowledge base.
+          High-level view of your knowledge agent and knowledge base.
         </p>
       </div>
 
@@ -98,7 +98,7 @@ export default async function AdminOverviewPage() {
           <CardHeader className="gap-1 pb-4">
             <CardTitle>Ticket resolution</CardTitle>
             <CardDescription>
-              Share of support tickets still awaiting a response.
+              Share of knowledge tickets still awaiting a response.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-5">

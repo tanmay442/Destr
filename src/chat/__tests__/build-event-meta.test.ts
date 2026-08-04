@@ -16,7 +16,7 @@ describe('buildEventMeta', () => {
     expect(buildEventMeta({ documentIds: [] })).toEqual({});
   });
 
-  it('includes the ticket id captured from the createSupportTicket tool result', () => {
+  it('includes the ticket id captured from the createKnowledgeTicket tool result', () => {
     expect(buildEventMeta({ ticketId: 'TKT-abc123' })).toEqual({ ticketId: 'TKT-abc123' });
     expect(buildEventMeta({ ticketId: null })).toEqual({});
     expect(buildEventMeta({ ticketId: undefined })).toEqual({});

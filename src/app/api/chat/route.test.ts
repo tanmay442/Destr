@@ -28,7 +28,7 @@ const { appConfigMock } = vi.hoisted(() => ({
     audience: 'test customers',
     agentPersona: { name: 'Astra', tone: 'friendly' as const },
     outOfScopeTopics: [],
-    branding: { title: 'RAG Support', description: '' },
+    branding: { title: 'RAG Knowledge Agent', description: '' },
     seedDocsDir: './documents',
     adminEmails: [],
     customInstructions: undefined,
@@ -209,23 +209,23 @@ describe('/api/chat', () => {
     expect(res.status).toBe(429);
   });
 
-  it('passes a createSupportTicket tool to streamText', () => {
+  it('passes a createKnowledgeTicket tool to streamText', () => {
     expect(appHandler.POST).toBeDefined();
   });
 });
 
-describe('/api/chat createSupportTicket tool', () => {
+describe('/api/chat createKnowledgeTicket tool', () => {
   async function invokeToolFromStreamText(overrides: {
     name: string;
     email: string;
     issue: string;
   }) {
     const tools = await captureToolsFromStreamText<{
-      createSupportTicket: {
+      createKnowledgeTicket: {
         execute: (args: { name: string; email: string; issue: string }) => Promise<unknown>;
       };
     }>();
-    const tool = tools?.createSupportTicket;
+    const tool = tools?.createKnowledgeTicket;
     expect(tool).toBeDefined();
     return tool!.execute(overrides);
   }
@@ -412,7 +412,7 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     const sys = system as string;
     expect(sys).not.toMatch(/Pre-fetched Reference Data/);
     expect(sys).toContain('searchDocumentation');
-    expect(sys).toContain('createSupportTicket');
+    expect(sys).toContain('createKnowledgeTicket');
   });
 
   it('respects appConfig.prefetchFirstTurn = false on empty lastUserText', async () => {
@@ -855,7 +855,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
 
-  it('does not cache a turn that opened a support ticket', async () => {
+  it('does not cache a turn that opened a knowledge ticket', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
     authMock.mockResolvedValue({ userId: 'user_tkt' });
     createTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
@@ -873,12 +873,12 @@ describe('/api/chat answer cache (Session 10)', () => {
     let streamController: ReadableStreamDefaultController<{ type: string }> | null = null;
     streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
       const tools = (opts?.tools as {
-        createSupportTicket?: {
+        createKnowledgeTicket?: {
           execute: (a: { name: string; email: string; issue: string }) => Promise<unknown>;
         };
       }) ?? {};
-      if (tools.createSupportTicket) {
-        void tools.createSupportTicket
+      if (tools.createKnowledgeTicket) {
+        void tools.createKnowledgeTicket
           .execute({ name: 'A', email: 'a@a.com', issue: 'please open a ticket' })
           .finally(ticketFinished);
       }

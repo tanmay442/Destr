@@ -16,7 +16,7 @@ import {
   AGENTIC_ENABLED,
 } from '@app/domain';
 
-// Runtime configuration for this deployment of the RAG Support Agent.
+// Runtime configuration for this deployment of the RAG Knowledge Agent.
 //
 // Edit any field, or run `pnpm configure` to be walked through the values
 // interactively. The schema at `@app/domain` validates
@@ -50,9 +50,9 @@ const config: AppConfig = {
   customInstructions: undefined,
 
   // Topics the agent should refuse to answer and how to redirect.
-  // The defaults cover the categories of request a customer-support
+  // The defaults cover the categories of request a knowledge
   // agent for a BI/dashboard SaaS cannot safely handle. Each rule
-  // tells the bot to decline AND open a support ticket rather than
+  // tells the bot to decline AND open a knowledge ticket rather than
   // improvise.
   outOfScopeTopics: [
     {
@@ -101,8 +101,8 @@ const config: AppConfig = {
 
   // Browser tab title + meta description.
   branding: {
-    title: 'RAG Support',
-    description: 'AI customer support agent, with grounded citations.',
+    title: 'RAG Knowledge Agent',
+    description: 'AI knowledge agent, with grounded citations.',
   },
 
   // Where the setup CLI drops seed PDFs and where `pnpm seed`
