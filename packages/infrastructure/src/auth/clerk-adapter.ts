@@ -3,7 +3,6 @@ import {
   clerkClient,
   clerkMiddleware,
   createRouteMatcher,
-  currentUser,
 } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
@@ -11,7 +10,13 @@ import { ForbiddenError, UnauthorizedError } from '@app/domain';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
-import { isAdminEmail, isVerifiedAdminEmail } from './clerk-shared';
+import {
+  createTtlCache,
+  getClerkUserCached,
+  isAdminEmail,
+  isVerifiedAdminEmail,
+  primaryEmailAddress,
+} from './clerk-shared';
 import type { AuthAdapter } from './auth-factory';
 
 export type AppRole = 'admin' | 'user';
@@ -49,18 +54,7 @@ function parseClerkRole(value: unknown): AppRole | null {
 }
 
 const ROLE_TTL_MS = 30_000;
-const roleCache = new Map<string, { role: 'admin' | 'user'; expiresAt: number }>();
-
-const USER_TTL_MS = 30_000;
-const userCache = new Map<string, { user: Awaited<ReturnType<typeof currentUser>>; expiresAt: number }>();
-
-async function getCurrentUserCached(userId: string) {
-  const cached = userCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) return cached.user;
-  const user = await currentUser();
-  if (user) userCache.set(userId, { user, expiresAt: Date.now() + USER_TTL_MS });
-  return user;
-}
+const roleCache = createTtlCache<'admin' | 'user'>(ROLE_TTL_MS, 2_000);
 
 async function resolveRoleCached(
   userId: string,
@@ -69,18 +63,18 @@ async function resolveRoleCached(
   emailVerified?: boolean,
 ): Promise<'admin' | 'user'> {
   const cached = roleCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) return cached.role;
+  if (cached) return cached;
   const role = await resolveRole(userId, sessionClaims, email, emailVerified);
-  roleCache.set(userId, { role, expiresAt: Date.now() + ROLE_TTL_MS });
+  roleCache.set(userId, role);
   return role;
 }
 
 export async function getAppSession(): Promise<AppSessionFull | null> {
   const { userId } = await auth();
   if (!userId) return null;
-  const user = await getCurrentUserCached(userId);
+  const user = await getClerkUserCached(userId);
   if (!user) return null;
-  const email = user.emailAddresses[0]?.emailAddress ?? '';
+  const email = primaryEmailAddress(user.emailAddresses, user.primaryEmailAddressId);
   const verifiedAdminEmail = isVerifiedAdminEmail(user.emailAddresses);
   let local = await findUserByClerkId(userId);
   if (!local) {
@@ -157,18 +151,18 @@ const isAdminRoute = createRouteMatcher([
   '/api/admin(.*)',
 ]);
 
-async function resolveRole(
+export async function resolveRole(
   userId: string,
   sessionClaims: Record<string, unknown> | null | undefined,
   email?: string,
   emailVerified?: boolean,
 ): Promise<'admin' | 'user'> {
+  const local = await findUserByClerkId(userId);
+  if (local?.role === 'admin' || local?.role === 'user') return local.role;
+  if (email && emailVerified && isAdminEmail(email)) return 'admin';
   const claims = sessionClaims as { metadata?: { role?: unknown } } | undefined;
   const fromClaims = claims?.metadata?.role;
   if (fromClaims === 'admin' || fromClaims === 'user') return fromClaims;
-  const local = await findUserByClerkId(userId);
-  if (local?.role === 'admin') return 'admin';
-  if (email && emailVerified && isAdminEmail(email)) return 'admin';
   return 'user';
 }
 
@@ -192,6 +186,11 @@ function createMiddleware(): AuthAdapter['middleware'] {
       return NextResponse.next();
     }
     if (req.nextUrl.pathname.startsWith('/api/')) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(
+          `[clerk] Unmatched API route ${req.nextUrl.pathname} rejected with 401; add it to isPublicRoute or isProtectedRoute.`,
+        );
+      }
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     return NextResponse.next();

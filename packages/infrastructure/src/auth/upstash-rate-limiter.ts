@@ -1,6 +1,25 @@
 import { Redis } from '@upstash/redis';
 import type { RateLimiter } from '@app/domain';
 
+export const RATE_LIMITER_LUA = `
+  local key = KEYS[1]
+  local now = tonumber(ARGV[1])
+  local window = tonumber(ARGV[2])
+  local limit = tonumber(ARGV[3])
+  local seqKey = key .. ':seq'
+  redis.call('zremrangebyscore', key, '-inf', now - window)
+  local count = redis.call('zcard', key)
+  if count >= limit then
+    local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')[2]
+    return {0, oldest}
+  end
+  local seq = redis.call('incr', seqKey)
+  redis.call('pexpire', seqKey, window)
+  redis.call('zadd', key, now, now .. ':' .. seq)
+  redis.call('pexpire', key, window)
+  return {1, limit - count - 1}
+`;
+
 export function createUpstashRateLimiter(): RateLimiter {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -9,30 +28,13 @@ export function createUpstashRateLimiter(): RateLimiter {
   }
   const redis = new Redis({ url, token });
 
-  const lua = `
-    local key = KEYS[1]
-    local now = tonumber(ARGV[1])
-    local window = tonumber(ARGV[2])
-    local limit = tonumber(ARGV[3])
-    local cutoff = now - window
-    redis.call('zremrangebyscore', key, '-inf', cutoff)
-    local count = redis.call('zcard', key)
-    if count >= limit then
-      local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')[2]
-      return {0, oldest}
-    end
-    redis.call('zadd', key, now, now)
-    redis.call('pexpire', key, window)
-    return {1, limit - count - 1}
-  `;
-
   return {
     async check(key, opts) {
       const redisKey = `ratelimit:${key}`;
       const now = Date.now();
       const windowMs = opts.windowMs;
       const [ok, second] = (await redis.eval(
-        lua,
+        RATE_LIMITER_LUA,
         [redisKey],
         [now, windowMs, opts.limit],
       )) as [number, number];
