@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createUpstashRateLimiter } from './upstash-rate-limiter';
+import { createUpstashRateLimiter, RATE_LIMITER_LUA } from './upstash-rate-limiter';
 
 const createRedisMock = () => ({
   eval: vi.fn(),
@@ -14,6 +14,34 @@ vi.mock('@upstash/redis', () => ({
   }),
 }));
 
+// Faithful emulation of the exported RATE_LIMITER_LUA script: a per-key sorted
+// set of unique `now:seq` members with a per-key sequence counter.
+class RedisZsetEmulator {
+  private sets = new Map<string, Map<string, number>>();
+  private seqs = new Map<string, number>();
+
+  eval(script: string, keys: string[], args: number[]): [number, number] {
+    expect(script).toBe(RATE_LIMITER_LUA);
+    const key = keys[0]!;
+    const [now, windowMs, limit] = args as [number, number, number];
+    const cutoff = now - windowMs;
+    const members = this.sets.get(key) ?? new Map();
+    for (const [member, score] of members) {
+      if (score < cutoff) members.delete(member);
+    }
+    const count = members.size;
+    if (count >= limit) {
+      const oldest = Math.min(...members.values());
+      return [0, oldest];
+    }
+    const seq = (this.seqs.get(key) ?? 0) + 1;
+    this.seqs.set(key, seq);
+    members.set(`${now}:${seq}`, now);
+    this.sets.set(key, members);
+    return [1, limit - count - 1];
+  }
+}
+
 describe('createUpstashRateLimiter', () => {
   beforeEach(() => {
     redisMock = createRedisMock();
@@ -23,6 +51,7 @@ describe('createUpstashRateLimiter', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it('throws when env vars are missing', () => {
@@ -31,50 +60,67 @@ describe('createUpstashRateLimiter', () => {
     expect(() => createUpstashRateLimiter()).toThrow('UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be set.');
   });
 
-  it('allows requests under the limit and decrements remaining', async () => {
+  it('sends the exported Lua fixture to Redis', async () => {
     redisMock.eval.mockResolvedValue([1, 29]);
+    const limiter = createUpstashRateLimiter();
+    await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+    expect(redisMock.eval).toHaveBeenCalledWith(
+      RATE_LIMITER_LUA,
+      ['ratelimit:user:1'],
+      [expect.any(Number), 60_000, 30],
+    );
+  });
+
+  it('allows requests under the limit and decrements remaining', async () => {
+    redisMock.eval.mockImplementation((script, keys, args) => new RedisZsetEmulator().eval(script, keys, args));
     const limiter = createUpstashRateLimiter();
     const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.remaining).toBe(29);
-    expect(redisMock.eval).toHaveBeenCalledOnce();
   });
 
   it('rejects requests over the limit and reports retryAfterMs', async () => {
-    redisMock.eval.mockResolvedValue([0, 1_000]);
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const emulator = new RedisZsetEmulator();
+    redisMock.eval.mockImplementation((script, keys, args) => emulator.eval(script, keys, args));
     const limiter = createUpstashRateLimiter();
+    for (let i = 0; i < 30; i++) {
+      await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+    }
     const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.retryAfterMs).toBeGreaterThanOrEqual(0);
-    expect(result.retryAfterMs).toBeLessThanOrEqual(60_000);
+    expect(result.retryAfterMs).toBe(60_000);
+  });
+
+  it('counts same-millisecond requests as distinct members', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const emulator = new RedisZsetEmulator();
+    redisMock.eval.mockImplementation((script, keys, args) => emulator.eval(script, keys, args));
+    const limiter = createUpstashRateLimiter();
+    for (let i = 0; i < 30; i++) {
+      const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+      expect(result.ok).toBe(true);
+    }
+    const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+    expect(result.ok).toBe(false);
   });
 
   it('uses a sliding window so old timestamps do not block new requests', async () => {
-    const members = new Map<number, number>();
-    let clock = 10_000;
-    vi.spyOn(Date, 'now').mockImplementation(() => clock);
-    redisMock.eval.mockImplementation(async (_lua: string, _keys: string[], args: number[]) => {
-      const now = args[0] ?? 0;
-      const windowMs = args[1] ?? 0;
-      const limit = args[2] ?? 0;
-      for (const ts of Array.from(members.keys())) {
-        if (ts < now - windowMs) members.delete(ts);
-      }
-      if (members.size >= limit) {
-        const oldest = Math.min(...members.keys());
-        return [0, oldest];
-      }
-      members.set(now + members.size, 1);
-      return [1, limit - members.size];
-    });
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const emulator = new RedisZsetEmulator();
+    redisMock.eval.mockImplementation((script, keys, args) => emulator.eval(script, keys, args));
     const limiter = createUpstashRateLimiter();
     for (let i = 0; i < 30; i++) {
-      await limiter.check('user:1', { limit: 30, windowMs: 1_000 });
-      clock += 1;
+      const result = await limiter.check('user:1', { limit: 30, windowMs: 1_000 });
+      expect(result.ok).toBe(true);
+      vi.setSystemTime(10_000 + i + 1);
     }
-    clock += 2_000;
+    vi.setSystemTime(10_000 + 30 + 2_000);
     const next = await limiter.check('user:1', { limit: 30, windowMs: 1_000 });
     expect(next.ok).toBe(true);
   });

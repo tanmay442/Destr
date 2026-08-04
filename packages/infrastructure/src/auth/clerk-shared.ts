@@ -1,3 +1,5 @@
+import { currentUser } from '@clerk/nextjs/server';
+
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
@@ -11,6 +13,7 @@ export function isAdminEmail(email: string | null | undefined): boolean {
 }
 
 export interface ClerkEmailAddress {
+  id?: string;
   emailAddress?: string;
   verification?: { status?: string } | Array<{ status?: string }> | null;
 }
@@ -34,3 +37,56 @@ export function isVerifiedAdminEmail(
   return null;
 }
 
+export function primaryEmailAddress(
+  emailAddresses: ClerkEmailAddress[] | undefined,
+  primaryId: string | null | undefined,
+): string {
+  if (!emailAddresses || emailAddresses.length === 0) return '';
+  const primary = primaryId
+    ? emailAddresses.find((e) => e.id === primaryId)
+    : undefined;
+  return primary?.emailAddress ?? emailAddresses[0]?.emailAddress ?? '';
+}
+
+export function createTtlCache<V>(ttlMs: number, maxEntries: number) {
+  const entries = new Map<string, { value: V; expiresAt: number }>();
+  return {
+    get(key: string): V | undefined {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt <= Date.now()) {
+        entries.delete(key);
+        return undefined;
+      }
+      return entry.value;
+    },
+    set(key: string, value: V): void {
+      if (entries.size >= maxEntries) {
+        const now = Date.now();
+        for (const [k, entry] of entries) {
+          if (entry.expiresAt <= now) entries.delete(k);
+        }
+        while (entries.size >= maxEntries) {
+          const oldest = entries.keys().next().value;
+          if (oldest === undefined) break;
+          entries.delete(oldest);
+        }
+      }
+      entries.set(key, { value, expiresAt: Date.now() + ttlMs });
+    },
+    size(): number {
+      return entries.size;
+    },
+  };
+}
+
+const USER_TTL_MS = 30_000;
+const userCache = createTtlCache<Awaited<ReturnType<typeof currentUser>>>(USER_TTL_MS, 1_000);
+
+export async function getClerkUserCached(userId: string) {
+  const cached = userCache.get(userId);
+  if (cached) return cached;
+  const user = await currentUser();
+  if (user) userCache.set(userId, user);
+  return user;
+}
