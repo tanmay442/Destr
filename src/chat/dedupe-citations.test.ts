@@ -30,13 +30,13 @@ describe('dedupeCitations', () => {
     expect(dedupeCitations(citations)).toHaveLength(2);
   });
 
-  it('dedupes on the first 60 characters of the snippet', () => {
+  it('keeps distinct snippets that share a long prefix', () => {
     const base = 'x'.repeat(60);
     const citations = [
       { snippet: base + 'AAAA', fileName: null, page: null },
       { snippet: base + 'BBBB', fileName: null, page: null },
     ];
-    expect(dedupeCitations(citations)).toHaveLength(1);
+    expect(dedupeCitations(citations)).toHaveLength(2);
   });
 
   it('handles null and missing identity fields', () => {

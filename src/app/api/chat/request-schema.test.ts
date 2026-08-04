@@ -61,4 +61,31 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('rejects an empty messages array', () => {
+    const result = ChatRequestSchema.safeParse({ messages: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it('caps the number of parts per message at 100', () => {
+    const over = baseMessage('user', Array.from({ length: 101 }, (_, i) => ({ type: 'text', text: `p${i}` })));
+    const at = baseMessage('user', Array.from({ length: 100 }, (_, i) => ({ type: 'text', text: `p${i}` })));
+    expect(ChatRequestSchema.safeParse({ messages: [over] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [at] }).success).toBe(true);
+  });
+
+  it('enforces a per-request total text character budget', () => {
+    const bigMessage = baseMessage('user', [{ type: 'text', text: 'x'.repeat(60_000) }]);
+    const threeBig = [bigMessage, bigMessage, bigMessage, bigMessage];
+    expect(ChatRequestSchema.safeParse({ messages: threeBig }).success).toBe(false);
+  });
+
+  it('requires a v4 turnId', () => {
+    const valid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const v1 = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    const body = { turnId: valid, messages: [baseMessage('user', [{ type: 'text', text: 'hi' }])] };
+    expect(ChatRequestSchema.safeParse(body).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, turnId: v1 }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ ...body, turnId: 'nope' }).success).toBe(false);
+  });
 });

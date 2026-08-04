@@ -38,6 +38,11 @@ describe('emitCitations', () => {
     expect(c!.snippet.endsWith('\u2026')).toBe(true);
   });
 
+  it('does not split a surrogate pair when truncating', () => {
+    const [c] = emitCitations([chunk({ content: 'a\u{1f600}b' })], 2);
+    expect(c!.snippet).toBe('a\u2026');
+  });
+
   it('leaves short snippets intact', () => {
     const [c] = emitCitations([chunk({ content: 'short' })], 100);
     expect(c!.snippet).toBe('short');

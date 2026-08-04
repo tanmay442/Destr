@@ -12,6 +12,14 @@ export interface EmittedCitation {
   source: string | null;
 }
 
+function truncateSnippet(content: string, max: number): string {
+  if (content.length <= max) return content;
+  let end = max;
+  const code = content.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return content.slice(0, end) + '\u2026';
+}
+
 export function emitCitations(
   chunks: RetrievedChunk[],
   snippetMax = CITATION_SNIPPET_MAX,
@@ -20,10 +28,7 @@ export function emitCitations(
     id: m.id,
     documentId: m.documentId,
     similarity: m.similarity,
-    snippet:
-      m.content.length > snippetMax
-        ? m.content.slice(0, snippetMax) + '\u2026'
-        : m.content,
+    snippet: truncateSnippet(m.content, snippetMax),
     fileName: m.fileName,
     page: m.page,
     sectionTitle: m.sectionTitle,
