@@ -8,6 +8,7 @@ import {
   lockedPathsInPatch,
   mergePatch,
   resolveEmbeddingModelId,
+  NON_EDITABLE_FIELDS,
 } from './descriptor';
 
 const WRITE_WINDOW_MS = 5_000;
@@ -79,6 +80,11 @@ export async function PUT(req: Request) {
   const locked = lockedPathsInPatch(patch, envLockedPaths());
   if (locked.length > 0) {
     return Response.json({ error: 'Env-locked fields cannot be modified', locked }, { status: 422 });
+  }
+
+  const immutable = lockedPathsInPatch(patch, NON_EDITABLE_FIELDS);
+  if (immutable.length > 0) {
+    return Response.json({ error: 'Read-only fields cannot be modified', fields: immutable }, { status: 422 });
   }
 
   if (patch.rerankerProvider) {

@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ok, err, NotFoundError, ConflictError } from '@app/domain';
 
-const { requireAdminMock, updateTicketMock, requireAdminRouteMock } = vi.hoisted(() => {
+const { requireAdminMock, updateTicketMock, getUserByClerkIdMock, requireAdminRouteMock } = vi.hoisted(() => {
   const requireAdminMock = vi.fn();
   const updateTicketMock = vi.fn();
+  const getUserByClerkIdMock = vi.fn(
+    async (): Promise<{ ok: true; value: { user: { clerkUserId: string; email: string; name: string | null; role: string } | null } }> =>
+      ({ ok: true, value: { user: { clerkUserId: 'user_2', email: '', name: null, role: 'user' } } }),
+  );
   const requireAdminRouteMock = vi.fn(async () => {
     try {
       const session = await requireAdminMock();
-      return { ok: true as const, session, comp: { updateTicket: updateTicketMock } };
+      return { ok: true as const, session, comp: { updateTicket: updateTicketMock, getUserByClerkId: getUserByClerkIdMock } };
     } catch (err) {
       if (err instanceof Error && err.constructor.name === 'ForbiddenError') {
         return { ok: false as const, response: new Response('Forbidden', { status: 403 }) };
@@ -15,7 +19,7 @@ const { requireAdminMock, updateTicketMock, requireAdminRouteMock } = vi.hoisted
       throw err;
     }
   });
-  return { requireAdminMock, updateTicketMock, requireAdminRouteMock };
+  return { requireAdminMock, updateTicketMock, getUserByClerkIdMock, requireAdminRouteMock };
 });
 
 vi.mock('@/composition', async () => {
@@ -41,6 +45,7 @@ import * as route from './route';
 beforeEach(() => {
   requireAdminMock.mockReset();
   updateTicketMock.mockReset();
+  getUserByClerkIdMock.mockReset().mockResolvedValue({ ok: true, value: { user: { clerkUserId: 'user_2', email: '', name: null, role: 'user' } } });
 });
 
 function makeParams(ticketId: string) {
@@ -151,6 +156,27 @@ describe('PATCH /api/admin/tickets/[ticketId]', () => {
     expect(updateTicketMock).toHaveBeenCalledWith(
       expect.objectContaining({ assignedTo: 'user_2' }),
     );
+  });
+
+  it('returns 400 when assignee is not a known user', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    getUserByClerkIdMock.mockResolvedValue({ ok: true, value: { user: null } });
+    const res = await route.PATCH(
+      makeReq({ assignedTo: 'ghost' }),
+      makeParams('TKT-1001'),
+    );
+    expect(res.status).toBe(400);
+    expect(updateTicketMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when assignedTo exceeds 255 characters', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    const res = await route.PATCH(
+      makeReq({ assignedTo: 'x'.repeat(256) }),
+      makeParams('TKT-1001'),
+    );
+    expect(res.status).toBe(400);
+    expect(updateTicketMock).not.toHaveBeenCalled();
   });
 
   it('returns 400 for an empty/malformed ticketId', async () => {

@@ -3,6 +3,8 @@ import { ValidationError, type AuditKind } from '@app/domain';
 
 const AUDIT_KINDS: readonly AuditKind[] = ['document', 'ticket', 'user', 'settings'];
 
+const MAX_AUDIT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
+
 function parseDate(raw: string | null, label: string): { ok: true; value?: Date } | { ok: false; error: Response } {
   if (raw === null) return { ok: true };
   const d = new Date(raw);
@@ -41,11 +43,17 @@ export async function GET(req: Request) {
   if (!from.ok) return from.error;
   const to = parseDate(url.searchParams.get('to'), 'to');
   if (!to.ok) return to.error;
+  if (from.value && to.value && from.value.getTime() > to.value.getTime()) {
+    return respond(new ValidationError('Invalid date range'));
+  }
+  if (from.value && to.value && to.value.getTime() - from.value.getTime() > MAX_AUDIT_RANGE_MS) {
+    return respond(new ValidationError('Date range too large'));
+  }
   const { limit, offset } = parseQueryPagination(url, { limit: 50 });
   const result = await comp.listAudit({
     kind,
-    action: url.searchParams.get('action') ?? undefined,
-    actor: url.searchParams.get('actor') ?? undefined,
+    action: url.searchParams.get('action')?.slice(0, 200) ?? undefined,
+    actor: url.searchParams.get('actor')?.slice(0, 200) ?? undefined,
     from: from.value,
     to: to.value,
     documentId,

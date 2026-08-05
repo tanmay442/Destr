@@ -121,6 +121,13 @@ describe('PUT /api/admin/settings', () => {
     expect(json.locked).toContain('retrievalMode');
   });
 
+  it('returns 422 when patch touches a read-only field', async () => {
+    const res = await route.PUT(putReq({ patch: { adminEmails: ['someone@x.com'] }, expectedVersion: 3 }));
+    expect(res.status).toBe(422);
+    const json = await res.json();
+    expect(json.fields).toContain('adminEmails');
+  });
+
   it('returns 422 when the requested reranker is unavailable', async () => {
     const res = await route.PUT(putReq({ patch: { rerankerProvider: 'cohere' }, expectedVersion: 3 }));
     expect(res.status).toBe(422);

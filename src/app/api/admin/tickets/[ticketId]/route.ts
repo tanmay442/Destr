@@ -4,7 +4,7 @@ import { ValidationError } from '@app/domain';
 
 const PatchSchema = z.object({
   status: z.enum(TICKET_STATUSES).optional(),
-  assignedTo: z.string().nullable().optional(),
+  assignedTo: z.string().min(1).max(255).nullable().optional(),
   note: z.string().min(1).max(10_000).optional(),
 });
 
@@ -23,6 +23,13 @@ export async function PATCH(
   const parsed = PatchSchema.safeParse(body);
   if (!parsed.success) {
     return respond(new ValidationError('Invalid payload', { issues: parsed.error.issues }));
+  }
+  if (typeof parsed.data.assignedTo === 'string') {
+    const assignee = await comp.getUserByClerkId(parsed.data.assignedTo);
+    if (!assignee.ok) return respond(assignee.error);
+    if (!assignee.value.user) {
+      return respond(new ValidationError('Unknown assignee'));
+    }
   }
   const result = await comp.updateTicket({
     ticketId,
