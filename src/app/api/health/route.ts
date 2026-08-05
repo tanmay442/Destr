@@ -4,23 +4,26 @@ import { getRuntimeConfig } from '@/lib/config/runtime';
 
 export async function GET() {
   const comp = getComposition();
-  const checks: Record<string, 'ok' | string> = {};
+  const checks: Record<string, boolean> = {
+    runtimeConfig: false,
+    database: false,
+  };
 
   try {
     await getRuntimeConfig();
-    checks.runtimeConfig = 'ok';
-  } catch (e) {
-    checks.runtimeConfig = String(e);
+    checks.runtimeConfig = true;
+  } catch {
+    checks.runtimeConfig = false;
   }
 
   try {
     await comp.db.execute('SELECT 1');
-    checks.database = 'ok';
-  } catch (e) {
-    checks.database = String(e);
+    checks.database = true;
+  } catch {
+    checks.database = false;
   }
 
-  const healthy = Object.values(checks).every((v) => v === 'ok');
+  const healthy = Object.values(checks).every(Boolean);
   return NextResponse.json(
     { status: healthy ? 'healthy' : 'degraded', checks },
     { status: healthy ? 200 : 503 },

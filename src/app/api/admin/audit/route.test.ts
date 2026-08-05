@@ -168,6 +168,24 @@ describe('GET /api/admin/audit', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 when from is after to', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    const res = await route.GET(makeReq({ from: '2025-06-30', to: '2025-06-01' }));
+    expect(res.status).toBe(400);
+    expect(listAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the date span exceeds one year', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },
+    });
+    const res = await route.GET(makeReq({ from: '2020-01-01', to: '2025-06-01' }));
+    expect(res.status).toBe(400);
+    expect(listAuditMock).not.toHaveBeenCalled();
+  });
+
   it('returns user and settings kinds without dropping them', async () => {
     requireAdminMock.mockResolvedValue({
       user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' },

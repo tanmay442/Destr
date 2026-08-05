@@ -20,6 +20,20 @@ import * as route from './route';
 
 const ORIGINAL_ENV = { ...process.env };
 
+function signedToken(iatSec = Math.floor(Date.now() / 1000)): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ iat: iatSec })).toString('base64url');
+  return `${header}.${payload}.sig`;
+}
+
+function signedPost(body: string, signature = signedToken()): Request {
+  return new Request('http://x/api/admin/ingest-worker', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'upstash-signature': signature },
+    body,
+  });
+}
+
 beforeEach(() => {
   verifyMock.mockReset();
   ingestQueuedDocumentMock.mockReset();
@@ -32,19 +46,22 @@ afterEach(() => {
   process.env.QSTASH_NEXT_SIGNING_KEY = ORIGINAL_ENV.QSTASH_NEXT_SIGNING_KEY;
 });
 
-function signedPost(body: string, signature = 'sig'): Request {
-  return new Request('http://x/api/admin/ingest-worker', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'upstash-signature': signature },
-    body,
-  });
-}
-
 describe('POST /api/admin/ingest-worker', () => {
   it('returns 401 when signing keys are not configured', async () => {
     delete process.env.QSTASH_CURRENT_SIGNING_KEY;
     const res = await route.POST(signedPost(JSON.stringify({ documentId: 1 })));
     expect(res.status).toBe(401);
+    expect(ingestQueuedDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 413 when content-length exceeds 1MB', async () => {
+    const req = new Request('http://x/api/admin/ingest-worker', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'upstash-signature': signedToken(), 'content-length': String(1024 * 1024 + 1) },
+      body: JSON.stringify({ documentId: 1 }),
+    });
+    const res = await route.POST(req);
+    expect(res.status).toBe(413);
     expect(ingestQueuedDocumentMock).not.toHaveBeenCalled();
   });
 
@@ -58,6 +75,21 @@ describe('POST /api/admin/ingest-worker', () => {
   it('returns 401 when Receiver.verify throws', async () => {
     verifyMock.mockRejectedValue(new Error('bad signature'));
     const res = await route.POST(signedPost(JSON.stringify({ documentId: 1 })));
+    expect(res.status).toBe(401);
+    expect(ingestQueuedDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the signature has no timestamp', async () => {
+    verifyMock.mockResolvedValue(true);
+    const res = await route.POST(signedPost(JSON.stringify({ documentId: 1 }), 'no-timestamp'));
+    expect(res.status).toBe(401);
+    expect(ingestQueuedDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for a replayed signature older than 5 minutes', async () => {
+    verifyMock.mockResolvedValue(true);
+    const old = Math.floor(Date.now() / 1000) - 6 * 60;
+    const res = await route.POST(signedPost(JSON.stringify({ documentId: 1 }), signedToken(old)));
     expect(res.status).toBe(401);
     expect(ingestQueuedDocumentMock).not.toHaveBeenCalled();
   });
