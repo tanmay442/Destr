@@ -12,6 +12,7 @@ import { ollamaEmbeddingService } from './ollama-embedding-service';
 import { getChatModel as getOpenAIChatModel } from './openai-chat-service';
 import { getGoogleChatModel } from './google-chat-service';
 import { getOllamaChatModel } from './ollama-chat-service';
+import { getGoogleEmbeddingModelId } from './google-embedding-service';
 import { docSummarizer } from './doc-summarizer';
 import { localReranker } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
@@ -93,7 +94,7 @@ export function getGraders(enabled?: boolean, gradeModelId?: string): {
   return gradeModelId ? createGraders(gradeModelId) : { queryRewriter, documentGrader, hallucinationGrader };
 }
 
-export { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
+export { getEmbeddingModel, EMBEDDING_OPTIONS, getGoogleEmbeddingModelId } from './google-embedding-service';
 export {
   docSummarizer,
   localReranker,
@@ -110,7 +111,7 @@ export function getEmbeddingModelId(): string {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
   switch (provider) {
     case 'google':
-      return 'gemini-embedding-001';
+      return getGoogleEmbeddingModelId();
     case 'openai':
       return process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
     case 'ollama':

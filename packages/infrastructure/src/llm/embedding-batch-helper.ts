@@ -1,17 +1,20 @@
 import { embedMany } from 'ai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '@app/domain';
+import { isRetryableError, retryDelay, sleep } from './retry';
+
+const EMBED_RETRY_ATTEMPTS = 5;
 
 type ProviderOptions = NonNullable<Parameters<typeof embedMany>[0]['providerOptions']>;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function embedManyWithRetry(
   batch: string[],
   model: EmbeddingModelV3,
+  offset: number,
   providerOptions?: ProviderOptions,
 ): Promise<number[][]> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < EMBED_RETRY_ATTEMPTS; attempt++) {
     try {
       const { embeddings } = await embedMany({
         model,
@@ -20,14 +23,15 @@ async function embedManyWithRetry(
       });
       return embeddings;
     } catch (err) {
-      if (attempt === 0) {
-        await sleep(500);
-        continue;
-      }
-      throw err;
+      lastErr = err;
+      if (!isRetryableError(err) || attempt === EMBED_RETRY_ATTEMPTS - 1) break;
+      await sleep(retryDelay(attempt));
     }
   }
-  throw new Error('Unreachable retry loop');
+  throw new Error(
+    `Embedding request failed at offset ${offset} after ${EMBED_RETRY_ATTEMPTS} attempts`,
+    { cause: lastErr },
+  );
 }
 
 export async function embedBatchWithModel(
@@ -45,7 +49,7 @@ export async function embedBatchWithModel(
     const chunk = batches.slice(i, i + EMBEDDING_BATCH_CONCURRENCY);
     const results = await Promise.all(
       chunk.map((batch, idx) =>
-        embedManyWithRetry(batch, model, providerOptions).then((embs) => ({
+        embedManyWithRetry(batch, model, (i + idx) * EMBEDDING_BATCH_SIZE, providerOptions).then((embs) => ({
           embs,
           expected: batch.length,
           offset: (i + idx) * EMBEDDING_BATCH_SIZE,

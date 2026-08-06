@@ -7,6 +7,11 @@ import { CCH_MODEL, CCH_CONTEXT_CHARS } from '@app/domain';
 /** Cap on the model's output. A title + 1-3 sentence summary is short. */
 const MAX_OUTPUT_TOKENS = 300;
 
+/** LRU cap for the doc-context cache. */
+const CCH_CACHE_MAX = 2000;
+/** TTL for cached doc contexts; summaries for stale corpus snapshots expire. */
+const CCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
 const SYSTEM_PROMPT = [
   'You are a precise document indexer for a retrieval-augmented generation (RAG) system.',
   'Given the beginning of a document, produce a short, descriptive TITLE and a concise',
@@ -59,10 +64,43 @@ function parseDocContext(raw: string): { title: string; summary: string } {
   return { title, summary };
 }
 
-const cchCache = new Map<string, Promise<{ title: string; summary: string }>>();
+interface CacheEntry {
+  promise: Promise<{ title: string; summary: string }>;
+  createdAt: number;
+}
+
+/** LRU-with-TTL cache keyed on a hash of the full text (not just the excerpt),
+ *  so distinct documents that share an identical opening don't collide. */
+const cchCache = new Map<string, CacheEntry>();
 
 export function clearDocContextCache(): void {
   cchCache.clear();
+}
+
+/** Current number of cached doc contexts (for observability/tests). */
+export function getDocContextCacheSize(): number {
+  return cchCache.size;
+}
+
+function getEntry(key: string): CacheEntry | undefined {
+  const entry = cchCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.createdAt > CCH_CACHE_TTL_MS) {
+    cchCache.delete(key);
+    return undefined;
+  }
+  // LRU refresh: re-insert at the tail.
+  cchCache.delete(key);
+  cchCache.set(key, entry);
+  return entry;
+}
+
+function setEntry(key: string, promise: Promise<{ title: string; summary: string }>): void {
+  if (cchCache.size >= CCH_CACHE_MAX) {
+    const oldest = cchCache.keys().next().value;
+    if (oldest !== undefined) cchCache.delete(oldest);
+  }
+  cchCache.set(key, { promise, createdAt: Date.now() });
 }
 
 async function generateDocContext(excerpt: string): Promise<{ title: string; summary: string }> {
@@ -87,19 +125,21 @@ async function generateDocContext(excerpt: string): Promise<{ title: string; sum
  * which `parseAndEmbed`/`ingestPrechunked` prepend as a header before
  * embedding. Never throws on malformed model output.
  *
- * Results are memoized by a sha256 hash of the truncated excerpt so re-ingesting
- * unchanged documents skips redundant LLM calls. The in-flight promise is cached
- * so concurrent ingests of identical documents share a single request.
+ * Results are memoized by a sha256 hash of the FULL text so re-ingesting
+ * unchanged documents skips redundant LLM calls. The cache is bounded (LRU +
+ * TTL) to avoid an unbounded memory leak on long-running servers. The
+ * in-flight promise is cached so concurrent ingests of identical documents
+ * share a single request.
  */
 export const docSummarizer: DocSummarizer = {
   generateDocContext(text: string): Promise<{ title: string; summary: string }> {
-    const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
-    const key = createHash('sha256').update(excerpt).digest('hex');
-    const cached = cchCache.get(key);
-    if (cached) return cached;
+    const key = createHash('sha256').update(text).digest('hex');
+    const cached = getEntry(key);
+    if (cached) return cached.promise;
 
+    const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
     const pending = generateDocContext(excerpt);
-    cchCache.set(key, pending);
+    setEntry(key, pending);
     pending.then(
       (result) => {
         if (!result.title && !result.summary) cchCache.delete(key);

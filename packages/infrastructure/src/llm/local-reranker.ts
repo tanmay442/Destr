@@ -18,6 +18,13 @@ type CrossEncoder = {
   model: (inputs: Record<string, unknown>) => Promise<{ logits: { data: ArrayLike<number> } }>;
 };
 
+/** Sigmoid squash of the cross-encoder logit so scores land in the same 0..1
+ *  range as hosted rerankers, keeping `relevanceScore` comparable across
+ *  providers if callers ever threshold on it. */
+function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-x));
+}
+
 let encoderPromise: Promise<CrossEncoder> | null = null;
 
 async function getEncoder(): Promise<CrossEncoder> {
@@ -65,7 +72,7 @@ export const localReranker: Reranker = {
 
     return documents.map((_, index) => ({
       index,
-      relevanceScore: scores[index] ?? 0,
+      relevanceScore: sigmoid(scores[index] ?? 0),
     }));
   },
 };

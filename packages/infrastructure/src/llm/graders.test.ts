@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok, err, ExternalServiceError } from '@app/domain';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { generateTextMock, getChatModelMock } = vi.hoisted(() => ({
   generateTextMock: vi.fn(),
@@ -19,13 +18,28 @@ vi.mock('./index', async () => {
   return { ...actual, getChatModel: getChatModelMock };
 });
 
-import { queryRewriter, documentGrader, hallucinationGrader } from './graders';
+vi.mock('./retry', async () => {
+  const actual = await vi.importActual<typeof import('./retry')>('./retry');
+  return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) };
+});
+
+import { queryRewriter, documentGrader, hallucinationGrader, getGraderFailureCounts } from './graders';
 import { getGraders } from './index';
+
+let consoleError: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   generateTextMock.mockReset();
+  getChatModelMock.mockReset();
   getChatModelMock.mockReturnValue({ modelId: 'mock-grade' });
+  consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
+
+afterEach(() => {
+  consoleError.mockRestore();
+});
+
+const retryable = Object.assign(new Error('rate limited'), { statusCode: 429 });
 
 describe('queryRewriter', () => {
   it('returns the rewritten query from the model', async () => {
@@ -38,9 +52,10 @@ describe('queryRewriter', () => {
     expect(await queryRewriter.rewrite('original')).toBe('original');
   });
 
-  it('echoes the original query when the model call throws', async () => {
+  it('echoes the original query when the model call throws (fail-open is safe here)', async () => {
     generateTextMock.mockRejectedValue(new Error('boom'));
     expect(await queryRewriter.rewrite('original')).toBe('original');
+    expect(getGraderFailureCounts().queryRewriter).toBeGreaterThan(0);
   });
 });
 
@@ -55,9 +70,26 @@ describe('documentGrader', () => {
     expect(await documentGrader.grade('q', 'doc')).toBe('no');
   });
 
-  it('defaults to yes when the model call throws', async () => {
+  it('passes the question and full document into the grading prompt', async () => {
+    generateTextMock.mockResolvedValue({ text: 'yes' });
+    await documentGrader.grade('what is refund policy', 'Refund policy: 30 days');
+    const prompt = String(generateTextMock.mock.calls[0]![0].prompt);
+    expect(prompt).toContain('QUESTION:\nwhat is refund policy');
+    expect(prompt).toContain('BEGIN DOCUMENT\nRefund policy: 30 days');
+    expect(prompt).toContain('END DOCUMENT');
+  });
+
+  it('fails closed (returns no) when the model call throws', async () => {
     generateTextMock.mockRejectedValue(new Error('boom'));
+    expect(await documentGrader.grade('q', 'doc')).toBe('no');
+    expect(getGraderFailureCounts().documentGrader).toBeGreaterThan(0);
+  });
+
+  it('retries transient failures before failing closed', async () => {
+    generateTextMock.mockRejectedValueOnce(retryable);
+    generateTextMock.mockResolvedValueOnce({ text: 'yes' });
     expect(await documentGrader.grade('q', 'doc')).toBe('yes');
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -72,9 +104,32 @@ describe('hallucinationGrader', () => {
     expect(await hallucinationGrader.grade('docs', 'answer')).toBe('no');
   });
 
-  it('defaults to yes (grounded) when the model call throws', async () => {
+  it('passes documents and generation into the grading prompt', async () => {
+    generateTextMock.mockResolvedValue({ text: 'yes' });
+    await hallucinationGrader.grade('DOC A', 'Generated answer text');
+    const prompt = String(generateTextMock.mock.calls[0]![0].prompt);
+    expect(prompt).toContain('BEGIN DOCUMENTS\nDOC A');
+    expect(prompt).toContain('GENERATED ANSWER:\nGenerated answer text');
+    expect(prompt).toContain('END DOCUMENTS');
+  });
+
+  it('fails closed (treats answer as ungrounded) when the model call throws', async () => {
     generateTextMock.mockRejectedValue(new Error('boom'));
+    expect(await hallucinationGrader.grade('docs', 'answer')).toBe('no');
+    expect(getGraderFailureCounts().hallucinationGrader).toBeGreaterThan(0);
+  });
+
+  it('never flips to grounded on a persistent retryable outage', async () => {
+    generateTextMock.mockRejectedValue(retryable);
+    expect(await hallucinationGrader.grade('docs', 'answer')).toBe('no');
+    expect(generateTextMock.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('retries transient failures before returning a verdict', async () => {
+    generateTextMock.mockRejectedValueOnce(retryable);
+    generateTextMock.mockResolvedValueOnce({ text: 'yes' });
     expect(await hallucinationGrader.grade('docs', 'answer')).toBe('yes');
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -99,7 +154,3 @@ describe('getGraders selector', () => {
     process.env.AGENTIC_ENABLED = prev ?? '';
   });
 });
-
-void ok;
-void err;
-void ExternalServiceError;

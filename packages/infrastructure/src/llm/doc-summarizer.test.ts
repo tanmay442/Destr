@@ -1,17 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const generateText = vi.fn();
 vi.mock('ai', () => ({ generateText: (...args: unknown[]) => generateText(...args) }));
 
 vi.mock('./index', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
 
-import { docSummarizer, clearDocContextCache } from './doc-summarizer';
+import { docSummarizer, clearDocContextCache, getDocContextCacheSize } from './doc-summarizer';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 
 describe('docSummarizer (Contextual Chunk Headers)', () => {
   beforeEach(() => {
     generateText.mockReset();
     clearDocContextCache();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('parses JSON output and truncates the prompt to CCH_CONTEXT_CHARS', async () => {
@@ -81,6 +85,39 @@ describe('docSummarizer (Contextual Chunk Headers)', () => {
 
     expect(first).toEqual({ title: '', summary: '' });
     expect(second).toEqual({ title: 'Recovered', summary: 'S.' });
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys the cache on the full text, not just the shared excerpt prefix', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"T","summary":"S."}' });
+    const prefix = 'x'.repeat(CCH_CONTEXT_CHARS);
+
+    await docSummarizer.generateDocContext(prefix + 'AAAA');
+    await docSummarizer.generateDocContext(prefix + 'BBBB');
+
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('evicts the oldest entry once the LRU cap is reached', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"T","summary":"S."}' });
+
+    for (let i = 0; i < 2001; i++) {
+      await docSummarizer.generateDocContext(`document ${i}`);
+    }
+
+    expect(getDocContextCacheSize()).toBeLessThanOrEqual(2000);
+  });
+
+  it('expires stale entries after the TTL and regenerates', async () => {
+    vi.useFakeTimers();
+    generateText.mockResolvedValue({ text: '{"title":"Old","summary":"S."}' });
+    await docSummarizer.generateDocContext('same text');
+
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+    generateText.mockResolvedValue({ text: '{"title":"Fresh","summary":"S."}' });
+    const res = await docSummarizer.generateDocContext('same text');
+
+    expect(res.title).toBe('Fresh');
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 });
