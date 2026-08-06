@@ -4,6 +4,7 @@ import {
   buildSections,
   mergeShortSections,
   makeDocumentChunk,
+  cleanTextArtifacts,
   CHILD_TOKEN_CAP,
   type Section,
 } from '../shared';
@@ -50,20 +51,6 @@ function looksLikeTable(text: string): boolean {
   // Spaced-column rows: a line with 2+ internal runs of 2+ spaces.
   const spacedRows = lines.filter((l) => (l.match(/ {2,}/g) ?? []).length >= 2).length;
   return spacedRows >= 2;
-}
-
-/** Drop orphaned bullet/number artifact lines; keep any line with a letter. */
-function cleanTextArtifacts(text: string): string {
-  return text
-    .split('\n')
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (/[a-zA-Z]/.test(trimmed)) return true;
-      const isGarbageLine = /^[0-9\s.\-◦▪•\*]+$/.test(trimmed);
-      return !isGarbageLine;
-    })
-    .join('\n')
-    .trim();
 }
 
 export function parentChildSplitter(modelId: string, opts: ParentChildOptions = {}): ChunkingStrategy {

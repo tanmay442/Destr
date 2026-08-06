@@ -19,30 +19,38 @@ interface ChunkMeta {
 /**
  * Split a segment into its leading metadata block and the remaining content.
  *
- * Metadata lines are `key: value` pairs at the very top of the segment. The
- * block ends at the first blank line or the first line that is not a valid
- * `key: value` pair; everything after that is treated as content. Parsing is
- * defensive: unknown keys are ignored and an unparseable `page` is dropped.
+ * A metadata block is only recognized when every leading line is a valid
+ * `key: value` pair AND the block is terminated by a blank line. Without that
+ * blank line (or when a non-meta line appears first) the whole segment is
+ * treated as content so leading prose is never silently consumed. Parsing is
+ * defensive: unknown keys are ignored and a non-integer `page` is dropped.
  */
 function extractMetaAndContent(segment: string): { meta: ChunkMeta; content: string } {
   const lines = segment.split(/\r?\n/);
   const meta: ChunkMeta = {};
   let i = 0;
-  for (; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.trim() === '') break;
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
-    if (!match) break;
+  while (i < lines.length && lines[i]!.trim() !== '') {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*\s*:/.test(lines[i]!)) {
+      return { meta: {}, content: segment.trim() };
+    }
+    i++;
+  }
+  if (i === 0 || i >= lines.length || lines[i]!.trim() !== '') {
+    return { meta: {}, content: segment.trim() };
+  }
+  for (let j = 0; j < i; j++) {
+    const match = lines[j]!.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+    if (!match) continue;
     const key = match[1]!.toLowerCase();
     const value = match[2]!.trim();
     if (!META_KEYS.has(key) || value === '') continue;
     if (key === 'title') meta.title = value;
     else if (key === 'page') {
       const n = Number(value);
-      if (Number.isFinite(n)) meta.page = n;
+      if (Number.isInteger(n)) meta.page = n;
     } else if (key === 'source') meta.source = value;
   }
-  const content = lines.slice(i).join('\n').trim();
+  const content = lines.slice(i + 1).join('\n').trim();
   return { meta, content };
 }
 
@@ -81,6 +89,23 @@ export function splitOutsideFences(text: string, delimiter: string): string[] {
       const close = line.match(FENCE_RE);
       if (close && close[2]![0] === fence[0]) fence = null;
     }
+  }
+  if (fence !== null) {
+    // An unclosed fence means a typo'd opener silently merged the rest of the
+    // document. Recover by splitting naively so delimiter lines still act as
+    // segment separators instead of swallowing the remaining chunks.
+    const out: string[] = [];
+    let cur: string[] = [];
+    for (const line of lines) {
+      if (fenceRe.test(line)) {
+        out.push(cur.join('\n'));
+        cur = [];
+      } else {
+        cur.push(line);
+      }
+    }
+    out.push(cur.join('\n'));
+    return out;
   }
   segments.push(buf.join('\n'));
   return segments;
