@@ -18,3 +18,4 @@ export function createBlobStorage(): BlobStorage {
 }
 
 export { createFilesystemBlobStorage, createR2BlobStorage, createS3BlobStorage };
+export type { S3FamilyConfig } from './blob-storage-s3-family';
