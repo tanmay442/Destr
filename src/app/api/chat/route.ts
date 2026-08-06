@@ -9,7 +9,7 @@ import type { ChatEventInput } from '@app/domain';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '../../../../config/constants';
+import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import type { AppConfig } from '@app/domain/app-config';
 import { dedupeCitations } from '@/chat/dedupe-citations';

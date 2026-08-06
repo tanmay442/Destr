@@ -8,7 +8,7 @@ import type {
   TurnsToTicket, TicketResponseTimes,
 } from '@app/domain';
 import { requireAdminActor } from './authz';
-import { MAX_LIST_LIMIT } from '../../../../config/constants';
+import { MAX_LIST_LIMIT } from '@app/domain';
 
 const DEFAULT_DOCUMENT_LIMIT = 20;
 

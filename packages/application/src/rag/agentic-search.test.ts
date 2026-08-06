@@ -66,7 +66,7 @@ describe('agenticSearch', () => {
     expect(unwrap(res).outOfDomain).toBe(true);
   });
 
-  it('retries with the original query when the first pass keeps nothing', async () => {
+  it('retries with a fresh rewrite when the first pass keeps nothing', async () => {
     searchChunksMock
       .mockResolvedValueOnce(ok([chunk('weak', 0.2)]))
       .mockResolvedValueOnce(ok([chunk('strong match', 0.85)]));
@@ -76,6 +76,7 @@ describe('agenticSearch', () => {
     const res = await agenticSearch('the question', makeDeps());
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
+    expect(rewriterMock).toHaveBeenCalledTimes(2);
     expect(rewriterMock).toHaveBeenCalledWith('the question');
     expect(unwrap(res).chunks).toHaveLength(1);
     expect(unwrap(res).chunks[0]!.content).toBe('strong match');
@@ -103,8 +104,25 @@ describe('agenticSearch', () => {
     graderMock.mockResolvedValue('no');
     const res = await agenticSearch('q', { ...makeDeps(), retrieveLimit: 25, maxRetries: 2 });
     expect(res.ok).toBe(true);
-    expect(searchChunksMock).toHaveBeenCalledWith('q', { limit: 25 }, expect.anything());
+    expect(searchChunksMock).toHaveBeenCalledWith('rewritten query', { limit: 25 }, expect.anything());
     expect(searchChunksMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('caps retries by the step budget', async () => {
+    searchChunksMock.mockResolvedValue(ok([chunk('weak', 0.2)]));
+    graderMock.mockResolvedValue('no');
+    const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 5, stepBudget: 3 });
+    expect(res.ok).toBe(true);
+    expect(searchChunksMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a chunk when its grader call throws instead of aborting the search', async () => {
+    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.8)]));
+    graderMock.mockRejectedValue(new Error('model down'));
+    const res = await agenticSearch('q', makeDeps());
+    expect(res.ok).toBe(true);
+    expect(unwrap(res).chunks).toHaveLength(1);
+    expect(unwrap(res).chunks[0]!.content).toBe('doc');
   });
 
   it('flags out-of-domain against a runtime outOfDomainThreshold', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NotFoundError, ValidationError, GoneError } from '@app/domain';
 import type { DocumentRepository, AuditLog, Clock, TransactionRunner, TransactionContext } from '@app/domain';
 import { restoreDocument, softDeleteDocument, hardDeleteDocument, uploadPdf, replacePdf } from '../documents';
-import { RESTORE_WINDOW_MS } from '../../../../../config/constants';
+import { RESTORE_WINDOW_MS } from '@app/domain';
 
 function makeMockDeps(overrides: {
   documents?: Partial<DocumentRepository>;

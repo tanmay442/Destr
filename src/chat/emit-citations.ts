@@ -1,5 +1,5 @@
 import type { RetrievedChunk } from '@app/application/rag/search';
-import { CITATION_SNIPPET_MAX } from '../../config/constants';
+import { CITATION_SNIPPET_MAX } from '@app/domain';
 
 export interface EmittedCitation {
   id: number;

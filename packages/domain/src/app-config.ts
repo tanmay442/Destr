@@ -26,37 +26,37 @@ export const appConfigSchema = z.object({
       {
         topic: 'security-incident reporting',
         handling:
-          'Decline to troubleshoot. Explain that you are opening a `security-incident` ticket to escalate the issue immediately. Do not ask for or collect credentials, tokens, or sensitive personal data.',
+          'Decline to troubleshoot. Tell the user you are opening a `security-incident` ticket so a security engineer can contact them within 1 business hour. Do not ask for credentials, account details, or any sensitive information in the chat.',
       },
       {
         topic: 'account-takeover claims',
         handling:
-          'Decline to investigate. Open a `security-incident` ticket immediately. Do not discuss account status or sensitive logs in the chat.',
+          'Decline to investigate. Open a `security-incident` ticket immediately. Do not discuss account state, last-login times, or any account data in the chat.',
       },
       {
         topic: 'refund or chargeback negotiation',
         handling:
-          'Decline to negotiate. Open a standard knowledge or billing ticket for review. Avoid making promises regarding credits, refunds, or policy waivers.',
+          'Decline to negotiate. Open a `billing-dispute` ticket so a billing specialist can review the account. The bot must not promise credits, refunds, or waivers of any kind.',
       },
       {
         topic: 'custom contract terms / DPAs / legal review',
         handling:
-          'Decline to interpret, draft, or agree to custom legal language. Open a ticket for team review.',
+          'Decline to draft, interpret, or commit to any custom contractual language. Open a `legal-request` ticket and tell the user a contracts specialist will respond within 2 business days.',
       },
       {
         topic: 'medical',
         handling:
-          'Decline politely and advise the user to contact a qualified medical professional.',
+          'Decline politely and suggest they contact a qualified medical professional directly.',
       },
       {
         topic: 'legal',
         handling:
-          'Decline politely and advise the user to consult a qualified legal professional.',
+          'Decline politely and suggest they consult a qualified lawyer directly.',
       },
       {
         topic: 'personal advice',
         handling:
-          'Decline politely and steer the conversation back to the assistant\'s primary topic.',
+          'Decline politely. This assistant is for this product only.',
       },
     ]),
   adminEmails: z.array(z.email()).default([]),

@@ -22,7 +22,7 @@ import type {
 } from '@app/domain';
 import { ingestFile, parseAndEmbed } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
-import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '../../../../config/constants';
+import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '@app/domain';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
 import { requireAdminActor } from './authz';
 

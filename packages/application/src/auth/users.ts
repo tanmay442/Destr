@@ -1,7 +1,7 @@
 import { err, ok, type Result, NotFoundError, ValidationError, ForbiddenError, ExternalServiceError } from '@app/domain';
-import type { UserRepository } from '@app/domain';
+import type { UserRepository, TransactionRunner } from '@app/domain';
 import type { AuditLog } from '@app/domain';
-import { MAX_LIST_LIMIT } from '../../../../config/constants';
+import { MAX_LIST_LIMIT } from '@app/domain';
 import { sanitizePagination } from '../service-result';
 import { logUserRoleChange } from './audit';
 import { safeAudit } from '../audit-reliability';
@@ -21,7 +21,7 @@ export async function listUsers(
 
 export async function setUserRole(
   input: { clerkUserId: string; role: 'admin' | 'user'; actorId: string },
-  deps: { users: UserRepository; audit: AuditLog; syncClerkRole: (clerkUserId: string, role: 'admin' | 'user') => Promise<void> },
+  deps: { users: UserRepository; audit: AuditLog; syncClerkRole: (clerkUserId: string, role: 'admin' | 'user') => Promise<void>; runner: TransactionRunner },
 ): Promise<Result<{ user: { clerkUserId: string; role: string } }>> {
   if (input.role !== 'admin' && input.role !== 'user') {
     return err(new ValidationError(`Invalid role: ${input.role}`));
@@ -36,19 +36,35 @@ export async function setUserRole(
     }
     const target = await deps.users.findByClerkId(input.clerkUserId);
     if (!target) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
-    if (target.role === 'admin' && input.role === 'user') {
-      const adminCount = await deps.users.countAdmins();
-      if (adminCount <= 1) {
-        return err(new ForbiddenError('Cannot demote the last admin'));
+
+    type Outcome =
+      | { kind: 'ok'; user: { clerkUserId: string; role: string } }
+      | { kind: 'last_admin' }
+      | { kind: 'not_found' };
+    const outcome = await deps.runner.run<Outcome>(async (ctx) => {
+      if (target.role === 'admin' && input.role === 'user') {
+        const adminCount = await ctx.users.countAdmins();
+        if (adminCount <= 1) {
+          return { kind: 'last_admin' };
+        }
       }
+      const row = await ctx.users.setRole(input.clerkUserId, input.role);
+      if (!row) return { kind: 'not_found' };
+      return { kind: 'ok', user: { clerkUserId: row.clerkUserId, role: row.role } };
+    });
+    if (outcome.kind === 'last_admin') {
+      return err(new ForbiddenError('Cannot demote the last admin'));
     }
+    if (outcome.kind === 'not_found') {
+      return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
+    }
+
     try {
       await deps.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {
+      await deps.users.setRole(input.clerkUserId, target.role).catch(() => {});
       return err(new ExternalServiceError('Failed to sync Clerk role', e));
     }
-    const row = await deps.users.setRole(input.clerkUserId, input.role);
-    if (!row) return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
     const event = { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role };
     void safeAudit(
       () => logUserRoleChange(event, { audit: deps.audit }).then((r) => {
@@ -58,7 +74,7 @@ export async function setUserRole(
       event,
       'user',
     );
-    return ok({ user: { clerkUserId: row.clerkUserId, role: row.role } });
+    return ok({ user: outcome.user });
   } catch (e) {
     return err(new ExternalServiceError('Failed to set user role', e));
   }

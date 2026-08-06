@@ -6,7 +6,7 @@ import type {
   DocSummarizer,
 } from '@app/domain';
 import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
-import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
+import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
 /** Sanitize a filename for use inside a blob-storage key. */
 function safeBlobName(name: string): string {
