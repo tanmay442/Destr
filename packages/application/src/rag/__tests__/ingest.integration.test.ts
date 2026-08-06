@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ingestFile } from '../ingest';
+import { ParseError } from '@app/domain';
 import type { IngestDeps } from '../ingest';
 
 function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
@@ -171,7 +172,7 @@ describe('ingestFile', () => {
     }
   });
 
-  it('returns ExternalServiceError when PDF parsing fails', async () => {
+  it('returns ParseError (not 5xx) when PDF parsing fails', async () => {
     const deps = makeDeps({
       pdfParser: { extractText: vi.fn().mockRejectedValue(new Error('corrupt file')) },
     });
@@ -181,6 +182,7 @@ describe('ingestFile', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ParseError);
       expect(result.error.message).toMatch(/PDF parsing failed/);
     }
   });
@@ -197,6 +199,26 @@ describe('ingestFile', () => {
     if (!result.ok) {
       expect(result.error.message).toMatch(/Embedding API failed/);
     }
+  });
+
+  it('preserves literal <thinking> tags found in source material (model-output-only scrub)', async () => {
+    const deps = makeDeps({
+      pdfParser: {
+        extractText: vi.fn().mockResolvedValue('Documented <thinking> is legitimate and stays.'),
+      },
+      textSplitter: {
+        splitText: vi.fn().mockResolvedValue(['Documented <thinking> is legitimate and stays.']),
+      },
+    });
+    const result = await ingestFile(
+      { fileName: 'doc.pdf', buffer: Buffer.from('x'), uploadedBy: 'user' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
+      'Documented <thinking> is legitimate and stays.',
+    ]);
   });
 
   it('stores clean content, embeds header+content, and persists title metadata', async () => {

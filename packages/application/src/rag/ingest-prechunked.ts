@@ -6,7 +6,6 @@ import type {
   DocSummarizer,
 } from '@app/domain';
 import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
-import { stripThinkTraces } from '@app/domain/sanitize-think';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
 
 /** Sanitize a filename for use inside a blob-storage key. */
@@ -50,9 +49,12 @@ export async function ingestPrechunked(
     return err(new ValidationError(`No chunks parsed from ${fileName}`));
   }
 
-  // Hash the markdown (or PDF buffer when present) for dedup.
-  const hashSource = pdfBuffer ?? Buffer.from(chunks.map((c) => c.content).join('\n'));
-  const fileHash = deps.hasher.sha256(hashSource);
+  // Dedup hash covers the markdown AND any companion PDF so re-uploading the
+  // same PDF with different markdown (or vice versa) is never treated as unchanged.
+  const markdownSource = Buffer.from(chunks.map((c) => c.content).join('\n'));
+  const fileHash = pdfBuffer
+    ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
+    : deps.hasher.sha256(markdownSource);
 
   const existing = await deps.documents.findByName(fileName);
   if (existing && existing.fileHash === fileHash) {
@@ -63,10 +65,9 @@ export async function ingestPrechunked(
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;
-  const cleanChunks = chunks.map((c) => ({ ...c, content: stripThinkTraces(c.content) }));
   if (deps.summarizer && CCH_ENABLED) {
     const ctx = await deps.summarizer.generateDocContext(
-      cleanChunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
+      chunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
     );
     title = ctx.title?.trim() || null;
     summary = ctx.summary?.trim() || null;
@@ -75,16 +76,16 @@ export async function ingestPrechunked(
   let embeddings: number[][];
   try {
     embeddings = await deps.embeddings.embedBatch(
-      cleanChunks.map((c) => (header ? header + c.content : c.content)),
+      chunks.map((c) => (header ? header + c.content : c.content)),
     );
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
-  if (embeddings.length !== cleanChunks.length) {
+  if (embeddings.length !== chunks.length) {
     return err(new ExternalServiceError('Embedding count mismatch'));
   }
 
-  const rows: PreparedChunk[] = cleanChunks.map((c, i) => ({
+  const rows: PreparedChunk[] = chunks.map((c, i) => ({
     documentId: 0,
     content: c.content,
     embedding: embeddings[i]!,
@@ -93,7 +94,6 @@ export async function ingestPrechunked(
     sectionTitle: c.sectionTitle ?? null,
     source: c.source ?? null,
     title,
-    summary,
     parentChunkId: null,
     embeddingModel: null,
     contentHash: null,

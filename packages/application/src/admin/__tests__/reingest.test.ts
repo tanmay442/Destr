@@ -21,12 +21,17 @@ function listPage(ids: number[]) {
   return { documents: ids.map(makeDoc), total: ids.length };
 }
 
+function makeDocsRepo(list: ReturnType<typeof vi.fn>) {
+  return {
+    list,
+    update: vi.fn().mockResolvedValue(makeDoc(1)),
+  } as unknown as DocumentRepository;
+}
+
 describe('reingestAll', () => {
   it('enqueues every non-deleted document exactly once (single page)', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
-    const documents = {
-      list: vi.fn().mockResolvedValue(listPage([1, 2, 3])),
-    } as unknown as DocumentRepository;
+    const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2, 3])));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
@@ -43,14 +48,14 @@ describe('reingestAll', () => {
   it('paginates across multiple pages using the repository total', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     let call = 0;
-    const documents = {
-      list: vi.fn(async () => {
+    const documents = makeDocsRepo(
+      vi.fn(async () => {
         call++;
         if (call === 1) return { documents: [makeDoc(1), makeDoc(2)], total: 5 };
         if (call === 2) return { documents: [makeDoc(3), makeDoc(4)], total: 5 };
         return { documents: [makeDoc(5)], total: 5 };
       }),
-    } as unknown as DocumentRepository;
+    );
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
@@ -63,9 +68,7 @@ describe('reingestAll', () => {
 
   it('returns zero enqueued when there are no documents', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
-    const documents = {
-      list: vi.fn().mockResolvedValue({ documents: [], total: 0 }),
-    } as unknown as DocumentRepository;
+    const documents = makeDocsRepo(vi.fn().mockResolvedValue({ documents: [], total: 0 }));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
@@ -79,7 +82,7 @@ describe('reingestAll', () => {
   it('only lists non-deleted documents', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const list = vi.fn().mockResolvedValue(listPage([9]));
-    const documents = { list } as unknown as DocumentRepository;
+    const documents = makeDocsRepo(list);
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
     await reingestAll({ documents, queue });
@@ -88,10 +91,50 @@ describe('reingestAll', () => {
     );
   });
 
+  it('resets a `done` document to `queued` before enqueueing (regression: was a silent no-op)', async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1])));
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
+
+    const result = await reingestAll({ documents, queue });
+    expect(result.ok).toBe(true);
+    // The worker short-circuits on `done`; reingest must first flip the status.
+    expect(documents.update).toHaveBeenCalledWith(1, { ingestStatus: 'queued' });
+    expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
+  });
+
+  it('does not re-reset an already-queued document', async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const list = vi.fn().mockResolvedValue({
+      documents: [{ ...makeDoc(1), ingestStatus: 'queued' as const }],
+      total: 1,
+    });
+    const documents = makeDocsRepo(list);
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
+
+    const result = await reingestAll({ documents, queue });
+    expect(result.ok).toBe(true);
+    expect(documents.update).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
+  });
+
+  it('deletes chunks before enqueueing when a chunk repo is provided', async () => {
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2])));
+    const chunks = { deleteByDocumentId: vi.fn().mockResolvedValue(undefined) };
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
+
+    const result = await reingestAll({ documents, queue, chunks } as never);
+    expect(result.ok).toBe(true);
+    expect(chunks.deleteByDocumentId).toHaveBeenCalledTimes(2);
+    expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(1);
+    expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(2);
+  });
+
   it('refuses to re-ingest when the queue is a no-op (no worker wired)', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const list = vi.fn().mockResolvedValue(listPage([1, 2, 3]));
-    const documents = { list } as unknown as DocumentRepository;
+    const documents = makeDocsRepo(list);
     const queue = { enqueue, isNoOp: () => true } as unknown as IngestQueue;
 
     const result = await reingestAll({ documents, queue });
