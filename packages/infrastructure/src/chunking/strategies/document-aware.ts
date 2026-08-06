@@ -16,7 +16,7 @@ interface Block {
 
 function parseMarkdownBlocks(text: string, page: number): Block[] {
   const normalized = text
-    .replace(/(\.)(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z0-9])/g, '$1\n\n')
+    .replace(/(\.)(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z])/g, '$1\n\n')
     .replace(/([a-z0-9])\.(\d+(?:\.\d+)*\.?\s+[A-Z])/g, '$1. $2');
   const lines = normalized.split(/\r?\n/);
   const blocks: Block[] = [];

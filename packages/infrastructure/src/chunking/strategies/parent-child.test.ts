@@ -57,4 +57,14 @@ describe('parent-child strategy', () => {
     // With a tiny parent size, the input is forced into several small parents.
     expect(parents.length).toBeGreaterThan(1);
   });
+
+  it('keeps whitespace-column numeric tables (C7 regression)', async () => {
+    const s = parentChildSplitter('test-model');
+    const text = ['# Pricing', '', '19.99  29.99  45.00', '42  17  3.1'].join('\n');
+    const chunks = await s.splitPages([{ page: 1, text }]);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('19.99');
+    expect(body).toContain('29.99');
+    expect(body).toContain('42');
+  });
 });

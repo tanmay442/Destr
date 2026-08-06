@@ -1,5 +1,3 @@
-import type { EmbeddingService } from '@app/domain';
-
 export interface Section {
   title: string | null;
   text: string;
@@ -35,22 +33,26 @@ export function isHeadingLine(line: string): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 120) return false;
   if (/^#{1,6}\s+/.test(t)) return true;
-  if (/^\d+(?:\.\d+)*\.?\s+[A-Z0-9]/.test(t)) return true;
+  if (/^\d+(?:\.\d+)*\.?\s+[A-Z]/.test(t)) return true;
   if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;
   return false;
 }
 
-/** Drop orphaned bullet/number artifact lines; keep any line with a letter. */
+/** Drop orphaned bullet/number artifact lines; keep any line with a letter.
+ *  A line of only digits/punctuation is kept when it is a multi-value numeric
+ *  row (e.g. whitespace-column tables like `19.99  29.99`) so legitimate data
+ *  tables survive; lone artifacts (`•`, `-`, `1.`) are stripped. */
 export function cleanTextArtifacts(text: string): string {
   return text
     .split('\n')
     .filter((line) => {
       const trimmed = line.trim();
       if (/[a-zA-Z]/.test(trimmed)) return true;
-      const isGarbageLine = /^[0-9\s.\-◦▪•\*]+$/.test(trimmed);
-      return !isGarbageLine;
+      const isArtifactOnly = /^[0-9\s.\-◦▪•\*]+$/.test(trimmed);
+      if (!isArtifactOnly) return true;
+      return trimmed.split(/\s+/).filter(Boolean).length >= 2;
     })
     .join('\n')
     .trim();
@@ -104,7 +106,7 @@ export interface PageSpan {
   page: number;
 }
 
-const ABBREVIATIONS = /\b(?:dr|mr|mrs|ms|prof|sr|jr|st|vs|etc|inc|ltd|co|e\.g|i\.e|no)\.?$/i;
+const ABBREVIATIONS = /\b(?:dr|mr|mrs|ms|prof|sr|jr|st|vs|etc|inc|ltd|co|e\.g|i\.e)\.?$/i;
 
 /** Split into sentences at ASCII/CJK terminators (.!?。！？), guarding
  *  abbreviation endings and hard-splitting overlong runs at word boundaries. */
@@ -112,9 +114,11 @@ export function splitSentences(
   text: string,
   maxLen = 600,
 ): Array<{ text: string; start: number }> {
-  // Mask internal "x.y" dots (decimals, versions, URLs) so they aren't split as terminators.
+  // Mask internal dots that are NOT sentence terminators (decimals, versions,
+  // URLs, filenames) so multi-dotted runs like "v1.2.3" stay together. A dot
+  // followed by whitespace/end-of-input is a genuine terminator and stays.
   const MASK = String.fromCharCode(1);
-  const masked = text.replace(/([a-z0-9])\.([a-z0-9])/gi, "$1" + MASK + "$2");
+  const masked = text.replace(/\.(?=\S)/g, MASK);
 
   const out: Array<{ text: string; start: number }> = [];
   const re = /[^.!?。！？]+[.!?。！？]+/g;
@@ -140,16 +144,18 @@ export function splitSentences(
   const hardSplit = (s: { text: string; start: number }): Array<{ text: string; start: number }> => {
     if (s.text.length <= maxLen) return [s];
     const parts: Array<{ text: string; start: number }> = [];
-    const words = s.text.split(/(\s+)/);
+    const wordRe = /\S+\s*/g;
     let cur = '';
     let curStart = s.start;
-    for (const w of words) {
-      if (cur.length + w.length > maxLen && cur.trim().length > 0) {
+    let wm: RegExpExecArray | null;
+    while ((wm = wordRe.exec(s.text)) !== null) {
+      const token = wm[0];
+      if (cur.length + token.length > maxLen && cur.trim().length > 0) {
         parts.push({ text: cur.trim(), start: curStart });
-        cur = w;
-        curStart = s.start + s.text.indexOf(w.trim(), curStart - s.start);
+        cur = token;
+        curStart = s.start + wm.index;
       } else {
-        cur += w;
+        cur += token;
       }
     }
     if (cur.trim().length > 0) parts.push({ text: cur.trim(), start: curStart });
@@ -167,8 +173,11 @@ export function chunkBySentences(
   modelId?: string,
   tokenCap?: number,
 ): string[] {
-  const fits = (s: string): boolean =>
-    modelId && tokenCap ? estimateTokens(s, modelId) <= tokenCap : s.length <= maxSize;
+  const fits = (s: string): boolean => {
+    if (s.length > maxSize) return false;
+    if (modelId && tokenCap && estimateTokens(s, modelId) > tokenCap) return false;
+    return true;
+  };
   const sentences = splitSentences(text).map((s) => s.text);
   if (sentences.length <= 1) {
     const trimmed = text.trim();
@@ -195,15 +204,20 @@ export function chunkBySentences(
 }
 
 /** Tokens per char per embedding model; defaults to 1 (CJK ≈ 1 token/char),
- *  ~0.25 for English-heavy OpenAI models. Gates child size on tokens. */
+ *  ~0.25 for English-heavy models. Gates child size on tokens. */
 const TOKENS_PER_CHAR: Record<string, number> = {
   'text-embedding-3-small': 0.25,
   'text-embedding-3-large': 0.25,
   'text-embedding-ada-002': 0.25,
+  'gemini-embedding-001': 0.25,
+  'gemini-embedding-002': 0.25,
 };
 
 export function tokensPerChar(modelId: string): number {
-  return TOKENS_PER_CHAR[modelId] ?? 1;
+  const exact = TOKENS_PER_CHAR[modelId];
+  if (exact !== undefined) return exact;
+  if (modelId.startsWith('gemini-embedding') || modelId.startsWith('embeddinggemma')) return 0.25;
+  return 1;
 }
 
 export function estimateTokens(text: string, modelId: string): number {
@@ -264,11 +278,4 @@ export function mergeShortParagraphs(
   return out;
 }
 
-/** Embed every sentence and return vectors in order. */
-export async function embedSentences(
-  embeddings: EmbeddingService,
-  sentences: Array<{ text: string; start: number }>,
-): Promise<number[][]> {
-  if (sentences.length === 0) return [];
-  return embeddings.embedBatch(sentences.map((s) => s.text));
-}
+

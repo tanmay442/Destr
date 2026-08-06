@@ -93,6 +93,24 @@ describe('document-aware strategy', () => {
     expect(chunks.some((c) => c.content.includes('| Pro | $20 |'))).toBe(true);
   });
 
+  it('keeps whitespace-column numeric tables (C7 regression)', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const table = ['Plan   Cost', '19.99  29.99', '42  17  3.1'].join('\n');
+    const chunks = await s.splitPages([{ page: 1, text: `## Pricing\n\n${table}` }]);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('19.99');
+    expect(body).toContain('29.99');
+    expect(body).toContain('42');
+  });
+
+  it('drops orphaned bullet artifacts but keeps surrounding content', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([{ page: 1, text: 'Intro here.\n•\n- \n1.\nKeep me.' }]);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('Intro here.');
+    expect(body).toContain('Keep me.');
+  });
+
   it('splits an oversized table while replicating the header per chunk', async () => {
     const s = getChunkingStrategy('document-aware', {
       embeddings: mockEmbeddings(),
@@ -129,6 +147,56 @@ describe('document-aware strategy', () => {
     ]);
     expect(chunks.every((c) => c.content.trim().length > 0)).toBe(true);
     expect(chunks.every((c, i) => c.chunkIndex === i)).toBe(true);
+  });
+
+  it('caps chunk sizes at the configured maxChunkSize', async () => {
+    const s = getChunkingStrategy('document-aware', {
+      embeddings: mockEmbeddings(),
+      maxChunkSize: 200,
+      overlap: 20,
+    });
+    const long = Array.from({ length: 60 }, (_, i) => `Paragraph number ${i + 1} with some words.`).join(
+      '\n\n',
+    );
+    const chunks = await s.splitPages([{ page: 1, text: long }]);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.content.length <= 200 + 20)).toBe(true);
+  });
+});
+
+describe('degenerate inputs', () => {
+  const strategies: Array<'document-aware' | 'recursive-adaptive' | 'semantic' | 'parent-child' | 'pre-chunked'> = [
+    'document-aware',
+    'recursive-adaptive',
+    'semantic',
+    'parent-child',
+    'pre-chunked',
+  ];
+
+  it('handles empty, single-char and all-whitespace pages without crashing', async () => {
+    for (const name of strategies.filter((n) => n !== 'pre-chunked')) {
+      const s = getChunkingStrategy(name, { embeddings: mockEmbeddings() });
+      await expect(s.splitPages([])).resolves.toEqual([]);
+      await expect(s.splitPages([{ page: 1, text: '' }])).resolves.toEqual([]);
+      await expect(s.splitPages([{ page: 1, text: '   \n  \n' }])).resolves.toEqual([]);
+      const one = await s.splitPages([{ page: 1, text: 'x' }]);
+      expect(one.every((c) => c.content.trim().length > 0)).toBe(true);
+    }
+    // pre-chunked keeps the 1 page -> 1 chunk positional contract even when blank.
+    const pre = getChunkingStrategy('pre-chunked', { embeddings: mockEmbeddings() });
+    expect(await pre.splitPages([{ page: 1, text: '' }])).toHaveLength(1);
+    expect((await pre.splitPages([{ page: 1, text: 'x' }]))[0]!.content).toBe('x');
+  });
+
+  it('keeps a single overlong sentence as one chunk (never drops it)', async () => {
+    for (const name of strategies) {
+      const s = getChunkingStrategy(name, { embeddings: mockEmbeddings() });
+      const long = 'word '.repeat(1200).trim();
+      const chunks = await s.splitPages([{ page: 1, text: long }]);
+      expect(chunks.length).toBeGreaterThan(0);
+      const body = chunks.map((c) => c.content).join('\n');
+      expect(body).toContain('word');
+    }
   });
 });
 
@@ -174,6 +242,40 @@ describe('semantic strategy', () => {
     };
     const s = getChunkingStrategy('semantic', { embeddings: shortEmbeddings });
     await expect(s.splitPages(pages)).rejects.toThrow(/embedding count mismatch/);
+  });
+
+  it('falls back to recursive-adaptive beyond the sentence cap (C9)', async () => {
+    const embeddings = mockEmbeddings();
+    const embedBatch = vi.spyOn(embeddings, 'embedBatch');
+    const s = getChunkingStrategy('semantic', { embeddings });
+    const huge = 'Hello world. '.repeat(2100);
+    const chunks = await s.splitPages([{ page: 1, text: huge }]);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(embedBatch).not.toHaveBeenCalled();
+  });
+
+  it('falls back to recursive-adaptive when embedding fails (C9)', async () => {
+    const failing = {
+      embed: vi.fn(),
+      embedBatch: vi.fn().mockRejectedValue(new Error('embed API down')),
+    };
+    const s = getChunkingStrategy('semantic', { embeddings: failing });
+    const chunks = await s.splitPages(pages);
+    expect(chunks.length).toBeGreaterThan(0);
+  });
+
+  it('embeds in bounded batches rather than one giant call (C9)', async () => {
+    const embeddings = mockEmbeddings();
+    const embedBatch = vi.spyOn(embeddings, 'embedBatch');
+    const s = getChunkingStrategy('semantic', { embeddings });
+    const text = Array.from({ length: 30 }, (_, i) => `Sentence number ${i + 1} here.`).join(' ');
+    await s.splitPages([{ page: 1, text }]);
+    // 30 sentences batched at 50 -> a single call; the batch cap prevents an
+    // unbounded single-array call on much larger documents.
+    expect(embedBatch.mock.calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of embedBatch.mock.calls) {
+      expect((call[0] as string[]).length).toBeLessThanOrEqual(50);
+    }
   });
 });
 

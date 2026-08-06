@@ -114,6 +114,46 @@ B`;
     expect(DEFAULT_MD_CHUNK_DELIMITER).toBe('---chunk---');
   });
 
+  it('requires a blank line after the metadata block', () => {
+    const md = `---chunk---
+title: My doc
+This is the first line of the body.`;
+    const chunks = markdownParser.parseChunkedMarkdown(md);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]!.sectionTitle).toBeNull();
+    expect(chunks[0]!.content).toContain('title: My doc');
+    expect(chunks[0]!.content).toContain('This is the first line');
+  });
+
+  it('only accepts integer page values', () => {
+    const md = `---chunk---
+title: X
+page: 1.5
+
+Body.`;
+    const chunks = markdownParser.parseChunkedMarkdown(md);
+    expect(chunks[0]!.page).toBeNull();
+    expect(chunks[0]!.sectionTitle).toBe('X');
+  });
+
+  it('rejects a delimiter inside an unclosed code fence', () => {
+    const md = `---chunk---
+title: A
+page: 1
+
+\`\`\`
+code block that never closes
+---chunk---
+title: B
+page: 2
+
+Body B`;
+    const chunks = markdownParser.parseChunkedMarkdown(md);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]!.sectionTitle).toBe('A');
+    expect(chunks[1]!.sectionTitle).toBe('B');
+  });
+
   it('does not split on a delimiter line inside a fenced code block', () => {
     const md = `---chunk---
 title: A

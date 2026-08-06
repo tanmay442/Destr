@@ -1,26 +1,53 @@
 import type { ChunkingStrategy, EmbeddingService } from '@app/domain';
+import { EMBEDDING_BATCH_SIZE } from '@app/domain';
 import {
   buildPageSpans,
   cosineSimilarity,
-  embedSentences,
   pageForOffset,
   splitSentences,
   makeDocumentChunk,
 } from '../shared';
+import { adaptiveRecursiveSplitter } from './recursive-adaptive';
 
 const TOPIC_THRESHOLD = 0.3;
 const MIN_CHUNK = 300;
 const MAX_CHUNK = 600;
+/** Above this sentence count the semantic strategy gives up on embedding every
+ *  sentence and falls back to the cheaper recursive-adaptive splitter so a
+ *  large document can never burn unbounded embedding budget. */
+const SEMANTIC_MAX_SENTENCES = 2000;
+
+async function embedSentencesProgressive(
+  embeddings: EmbeddingService,
+  sentences: Array<{ text: string }>,
+): Promise<number[][]> {
+  const vectors: number[][] = [];
+  for (let i = 0; i < sentences.length; i += EMBEDDING_BATCH_SIZE) {
+    const batch = sentences.slice(i, i + EMBEDDING_BATCH_SIZE).map((s) => s.text);
+    const embedded = await embeddings.embedBatch(batch);
+    vectors.push(...embedded);
+  }
+  return vectors;
+}
 
 export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: string): ChunkingStrategy {
+  const fallback = adaptiveRecursiveSplitter(modelId);
   return {
     async splitPages(pages) {
       const spans = buildPageSpans(pages);
       const merged = spans.map((s) => s.text).join('\n\n');
       const sentences = splitSentences(merged);
       if (sentences.length === 0) return [];
+      if (sentences.length > SEMANTIC_MAX_SENTENCES) {
+        return fallback.splitPages(pages);
+      }
 
-      const vectors = await embedSentences(embeddings, sentences);
+      let vectors: number[][];
+      try {
+        vectors = await embedSentencesProgressive(embeddings, sentences);
+      } catch {
+        return fallback.splitPages(pages);
+      }
       if (vectors.length !== sentences.length) {
         throw new Error(
           `embedding count mismatch: got ${vectors.length} vectors for ${sentences.length} sentences`,
