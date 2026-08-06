@@ -4,7 +4,7 @@ import type {
   Hasher, PdfParser, TextSplitter, TransactionRunner,
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
 } from '@app/domain';
-import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
+import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
 interface IngestFileInput {
   fileName: string;

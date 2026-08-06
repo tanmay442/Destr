@@ -1,6 +1,6 @@
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
 import type { DocumentRepository, ChunkRepository, IngestQueue } from '@app/domain';
-import { MAX_LIST_LIMIT } from '../../../../config/constants';
+import { MAX_LIST_LIMIT } from '@app/domain';
 
 export interface ReingestDeps {
   documents: DocumentRepository;

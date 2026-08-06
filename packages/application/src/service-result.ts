@@ -1,9 +1,9 @@
 import { err, ok, type Result } from '@app/domain';
-import { ExternalServiceError } from '@app/domain';
+import { DomainError, ExternalServiceError } from '@app/domain';
 
 export type { Result } from '@app/domain';
 
-/** Unhandled throws become ExternalServiceError. */
+/** DomainErrors pass through unwrapped; unknown throws become ExternalServiceError. */
 export async function wrapServiceCall<T>(
   op: () => Promise<Result<T>>,
   message: string,
@@ -11,6 +11,9 @@ export async function wrapServiceCall<T>(
   try {
     return await op();
   } catch (e) {
+    if (e instanceof DomainError) {
+      return err(e);
+    }
     return err(new ExternalServiceError(message, e));
   }
 }
@@ -28,8 +31,10 @@ export function sanitizePagination(
   maxLimit: number,
   defaultLimit = 25,
 ): { limit: number; offset: number } {
+  const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : defaultLimit;
+  const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? rawOffset : 0;
   return {
-    limit: Math.min(Math.max(Math.floor(rawLimit ?? defaultLimit), 1), maxLimit),
-    offset: Math.max(Math.floor(rawOffset ?? 0), 0),
+    limit: Math.min(Math.max(Math.floor(limit), 1), maxLimit),
+    offset: Math.max(Math.floor(offset), 0),
   };
 }

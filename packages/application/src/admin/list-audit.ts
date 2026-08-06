@@ -1,7 +1,8 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type { AuditLog, AuditEventRecord, AuditKind, UserRepository } from '@app/domain';
-import { MAX_AUDIT_LIMIT } from '../../../../config/constants';
+import { MAX_AUDIT_LIMIT } from '@app/domain';
 import { requireAdminActor } from './authz';
+import { sanitizePagination } from '../service-result';
 
 export async function listAudit(
   input: {
@@ -21,8 +22,7 @@ export async function listAudit(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   try {
-    const limit = Math.min(Math.max(Math.floor(input.limit ?? 50), 1), MAX_AUDIT_LIMIT);
-    const offset = Math.max(Math.floor(input.offset ?? 0), 0);
+    const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_AUDIT_LIMIT, 50);
     const r = await deps.audit.list({
       kind: input.kind,
       action: input.action,

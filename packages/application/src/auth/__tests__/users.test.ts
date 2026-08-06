@@ -1,26 +1,33 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ForbiddenError } from '@app/domain';
+import { ForbiddenError, ExternalServiceError } from '@app/domain';
+import type { TransactionContext } from '@app/domain';
 import { setUserRole } from '../users';
 import type { UserRepository, AuditLog } from '@app/domain';
 
 function makeDeps(overrides?: {
   users?: Partial<UserRepository>;
   audit?: Partial<AuditLog>;
+  syncClerkRole?: (clerkUserId: string, role: 'admin' | 'user') => Promise<void>;
 }) {
   const logTicketEvent = vi.fn().mockResolvedValue(undefined);
-  return {
-    users: {
-      upsertFromClerk: vi.fn(),
-      findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'actor_1', role: 'admin' }),
-      setRole: vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' }),
-      touchLastSeen: vi.fn(),
-      list: vi.fn(),
-      countAll: vi.fn(),
-      countAdmins: vi.fn().mockResolvedValue(2),
-      syncClerkRole: vi.fn().mockResolvedValue(undefined),
-      ...overrides?.users,
-    } as UserRepository,
+  const users = {
+    upsertFromClerk: vi.fn(),
+    findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'actor_1', role: 'admin' }),
+    setRole: vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' }),
+    touchLastSeen: vi.fn(),
+    list: vi.fn(),
+    countAll: vi.fn(),
+    countAdmins: vi.fn().mockResolvedValue(2),
     syncClerkRole: vi.fn().mockResolvedValue(undefined),
+    ...overrides?.users,
+  } as UserRepository;
+  return {
+    users,
+    runner: {
+      run: async <T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T> =>
+        fn({ users } as TransactionContext),
+    },
+    syncClerkRole: overrides?.syncClerkRole ?? vi.fn().mockResolvedValue(undefined),
     audit: {
       logDocumentEvent: vi.fn(),
       logTicketEvent,
@@ -116,5 +123,41 @@ describe('setUserRole', () => {
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(ForbiddenError);
     }
+  });
+
+  it('persists the role before syncing Clerk and reverts on sync failure', async () => {
+    const setRole = vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' });
+    const syncClerkRole = vi.fn().mockRejectedValue(new Error('Clerk down'));
+    const deps = makeDeps({ users: { setRole }, syncClerkRole });
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ExternalServiceError);
+    }
+    expect(syncClerkRole).toHaveBeenCalledWith('user_1', 'admin');
+    // Compensating write: DB role restored to the original role after the Clerk failure.
+    expect(setRole).toHaveBeenLastCalledWith('user_1', 'admin');
+  });
+
+  it('runs the last-admin check inside the same transaction as the update', async () => {
+    const setRole = vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'user' });
+    const countAdmins = vi.fn().mockResolvedValue(2);
+    const deps = makeDeps({
+      users: {
+        countAdmins,
+        setRole,
+        findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'admin' }),
+      },
+    });
+    const result = await setUserRole(
+      { clerkUserId: 'admin_1', role: 'user', actorId: 'actor_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(true);
+    expect(countAdmins).toHaveBeenCalled();
+    expect(setRole).toHaveBeenCalledWith('admin_1', 'user');
   });
 });

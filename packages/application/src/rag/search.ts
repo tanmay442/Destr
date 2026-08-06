@@ -9,7 +9,7 @@ import {
   HYBRID_ENABLED,
   RRF_K,
   LEXICAL_WEIGHT,
-} from '../../../../config/constants';
+} from '@app/domain';
 import { sanitizePagination } from '../service-result';
 
 const MAX_SEARCH_LIMIT = 50;
@@ -39,6 +39,8 @@ export interface SearchOpts {
   limit?: number;
   /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
   mode?: 'parent' | 'window';
+  /** Override `PARENT_CHILD_WINDOW` for this call. */
+  parentChildWindow?: number;
   /** Broad candidate-pool size before reranking. Ignored when no reranker. */
   candidateLimit?: number;
   /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
@@ -100,20 +102,36 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
     })
     .sort((a, b) => b.similarity - a.similarity);
 
-  return [...resolved, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
+  // Children whose parent is missing fall back to the child hit itself so
+  // they are not silently dropped (recall loss).
+  const parentByIdHas = (id: number | null | undefined) => id != null && parentById.has(id);
+  const orphanedChildren = childHits
+    .filter((h) => !parentByIdHas(h.parentChunkId))
+    .map(toRetrievedChunk);
+
+  return [...resolved, ...orphanedChildren, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
 }
 
 /** Pad each hit with its `±N` neighbouring chunks (`window` mode).
- *  Concatenates neighbour content for context in a single batched round-trip. */
-async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
-  const radius = PARENT_CHILD_WINDOW;
+ *  Concatenates neighbour content for context in a single batched round-trip.
+ *  Hits with no neighbours are skipped; overlapping windows are deduped by chunk id. */
+async function resolveWindow(
+  hits: RetrievedChunkRow[],
+  deps: SearchDeps,
+  radius: number,
+): Promise<RetrievedChunk[]> {
   const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - radius, end: h.chunkIndex + radius }));
   const ranged = await deps.chunks.getByDocAndRanges(ranges);
-  return hits.map((h) => {
+  const seen = new Set<number>();
+  const resolved: RetrievedChunk[] = [];
+  for (const h of hits) {
     const key = `${h.documentId}:${h.chunkIndex - radius}:${h.chunkIndex + radius}`;
     const neighbours = ranged.get(key) ?? [];
     const ordered = [...neighbours].sort((a, b) => a.chunkIndex - b.chunkIndex);
-    return {
+    const windowed = ordered.filter((n) => !seen.has(n.id));
+    if (windowed.length === 0) continue;
+    for (const n of ordered) seen.add(n.id);
+    resolved.push({
       id: h.id,
       documentId: h.documentId,
       fileName: h.fileName,
@@ -121,18 +139,25 @@ async function resolveWindow(hits: RetrievedChunkRow[], deps: SearchDeps): Promi
       sectionTitle: h.sectionTitle,
       source: h.source,
       title: h.title,
-      content: ordered.map((n) => n.content).join('\n\n'),
+      content: windowed.map((n) => n.content).join('\n\n'),
       similarity: h.similarity,
-    };
-  });
+    });
+  }
+  return resolved;
 }
 
-/** Reorder by reranker relevance score, cap to `topN`. Falls back to cosine on failure. */
+/** Drop candidates below the similarity threshold (post-rerank cutoff). */
+function filterByThreshold(rows: RetrievedChunkRow[], threshold: number): RetrievedChunkRow[] {
+  return rows.filter((r) => r.similarity >= threshold);
+}
+
+/** Reorder by reranker relevance score, drop below-threshold candidates, cap to `topN`. Falls back to cosine on failure. */
 async function rerankRows(
   query: string,
   rows: RetrievedChunkRow[],
   topN: number,
   reranker: Reranker,
+  threshold: number,
 ): Promise<RetrievedChunkRow[]> {
   try {
     const ranked = await reranker.rank(query, rows.map((r) => r.content));
@@ -140,9 +165,9 @@ async function rerankRows(
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .map((r) => rows[r.index])
       .filter((r): r is RetrievedChunkRow => r != null);
-    return (ordered.length > 0 ? ordered : sortBySimilarity(rows)).slice(0, topN);
+    return filterByThreshold(ordered.length > 0 ? ordered : sortBySimilarity(rows), threshold).slice(0, topN);
   } catch {
-    return sortBySimilarity(rows).slice(0, topN);
+    return filterByThreshold(sortBySimilarity(rows), threshold).slice(0, topN);
   }
 }
 
@@ -182,7 +207,7 @@ export async function searchChunks(
   }
   const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, RERANK_TOP_N);
   const rerankerEnabled = deps.reranker != null;
-  const threshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
+  const preThreshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
   const candidateLimit = rerankerEnabled ? (opts.candidateLimit ?? CANDIDATE_POOL) : topN;
 
   let embedding: number[];
@@ -197,7 +222,7 @@ export async function searchChunks(
   const runHybrid = hybridEnabled && searchByLexical != null;
 
   // Run vector + lexical concurrently; lexical failure falls back to vector-only.
-  const vectorPromise = deps.chunks.searchByVector(embedding, { threshold, limit: candidateLimit });
+  const vectorPromise = deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit });
   const lexicalPromise = runHybrid
     ? searchByLexical(query, { limit: candidateLimit }).then(
         (rows) => ({ ok: true as const, rows }),
@@ -238,13 +263,14 @@ async function capAndResolve(
   opts: SearchOpts,
   deps: SearchDeps,
 ): Promise<Result<RetrievedChunk[]>> {
+  const threshold = opts.threshold ?? SIMILARITY_THRESHOLD;
   const capped = deps.reranker
-    ? await rerankRows(query, rows, topN, deps.reranker)
+    ? await rerankRows(query, rows, topN, deps.reranker, threshold)
     : sortBySimilarity(rows).slice(0, topN);
 
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'
-      ? await resolveWindow(capped, deps)
+      ? await resolveWindow(capped, deps, opts.parentChildWindow ?? PARENT_CHILD_WINDOW)
       : await resolveParents(capped, deps);
   return ok(resolved);
 }

@@ -295,6 +295,81 @@ describe('searchChunks parent-child resolution', () => {
     expect(result.value[0]!.content).toBe('before\n\nmiddle\n\nafter');
     expect(result.value[0]!.id).toBe(3);
   });
+
+  it('dedupes overlapping windows and skips hits with no neighbours', async () => {
+    const deps = parentChildDeps(
+      [
+        { id: 3, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0.9, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+        { id: 8, documentId: 1, chunkIndex: 6, content: 'six', similarity: 0.8, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+        { id: 20, documentId: 1, chunkIndex: 50, content: 'lonely', similarity: 0.7, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+      ],
+      [],
+    );
+    (deps.chunks.getByDocAndRanges as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([
+        [
+          '1:3:7',
+          [
+            { id: 3, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+            { id: 4, documentId: 1, chunkIndex: 4, content: 'four', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+          ],
+        ],
+        [
+          '1:4:8',
+          [
+            { id: 4, documentId: 1, chunkIndex: 4, content: 'four', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+            { id: 8, documentId: 1, chunkIndex: 6, content: 'six', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+          ],
+        ],
+      ]),
+    );
+    const result = await searchChunks('q', { mode: 'window' }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ids = result.value.map((r) => r.id);
+    expect(ids).not.toContain(20);
+    const contents = result.value.map((r) => r.content).join('\n');
+    expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
+    expect(contents.indexOf('four', contents.indexOf('four') + 1)).toBe(-1);
+    expect(contents).toContain('six');
+  });
+
+  it('falls back to the child hit when its parent is missing', async () => {
+    const deps = parentChildDeps(
+      [
+        {
+          id: 10,
+          documentId: 1,
+          chunkIndex: 3,
+          content: 'child text',
+          similarity: 0.9,
+          parentChunkId: 5,
+          fileName: 'd.pdf',
+          page: 1,
+          sectionTitle: 'Child Sec',
+          source: 'Page 1 — Child Sec',
+          title: null,
+        },
+      ],
+      [],
+    );
+    const result = await searchChunks('q', {}, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual([
+      {
+        id: 10,
+        documentId: 1,
+        fileName: 'd.pdf',
+        page: 1,
+        sectionTitle: 'Child Sec',
+        source: 'Page 1 — Child Sec',
+        title: null,
+        content: 'child text',
+        similarity: 0.9,
+      },
+    ]);
+  });
 });
 
 describe('searchChunks reranking', () => {
@@ -412,8 +487,25 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Highest cosine similarity first.
-    expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
+    // Highest cosine similarity first; the 0.3 candidate is dropped below the threshold.
+    expect(result.value.map((r) => r.id)).toEqual([2, 3]);
+  });
+
+  it('drops below-threshold candidates post-rerank even when ranked first', async () => {
+    const rows = [
+      flatRow(1, 'noise', 0.2),
+      flatRow(2, 'relevant', 0.8),
+    ];
+    // The reranker loves the near-random low-similarity chunk.
+    const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
+      docs.map((_d, index) => ({ index, relevanceScore: docs.length - index })),
+    );
+    const deps = rerankDeps(rows, { rank });
+
+    const result = await searchChunks('q', { limit: 2 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([2]);
   });
 
   it('uses the original cosine path when no reranker is configured (default cosine mode)', async () => {

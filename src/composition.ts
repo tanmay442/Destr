@@ -33,7 +33,7 @@ import { appConfig } from './lib/config';
 import { getRuntimeConfig } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
-import { MAX_LIST_LIMIT } from '../config/constants';
+import { MAX_LIST_LIMIT } from '@app/domain';
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -196,7 +196,7 @@ function createComposition() {
     availableRerankers,
     listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
     setUserRole: (input: Parameters<typeof setUserRole>[0]) =>
-      bind(setUserRole, input, { ...userDeps, ...auditDeps, syncClerkRole: Auth.syncClerkUserRole }),
+      bind(setUserRole, input, { ...userDeps, ...auditDeps, runner: txRunner, syncClerkRole: Auth.syncClerkUserRole }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
     getUserByClerkId: (id: string) => bind(getUserByClerkId, id, userDeps),
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),

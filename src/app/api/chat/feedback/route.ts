@@ -2,7 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { z } from 'zod';
 import { getComposition, assertSameOrigin, respondResult, respond } from '@/composition';
 import { ValidationError } from '@app/domain';
-import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '../../../../../config/constants';
+import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '@app/domain';
 import { V4_UUID_REGEX } from '@/chat/turn-id';
 
 const FeedbackRequestSchema = z.object({

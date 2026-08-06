@@ -6,7 +6,7 @@ vi.mock('ai', () => ({ generateText: (...args: unknown[]) => generateText(...arg
 vi.mock('./index', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
 
 import { docSummarizer, clearDocContextCache } from './doc-summarizer';
-import { CCH_CONTEXT_CHARS } from '../../../../config/constants';
+import { CCH_CONTEXT_CHARS } from '@app/domain';
 
 describe('docSummarizer (Contextual Chunk Headers)', () => {
   beforeEach(() => {

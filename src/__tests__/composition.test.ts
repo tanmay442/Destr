@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseQueryPagination, parsePageParam } from '@/composition';
-import { MAX_LIST_LIMIT } from '../../config/constants';
+import { MAX_LIST_LIMIT } from '@app/domain';
 
 describe('parseQueryPagination', () => {
   it('falls back to defaults when given NaN values', () => {

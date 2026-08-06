@@ -9,7 +9,8 @@ import {
   OUT_OF_DOMAIN_THRESHOLD,
   AGENTIC_RETRIEVE_LIMIT,
   AGENTIC_MAX_RETRIES,
-} from '../../../../config/constants';
+  AGENT_STEP_BUDGET,
+} from '@app/domain';
 
 export interface AgenticDeps {
   search: SearchDeps;
@@ -19,6 +20,8 @@ export interface AgenticDeps {
   /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
+  /** Absolute cap on total retrieval+grade passes this turn. */
+  stepBudget?: number;
   outOfDomainThreshold?: number;
 }
 
@@ -41,7 +44,13 @@ async function retrieveAndGrade(
   }
   const rows = found.value;
   const grades = await Promise.all(
-    rows.map((r) => deps.documentGrader.grade(query, r.content)),
+    rows.map(async (r) => {
+      try {
+        return await deps.documentGrader.grade(query, r.content);
+      } catch {
+        return 'yes' as const;
+      }
+    }),
   );
   const kept = rows.filter((_, i) => grades[i] === 'yes');
   const maxSimilarity = rows.reduce((m, r) => Math.max(m, r.similarity), 0);
@@ -50,9 +59,10 @@ async function retrieveAndGrade(
 
 /**
  * Agentic retrieval loop: 1. rewrite query, 2. retrieve + grade/drop irrelevant
- * chunks, 3. retry with original query if nothing kept, 4. report out-of-domain
- * when the final pool is empty and below threshold. Generation + hallucination
- * check happen in the route after `streamText` returns.
+ * chunks, 3. retry with a fresh rewrite if nothing kept (bounded by the step
+ * budget), 4. report out-of-domain when the final pool is empty and below
+ * threshold. Generation + hallucination check happen in the route after
+ * `streamText` returns.
  */
 export async function agenticSearch(
   originalQuery: string,
@@ -63,20 +73,23 @@ export async function agenticSearch(
   }
 
   try {
-    let rewritten: string;
-    try {
-      rewritten = await deps.queryRewriter.rewrite(originalQuery);
-    } catch {
-      rewritten = originalQuery;
-    }
+    const tryRewrite = async (query: string): Promise<string> => {
+      try {
+        return await deps.queryRewriter.rewrite(query);
+      } catch {
+        return query;
+      }
+    };
 
+    const stepBudget = deps.stepBudget ?? AGENT_STEP_BUDGET;
+    const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
+
+    let rewritten = await tryRewrite(originalQuery);
     let pass = await retrieveAndGrade(rewritten, deps);
 
-    const maxRetries = deps.maxRetries ?? AGENTIC_MAX_RETRIES;
-    if (pass.chunks.length === 0) {
-      for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0; attempt++) {
-        pass = await retrieveAndGrade(originalQuery, deps);
-      }
+    for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0; attempt++) {
+      rewritten = await tryRewrite(originalQuery);
+      pass = await retrieveAndGrade(rewritten, deps);
     }
 
     const outOfDomain =

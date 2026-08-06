@@ -294,7 +294,7 @@ also backed by a sorted set); the call sites do not need to change.
 
 | File | Purpose |
 | --- | --- |
-| `@app/domain` (`packages/domain/src/constants.ts`) | Centralised business-logic constants (rate limits, thresholds, batch sizes). `config/constants.ts` re-exports it for legacy call sites. |
+| `@app/domain` (`packages/domain/src/constants.ts`) | Centralised business-logic constants (rate limits, thresholds, batch sizes). Single source of truth — root `config/constants.ts` re-export removed (M35). |
 | `src/lib/sanitize.ts` | `escapeHtml()` and `sanitizeText()` for user-supplied free-text fields |
 | `src/lib/logger.ts` | Lightweight structured JSON logger with `LOG_LEVEL` env gate (replace with pino for richer features) |
 | `src/lib/http.ts` | `respond()`, `respondResult()`, `toSafeError()`, `toActionResult()`, and `isActionError()` for consistent error mapping |
@@ -364,7 +364,7 @@ instantiates the Clerk auth adapter for route gating. Routes import from
 | Layer            | May import                                | May NOT import                |
 |------------------|-------------------------------------------|-------------------------------|
 | `domain`         | zod                                       | application, infrastructure, cli, src/, drizzle, @ai-sdk, unpdf, next, node: built-ins |
-| `application`    | domain, config/constants                  | infrastructure, src/app, src/components, drizzle, @ai-sdk, unpdf, next |
+| `application`    | domain                                      | infrastructure, src/app, src/components, drizzle, @ai-sdk, unpdf, next |
 | `infrastructure` | domain, drizzle, @ai-sdk, clerk, unpdf, pg | application, src/app, src/components, next (except the Clerk `auth/` adapter may import `next/server` for `NextResponse`/request types) |
 | `src/app`, `src/components` | application, domain, src/lib/http, src/lib/config, `@ai-sdk/react`, `next`, `@clerk/nextjs` | drizzle-orm, pg, unpdf, @app/infrastructure |
 | `cli`            | application, infrastructure, dotenv       | src/app, src/components |

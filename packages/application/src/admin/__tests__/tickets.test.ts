@@ -195,6 +195,34 @@ describe('updateTicket', () => {
     expect(call.notes.length).toBe(10_000);
   });
 
+  it('truncates notes at code-point boundaries without splitting surrogate pairs', async () => {
+    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    const longNote = '😀'.repeat(5000) + 'x'.repeat(5001);
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue({ ...existing, notes: '' }),
+      },
+    });
+    await updateTicket(
+      { ticketId: 'TKT-1001', note: longNote, actorId: 'user_1' },
+      deps,
+    );
+    const call = vi.mocked(deps.tickets.update).mock.calls[0]![1] as { notes: string };
+    const notes = call.notes;
+    for (let i = 0; i < notes.length; i++) {
+      const code = notes.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        expect(notes.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
+        expect(notes.charCodeAt(i + 1)).toBeLessThanOrEqual(0xdfff);
+        i += 1;
+      } else {
+        expect(code).toBeLessThan(0xd800);
+      }
+    }
+    expect([...notes].length).toBeLessThanOrEqual(10_000);
+  });
+
   it('logs both status_change and assign when both are set', async () => {
     const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
     const deps = makeMockRepos({
@@ -260,6 +288,26 @@ describe('createTicket', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('external_service');
     }
+  });
+
+  it('caps issue, name, and email fields', async () => {
+    const deps = makeMockRepos();
+    await createTicket(
+      {
+        userId: 'user_1',
+        name: 'n'.repeat(200),
+        email: 'e'.repeat(300) + '@x.com',
+        issue: 'i'.repeat(5000),
+      },
+      deps,
+    );
+    expect(deps.tickets.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'n'.repeat(100),
+        email: 'e'.repeat(254),
+        issue: 'i'.repeat(4000),
+      }),
+    );
   });
 });
 

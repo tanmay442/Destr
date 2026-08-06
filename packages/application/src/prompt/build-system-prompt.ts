@@ -1,4 +1,5 @@
 import type { AppConfig } from '@app/domain';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP } from '@app/domain';
 import type { RetrievedChunk } from '../rag/search';
 
 const TOOL_CONTRACT_BLOCK = `# Interaction Guidelines
@@ -10,7 +11,7 @@ You assist users by answering questions using two tools: \`searchDocumentation\`
 3. **Out of Scope**: Do not search for legal, medical, security emergency, or custom contract inquiries. Apply the out-of-scope policies or open a ticket.
 4. **Answer & Cite**:
    - Provide a plain-language answer, paraphrasing rather than copying large blocks.
-   - Always include a citation in the format: \`> "<source-file>: <snippet ≤ 150 chars>"\` using the actual source text.
+   - Always include a citation in the format: \`> "<source-file>: <snippet ≤ ${CITATION_SNIPPET_MAX} chars>"\` using the actual source text.
    - Mention any tier or role requirements if specified in the documentation.
 5. **No Match**: If search returns no relevant results, state this clearly and call \`createKnowledgeTicket\`.
 6. **Casual Conversations (Greetings, Goodbyes, Chit-chat)**: If the user's message is a greeting, farewell, thank you, or casual remark that is not a functional question or issue, **do not call any tools**. Save compute by responding with minimal tokens and gently steering the conversation back to how you can help (e.g., stating that you are available if they have any questions about the organization).
@@ -79,7 +80,7 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   const header = `# Pre-fetched Reference Data`;
   const bullets = chunks
     .map((c) => {
-      const content = c.content.length > 600 ? c.content.slice(0, 600) + '…' : c.content;
+      const content = c.content.length > TOOL_CONTENT_CAP ? c.content.slice(0, TOOL_CONTENT_CAP) + '…' : c.content;
       return `<reference source="${c.source}">\n${content}\n</reference>`;
     })
     .join('\n\n');

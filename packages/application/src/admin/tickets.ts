@@ -8,9 +8,10 @@ import {
 } from '@app/domain';
 import type { TicketRepository, AuditLog, TicketRow, UserRepository } from '@app/domain';
 import { randomUUID } from 'node:crypto';
-import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '../../../../config/constants';
+import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '@app/domain';
 import { requireAdminActor } from './authz';
 import { safeAudit } from '../audit-reliability';
+import { sanitizePagination } from '../service-result';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -27,8 +28,24 @@ export const VALID_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = 
 
 const NOTE_CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
+const MAX_TICKET_ISSUE_LENGTH = 4000;
+const MAX_TICKET_NAME_LENGTH = 100;
+const MAX_TICKET_EMAIL_LENGTH = 254;
+
 function sanitizeTicketNote(input: string): string {
   return input.replace(NOTE_CONTROL_CHARS, '').replace(/\r\n/g, '\n').trim();
+}
+
+/** Keep the tail of `value` up to `max` Unicode code points, never splitting surrogate pairs. */
+function tailCodePoints(value: string, max: number): string {
+  const chars = [...value];
+  return chars.length > max ? chars.slice(-max).join('') : value;
+}
+
+/** Keep the head of `value` up to `max` Unicode code points. */
+function capCodePoints(value: string, max: number): string {
+  const chars = [...value];
+  return chars.length > max ? chars.slice(0, max).join('') : value;
 }
 
 export async function listTickets(
@@ -45,8 +62,7 @@ export async function listTickets(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   try {
-    const limit = Math.min(Math.max(Math.floor(input.limit ?? 25), 1), MAX_LIST_LIMIT);
-    const offset = Math.max(Math.floor(input.offset ?? 0), 0);
+    const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
     const r = await deps.tickets.list({
       status: input.status,
       assignee: input.assignee,
@@ -89,7 +105,7 @@ export async function updateTicket(
     const note = input.note ? sanitizeTicketNote(input.note) : undefined;
     if (note) {
       const appended = existing.notes ? existing.notes + '\n' + note : note;
-      patch.notes = appended.slice(-MAX_TICKET_NOTES_LENGTH);
+      patch.notes = tailCodePoints(appended, MAX_TICKET_NOTES_LENGTH);
     }
     const updated = await deps.tickets.update(input.ticketId, patch);
     if (!updated) return err(new NotFoundError('Ticket not found'));
@@ -131,9 +147,9 @@ export async function createTicket(
       const row = await deps.tickets.insert({
         ticketId,
         userId: input.userId,
-        name: input.name,
-        email: input.email,
-        issue: input.issue,
+        name: capCodePoints(input.name, MAX_TICKET_NAME_LENGTH),
+        email: capCodePoints(input.email, MAX_TICKET_EMAIL_LENGTH),
+        issue: capCodePoints(input.issue, MAX_TICKET_ISSUE_LENGTH),
       });
       const event = { action: 'create' as const, ticketId: row.ticketId, actorId: input.userId };
       void safeAudit(
