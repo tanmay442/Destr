@@ -207,6 +207,7 @@ function makeUploadDeps(opts: {
   ingestQueue: { enqueue: ReturnType<typeof vi.fn> };
   runner: { run: ReturnType<typeof vi.fn> };
   audit: { logDocumentEvent: ReturnType<typeof vi.fn> };
+  chunks: { insertMany: ReturnType<typeof vi.fn>; deleteByDocumentId: ReturnType<typeof vi.fn> };
 } {
   const documents = {
     findByName: vi.fn().mockResolvedValue(null),
@@ -260,7 +261,7 @@ function makeUploadDeps(opts: {
     ingestQueue,
     users,
   };
-  return { deps: deps as unknown as Parameters<typeof uploadPdf>[1], documents, blobStorage, ingestQueue, runner, audit };
+  return { deps: deps as unknown as Parameters<typeof uploadPdf>[1], documents, blobStorage, ingestQueue, runner, audit, chunks };
 }
 
 describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
@@ -378,5 +379,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       expect(result.value.chunks).toBe(0);
     }
     expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith({ documentId: 1 });
+    expect(mocks.chunks.deleteByDocumentId).not.toHaveBeenCalled();
   });
 });

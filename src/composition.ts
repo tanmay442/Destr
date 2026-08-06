@@ -212,7 +212,8 @@ function createComposition() {
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
-      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner }),
+      // WP-11 owns this file; this binds users (WP-6 M1 admin authz). Remove/adjust if WP-11 wires it differently.
+      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: Db.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
@@ -244,7 +245,9 @@ function createComposition() {
     ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
-    reingestAll: () => reingestAll({ documents: documentRepo, queue: ingestQueue }),
+    reingestAll: () =>
+      // WP-11 owns this file; chunks wipe is WP-6 H2 (idempotent with WP-11's worker-side delete). Remove/adjust if WP-11 wires it differently.
+      reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
