@@ -166,4 +166,34 @@ describe('ingestPrechunked', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toMatch(/Embedding API failed/);
   });
+
+  it('dedup hash covers the markdown even when a companion PDF is present (regression: PDF-only hash)', async () => {
+    const makeHashing = () => ({ sha256: vi.fn((b: Buffer) => Buffer.from(b).toString('hex')) });
+    const pdf = Buffer.from('%PDF-1.4-same-pdf');
+
+    const depsA = makeDeps({ hasher: makeHashing() });
+    const resultA = await ingestPrechunked(
+      { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user', pdfBuffer: pdf, pdfFileName: 'doc.pdf' },
+      depsA,
+    );
+    expect(resultA.ok).toBe(true);
+
+    // Same PDF but different markdown must NOT dedup as unchanged.
+    const CHUNKS_CHANGED: typeof CHUNKS = [{ content: 'Completely different body.', page: 1 }];
+    const depsB = makeDeps({ hasher: makeHashing() });
+    depsB.embeddings = { embed: vi.fn(), embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]) };
+    depsB.documents.findByName = vi.fn().mockResolvedValue({
+      id: 1, fileName: 'doc.md', fileHash: 'stored-hash-from-previous-upload', uploadedBy: 'user',
+      uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
+    });
+    const resultB = await ingestPrechunked(
+      { fileName: 'doc.md', chunks: CHUNKS_CHANGED, uploadedBy: 'user', pdfBuffer: pdf, pdfFileName: 'doc.pdf' },
+      depsB,
+    );
+    expect(resultB.ok).toBe(true);
+    if (resultA.ok && resultB.ok) {
+      expect(resultB.value.status).not.toBe('unchanged');
+      expect(depsB.chunks.insertMany).toHaveBeenCalled();
+    }
+  });
 });

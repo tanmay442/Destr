@@ -8,6 +8,7 @@ import type {
   TurnsToTicket, TicketResponseTimes,
 } from '@app/domain';
 import { requireAdminActor } from './authz';
+import { MAX_LIST_LIMIT } from '../../../../config/constants';
 
 const DEFAULT_DOCUMENT_LIMIT = 20;
 
@@ -129,7 +130,10 @@ export async function getDocumentAnalytics(
 ): Promise<Result<DocumentAnalytics>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
-  const limit = input.limit && input.limit > 0 ? Math.floor(input.limit) : DEFAULT_DOCUMENT_LIMIT;
+  const limit = Math.min(
+    input.limit && input.limit > 0 ? Math.floor(input.limit) : DEFAULT_DOCUMENT_LIMIT,
+    MAX_LIST_LIMIT,
+  );
   try {
     const [utility, zeroHit, summary, documentSentiment, thumbsDownDocs] = await Promise.all([
       deps.chatEvents.getDocumentUtility(limit, input.range),

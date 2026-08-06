@@ -1,11 +1,10 @@
-import { err, ok, type Result, ValidationError, ExternalServiceError } from '@app/domain';
+import { err, ok, type Result, ValidationError, ExternalServiceError, ParseError } from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, PdfParser, TextSplitter, TransactionRunner,
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
 } from '@app/domain';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '../../../../config/constants';
-import { stripThinkTraces } from '@app/domain/sanitize-think';
 
 interface IngestFileInput {
   fileName: string;
@@ -44,7 +43,6 @@ export interface PreparedChunk {
   sectionTitle?: string | null;
   source?: string | null;
   title?: string | null;
-  summary?: string | null;
   parentChunkId?: number | null;
   kind?: 'parent' | 'child' | 'summary';
   embeddingModel?: string | null;
@@ -115,7 +113,6 @@ function toPreparedRows(
     sectionTitle: c.sectionTitle ?? null,
     source: c.source ?? null,
     title: c.title ?? null,
-    summary: c.summary ?? null,
     parentChunkId: c.parentChunkId ?? null,
     kind: c.kind ?? 'child',
     embeddingModel: c.embeddingModel ?? null,
@@ -140,14 +137,12 @@ export async function parseAndEmbed(
     try {
       text = await deps.pdfParser.extractText(input.buffer);
     } catch (cause) {
-      return err(new ExternalServiceError('PDF parsing failed', cause));
+      return err(new ParseError('PDF parsing failed', cause));
     }
     sourceText = text;
     const texts = await deps.textSplitter.splitText(text);
     docChunks = texts.map((t, i) => ({ content: t, chunkIndex: i }));
   }
-  docChunks = docChunks.map((c) => ({ ...c, content: stripThinkTraces(c.content) }));
-  sourceText = stripThinkTraces(sourceText);
   const { header, title, summary } = await buildCchHeader(deps, sourceText);
   docChunks = applyCchHeader(docChunks, header, title, summary);
 

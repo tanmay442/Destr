@@ -37,13 +37,11 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
       expect.objectContaining({
         content: 'Alpha text.',
         title: 'My Doc',
-        summary: 'About things.',
         chunkIndex: 0,
       }),
       expect.objectContaining({
         content: 'Beta text.',
         title: 'My Doc',
-        summary: 'About things.',
         chunkIndex: 1,
       }),
     ]);
@@ -63,7 +61,6 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     for (const row of result.value.rows) {
       expect(row.content.startsWith('Document:')).toBe(false);
       expect(row.title).toBeNull();
-      expect(row.summary).toBeNull();
     }
   });
 
@@ -93,7 +90,7 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     vi.resetModules();
   });
 
-  it('stamps metadata even when the summarizer returns only a summary (no header)', async () => {
+  it('stamps title metadata even when the summarizer returns only a summary (no header)', async () => {
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: '', summary: 'loose summary' }),
     };
@@ -106,10 +103,9 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // No title → no header prepended, but metadata is recorded.
+    // No title → no header prepended; the summary is header-only (never persisted).
     expect(result.value.rows[0]!.content).toBe('Alpha text.');
     expect(result.value.rows[0]!.title).toBeNull();
-    expect(result.value.rows[0]!.summary).toBe('loose summary');
   });
 
   it('stores a zero-vector placeholder for parent blocks and skips their embedding call (S5 Option C)', async () => {
