@@ -4,6 +4,7 @@ import { TicketOverlay, type TicketRow } from './ticket-overlay';
 import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
 import { Badge } from '@/components/ui/badge';
+import { PAGE_SIZE, statusBadgeClass } from '@/components/admin/admin-helpers';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Table,
@@ -15,20 +16,6 @@ import {
 } from '@/components/ui/table';
 
 export const dynamic = 'force-dynamic';
-
-const PAGE_SIZE = 25;
-
-function statusBadgeClass(status: string): string {
-  switch (status) {
-    case 'closed':
-      return 'border-success/40 text-success';
-    case 'in_progress':
-      return 'border-warning/40 text-warning';
-    case 'created':
-    default:
-      return 'border-primary/40 text-primary';
-  }
-}
 
 export default async function TicketsPage({
   searchParams,
@@ -172,7 +159,7 @@ export default async function TicketsPage({
                       {t.userId === 'anonymous' ? (
                         <Badge
                           variant="outline"
-                          className="mt-1 w-fit border-warning/40 text-[10px] text-warning"
+                          className="mt-1 w-fit border-warning/40 text-[11px] text-warning"
                         >
                           anonymous
                         </Badge>
@@ -190,7 +177,7 @@ export default async function TicketsPage({
                   <TableCell>
                     <Badge
                       variant="outline"
-                      className={`text-[10px] font-medium uppercase tracking-[0.05em] ${statusBadgeClass(t.status)}`}
+                      className={`text-[11px] font-medium uppercase tracking-[0.05em] ${statusBadgeClass(t.status)}`}
                     >
                       {t.status.replace('_', ' ')}
                     </Badge>

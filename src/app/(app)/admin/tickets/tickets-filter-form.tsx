@@ -30,6 +30,14 @@ export function TicketsFilterForm({
 }) {
   const [statusValue, setStatusValue] = useState(status ?? '');
   const [assigneeValue, setAssigneeValue] = useState(assignee ?? '');
+  const [prevFilters, setPrevFilters] = useState({ status, assignee });
+
+  if (prevFilters.status !== status || prevFilters.assignee !== assignee) {
+    setPrevFilters({ status, assignee });
+    setStatusValue(status ?? '');
+    setAssigneeValue(assignee ?? '');
+  }
+
   return (
     <form
       className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
@@ -91,6 +99,7 @@ export function TicketsFilterForm({
         id="tickets-search"
         type="search"
         name="q"
+        key={search ?? ''}
         defaultValue={search ?? ''}
         placeholder="Search issue…"
         data-testid="tickets-search"

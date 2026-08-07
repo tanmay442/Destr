@@ -22,19 +22,20 @@ export function Pagination({
   query,
   linkClassName = defaultLinkClass,
 }: PaginationProps) {
+  const safePage = Math.min(Math.max(page, 1), totalPages);
   return (
     <nav
       className="flex flex-col-reverse items-stretch gap-2 text-sm sm:flex-row sm:items-center sm:justify-between"
       aria-label="Pagination"
     >
       <span className="text-muted-foreground tabular-nums">
-        Page <span className="text-foreground">{page}</span> of {totalPages} ·{' '}
+        Page <span className="text-foreground">{safePage}</span> of {totalPages} ·{' '}
         {total.toLocaleString()} total
       </span>
       <div className="flex items-center gap-2">
-        {page > 1 ? (
+        {safePage > 1 ? (
           <Link
-            href={{ pathname, query: { ...query, page: page - 1 } }}
+            href={{ pathname, query: { ...query, page: safePage - 1 } }}
             className={cn(linkClassName)}
             aria-label="Previous page"
           >
@@ -42,9 +43,9 @@ export function Pagination({
             Previous
           </Link>
         ) : null}
-        {page < totalPages ? (
+        {safePage < totalPages ? (
           <Link
-            href={{ pathname, query: { ...query, page: page + 1 } }}
+            href={{ pathname, query: { ...query, page: safePage + 1 } }}
             className={cn(linkClassName)}
             aria-label="Next page"
           >

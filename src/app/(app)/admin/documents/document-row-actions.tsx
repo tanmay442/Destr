@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import {
   deleteDocumentAction,
@@ -11,6 +11,16 @@ import {
 } from '../actions';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -33,6 +43,8 @@ export function DocumentRowActions({
   const [pending, startTransition] = useTransition();
   const [recountPending, startRecount] = useTransition();
   const [hardDeletePending, startHardDelete] = useTransition();
+  const [hardDeleteOpen, setHardDeleteOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -100,17 +112,14 @@ export function DocumentRowActions({
         {isDeleted ? (
           <DropdownMenuItem
             disabled={hardDeletePending}
-            onSelect={() =>
-              startHardDelete(async () => {
-                const res = await hardDeleteDocumentAction(id);
-                if (res.error) toast.error(res.error);
-                else toast.success('Document permanently removed');
-              })
-            }
+            onSelect={() => {
+              setConfirmText('');
+              setHardDeleteOpen(true);
+            }}
             className="text-destructive focus:text-destructive"
             data-testid={`documents-hard-delete-${id}`}
           >
-            {hardDeletePending ? 'Removing…' : 'Hard delete'}
+            Hard delete
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem
@@ -129,6 +138,47 @@ export function DocumentRowActions({
         </DropdownMenuItem>
         <span className="sr-only">{fileName}</span>
       </DropdownMenuContent>
+      <Dialog open={hardDeleteOpen} onOpenChange={setHardDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Permanently delete document?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the document and its chunks. Type the file
+              name to confirm.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`hard-delete-confirm-${id}`}>File name</Label>
+            <Input
+              id={`hard-delete-confirm-${id}`}
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={fileName}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHardDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={confirmText !== fileName || hardDeletePending}
+              onClick={() =>
+                startHardDelete(async () => {
+                  const res = await hardDeleteDocumentAction(id);
+                  setHardDeleteOpen(false);
+                  setConfirmText('');
+                  if (res.error) toast.error(res.error);
+                  else toast.success('Document permanently removed');
+                })
+              }
+            >
+              {hardDeletePending ? 'Removing…' : 'Permanently delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DropdownMenu>
   );
 }

@@ -6,7 +6,7 @@ import {
 export function MarketingHero() {
   return (
     <section className="flex flex-col gap-5" data-testid="landing-left">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         {HERO.eyebrow}
       </p>
 

@@ -4,6 +4,7 @@ import { RecountAllButton } from './recount-all-button';
 import { UploadDocumentDialog } from './upload-document-dialog';
 import { IngestStatusPoller } from './ingest-status-poller';
 import { Pagination } from '@/components/admin/Pagination';
+import { PAGE_SIZE } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,8 +20,6 @@ import {
 import type { IngestStatus } from '@app/domain';
 
 export const dynamic = 'force-dynamic';
-
-const PAGE_SIZE = 25;
 
 function ingestBadgeClass(status: IngestStatus): string {
   switch (status) {
@@ -71,31 +70,33 @@ export default async function DocumentsPage({
       </div>
 
       <div className="flex flex-col gap-3">
-        <form
-          className="flex flex-col gap-2 sm:flex-row sm:items-center"
-          method="get"
-          aria-label="Search documents"
-        >
-          <Label className="sr-only" htmlFor="documents-search">
-            Search documents
-          </Label>
-          <Input
-            id="documents-search"
-            type="search"
-            name="search"
-            defaultValue={search}
-            placeholder="Search file name…"
-            className="flex-1"
-            data-testid="documents-search"
-          />
-          <div className="flex items-center gap-2">
-            <Button type="submit" size="sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <form
+            className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-1"
+            method="get"
+            aria-label="Search documents"
+          >
+            <Label className="sr-only" htmlFor="documents-search">
+              Search documents
+            </Label>
+            <Input
+              id="documents-search"
+              type="search"
+              name="search"
+              defaultValue={search}
+              placeholder="Search file name…"
+              className="sm:flex-1"
+              data-testid="documents-search"
+            />
+            <Button type="submit" size="sm" className="w-fit">
               Search
             </Button>
+          </form>
+          <div className="flex items-center gap-2">
             <RecountAllButton />
             <UploadDocumentDialog />
           </div>
-        </form>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">

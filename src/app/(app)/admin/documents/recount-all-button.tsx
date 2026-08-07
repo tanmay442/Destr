@@ -4,7 +4,7 @@ import { useTransition } from 'react';
 import { Calculator } from 'lucide-react';
 import { recountAllChunksAction } from '../actions';
 import { Button } from '@/components/ui/button';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 
 export function RecountAllButton() {
   const [pending, startTransition] = useTransition();

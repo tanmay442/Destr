@@ -87,15 +87,17 @@ export function DonutChart({
 export function BarList({
   items,
   unit,
+  ariaLabel,
   className,
 }: {
   items: { label: string; value: number; barClassName?: string }[];
   unit?: string;
+  ariaLabel: string;
   className?: string;
 }) {
   const max = Math.max(1, ...items.map((i) => i.value));
   return (
-    <ul className={cn("flex flex-col gap-3.5", className)}>
+    <ul aria-label={ariaLabel} className={cn("flex flex-col gap-3.5", className)}>
       {items.map((item) => (
         <li key={item.label} className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2 text-sm">
@@ -151,7 +153,7 @@ export function ActivityBars({
         const heightPct = hasValue ? (bucket.value / max) * 100 : 0;
         return (
           <div key={i} className="flex h-full flex-1 flex-col items-stretch gap-1.5">
-            <span className="h-4 text-center text-[10px] font-medium tabular-nums text-foreground">
+            <span className="h-4 text-center text-[11px] font-medium tabular-nums text-foreground">
               {hasValue ? bucket.value.toLocaleString() : ""}
             </span>
             <div className="flex flex-1 items-end">
@@ -166,7 +168,7 @@ export function ActivityBars({
                 }}
               />
             </div>
-            <span className="text-center text-[10px] tabular-nums text-muted-foreground">
+            <span className="text-center text-[11px] tabular-nums text-muted-foreground">
               {bucket.label}
             </span>
           </div>
@@ -310,7 +312,7 @@ export function LineChart({
         {ticks.map((t, i) => (
           <span
             key={`${t.label}-${i}`}
-            className="text-[10px] text-muted-foreground tabular-nums"
+            className="text-[11px] text-muted-foreground tabular-nums"
           >
             {t.label}
           </span>

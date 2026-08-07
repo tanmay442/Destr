@@ -18,6 +18,7 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
+import { cn } from '@/components/admin/admin-helpers';
 import { formatDuration } from '@/lib/format-duration';
 import type { ReactNode } from 'react';
 import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox, BarChart3, Gauge, Sparkles } from 'lucide-react';
@@ -56,7 +57,7 @@ function MetricCard({
           : 'text-foreground';
   return (
     <Card className="gap-2 p-4 shadow-none">
-      <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
         {icon ? <span aria-hidden>{icon}</span> : null}
         {label}
       </span>
@@ -120,10 +121,6 @@ function padUsage(rows: { day: string; total: number }[], days: number) {
   return out;
 }
 
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
-
 function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
   const buckets = mode.queryLengthBuckets;
   const bucketTotal = Math.max(1, buckets.short + buckets.medium + buckets.long);
@@ -174,7 +171,7 @@ function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
         </dl>
         <Separator className="opacity-50" />
         <div className="flex flex-col gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Query length
           </span>
           <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
@@ -453,6 +450,7 @@ export default async function AnalyticsPage() {
                   <CardContent>
                     <BarList
                       unit=" ms"
+                      ariaLabel="Chat latency by stage"
                       items={[
                         { label: 'Retrieve p50', value: chat.retrieveP50Ms },
                         { label: 'Retrieve p95', value: chat.retrieveP95Ms },
@@ -476,6 +474,7 @@ export default async function AnalyticsPage() {
                     {chat.cacheBusterQueries.length > 0 ? (
                       <BarList
                         unit=" misses"
+                        ariaLabel="Cache-buster queries by miss count"
                         items={chat.cacheBusterQueries.map((q) => ({
                           label: q.query,
                           value: q.misses,
@@ -508,7 +507,7 @@ export default async function AnalyticsPage() {
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
                       <div className="flex flex-col gap-1">
-                        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                           p50
                         </span>
                         <LineChart
@@ -518,7 +517,7 @@ export default async function AnalyticsPage() {
                         />
                       </div>
                       <div className="flex flex-col gap-1">
-                        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                           p95
                         </span>
                         <LineChart
@@ -615,6 +614,7 @@ export default async function AnalyticsPage() {
                     {ticketIntel.turnsToTicket.ticketSessions > 0 ? (
                       <div className="flex flex-col gap-3">
                         <BarList
+                          ariaLabel="Turns to ticket by bucket"
                           items={ticketIntel.turnsToTicket.buckets.map((b) => ({
                             label: b.label,
                             value: b.count,
@@ -770,6 +770,7 @@ export default async function AnalyticsPage() {
                 <CardContent>
                   {feedback && feedback.thumbsDownDocs.length > 0 ? (
                     <BarList
+                      ariaLabel="Documents with negative feedback"
                       items={feedback.thumbsDownDocs.map((d) => ({
                         label: d.fileName ?? `Document #${d.documentId}`,
                         value: d.down,

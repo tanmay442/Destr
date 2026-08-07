@@ -27,6 +27,14 @@ export interface FerrofluidProps {
 
 const MAX_COLORS = 8;
 
+let webglErrorLogged = false;
+
+function reportWebGLError(error: unknown): void {
+  if (webglErrorLogged) return;
+  webglErrorLogged = true;
+  console.error(error);
+}
+
 const hexToRGB = (hex: string): [number, number, number] => {
   const c = hex.replace('#', '').padEnd(6, '0');
   const r = parseInt(c.slice(0, 2), 16) / 255;
@@ -319,7 +327,7 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
         try {
           renderer.render({ scene: meshRef.current });
         } catch (e) {
-          console.error(e);
+          reportWebGLError(e);
         }
       }
     };
@@ -372,7 +380,7 @@ const Ferrofluid: React.FC<FerrofluidProps> = ({
         try {
           renderer.render({ scene: meshRef.current });
         } catch (e) {
-          console.error(e);
+          reportWebGLError(e);
         }
       }
     };

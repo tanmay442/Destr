@@ -2,7 +2,10 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
+import Image from 'next/image';
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -18,7 +21,7 @@ import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import {
   ArrowUp,
   Square,
@@ -32,6 +35,17 @@ import {
 } from 'lucide-react';
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
+
+function errorDigest(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (!message) return undefined;
+  let hash = 2166136261;
+  for (let i = 0; i < message.length; i += 1) {
+    hash ^= message.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `ref-${(hash >>> 0).toString(36)}`;
+}
 
 type FeedbackVote = 1 | -1;
 
@@ -127,15 +141,147 @@ function StatusStages() {
 
 function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
   const url = typeof href === 'string' ? href.trim() : '';
-  if (/^(javascript:|data:)/i.test(url)) {
+  if (!/^(https?:)\/\//i.test(url)) {
     return <span {...props}>{children}</span>;
   }
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+    <a href={url} target="_blank" rel="noopener noreferrer" {...props}>
       {children}
     </a>
   );
 }
+
+const MessageItem = memo(function MessageItem({
+  message,
+  turnId,
+  vote,
+  onVote,
+}: {
+  message: MyUIMessage;
+  turnId: string | undefined;
+  vote: FeedbackVote | undefined;
+  onVote: (message: MyUIMessage, turnId: string, feedback: FeedbackVote) => void;
+}) {
+  const isUser = message.role === 'user';
+  const textParts = message.parts.filter((p) => p.type === 'text');
+  const citations = message.parts.filter(
+    (p) => p.type === 'data-citation',
+  ) as Array<{
+    type: 'data-citation';
+    data: CitationData;
+  }>;
+
+  return (
+    <div
+      className={cn(
+        'flex w-full animate-in flex-col gap-3 fade-in-0 slide-in-from-bottom-2 duration-300',
+        isUser ? 'items-end' : 'items-start',
+      )}
+      data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
+    >
+      {textParts.map((part, i) =>
+        part.type === 'text' ? (
+          isUser ? (
+            <div
+              key={i}
+              className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground"
+              data-testid="chat-text"
+            >
+              {part.text}
+            </div>
+          ) : (
+            <div
+              key={i}
+              className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
+              data-testid="chat-text"
+            >
+              <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>
+                {part.text}
+              </Markdown>
+            </div>
+          )
+        ) : null,
+      )}
+
+      {citations.length > 0 && !isUser ? (
+        <div
+          className="-mx-1 flex w-full max-w-none snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
+          data-testid="chat-citations"
+        >
+          {citations.map((c, i) => {
+            const sim = c.data.similarity;
+            const simPct = Math.round(sim * 100);
+            const simTone =
+              sim >= 0.8
+                ? 'var(--success)'
+                : sim >= 0.6
+                  ? 'var(--primary)'
+                  : 'var(--warning)';
+            return (
+              <div
+                key={i}
+                className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/60 p-3"
+                data-testid="chat-citation"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                    Source {i + 1}
+                  </span>
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
+                    style={{
+                      color: simTone,
+                      background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
+                    }}
+                    title="Cosine similarity to your question"
+                  >
+                    {simPct}% match
+                  </span>
+                </div>
+                {c.data.fileName ? (
+                  <div className="flex flex-col gap-0.5">
+                    <span
+                      className="truncate text-[11.5px] font-medium text-foreground"
+                      title={c.data.fileName}
+                      data-testid="chat-citation-file"
+                    >
+                      {c.data.fileName}
+                      {c.data.page != null ? (
+                        <span className="text-muted-foreground">
+                          {' '}
+                          — p.{c.data.page}
+                        </span>
+                      ) : null}
+                    </span>
+                    {c.data.sectionTitle && c.data.sectionTitle !== c.data.fileName ? (
+                      <span
+                        className="truncate text-[11px] text-muted-foreground"
+                        title={c.data.sectionTitle}
+                        data-testid="chat-citation-section"
+                      >
+                        § {c.data.sectionTitle}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                  {c.data.snippet}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {!isUser && turnId ? (
+        <FeedbackControl
+          vote={vote}
+          onVote={(feedback) => onVote(message, turnId, feedback)}
+        />
+      ) : null}
+    </div>
+  );
+});
 
 const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
   { label: 'Reset password', text: 'How do I change my password?' },
@@ -148,78 +294,114 @@ export function ChatInterface() {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>({});
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
-  const pendingTurnIdRef = useRef<string | null>(null);
+  const pendingTurnIdRef = useRef<string[]>([]);
+  const submittingRef = useRef(false);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
     transport,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
-      const turnId = pendingTurnIdRef.current;
-      pendingTurnIdRef.current = null;
+      const turnId = pendingTurnIdRef.current.shift();
       if (!turnId || isAbort || isDisconnect || isError) return;
       if (message.role !== 'assistant') return;
       setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
     },
   });
 
-  const submit = (text: string) => {
+  const submit = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     const turnId = crypto.randomUUID();
-    pendingTurnIdRef.current = turnId;
-    sendMessage({ text: trimmed }, { body: { turnId } });
-    setInput('');
-  };
-
-  const submitFeedback = async (
-    message: MyUIMessage,
-    turnId: string,
-    feedback: FeedbackVote,
-  ) => {
-    const previous = votes[turnId];
-    if (previous === feedback) return;
-    setVotes((prev) => ({ ...prev, [turnId]: feedback }));
-    const citationData = message.parts
-      .filter((p) => p.type === 'data-citation')
-      .map((p) => (p as { data: CitationData }).data);
-    const documentIds = uniqueIds(citationData.map((c) => c.documentId));
-    const chunkIds = uniqueIds(citationData.map((c) => c.id));
-    const payload = {
-      turnId,
-      feedback,
-      ...(documentIds.length > 0 ? { documentIds } : {}),
-      ...(chunkIds.length > 0 ? { chunkIds } : {}),
-    };
+    pendingTurnIdRef.current.push(turnId);
     try {
-      let res = await postFeedback(payload);
-      if (res.status === 404) {
-        await new Promise((resolve) => setTimeout(resolve, FEEDBACK_RETRY_DELAY_MS));
-        res = await postFeedback(payload);
-      }
-      if (!res.ok) throw new Error(`Feedback request failed (${res.status})`);
+      await sendMessage({ text: trimmed }, { body: { turnId } });
+      setInput('');
     } catch {
-      setVotes((prev) => {
-        const next = { ...prev };
-        if (previous === undefined) delete next[turnId];
-        else next[turnId] = previous;
-        return next;
-      });
-      toast.error('Could not save your feedback. Please try again.');
+      pendingTurnIdRef.current = pendingTurnIdRef.current.filter(
+        (queued) => queued !== turnId,
+      );
+      submittingRef.current = false;
     }
   };
 
+  const submitFeedback = useCallback(
+    async (
+      message: MyUIMessage,
+      turnId: string,
+      feedback: FeedbackVote,
+    ) => {
+      const previous = votes[turnId];
+      if (previous === feedback) return;
+      setVotes((prev) => ({ ...prev, [turnId]: feedback }));
+      const citationData = message.parts
+        .filter((p) => p.type === 'data-citation')
+        .map((p) => (p as { data: CitationData }).data);
+      const documentIds = uniqueIds(citationData.map((c) => c.documentId));
+      const chunkIds = uniqueIds(citationData.map((c) => c.id));
+      const payload = {
+        turnId,
+        feedback,
+        ...(documentIds.length > 0 ? { documentIds } : {}),
+        ...(chunkIds.length > 0 ? { chunkIds } : {}),
+      };
+      try {
+        let res = await postFeedback(payload);
+        if (res.status === 404) {
+          await new Promise((resolve) => setTimeout(resolve, FEEDBACK_RETRY_DELAY_MS));
+          res = await postFeedback(payload);
+        }
+        if (!res.ok) throw new Error(`Feedback request failed (${res.status})`);
+      } catch {
+        setVotes((prev) => {
+          const next = { ...prev };
+          if (previous === undefined) delete next[turnId];
+          else next[turnId] = previous;
+          return next;
+        });
+        toast.error('Could not save your feedback. Please try again.');
+      }
+    },
+    [votes],
+  );
+
+  const handleVote = useCallback(
+    (message: MyUIMessage, turnId: string, feedback: FeedbackVote) => {
+      void submitFeedback(message, turnId, feedback);
+    },
+    [submitFeedback],
+  );
+
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    submit(input);
+    void submit(input);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      submit(input);
+      void submit(input);
     }
   };
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  let lastUserText = '';
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (!m || m.role !== 'user') continue;
+    lastUserText = m.parts
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { text: string }).text)
+      .join('\n');
+    break;
+  }
+
+  useEffect(() => {
+    if (status === 'ready' || status === 'error') {
+      submittingRef.current = false;
+    }
+  }, [status]);
 
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
@@ -243,9 +425,8 @@ export function ChatInterface() {
 
   useEffect(() => {
     if (!error || (error instanceof Error && error.name === 'AbortError')) return;
-    const message =
-      error instanceof Error ? error.message || 'Something went wrong.' : 'Something went wrong.';
-    toast.error(message);
+    const digest = errorDigest(error);
+    toast.error(digest ? `Something went wrong. Reference: ${digest}` : 'Something went wrong.');
   }, [error]);
 
   return (
@@ -261,12 +442,13 @@ export function ChatInterface() {
           {messages.length === 0 ? (
             <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center fade-in-0 slide-in-from-bottom-2 duration-500">
               <div className="flex flex-col items-center gap-4">
-                <img
+                <Image
                   src="/logo.svg"
                   alt=""
                   aria-hidden
+                  width={42}
+                  height={42}
                   className="h-[42px] w-[42px]"
-                  decoding="async"
                 />
                 <div className="flex flex-col gap-2">
                   <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
@@ -285,7 +467,7 @@ export function ChatInterface() {
                     key={q.label}
                     type="button"
                     disabled={isStreaming}
-                    onClick={() => submit(q.text)}
+                    onClick={() => void submit(q.text)}
                     className="group flex h-auto items-start gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-left text-sm text-foreground transition-colors hover:border-primary/40 hover:bg-surface-elevated disabled:opacity-50"
                     data-testid="chat-quick-prompt"
                   >
@@ -302,126 +484,15 @@ export function ChatInterface() {
             </div>
           ) : (
             messages.map((m) => {
-              const isUser = m.role === 'user';
-              const textParts = m.parts.filter((p) => p.type === 'text');
-              const citations = m.parts.filter(
-                (p) => p.type === 'data-citation',
-              ) as Array<{
-                type: 'data-citation';
-                data: CitationData;
-              }>;
               const turnId = turnIds[m.id];
               return (
-                <div
+                <MessageItem
                   key={m.id}
-                  className={cn(
-                    'flex w-full animate-in flex-col gap-3 fade-in-0 slide-in-from-bottom-2 duration-300',
-                    isUser ? 'items-end' : 'items-start',
-                  )}
-                  data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
-                >
-                  {textParts.map((part, i) =>
-                    part.type === 'text' ? (
-                      isUser ? (
-                        <div
-                          key={i}
-                          className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground"
-                          data-testid="chat-text"
-                        >
-                          {part.text}
-                        </div>
-                      ) : (
-                        <div
-                          key={i}
-                          className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
-                          data-testid="chat-text"
-                        >
-                          <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>
-                            {part.text}
-                          </Markdown>
-                        </div>
-                      )
-                    ) : null,
-                  )}
-
-                  {citations.length > 0 && !isUser ? (
-                    <div
-                      className="-mx-1 flex w-full max-w-none snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
-                      data-testid="chat-citations"
-                    >
-                      {citations.map((c, i) => {
-                        const sim = c.data.similarity;
-                        const simPct = Math.round(sim * 100);
-                        const simTone =
-                          sim >= 0.8
-                            ? 'var(--success)'
-                            : sim >= 0.6
-                              ? 'var(--primary)'
-                              : 'var(--warning)';
-                        return (
-                          <div
-                            key={i}
-                            className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/60 p-3"
-                            data-testid="chat-citation"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-                                Source {i + 1}
-                              </span>
-                              <span
-                                className="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums"
-                                style={{
-                                  color: simTone,
-                                  background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
-                                }}
-                                title="Cosine similarity to your question"
-                              >
-                                {simPct}% match
-                              </span>
-                            </div>
-                            {c.data.fileName ? (
-                              <div className="flex flex-col gap-0.5">
-                                <span
-                                  className="truncate text-[11.5px] font-medium text-foreground"
-                                  title={c.data.fileName}
-                                  data-testid="chat-citation-file"
-                                >
-                                  {c.data.fileName}
-                                  {c.data.page != null ? (
-                                    <span className="text-muted-foreground">
-                                      {' '}
-                                      — p.{c.data.page}
-                                    </span>
-                                  ) : null}
-                                </span>
-                                {c.data.sectionTitle &&
-                                  c.data.sectionTitle !== c.data.fileName ? (
-                                    <span
-                                      className="truncate text-[11px] text-muted-foreground"
-                                      title={c.data.sectionTitle}
-                                      data-testid="chat-citation-section"
-                                    >
-                                      § {c.data.sectionTitle}
-                                    </span>
-                                  ) : null}
-                              </div>
-                            ) : null}
-                            <p className="line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground">
-                              {c.data.snippet}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  {!isUser && turnId ? (
-                    <FeedbackControl
-                      vote={votes[turnId]}
-                      onVote={(feedback) => void submitFeedback(m, turnId, feedback)}
-                    />
-                  ) : null}
-                </div>
+                  message={m}
+                  turnId={turnId}
+                  vote={turnId ? votes[turnId] : undefined}
+                  onVote={handleVote}
+                />
               );
             })
           )}
@@ -453,15 +524,27 @@ export function ChatInterface() {
               data-testid="chat-error"
             >
               <AlertCircle aria-hidden />
-              <div className="flex flex-col gap-0.5">
-                <AlertTitle>
-                  {error instanceof Error
-                    ? error.message || 'Something went wrong.'
-                    : 'Something went wrong.'}
-                </AlertTitle>
+              <div className="flex flex-col gap-2">
+                <AlertTitle>Something went wrong</AlertTitle>
                 <AlertDescription className="text-xs text-destructive/80">
-                  Try again in a moment.
+                  {(() => {
+                    const digest = errorDigest(error);
+                    return digest ? `Reference: ${digest}` : 'Try again in a moment.';
+                  })()}
                 </AlertDescription>
+                {lastUserText ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isStreaming}
+                    onClick={() => void submit(lastUserText)}
+                    data-testid="chat-retry"
+                    className="w-fit"
+                  >
+                    Try again
+                  </Button>
+                ) : null}
               </div>
             </Alert>
           ) : null}
@@ -511,11 +594,11 @@ export function ChatInterface() {
           </Button>
         </form>
         <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-foreground-faint">
-          Press <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Enter</kbd>{' '}
+          Press <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">Enter</kbd>{' '}
           to send ·{' '}
-          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Shift</kbd>{' '}
+          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">Shift</kbd>{' '}
           +{' '}
-          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">Enter</kbd>{' '}
+          <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">Enter</kbd>{' '}
           for a new line
         </p>
       </div>

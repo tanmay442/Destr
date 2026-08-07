@@ -1,16 +1,14 @@
 import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
 import type { AuditKind } from '@app/domain';
 import { Pagination } from '@/components/admin/Pagination';
+import { AUDIT_PAGE_SIZE, ADMIN_KINDS } from '@/components/admin/admin-helpers';
 import { AuditLogTable } from '@/components/admin/AuditLogTable';
 import { AuditFilterForm } from './audit-filter-form';
 
 export const dynamic = 'force-dynamic';
 
-const PAGE_SIZE = 50;
-const KINDS: readonly AuditKind[] = ['document', 'ticket', 'user', 'settings'];
-
 function parseKind(raw: string | undefined): AuditKind | undefined {
-  return (KINDS as readonly string[]).includes(raw ?? '') ? (raw as AuditKind) : undefined;
+  return (ADMIN_KINDS as readonly string[]).includes(raw ?? '') ? (raw as AuditKind) : undefined;
 }
 
 function parseDate(raw: string | undefined, endOfDay = false): Date | undefined {
@@ -35,7 +33,7 @@ export default async function AuditPage({
 }) {
   const params = await searchParams;
   const page = parsePageParam(params.page);
-  const offset = (page - 1) * PAGE_SIZE;
+  const offset = (page - 1) * AUDIT_PAGE_SIZE;
   const documentIdRaw = params.documentId ? Number(params.documentId) : undefined;
   const documentId = Number.isInteger(documentIdRaw) ? documentIdRaw : undefined;
   const kind = parseKind(params.kind);
@@ -51,11 +49,11 @@ export default async function AuditPage({
     to: parseDate(params.to, true),
     documentId,
     ticketId: params.ticketId,
-    limit: PAGE_SIZE,
+    limit: AUDIT_PAGE_SIZE,
     offset,
     actorId,
   }));
-  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(result.total / AUDIT_PAGE_SIZE));
   return (
     <section className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { SignInButton } from '@clerk/nextjs';
 import { ArrowRight } from 'lucide-react';
 import BorderGlow from '@/components/react-bits/BorderGlow';
@@ -23,12 +24,13 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
     >
       <div className="flex flex-col gap-5 p-6">
         <div className="flex flex-col gap-3">
-          <img
+          <Image
             src="/logo.svg"
             alt=""
             aria-hidden
+            width={48}
+            height={48}
             className="size-12"
-            decoding="async"
           />
           <div className="flex flex-col gap-2">
             <h2 className="text-xl font-semibold tracking-tight text-foreground">
@@ -60,7 +62,7 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           </SignInButton>
         </div>
 
-        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-foreground-subtle">
+        <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-foreground-subtle">
           Auth by Clerk
         </p>
       </div>

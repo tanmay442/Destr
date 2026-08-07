@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ok, err, ExternalServiceError } from '@app/domain';
+import { MAX_UPLOAD_PDF_BYTES } from '@/lib/limits';
 
 const { requireAdminMock } = vi.hoisted(() => ({
   requireAdminMock: vi.fn(),
@@ -7,7 +8,6 @@ const { requireAdminMock } = vi.hoisted(() => ({
 
 const {
   uploadPdfMock,
-  replacePdfMock,
   softDeleteDocumentMock,
   restoreDocumentMock,
   hardDeleteDocumentMock,
@@ -16,10 +16,8 @@ const {
   setUserRoleMock,
   updateTicketMock,
   revalidatePathMock,
-  redirectMock,
 } = vi.hoisted(() => ({
   uploadPdfMock: vi.fn(),
-  replacePdfMock: vi.fn(),
   softDeleteDocumentMock: vi.fn(),
   restoreDocumentMock: vi.fn(),
   hardDeleteDocumentMock: vi.fn(),
@@ -28,7 +26,6 @@ const {
   setUserRoleMock: vi.fn(),
   updateTicketMock: vi.fn(),
   revalidatePathMock: vi.fn(),
-  redirectMock: vi.fn(),
 }));
 
 vi.mock('@/composition', async () => {
@@ -59,7 +56,6 @@ vi.mock('@/composition', async () => {
     err,
     getComposition: () => ({
       uploadPdf: uploadPdfMock,
-      replacePdf: replacePdfMock,
       softDeleteDocument: softDeleteDocumentMock,
       restoreDocument: restoreDocumentMock,
       hardDeleteDocument: hardDeleteDocumentMock,
@@ -75,14 +71,11 @@ vi.mock('next/cache', () => ({
   revalidatePath: revalidatePathMock,
 }));
 
-vi.mock('next/navigation', () => ({
-  redirect: redirectMock,
-}));
-
 import {
   uploadPdfAction,
   deleteDocumentAction,
   restoreDocumentAction,
+  hardDeleteDocumentAction,
   setRoleAction,
   updateTicketAction,
   recountChunksAction,
@@ -92,7 +85,6 @@ import {
 beforeEach(() => {
   requireAdminMock.mockReset();
   uploadPdfMock.mockReset();
-  replacePdfMock.mockReset();
   softDeleteDocumentMock.mockReset();
   restoreDocumentMock.mockReset();
   hardDeleteDocumentMock.mockReset();
@@ -101,7 +93,6 @@ beforeEach(() => {
   setUserRoleMock.mockReset();
   updateTicketMock.mockReset();
   revalidatePathMock.mockReset();
-  redirectMock.mockReset();
 });
 
 describe('admin actions', () => {
@@ -161,6 +152,30 @@ describe('admin actions', () => {
     expect(result.documentId).toBe(42);
   });
 
+  it('uploadPdfAction rejects non-PDF content', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const fd = new FormData();
+    fd.append('file', new File(['not a pdf'], 'fake.pdf', { type: 'application/pdf' }));
+    const result = await uploadPdfAction({}, fd);
+    expect(result.error).toMatch(/Only PDF/);
+    expect(uploadPdfMock).not.toHaveBeenCalled();
+  });
+
+  it('uploadPdfAction rejects files over 20 MB', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const bytes = new Uint8Array(MAX_UPLOAD_PDF_BYTES + 1);
+    bytes.set([0x25, 0x50, 0x44, 0x46], 0);
+    const fd = new FormData();
+    fd.append('file', new File([bytes], 'big.pdf', { type: 'application/pdf' }));
+    const result = await uploadPdfAction({}, fd);
+    expect(result.error).toMatch(/20 MB/);
+    expect(uploadPdfMock).not.toHaveBeenCalled();
+  });
+
   it('deleteDocumentAction delegates to softDeleteDocument', async () => {
     requireAdminMock.mockResolvedValue({
       user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
@@ -178,6 +193,35 @@ describe('admin actions', () => {
     softDeleteDocumentMock.mockResolvedValue(err(new ExternalServiceError('db down')));
     const result = await deleteDocumentAction(42);
     expect(result.error).toBe('An external service is temporarily unavailable');
+  });
+
+  it('deleteDocumentAction 403s when requireAdmin throws', async () => {
+    const forbiddenError = new Error('Forbidden') as Error & { status: number };
+    forbiddenError.status = 403;
+    requireAdminMock.mockRejectedValue(forbiddenError);
+    const result = await deleteDocumentAction(42);
+    expect(result.error).toBe('Forbidden');
+    expect(softDeleteDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('restoreDocumentAction delegates to restoreDocument and revalidates', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    restoreDocumentMock.mockResolvedValue(ok(undefined));
+    const result = await restoreDocumentAction(42);
+    expect(restoreDocumentMock).toHaveBeenCalledWith(42, 'admin_1');
+    expect(result).toEqual({});
+    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/documents');
+  });
+
+  it('restoreDocumentAction 403s when requireAdmin throws', async () => {
+    const forbiddenError = new Error('Forbidden') as Error & { status: number };
+    forbiddenError.status = 403;
+    requireAdminMock.mockRejectedValue(forbiddenError);
+    const result = await restoreDocumentAction(42);
+    expect(result.error).toBe('Forbidden');
+    expect(restoreDocumentMock).not.toHaveBeenCalled();
   });
 
   it('restoreDocumentAction surfaces Result errors (expired)', async () => {
@@ -210,6 +254,62 @@ describe('admin actions', () => {
     const result = await setRoleAction('user_1', 'admin');
     expect(setUserRoleMock).toHaveBeenCalledWith({ clerkUserId: 'user_1', role: 'admin', actorId: 'admin_1' });
     expect(result).toEqual({});
+  });
+
+  it('setRoleAction 403s when requireAdmin throws', async () => {
+    const forbiddenError = new Error('Forbidden') as Error & { status: number };
+    forbiddenError.status = 403;
+    requireAdminMock.mockRejectedValue(forbiddenError);
+    const result = await setRoleAction('user_1', 'admin');
+    expect(result.error).toBe('Forbidden');
+    expect(setUserRoleMock).not.toHaveBeenCalled();
+  });
+
+  it('hardDeleteDocumentAction delegates to hardDeleteDocument and revalidates', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    hardDeleteDocumentMock.mockResolvedValue(ok(undefined));
+    const result = await hardDeleteDocumentAction(42);
+    expect(hardDeleteDocumentMock).toHaveBeenCalledWith({ documentId: 42, actorId: 'admin_1' });
+    expect(result).toEqual({});
+    expect(revalidatePathMock).toHaveBeenCalledWith('/admin/documents');
+  });
+
+  it('hardDeleteDocumentAction 403s when requireAdmin throws', async () => {
+    const forbiddenError = new Error('Forbidden') as Error & { status: number };
+    forbiddenError.status = 403;
+    requireAdminMock.mockRejectedValue(forbiddenError);
+    const result = await hardDeleteDocumentAction(42);
+    expect(result.error).toBe('Forbidden');
+    expect(hardDeleteDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('updateTicketAction sanitizes note text before delegating', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    updateTicketMock.mockResolvedValue(ok({} as never));
+    const result = await updateTicketAction('TKT-1001', {
+      note: '  hello\x00world\r\nnext  ',
+    });
+    expect(result).toEqual({});
+    expect(updateTicketMock).toHaveBeenCalledWith({
+      ticketId: 'TKT-1001',
+      status: undefined,
+      assignedTo: undefined,
+      note: 'helloworld\nnext',
+      actorId: 'admin_1',
+    });
+  });
+
+  it('updateTicketAction 403s when requireAdmin throws', async () => {
+    const forbiddenError = new Error('Forbidden') as Error & { status: number };
+    forbiddenError.status = 403;
+    requireAdminMock.mockRejectedValue(forbiddenError);
+    const result = await updateTicketAction('TKT-1001', { status: 'closed' });
+    expect(result.error).toBe('Forbidden');
+    expect(updateTicketMock).not.toHaveBeenCalled();
   });
 
   it('updateTicketAction surfaces Result errors (invalid transition)', async () => {
@@ -271,6 +371,79 @@ describe('admin actions', () => {
     const result = await recountAllChunksAction();
     expect(result).toEqual({ documents: 2, total: 12 });
     expect(revalidatePathMock).toHaveBeenCalledWith('/admin/documents');
+  });
+
+  it('deleteDocumentAction rejects non-positive ids', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await deleteDocumentAction(0);
+    expect(result.error).toBe('Invalid document id');
+    expect(softDeleteDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('hardDeleteDocumentAction rejects non-integer ids', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await hardDeleteDocumentAction(1.5);
+    expect(result.error).toBe('Invalid document id');
+    expect(hardDeleteDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('restoreDocumentAction rejects non-positive ids', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await restoreDocumentAction(-3);
+    expect(result.error).toBe('Invalid document id');
+    expect(restoreDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('recountChunksAction rejects non-positive ids', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await recountChunksAction(0);
+    expect(result.error).toBe('Invalid document id');
+    expect(recountChunksForDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('updateTicketAction rejects unknown status values', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await updateTicketAction('TKT-1001', { status: 'bogus' as never });
+    expect(result.error).toBe('Invalid status');
+    expect(updateTicketMock).not.toHaveBeenCalled();
+  });
+
+  it('updateTicketAction rejects over-long assignee values', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    const result = await updateTicketAction('TKT-1001', { assignedTo: 'x'.repeat(256) });
+    expect(result.error).toMatch(/255/);
+    expect(updateTicketMock).not.toHaveBeenCalled();
+  });
+
+  it('updateTicketAction accepts a valid status and assignee', async () => {
+    requireAdminMock.mockResolvedValue({
+      user: { id: 'admin_1', email: 'a@x.com', name: 'Admin', role: 'admin' },
+    });
+    updateTicketMock.mockResolvedValue(ok({} as never));
+    const result = await updateTicketAction('TKT-1001', {
+      status: 'in_progress',
+      assignedTo: 'alice@example.com',
+    });
+    expect(result).toEqual({});
+    expect(updateTicketMock).toHaveBeenCalledWith({
+      ticketId: 'TKT-1001',
+      status: 'in_progress',
+      assignedTo: 'alice@example.com',
+      note: undefined,
+      actorId: 'admin_1',
+    });
   });
 
   it('recountAllChunksAction surfaces Result errors', async () => {

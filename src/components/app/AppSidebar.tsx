@@ -63,6 +63,13 @@ export function AppSidebar({
 
   const onAdmin = pathname?.startsWith('/admin') ?? false;
   const [adminToggled, setAdminToggled] = useState<boolean | null>(null);
+  const [prevOnAdmin, setPrevOnAdmin] = useState(onAdmin);
+
+  if (prevOnAdmin !== onAdmin) {
+    setPrevOnAdmin(onAdmin);
+    setAdminToggled(null);
+  }
+
   const adminOpen = adminToggled ?? onAdmin;
 
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
