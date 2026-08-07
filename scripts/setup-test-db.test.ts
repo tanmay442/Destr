@@ -54,7 +54,7 @@ describe('setup-test-db', () => {
       json: async () => ({
         branches: [
           { id: 'br-primary', name: 'production', primary: true },
-          { id: 'br-1', name: 'dev-test' },
+          { id: 'br-1', name: 'dev-test__ragtest__' },
         ],
       }),
     });
@@ -108,7 +108,7 @@ describe('setup-test-db', () => {
       status: 200,
       text: async () => '',
       json: async () => ({
-        branch: { id: 'br-new', name: 'dev-test', current_state: 'ready' },
+        branch: { id: 'br-new', name: 'dev-test__ragtest__', current_state: 'ready' },
         operations: [],
       }),
     });
@@ -146,7 +146,7 @@ describe('setup-test-db', () => {
     expect(createCall[0]).toContain('/branches');
     expect(createCall[1]?.method).toBe('POST');
     expect(JSON.parse(createCall[1]?.body as string)).toMatchObject({
-      name: 'dev-test',
+      name: 'dev-test__ragtest__',
       parent_id: 'br-primary',
     });
     const epCall = fetchMock.mock.calls[3]!;
@@ -161,5 +161,76 @@ describe('setup-test-db', () => {
     expect(uriCall[0]).toContain('role_name=neondb_owner');
     expect(uriCall[0]).toContain('database_name=neondb');
     expect(uriCall[0]).not.toContain('endpoint_id=');
+  });
+
+  it('recreates a stale owned branch (TTL guard)', async () => {
+    process.env.NEON_PROJECT_ID = 'proj-1';
+    process.env.NEON_API_KEY = 'key-1';
+    process.env.NEON_TEST_BRANCH = 'dev-test';
+    process.env.NEON_TEST_BRANCH_TTL_HOURS = '1';
+    const stale = '2020-01-01T00:00:00Z';
+
+    // 1. list: stale owned branch exists
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        branches: [{ id: 'br-old', name: 'dev-test__ragtest__', created_at: stale }],
+      }),
+    });
+    // 2. DELETE the stale branch
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({}),
+    });
+    // 3. create a fresh branch
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        branch: { id: 'br-new', name: 'dev-test__ragtest__', current_state: 'ready' },
+        operations: [],
+      }),
+    });
+    // 4. endpoints list (empty)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({ endpoints: [] }),
+    });
+    // 5. create endpoint (active immediately)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        endpoint: { id: 'ep-new', type: 'read_write', current_state: 'active' },
+      }),
+    });
+    // 6. connection uri
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({ uri: 'postgres://u:p@host/db?sslmode=require' }),
+    });
+    execFileSyncMock.mockReturnValueOnce(Buffer.from(''));
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
+
+    await runSetup();
+    const deleteCall = fetchMock.mock.calls[1]!;
+    expect(deleteCall[0]).toContain('/branches/br-old');
+    expect(deleteCall[1]?.method).toBe('DELETE');
+    const createCall = fetchMock.mock.calls[2]!;
+    expect(createCall[1]?.method).toBe('POST');
+    expect(JSON.parse(createCall[1]?.body as string)).toMatchObject({
+      name: 'dev-test__ragtest__',
+    });
+    delete process.env.NEON_TEST_BRANCH_TTL_HOURS;
   });
 });

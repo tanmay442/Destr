@@ -10,6 +10,11 @@ on:
       - '.github/workflows/eval.yml'
   workflow_dispatch:
 
+# Serialize per-ref runs so concurrent jobs never race the same test branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   eval:
     name: RAG Eval (mock)
