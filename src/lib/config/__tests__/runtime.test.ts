@@ -163,4 +163,36 @@ describe('graceful degradation', () => {
     const second = await getRuntimeConfig();
     expect(second.retrievalMode).toBe('normal');
   });
+
+  it('seeds a degraded cache on cold-start failure so the DB is not re-queried within the soft window', async () => {
+    const repo: FakeRepo = {
+      getOverrides: vi.fn(async () => {
+        throw new Error('db down');
+      }),
+      saveOverrides: vi.fn(async () => ({ version: 1 })),
+    };
+    const { getRuntimeConfig } = await loadRuntime(repo);
+    const first = await getRuntimeConfig();
+    expect(first).toEqual(appConfig);
+    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+    advance(10_000);
+    const second = await getRuntimeConfig();
+    expect(second).toEqual(appConfig);
+    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the DB after the degraded cache hard-expires', async () => {
+    const repo: FakeRepo = {
+      getOverrides: vi.fn(async () => {
+        throw new Error('db down');
+      }),
+      saveOverrides: vi.fn(async () => ({ version: 1 })),
+    };
+    const { getRuntimeConfig } = await loadRuntime(repo);
+    await getRuntimeConfig();
+    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+    advance(301_000);
+    await getRuntimeConfig();
+    expect(repo.getOverrides).toHaveBeenCalledTimes(2);
+  });
 });

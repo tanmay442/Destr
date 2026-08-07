@@ -91,33 +91,13 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
   return result as unknown as AppConfig;
 }
 
-type RemoteVersionSource = () => Promise<number | null>;
-
-let remoteVersionSource: RemoteVersionSource | null = null;
-
-export function setRemoteConfigVersionSource(source: RemoteVersionSource | null): void {
-  remoteVersionSource = source;
-}
-
-async function readRemoteVersion(): Promise<number | null> {
-  if (!remoteVersionSource) return null;
-  try {
-    return await remoteVersionSource();
-  } catch {
-    return null;
-  }
-}
-
 let cache: CacheEntry | null = null;
 let refreshInFlight: Promise<AppConfig> | null = null;
 
 export async function getRuntimeConfig(): Promise<AppConfig> {
   const now = Date.now();
 
-  const remote = await readRemoteVersion();
-  const remoteNewer = remote != null && cache != null && remote > cache.version;
-
-  if (cache && now < cache.softExpiry && !remoteNewer) {
+  if (cache && now < cache.softExpiry) {
     return applyEnvLock(cache.value);
   }
   if (cache && now < cache.hardExpiry) {
@@ -145,12 +125,15 @@ async function refreshCache(): Promise<AppConfig> {
     };
     return validated;
   } catch (err) {
-    logger.error('[runtime-config] DB read failed, falling back', { error: err });
-    if (cache) {
-      cache.softExpiry = Date.now() + SOFT_TTL_MS;
-      return cache.value;
-    }
-    return appConfig;
+    logger.error('[runtime-config] DB read failed, entering degraded mode', { error: err });
+    const now = Date.now();
+    cache = {
+      value: cache ? cache.value : appConfig,
+      softExpiry: now + SOFT_TTL_MS,
+      hardExpiry: now + HARD_TTL_MS,
+      version: cache ? cache.version : 0,
+    };
+    return cache.value;
   }
 }
 

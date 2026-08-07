@@ -43,6 +43,20 @@ export function toActionResult<T>(result: Result<T>): T | SafeErrorBody {
   return toErrorBody(result.error);
 }
 
+const KNOWN_ERROR_CODES = new Set([
+  'validation_error',
+  'unauthorized',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'gone',
+  'rate_limited',
+  'external_service',
+  'parse_error',
+  'payload_too_large',
+  'internal_error',
+]);
+
 export function isActionError<T>(
   result: T | SafeErrorBody,
 ): result is SafeErrorBody {
@@ -52,7 +66,8 @@ export function isActionError<T>(
     'error' in result &&
     'code' in result &&
     typeof (result as SafeErrorBody).error === 'string' &&
-    typeof (result as SafeErrorBody).code === 'string'
+    typeof (result as SafeErrorBody).code === 'string' &&
+    KNOWN_ERROR_CODES.has((result as SafeErrorBody).code)
   );
 }
 

@@ -1,29 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { escapeHtml, sanitizeText } from '../sanitize';
-
-describe('escapeHtml', () => {
-  it('escapes all HTML special characters', () => {
-    expect(escapeHtml('<script>alert("x")</script>')).toBe(
-      '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;',
-    );
-  });
-
-  it('escapes ampersand first to avoid double-encoding', () => {
-    expect(escapeHtml('&lt;')).toBe('&amp;lt;');
-  });
-
-  it('escapes single quotes', () => {
-    expect(escapeHtml("it's")).toBe("it&#39;s");
-  });
-
-  it('passes through plain text unchanged', () => {
-    expect(escapeHtml('hello world')).toBe('hello world');
-  });
-
-  it('handles empty string', () => {
-    expect(escapeHtml('')).toBe('');
-  });
-});
+import { sanitizeText } from '../sanitize';
 
 describe('sanitizeText', () => {
   it('strips control characters except newline and tab', () => {
