@@ -10,6 +10,7 @@ function setValidBaseEnv() {
   vi.stubEnv('CHAT_PROVIDER', 'openai');
   vi.stubEnv('CUSTOM_LLM_API_KEY', 'test-chat-key');
   vi.stubEnv('CUSTOM_LLM_BASE_URL', 'http://localhost:3000/v1');
+  vi.stubEnv('LLM_MODEL', 'gpt-4o-mini');
   vi.stubEnv('BLOB_STORAGE_PROVIDER', 'filesystem');
 }
 
@@ -131,5 +132,47 @@ describe('validateEnv', () => {
     expect(names).not.toContain('QSTASH_CURRENT_SIGNING_KEY');
     expect(names).not.toContain('QSTASH_NEXT_SIGNING_KEY');
     expect(names).not.toContain('QSTASH_INGEST_WORKER_URL');
+  });
+
+  it('treats unset EMBEDDING_PROVIDER as google (runtime default)', () => {
+    vi.stubEnv('EMBEDDING_PROVIDER', '');
+    vi.stubEnv('AI_STUDIO_KEY', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.missing.map((m) => m.name)).toContain('AI_STUDIO_KEY');
+  });
+
+  it('treats unset CHAT_PROVIDER as openai (runtime default)', () => {
+    vi.stubEnv('CHAT_PROVIDER', '');
+    vi.stubEnv('CUSTOM_LLM_API_KEY', '');
+    vi.stubEnv('CUSTOM_LLM_BASE_URL', '');
+    vi.stubEnv('LLM_MODEL', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    const names = result.missing.map((m) => m.name);
+    expect(names).toContain('CUSTOM_LLM_API_KEY');
+    expect(names).toContain('CUSTOM_LLM_BASE_URL');
+    expect(names).toContain('LLM_MODEL');
+  });
+
+  it('requires LLM_MODEL when CHAT_PROVIDER=openai', () => {
+    vi.stubEnv('CHAT_PROVIDER', 'openai');
+    vi.stubEnv('LLM_MODEL', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.missing.map((m) => m.name)).toContain('LLM_MODEL');
+  });
+
+  it('does not require LLM_MODEL when CHAT_PROVIDER=ollama', () => {
+    vi.stubEnv('CHAT_PROVIDER', 'ollama');
+    vi.stubEnv('OLLAMA_BASE_URL', 'http://localhost:11434');
+    vi.stubEnv('LLM_MODEL', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(true);
+    expect(result.missing.map((m) => m.name)).not.toContain('LLM_MODEL');
   });
 });

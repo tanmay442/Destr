@@ -225,3 +225,33 @@ describe('proxy.ts (auth adapter)', () => {
     expect(redirectMock).toHaveBeenCalled();
   });
 });
+
+describe('proxy config matcher', () => {
+  const matcher = proxy.config.matcher[0];
+  const matches = (path: string): boolean => {
+    if (!matcher) throw new Error('proxy matcher is empty');
+    return new RegExp(`^(?:${matcher})$`).test(path);
+  };
+
+  it('covers API and trpc routes without a redundant entry', () => {
+    expect(proxy.config.matcher).toHaveLength(1);
+    expect(matches('/api/chat')).toBe(true);
+    expect(matches('/api/admin/documents/1')).toBe(true);
+    expect(matches('/trpc/some.route')).toBe(true);
+  });
+
+  it('covers page routes', () => {
+    expect(matches('/admin/documents')).toBe(true);
+    expect(matches('/login')).toBe(true);
+    expect(matches('/chat')).toBe(true);
+  });
+
+  it('excludes _next bundles and static assets', () => {
+    expect(matches('/_next/static/chunks/app-abc123.js')).toBe(false);
+    expect(matches('/_next/image?url=x')).toBe(false);
+    expect(matches('/logo.svg')).toBe(false);
+    expect(matches('/favicon.ico')).toBe(false);
+    expect(matches('/styles.css')).toBe(false);
+    expect(matches('/image.png')).toBe(false);
+  });
+});

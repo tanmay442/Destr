@@ -5,8 +5,15 @@ interface EnvVarSpec {
   condition?: () => boolean;
 }
 
+const PROVIDER_DEFAULTS: Record<string, string> = {
+  EMBEDDING_PROVIDER: 'google',
+  CHAT_PROVIDER: 'openai',
+};
+
 function providerIs(provider: string, envVar: string): boolean {
-  return process.env[envVar] === provider;
+  const raw = process.env[envVar]?.trim();
+  if (raw) return raw === provider;
+  return provider === (PROVIDER_DEFAULTS[envVar] ?? '');
 }
 
 const ENV_VARS: EnvVarSpec[] = [
@@ -61,6 +68,12 @@ const ENV_VARS: EnvVarSpec[] = [
     name: 'CUSTOM_LLM_BASE_URL',
     required: true,
     description: 'OpenAI-compatible chat base URL',
+    condition: () => providerIs('openai', 'CHAT_PROVIDER'),
+  },
+  {
+    name: 'LLM_MODEL',
+    required: true,
+    description: 'Chat model id for the OpenAI-compatible chat provider',
     condition: () => providerIs('openai', 'CHAT_PROVIDER'),
   },
   {

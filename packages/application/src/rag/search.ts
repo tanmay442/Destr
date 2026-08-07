@@ -1,4 +1,4 @@
-import { err, ok, type Result, ExternalServiceError } from '@app/domain';
+import { err, ok, type Result, ExternalServiceError, logger } from '@app/domain';
 import type { ChunkRepository, EmbeddingService, Reranker, RetrievedChunkRow } from '@app/domain';
 import {
   SIMILARITY_THRESHOLD,
@@ -242,7 +242,7 @@ export async function searchChunks(
     return capAndResolve(vectorRows, query, topN, opts, deps);
   }
   if (!lexicalResult.ok) {
-    console.warn('Lexical search failed; falling back to vector-only', { error: String(lexicalResult.cause) });
+    logger.warn('Lexical search failed; falling back to vector-only', { error: String(lexicalResult.cause) });
     return capAndResolve(vectorRows, query, topN, opts, deps);
   }
   const lexicalRows = lexicalResult.rows;

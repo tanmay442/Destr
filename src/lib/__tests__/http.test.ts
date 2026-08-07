@@ -153,8 +153,18 @@ describe('respond edge cases', () => {
 });
 
 describe('isActionError', () => {
-  it('returns true for valid error body', () => {
-    expect(isActionError({ error: 'x', code: 'y' })).toBe(true);
+  it('returns true for a body with a known error code', () => {
+    expect(isActionError({ error: 'x', code: 'not_found' })).toBe(true);
+    expect(isActionError({ error: 'x', code: 'validation_error' })).toBe(true);
+    expect(isActionError({ error: 'x', code: 'internal_error' })).toBe(true);
+  });
+
+  it('returns false for a body with an unknown code', () => {
+    expect(isActionError({ error: 'x', code: 'y' })).toBe(false);
+  });
+
+  it('returns false for a plain value shaped like an error body', () => {
+    expect(isActionError({ error: 'some value', code: 'custom' })).toBe(false);
   });
 
   it('returns false for null', () => {
@@ -170,7 +180,7 @@ describe('isActionError', () => {
   });
 
   it('returns false for object missing error', () => {
-    expect(isActionError({ code: 'x' })).toBe(false);
+    expect(isActionError({ code: 'not_found' })).toBe(false);
   });
 });
 

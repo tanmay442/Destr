@@ -1,11 +1,12 @@
 export async function register() {
-  if (process.env.NEXT_RUNTIME) {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  if (process.env.SKIP_ENV_VALIDATION !== '1') {
     const { validateEnv } = await import('./src/lib/env');
     const result = validateEnv();
     if (!result.ok) {
-      // Fail fast in every environment: a misconfigured deploy would otherwise
-      // boot and serve confusing 500s once adapters hit the missing env vars.
       throw new Error(result.message);
     }
   }
+  const { startVectorDimensionCheck } = await import('@/composition');
+  startVectorDimensionCheck();
 }

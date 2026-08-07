@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { parseQueryPagination, parsePageParam } from '@/composition';
+import {
+  parseQueryPagination,
+  parsePageParam,
+  getComposition,
+  availableRerankers,
+  resolveReranker,
+  assertSameOrigin,
+} from '@/composition';
 import { MAX_LIST_LIMIT } from '@app/domain';
+import type { AppConfig } from '@app/domain/app-config';
 
 describe('parseQueryPagination', () => {
   it('falls back to defaults when given NaN values', () => {
@@ -108,5 +116,78 @@ describe('parsePageParam', () => {
   it('uses custom fallback', () => {
     expect(parsePageParam(undefined, 3)).toBe(3);
     expect(parsePageParam('abc', 3)).toBe(3);
+  });
+});
+
+describe('getComposition wiring', () => {
+  it('returns a singleton instance', () => {
+    expect(getComposition()).toBe(getComposition());
+  });
+
+  it('exposes the expected API surface', () => {
+    const comp = getComposition();
+    expect(typeof comp.ingestFile).toBe('function');
+    expect(typeof comp.searchChunks).toBe('function');
+    expect(typeof comp.agenticSearch).toBe('function');
+    expect(typeof comp.uploadPdf).toBe('function');
+    expect(typeof comp.replacePdf).toBe('function');
+    expect(typeof comp.ingestQueuedDocument).toBe('function');
+    expect(typeof comp.listUsers).toBe('function');
+    expect(typeof comp.setUserRole).toBe('function');
+    expect(typeof comp.listDocuments).toBe('function');
+    expect(typeof comp.reingestAll).toBe('function');
+    expect(comp.db).toBeDefined();
+    expect(comp.schema).toBeDefined();
+    expect(comp.answerCache).toBeDefined();
+    expect(comp.settingsRepo).toBeDefined();
+  });
+});
+
+describe('reranker selection', () => {
+  it('availableRerankers reports a status for every registry key', () => {
+    const rerankers = availableRerankers();
+    expect(rerankers.has('cosine')).toBe(true);
+    expect(rerankers.has('cohere')).toBe(true);
+    expect(rerankers.has('local')).toBe(true);
+    for (const status of rerankers.values()) {
+      expect(typeof status.ok).toBe('boolean');
+    }
+  });
+
+  it('resolveReranker returns undefined for cosine (default path)', () => {
+    expect(resolveReranker({ rerankerProvider: 'cosine' } as AppConfig)).toBeUndefined();
+  });
+
+  it('resolveReranker returns undefined for cohere when no API key is configured', () => {
+    expect(resolveReranker({ rerankerProvider: 'cohere' } as AppConfig)).toBeUndefined();
+  });
+});
+
+describe('assertSameOrigin', () => {
+  it('passes when no origin header is present', () => {
+    const req = new Request('http://localhost:3000/api/x', {
+      headers: { host: 'localhost:3000' },
+    });
+    expect(assertSameOrigin(req)).toBeNull();
+  });
+
+  it('passes for a same-origin request', () => {
+    const req = new Request('http://localhost:3000/api/x', {
+      headers: {
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        'sec-fetch-site': 'same-origin',
+      },
+    });
+    expect(assertSameOrigin(req)).toBeNull();
+  });
+
+  it('rejects a cross-origin request with 403', () => {
+    const req = new Request('http://localhost:3000/api/x', {
+      headers: { origin: 'http://evil.com', host: 'localhost:3000' },
+    });
+    const res = assertSameOrigin(req);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(403);
   });
 });

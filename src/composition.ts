@@ -59,6 +59,10 @@ if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER 
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
 }
 
+if (process.env.NODE_ENV === 'production' && !process.env.UPSTASH_REDIS_REST_URL) {
+  logger.warn('NODE_ENV=production without UPSTASH_REDIS_REST_URL: answer cache and rate limiting fall back to in-memory state that is not shared across instances.');
+}
+
 const ingestQueue: IngestQueue = Queue.createIngestQueue({
   ingest: async (documentId: number) => {
     const result = await ingestQueuedDocumentStandalone(documentId);
@@ -90,11 +94,18 @@ async function ingestQueuedDocumentStandalone(
     const outcome = await Db.transactionRunner.run(async (tx) => {
       const claimed = await tx.documents.claimIngest(documentId);
       if (!claimed) return { claimed: false } as const;
+      const current = await tx.documents.findById(documentId);
+      if (!current || current.fileHash !== systemHasher.sha256(buffer)) {
+        await tx.documents.updateIngestStatus(documentId, 'queued');
+        return { claimed: true, stale: true } as const;
+      }
+      await tx.chunks.deleteByDocumentId(documentId);
       await tx.chunks.insertMany(prepared.value.rows);
       await tx.documents.updateIngestStatus(documentId, 'done');
-      return { claimed: true, chunks: prepared.value.chunks } as const;
+      return { claimed: true, stale: false, chunks: prepared.value.chunks } as const;
     });
     if (!outcome.claimed) return ok({ status: 'busy', chunks: 0 });
+    if (outcome.stale) return ok({ status: 'busy', chunks: 0 });
     return ok({ status: 'done', chunks: outcome.chunks });
   } catch (e) {
     await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
@@ -140,11 +151,11 @@ const rerankerRegistry = new Map<string, { reranker?: Reranker; status: Reranker
   ],
 ]);
 
-function availableRerankers(): Map<string, RerankerStatus> {
+export function availableRerankers(): Map<string, RerankerStatus> {
   return new Map([...rerankerRegistry].map(([name, entry]) => [name, entry.status]));
 }
 
-function resolveReranker(cfg: AppConfig): Reranker | undefined {
+export function resolveReranker(cfg: AppConfig): Reranker | undefined {
   return rerankerRegistry.get(cfg.rerankerProvider)?.reranker;
 }
 
@@ -170,7 +181,11 @@ function createAnswerCache() {
   if (process.env.UPSTASH_REDIS_REST_URL) {
     try {
       return Auth.createUpstashAnswerCache();
-    } catch {
+    } catch (e) {
+      logger.error(
+        'UPSTASH_REDIS_REST_URL is set but the Upstash answer cache could not be initialized; falling back to in-memory cache. Provide UPSTASH_REDIS_REST_TOKEN or unset UPSTASH_REDIS_REST_URL.',
+        { error: e },
+      );
       return Auth.createInMemoryAnswerCache();
     }
   }
@@ -187,7 +202,18 @@ function createComposition() {
   return {
     ingestFile: async (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, await resolveIngestDeps()),
     searchChunks: (cfg: AppConfig, q: string, o: Parameters<typeof searchChunks>[1]) =>
-      bind(searchChunks, q, { ...o, threshold: cfg.similarityThreshold, hybridEnabled: cfg.hybridEnabled }, getSearchDeps(cfg)),
+      bind(
+        searchChunks,
+        q,
+        {
+          ...o,
+          threshold: cfg.similarityThreshold,
+          hybridEnabled: cfg.hybridEnabled,
+          mode: cfg.parentChildMode,
+          parentChildWindow: cfg.parentChildWindow,
+        },
+        getSearchDeps(cfg),
+      ),
     agenticSearch: (cfg: AppConfig, query: string) => agenticSearch(query, getAgenticDeps(cfg)),
     getHallucinationGrader: (cfg: AppConfig) => getAgenticDeps(cfg).hallucinationGrader.grade,
     getSearchDeps,
@@ -212,7 +238,6 @@ function createComposition() {
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
-      // WP-11 owns this file; this binds users (WP-6 M1 admin authz). Remove/adjust if WP-11 wires it differently.
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: Db.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
@@ -246,7 +271,6 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      // WP-11 owns this file; chunks wipe is WP-6 H2 (idempotent with WP-11's worker-side delete). Remove/adjust if WP-11 wires it differently.
       reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps }),
