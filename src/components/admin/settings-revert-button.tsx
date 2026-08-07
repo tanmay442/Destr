@@ -4,22 +4,12 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
+import { setDeep } from '@/components/admin/admin-helpers';
 
 export interface SettingsChange {
   key: string;
   old: unknown;
   new: unknown;
-}
-
-function setDeep(target: Record<string, unknown>, path: string, value: unknown): void {
-  const parts = path.split('.');
-  let cur = target;
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    const p = parts[i]!;
-    if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {};
-    cur = cur[p] as Record<string, unknown>;
-  }
-  cur[parts[parts.length - 1]!] = value;
 }
 
 export function SettingsRevertButton({ changes }: { changes: SettingsChange[] }) {

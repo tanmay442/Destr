@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { ADMIN_KINDS } from '@/components/admin/admin-helpers';
 import {
   Select,
   SelectContent,
@@ -13,7 +14,6 @@ import {
 } from '@/components/ui/select';
 
 const ALL = '__all__';
-const KINDS = ['document', 'ticket', 'user', 'settings'] as const;
 
 export function AuditFilterForm({
   kind,
@@ -29,6 +29,13 @@ export function AuditFilterForm({
   to?: string;
 }) {
   const [kindValue, setKindValue] = useState(kind ?? '');
+  const [prevKind, setPrevKind] = useState(kind);
+
+  if (prevKind !== kind) {
+    setPrevKind(kind);
+    setKindValue(kind ?? '');
+  }
+
   return (
     <form
       className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6"
@@ -45,7 +52,7 @@ export function AuditFilterForm({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>All kinds</SelectItem>
-          {KINDS.map((k) => (
+          {ADMIN_KINDS.map((k) => (
             <SelectItem key={k} value={k}>
               {k}
             </SelectItem>
@@ -59,6 +66,7 @@ export function AuditFilterForm({
         id="audit-filter-action"
         type="text"
         name="action"
+        key={action ?? ''}
         defaultValue={action ?? ''}
         placeholder="Action (e.g. upload)"
       />
@@ -69,6 +77,7 @@ export function AuditFilterForm({
         id="audit-filter-actor"
         type="text"
         name="actor"
+        key={actor ?? ''}
         defaultValue={actor ?? ''}
         placeholder="Actor id"
       />
@@ -79,6 +88,7 @@ export function AuditFilterForm({
         id="audit-filter-from"
         type="date"
         name="from"
+        key={from ?? ''}
         defaultValue={from ?? ''}
       />
       <Label className="sr-only" htmlFor="audit-filter-to">
@@ -88,6 +98,7 @@ export function AuditFilterForm({
         id="audit-filter-to"
         type="date"
         name="to"
+        key={to ?? ''}
         defaultValue={to ?? ''}
       />
       <Button type="submit" size="sm" className="sm:col-span-2 lg:col-span-1">

@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 interface BrandMarkProps {
   className?: string;
   /** Size of the logo container. Default 42px (150% of the original 28px). */
@@ -12,13 +14,12 @@ const SIZE_MAP: Record<NonNullable<BrandMarkProps['size']>, string> = {
 
 export function BrandMark({ className = '', size = 'sm' }: BrandMarkProps) {
   return (
-    <img
+    <Image
       src="/logo.svg"
       alt=""
       aria-hidden
       width={42}
       height={42}
-      decoding="async"
       className={[SIZE_MAP[size], 'shrink-0', className].join(' ')}
       data-testid="brand-mark"
     />

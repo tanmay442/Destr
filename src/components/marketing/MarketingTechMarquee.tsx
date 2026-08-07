@@ -1,42 +1,39 @@
 'use client';
 
 import LogoLoop from '@/components/react-bits/LogoLoop';
+import type { LucideIcon } from 'lucide-react';
 import {
-  SiDocker,
-  SiVercel,
-  SiNextdotjs,
-  SiTypescript,
-  SiTailwindcss,
-  SiReact,
-  SiOllama,
-  SiClerk,
-  SiCloudflare,
-  SiNeon,
-  SiVitest,
-  SiDrizzle,
-  SiGoogle,
-  SiUpstash,
-} from 'react-icons/si';
-import type { ComponentType, SVGProps } from 'react';
+  AppWindow,
+  Atom,
+  BrainCircuit,
+  Cloud,
+  Container,
+  Database,
+  FileCode,
+  FlaskConical,
+  KeyRound,
+  Search,
+  Table,
+  Triangle,
+  Wind,
+  Zap,
+} from 'lucide-react';
 
-const ICON_MAP: Record<
-  string,
-  { Icon: ComponentType<SVGProps<SVGSVGElement>>; href: string }
-> = {
-  Docker: { Icon: SiDocker, href: 'https://www.docker.com' },
-  Vercel: { Icon: SiVercel, href: 'https://vercel.com' },
-  'Next.js': { Icon: SiNextdotjs, href: 'https://nextjs.org' },
-  TypeScript: { Icon: SiTypescript, href: 'https://www.typescriptlang.org' },
-  'Tailwind CSS': { Icon: SiTailwindcss, href: 'https://tailwindcss.com' },
-  React: { Icon: SiReact, href: 'https://react.dev' },
-  Ollama: { Icon: SiOllama, href: 'https://ollama.com' },
-  Clerk: { Icon: SiClerk, href: 'https://clerk.com' },
-  Cloudflare: { Icon: SiCloudflare, href: 'https://www.cloudflare.com' },
-  Neon: { Icon: SiNeon, href: 'https://neon.tech' },
-  Vitest: { Icon: SiVitest, href: 'https://vitest.dev' },
-  Drizzle: { Icon: SiDrizzle, href: 'https://orm.drizzle.team' },
-  Google: { Icon: SiGoogle, href: 'https://aistudio.google.com' },
-  Upstash: { Icon: SiUpstash, href: 'https://upstash.com' },
+const ICON_MAP: Record<string, { Icon: LucideIcon; href: string }> = {
+  Docker: { Icon: Container, href: 'https://www.docker.com' },
+  Vercel: { Icon: Triangle, href: 'https://vercel.com' },
+  'Next.js': { Icon: AppWindow, href: 'https://nextjs.org' },
+  TypeScript: { Icon: FileCode, href: 'https://www.typescriptlang.org' },
+  'Tailwind CSS': { Icon: Wind, href: 'https://tailwindcss.com' },
+  React: { Icon: Atom, href: 'https://react.dev' },
+  Ollama: { Icon: BrainCircuit, href: 'https://ollama.com' },
+  Clerk: { Icon: KeyRound, href: 'https://clerk.com' },
+  Cloudflare: { Icon: Cloud, href: 'https://www.cloudflare.com' },
+  Neon: { Icon: Database, href: 'https://neon.tech' },
+  Vitest: { Icon: FlaskConical, href: 'https://vitest.dev' },
+  Drizzle: { Icon: Table, href: 'https://orm.drizzle.team' },
+  Google: { Icon: Search, href: 'https://aistudio.google.com' },
+  Upstash: { Icon: Zap, href: 'https://upstash.com' },
 };
 
 const MARQUEE_TECH = [
@@ -58,22 +55,11 @@ const MARQUEE_TECH = [
 
 export function MarketingTechMarquee() {
   const logos = MARQUEE_TECH.map((name) => {
-    const entry = ICON_MAP[name];
-    if (entry) {
-      const { Icon, href } = entry;
-      return {
-        node: <Icon className="h-11 w-11 text-muted-foreground" aria-hidden />,
-        title: name,
-        href,
-      };
-    }
+    const { Icon, href } = ICON_MAP[name]!;
     return {
-      node: (
-        <span className="font-medium tracking-tight text-muted-foreground">
-          {name}
-        </span>
-      ),
+      node: <Icon className="h-11 w-11 text-muted-foreground" aria-hidden />,
       title: name,
+      href,
     };
   });
 

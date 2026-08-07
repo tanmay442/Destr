@@ -1,6 +1,7 @@
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { UserRowActions } from './user-row-actions';
 import { Pagination } from '@/components/admin/Pagination';
+import { PAGE_SIZE } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,8 +17,6 @@ import {
 } from '@/components/ui/table';
 
 export const dynamic = 'force-dynamic';
-
-const PAGE_SIZE = 25;
 
 function formatRelative(d: Date | null): string {
   if (!d) return '—';

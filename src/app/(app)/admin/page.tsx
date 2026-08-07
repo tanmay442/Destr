@@ -117,7 +117,7 @@ export default async function AdminOverviewPage() {
                   ? `${Math.round((openTickets / summary.ticketCount) * 100)}%`
                   : '—'}
               </span>
-              <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
                 {hasTickets ? 'open' : 'no tickets'}
               </span>
             </DonutChart>
@@ -142,7 +142,7 @@ export default async function AdminOverviewPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <BarList items={corpusItems} />
+            <BarList items={corpusItems} ariaLabel="Knowledge base size by type" />
           </CardContent>
         </Card>
       </div>

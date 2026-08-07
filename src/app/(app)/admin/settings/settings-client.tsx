@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { AppConfig } from '@app/domain';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
+import { setDeep } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -92,17 +93,6 @@ interface FieldDescriptor {
 
 type OutOfScopeTopic = { topic: string; handling: string };
 type Values = Record<string, unknown>;
-
-function setDeep(target: Record<string, unknown>, path: string, value: unknown): void {
-  const parts = path.split('.');
-  let cur = target;
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    const p = parts[i]!;
-    if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {};
-    cur = cur[p] as Record<string, unknown>;
-  }
-  cur[parts[parts.length - 1]!] = value;
-}
 
 function serialize(value: unknown): string {
   if (value === undefined) return '(unset)';
@@ -184,10 +174,20 @@ export function SettingsClient() {
 
   function handleCopyPrompt() {
     if (!preview) return;
-    navigator.clipboard.writeText(preview);
-    setCopiedPrompt(true);
-    toast.success('System prompt copied to clipboard');
-    setTimeout(() => setCopiedPrompt(false), 2000);
+    if (!navigator.clipboard?.writeText) {
+      toast.error('Could not copy the prompt. Select it in the preview and copy manually.');
+      return;
+    }
+    navigator.clipboard
+      .writeText(preview)
+      .then(() => {
+        setCopiedPrompt(true);
+        toast.success('System prompt copied to clipboard');
+        setTimeout(() => setCopiedPrompt(false), 2000);
+      })
+      .catch(() => {
+        toast.error('Could not copy the prompt. Select it in the preview and copy manually.');
+      });
   }
 
   async function handleReingest() {
@@ -322,7 +322,7 @@ export function SettingsClient() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
           <p className="text-sm text-muted-foreground">
             Configure persona, guardrails, chunking, and retrieval options.
-            <Badge variant="outline" className="ml-2 align-middle text-[10px] font-medium text-muted-foreground">
+            <Badge variant="outline" className="ml-2 align-middle text-[11px] font-medium text-muted-foreground">
               v{version}
             </Badge>
           </p>
@@ -709,7 +709,7 @@ export function SettingsClient() {
       {changedKeys.length > 0 ? (
         <div className="sticky bottom-4 z-40 flex flex-col items-stretch gap-3 rounded-lg border border-border-subtle bg-card/95 p-3 shadow-xl backdrop-blur-md sm:flex-row sm:items-center sm:justify-between sm:p-4">
           <div className="flex items-center gap-2 text-sm text-foreground">
-            <Badge variant="default" className="h-5 px-1.5 text-[10px]">
+            <Badge variant="default" className="h-5 px-1.5 text-[11px]">
               {changedKeys.length}
             </Badge>
             <span>
@@ -822,7 +822,7 @@ function FieldControl({
 }) {
   const id = `field-${field.key}`;
   const disabled = field.readOnly === true;
-  const locked = field.source === 'env-locked';
+  const locked = field.readOnly === true;
   const changed = serialize(value) !== serialize(field.default);
 
   return (
@@ -834,7 +834,12 @@ function FieldControl({
         >
           {field.label ?? field.key}
           {locked ? (
-            <Lock className="size-3 text-foreground-faint" aria-label="Environment-locked" />
+            <Lock
+              className="size-3 text-foreground-faint"
+              aria-label={
+                field.source === 'env-locked' ? 'Environment-locked' : 'Read-only'
+              }
+            />
           ) : null}
         </Label>
         {!disabled && changed ? (
@@ -926,7 +931,11 @@ function FieldControl({
             max={field.max}
             step={field.step}
             disabled={disabled}
-            value={[Number(value ?? field.min ?? 0)]}
+            value={[
+              typeof value === 'number' && Number.isFinite(value)
+                ? value
+                : field.min ?? 0,
+            ]}
             onValueChange={(v) => onChange(v[0])}
           />
           <span className="w-12 text-right font-mono text-sm tabular-nums text-muted-foreground">
@@ -940,7 +949,10 @@ function FieldControl({
       ) : null}
       {locked ? (
         <p className="text-xs leading-normal text-muted-foreground">
-          {field.readOnlyReason ?? 'Locked by environment configuration.'}
+          {field.readOnlyReason ??
+            (field.source === 'env-locked'
+              ? 'Locked by environment configuration.'
+              : 'This value is managed by the system.')}
         </p>
       ) : null}
       {field.available === false && field.unavailableReason ? (

@@ -18,7 +18,7 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { ChatInterface } from './ChatInterface';
 
 type Msg = {

@@ -3,11 +3,18 @@
 import { revalidatePath } from 'next/cache';
 import { getComposition, requireAdmin, ForbiddenError } from '@/composition';
 import { UnauthorizedError } from '@app/domain';
-import type { TicketStatus } from '@app/application/admin/tickets';
+import { isTicketStatus, type TicketStatus } from '@app/application/admin/tickets';
 import type { AppRole } from '@app/infrastructure/auth';
 import { toSafeError } from '@/lib/http';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
+import { MAX_UPLOAD_PDF_BYTES } from '@/lib/limits';
+
+const MAX_ASSIGNEE_LENGTH = 255;
+
+function isValidDocumentId(documentId: number): boolean {
+  return Number.isInteger(documentId) && documentId > 0;
+}
 
 async function requireAdminOrError(): Promise<
   | { user: { id: string; email: string; name: string; imageUrl: string | null; role: 'admin' | 'user' } }
@@ -55,7 +62,7 @@ export async function uploadPdfAction(
   if (buffer.length < 4 || buffer.toString('utf8', 0, 4) !== '%PDF') {
     return { error: 'Only PDF files are supported.' };
   }
-  if (file.size > 20 * 1024 * 1024) {
+  if (file.size > MAX_UPLOAD_PDF_BYTES) {
     return { error: 'File too large (max 20 MB).' };
   }
   try {
@@ -92,6 +99,9 @@ export async function deleteDocumentAction(
 ): Promise<{ error?: string }> {
   const session = await requireAdminOrError();
   if ('error' in session) return session;
+  if (!isValidDocumentId(documentId)) {
+    return { error: 'Invalid document id' };
+  }
   try {
     const result = await getComposition().softDeleteDocument({ documentId, actorId: session.user.id });
     if (!result.ok) return toSafeError(result.error);
@@ -108,6 +118,9 @@ export async function restoreDocumentAction(
 ): Promise<{ error?: string }> {
   const session = await requireAdminOrError();
   if ('error' in session) return session;
+  if (!isValidDocumentId(documentId)) {
+    return { error: 'Invalid document id' };
+  }
   try {
     const result = await getComposition().restoreDocument(documentId, session.user.id);
     if (!result.ok) return toSafeError(result.error);
@@ -124,6 +137,9 @@ export async function hardDeleteDocumentAction(
 ): Promise<{ error?: string }> {
   const session = await requireAdminOrError();
   if ('error' in session) return session;
+  if (!isValidDocumentId(documentId)) {
+    return { error: 'Invalid document id' };
+  }
   try {
     const result = await getComposition().hardDeleteDocument({ documentId, actorId: session.user.id });
     if (!result.ok) return toSafeError(result.error);
@@ -171,6 +187,16 @@ export async function updateTicketAction(
 ): Promise<{ error?: string }> {
   const session = await requireAdminOrError();
   if ('error' in session) return session;
+  if (patch.status !== undefined && !isTicketStatus(patch.status)) {
+    return { error: 'Invalid status' };
+  }
+  if (
+    patch.assignedTo !== undefined &&
+    patch.assignedTo !== null &&
+    patch.assignedTo.length > MAX_ASSIGNEE_LENGTH
+  ) {
+    return { error: 'Assignee name too long (max 255 characters).' };
+  }
   try {
     const result = await getComposition().updateTicket({
       ticketId,
@@ -198,6 +224,9 @@ export async function recountChunksAction(
 ): Promise<RecountChunksResult> {
   const session = await requireAdminOrError();
   if ('error' in session) return session;
+  if (!isValidDocumentId(documentId)) {
+    return { error: 'Invalid document id' };
+  }
   try {
     const result = await getComposition().recountChunksForDocument(documentId);
     if (!result.ok) return toSafeError(result.error);

@@ -4,6 +4,8 @@ import { useState, useTransition } from 'react';
 import { Save, MessageSquarePlus } from 'lucide-react';
 import { updateTicketAction } from '../actions';
 import { VALID_TRANSITIONS, type TicketStatus } from '@app/application/admin/tickets';
+import { sanitizeText } from '@/lib/sanitize';
+import { statusBadgeClass } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -27,18 +29,6 @@ const UNASSIGNED = '__unassigned__';
 
 function formatStatus(s: string): string {
   return s.replace('_', ' ');
-}
-
-function statusBadgeClass(status: string): string {
-  switch (status) {
-    case 'closed':
-      return 'border-success/40 text-success';
-    case 'in_progress':
-      return 'border-warning/40 text-warning';
-    case 'created':
-    default:
-      return 'border-primary/40 text-primary';
-  }
 }
 
 export function TicketDrawer({
@@ -66,6 +56,7 @@ export function TicketDrawer({
   const [currentStatus, setCurrentStatus] = useState(status);
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
   const [prevAssignee, setPrevAssignee] = useState(assignedTo ?? '');
+  const cleanNote = sanitizeText(note);
 
   if ((assignedTo ?? '') !== prevAssignee) {
     setPrevAssignee(assignedTo ?? '');
@@ -78,19 +69,19 @@ export function TicketDrawer({
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Name
           </span>
           <span className="text-sm text-foreground">{name}</span>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Email
           </span>
           <span className="text-sm text-foreground">{email}</span>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Issue
           </span>
           <p className="whitespace-pre-wrap text-sm text-foreground">{issue}</p>
@@ -105,31 +96,40 @@ export function TicketDrawer({
           <div className="flex flex-col gap-1.5">
             <Label
               htmlFor={`ticket-status-${ticketId}`}
-              className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
             >
               Status
             </Label>
-            <Select value={currentStatus} onValueChange={setCurrentStatus}>
-              <SelectTrigger
-                id={`ticket-status-${ticketId}`}
-                data-testid={`ticket-status-${ticketId}`}
-                className="w-full"
+            {currentStatus === 'closed' ? (
+              <span
+                className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-xs font-medium ${statusBadgeClass('closed')}`}
+                data-testid={`ticket-status-static-${ticketId}`}
               >
-                <SelectValue placeholder={currentStatus} />
-              </SelectTrigger>
-              <SelectContent>
-                {VALID_TRANSITIONS[currentStatus as TicketStatus]?.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {formatStatus(s)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                Closed
+              </span>
+            ) : (
+              <Select value={currentStatus} onValueChange={setCurrentStatus}>
+                <SelectTrigger
+                  id={`ticket-status-${ticketId}`}
+                  data-testid={`ticket-status-${ticketId}`}
+                  className="w-full"
+                >
+                  <SelectValue placeholder={currentStatus} />
+                </SelectTrigger>
+                <SelectContent>
+                  {VALID_TRANSITIONS[currentStatus as TicketStatus]?.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {formatStatus(s)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <Label
               htmlFor={`ticket-assignee-${ticketId}`}
-              className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
             >
               Assignee
             </Label>
@@ -163,7 +163,9 @@ export function TicketDrawer({
             startTransition(async () => {
               setError(null);
               const res = await updateTicketAction(ticketId, {
-                status: currentStatus as 'created' | 'in_progress' | 'closed',
+                ...(currentStatus !== 'closed'
+                  ? { status: currentStatus as 'created' | 'in_progress' }
+                  : {}),
                 assignedTo: currentAssignee || null,
               });
               if (res.error) setError(res.error);
@@ -182,7 +184,7 @@ export function TicketDrawer({
       <div className="flex flex-col gap-2">
         <Label
           htmlFor={`ticket-note-${ticketId}`}
-          className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+          className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
         >
           Add note
         </Label>
@@ -198,11 +200,11 @@ export function TicketDrawer({
           type="button"
           variant="outline"
           size="sm"
-          disabled={pending || note.trim().length === 0}
+          disabled={pending || cleanNote.length === 0}
           onClick={() =>
             startTransition(async () => {
               setError(null);
-              const res = await updateTicketAction(ticketId, { note });
+              const res = await updateTicketAction(ticketId, { note: cleanNote });
               if (res.error) {
                 setError(res.error);
               } else {
@@ -223,7 +225,7 @@ export function TicketDrawer({
           className="rounded-lg border border-border-subtle bg-surface-sunken p-3"
           data-testid={`ticket-notes-${ticketId}`}
         >
-          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Notes
           </span>
           <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{notes}</p>
