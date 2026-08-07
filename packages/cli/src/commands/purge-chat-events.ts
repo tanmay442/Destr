@@ -73,6 +73,11 @@ export async function runPurgeChatEvents({
     if (confirmFn) {
       confirmed = await confirmFn();
     } else {
+      if (!process.stdin.isTTY) {
+        throw new Error(
+          'Refusing to purge chat_events without confirmation. Pass --yes to proceed in non-interactive mode.',
+        );
+      }
       const rl = makeRl();
       confirmed = await askYesNo(
         rl,

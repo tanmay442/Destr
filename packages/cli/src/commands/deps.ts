@@ -4,7 +4,12 @@ import type { PrechunkedIngestDeps } from '@app/application/rag/ingest-prechunke
 import type { ChunkingStrategyName } from '@app/infrastructure/chunking';
 import type { MarkdownParser } from '@app/domain';
 import { markdownParser } from '@app/infrastructure/markdown';
-import { createRepositoryAdapters, createBlobStorage, Db, Llm, Pdf, Chunking } from '@app/infrastructure';
+import * as Db from '@app/infrastructure/db';
+import { createRepositoryAdapters } from '@app/infrastructure/db';
+import * as Llm from '@app/infrastructure/llm';
+import * as Pdf from '@app/infrastructure/pdf';
+import * as Chunking from '@app/infrastructure/chunking';
+import { createBlobStorage } from '@app/infrastructure/storage';
 
 type UploadIngestDeps = PrechunkedIngestDeps & { markdownParser: MarkdownParser };
 

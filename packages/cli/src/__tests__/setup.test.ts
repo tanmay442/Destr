@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeEnvFile, applyToProcess, readEnvFile } from '../commands/setup';
+import { writeEnvFile, applyToProcess, readEnvFile, refreshEnvSnapshot } from '../commands/setup';
 
 let work: string;
 
@@ -52,6 +52,32 @@ describe('writeEnvFile & applyToProcess', () => {
     expect(process.env.TEMP_KEY_2).toBeUndefined();
 
     delete process.env.TEMP_KEY_1;
+  });
+
+  it('refreshes the process.env snapshot from the file', () => {
+    const envPath = join(work, '.env.local');
+    writeFileSync(envPath, 'SNAPSHOT_KEY=snapshot_value\n');
+    refreshEnvSnapshot(envPath);
+    expect(process.env.SNAPSHOT_KEY).toBe('snapshot_value');
+    delete process.env.SNAPSHOT_KEY;
+  });
+
+  it('does not resurrect a cleared key after the snapshot is refreshed', () => {
+    const envPath = join(work, '.env.local');
+    const initialLines = ['ROTATED=old_secret', 'KEEP=value'];
+    writeFileSync(envPath, initialLines.join('\n') + '\n');
+    process.env.ROTATED = 'old_secret';
+
+    const vars = { ROTATED: '', KEEP: 'value' };
+    writeEnvFile(envPath, vars, initialLines);
+    refreshEnvSnapshot(envPath);
+    applyToProcess(vars);
+
+    expect(process.env.ROTATED).toBeUndefined();
+    expect(process.env.KEEP).toBe('value');
+
+    delete process.env.ROTATED;
+    delete process.env.KEEP;
   });
 
   it('reads env vars correctly from env file', () => {

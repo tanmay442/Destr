@@ -71,4 +71,14 @@ describe('runPurgeChatEvents', () => {
     expect(res.deletedCount).toBe(15);
     expect(res.dryRun).toBe(false);
   });
+
+  it('requires --yes when running non-interactively', async () => {
+    const prev = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      await expect(runPurgeChatEvents({ days: 30 })).rejects.toThrow(/--yes/);
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: prev, configurable: true });
+    }
+  });
 });

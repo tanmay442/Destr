@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PDF_PARSE_MAX_BYTES } from '@app/domain';
-import { createBlobStorage } from '@app/infrastructure';
+import { createBlobStorage } from '@app/infrastructure/storage';
 import { warn, getRepoRoot } from './common';
 import { buildIngestDeps } from './deps';
 import { isMainModule } from '../is-main-module';
@@ -82,14 +82,14 @@ export async function runSeed(opts: SeedOptions = {}): Promise<SeedResult> {
   let files: string[];
   try {
     files = readdirSync(fixturesDir).filter((f) => f.toLowerCase().endsWith('.pdf'));
-  } catch {
-    console.error(`Cannot read fixtures directory: ${fixturesDir}`);
-    process.exit(1);
+  } catch (err) {
+    throw new Error(
+      `Cannot read fixtures directory ${fixturesDir}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   if (files.length === 0) {
-    console.error(`No PDFs found in ${fixturesDir}`);
-    process.exit(1);
+    throw new Error(`No PDFs found in ${fixturesDir}`);
   }
 
   const isProd = process.env.NODE_ENV === 'production';

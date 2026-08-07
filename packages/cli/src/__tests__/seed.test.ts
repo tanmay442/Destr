@@ -29,6 +29,28 @@ describe('parseSeedArgs', () => {
 });
 
 describe('runSeed', () => {
+  it('throws when the fixtures directory does not exist', async () => {
+    await expect(runSeed({ fixturesDir: join(work, 'missing') })).rejects.toThrow(
+      /Cannot read fixtures directory/,
+    );
+  });
+
+  it('throws when no PDFs are found', async () => {
+    writeFileSync(join(work, 'notes.txt'), 'not a pdf');
+    await expect(runSeed({ fixturesDir: work })).rejects.toThrow(/No PDFs found/);
+  });
+
+  it('CLI exits non-zero when seeding fails', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const tsxBin = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const result = spawnSync(tsxBin, ['packages/cli/src/index.ts', 'seed', '--dir=/does-not-exist'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(result.status).toBe(1);
+  }, 70_000);
+
   it('blocks non-local/prod seed unless yes or SEED_ALLOWED_ENV is set', async () => {
     writeFileSync(join(work, 'test.pdf'), '%PDF-1.4\ncontent');
     process.env.DATABASE_URL = 'postgres://user:pass@remote-host.com:5432/db';

@@ -10,7 +10,6 @@ import { type Interface } from 'node:readline';
 import pg from 'pg';
 const { Pool } = pg;
 import { config as loadEnv } from 'dotenv';
-loadEnv({ path: '.env.local' });
 
 import {
   makeRl,
@@ -223,10 +222,9 @@ function validateClerkVars(): string | null {
 
 
 async function promptEnv(rl: Interface, envPath: string): Promise<void> {
-  const initial = readEnvFile(envPath);
-  let lines = initial.lines;
   while (true) {
-    const vars: Record<string, string> = { ...initial.vars };
+    const current = readEnvFile(envPath);
+    const vars: Record<string, string> = { ...current.vars };
 
     banner('Database');
     {
@@ -266,10 +264,8 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
     banner('Embedding (Google AI Studio)');
     vars.AI_STUDIO_KEY = await askSecret(rl, 'AI_STUDIO_KEY', vars.AI_STUDIO_KEY ?? '');
 
-    writeEnvFile(envPath, vars, lines);
-    lines = existsSync(envPath)
-      ? readFileSync(envPath, 'utf8').split(/\r?\n/)
-      : [];
+    writeEnvFile(envPath, vars, current.lines);
+    refreshEnvSnapshot(envPath);
     applyToProcess(vars);
 
     const errors: string[] = [];

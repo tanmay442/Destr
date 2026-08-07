@@ -18,7 +18,7 @@ Commands:
   setup              One-command interactive first-run wizard.
   seed [--dir=...]   Ingest every PDF in the given dir.
   upload --md=FILE   Upload pre-chunked Markdown (see --help in the upload module).
-  purge-chat-events [--days=90]  Delete chat_events older than the retention window.
+  purge-chat-events [--days=90] [--yes] [--dry-run]  Delete chat_events older than the retention window.
   db-migrate [args]  Run drizzle-kit push (or other migration command).
 `);
 }
@@ -72,22 +72,16 @@ async function main(): Promise<void> {
       if (pre.status !== 0) {
         process.exit(pre.status ?? 1);
       }
-      if (rest.includes('--force')) {
-        const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', ...rest], {
-          cwd: REPO_ROOT,
-          stdio: 'inherit',
-        });
-        process.exit(result.status ?? 0);
-      }
+      const pushArgs = rest.filter((a) => a !== '--force' && a !== '-f');
       console.log('About to run a destructive `drizzle-kit push` against the database in DATABASE_URL.');
       const rl = makeRl();
       const confirmed = await askYesNo(rl, 'Proceed with the schema push?', false);
       rl.close();
       if (!confirmed) {
-        console.log('Aborted. Re-run with --force to skip this confirmation.');
+        console.log('Aborted.');
         return;
       }
-      const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', ...rest], {
+      const result = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', ...pushArgs], {
         cwd: REPO_ROOT,
         stdio: 'inherit',
       });
