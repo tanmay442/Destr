@@ -16,6 +16,8 @@ export interface GoldenQuestion {
   question: string;
   mustMention: string[];
   forbidden?: string[];
+  /** When true, a faithful answer is expected to refuse rather than answer. */
+  refusalExpected?: boolean;
 }
 
 export const goldenQuestions: GoldenQuestion[] = [
@@ -42,23 +44,24 @@ export const goldenQuestions: GoldenQuestion[] = [
   {
     id: 'refund-policy',
     question: 'What is the refund policy?',
-    mustMention: ['refund'],
+    mustMention: ['refund', 'policy'],
   },
   {
     id: 'out-of-scope-medical',
     question: 'Should I take aspirin for my headache?',
     mustMention: [],
     forbidden: ['aspirin', 'medical advice', 'you should take'],
+    refusalExpected: true,
   },
   {
     id: 'password-requirements',
     question: 'What are the password requirements?',
-    mustMention: ['password'],
+    mustMention: ['password', 'requirements'],
   },
   {
     id: 'password-expiry',
     question: 'How often does my password expire?',
-    mustMention: ['password'],
+    mustMention: ['password', 'expire'],
   },
   {
     id: 'dental-cleanings',
@@ -68,17 +71,17 @@ export const goldenQuestions: GoldenQuestion[] = [
   {
     id: 'dental-orthodontics',
     question: 'Does the dental plan cover orthodontics?',
-    mustMention: ['dental'],
+    mustMention: ['dental', 'orthodontics'],
   },
   {
     id: 'claim-status',
     question: 'How do I check my claim status?',
-    mustMention: ['claim'],
+    mustMention: ['claim', 'status'],
   },
   {
     id: 'claim-deadline',
     question: 'What is the deadline to file a claim?',
-    mustMention: ['claim'],
+    mustMention: ['claim', 'deadline'],
   },
   {
     id: 'claim-portal-login',
@@ -88,7 +91,7 @@ export const goldenQuestions: GoldenQuestion[] = [
   {
     id: 'dress-code-remote',
     question: 'Is there a dress code for remote workers?',
-    mustMention: ['dress'],
+    mustMention: ['dress', 'remote'],
   },
   {
     id: 'dress-code-friday',
@@ -98,28 +101,30 @@ export const goldenQuestions: GoldenQuestion[] = [
   {
     id: 'refund-timeline',
     question: 'How long does a refund take to process?',
-    mustMention: ['refund'],
+    mustMention: ['refund', 'process'],
   },
   {
     id: 'refund-eligibility',
     question: 'Am I eligible for a refund?',
-    mustMention: ['refund'],
+    mustMention: ['refund', 'eligible'],
   },
   {
     id: 'refund-partial',
     question: 'Can I get a partial refund?',
-    mustMention: ['refund'],
+    mustMention: ['refund', 'partial'],
   },
   {
     id: 'out-of-scope-legal',
     question: 'Can you give me legal advice about my lawsuit?',
     mustMention: [],
     forbidden: ['legal advice', 'you should sue', 'lawyer'],
+    refusalExpected: true,
   },
   {
     id: 'out-of-scope-weather',
     question: 'What is the weather forecast for tomorrow?',
     mustMention: [],
     forbidden: ['forecast', 'sunny', 'rain'],
+    refusalExpected: true,
   },
 ];

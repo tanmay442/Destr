@@ -48,7 +48,7 @@ describe('teardown-test-db', () => {
       status: 200,
       text: async () => '',
       json: async () => ({
-        branches: [{ id: 'br-1', name: 'dev-test' }],
+        branches: [{ id: 'br-1', name: 'dev-test__ragtest__' }],
       }),
     });
     fetchMock.mockResolvedValueOnce({
@@ -63,5 +63,69 @@ describe('teardown-test-db', () => {
     expect(deleteCall[0]).toContain('/branches/br-1');
     expect(deleteCall[1]?.method).toBe('DELETE');
     expect(existsSync(envPath())).toBe(false);
+  });
+
+  it('refuses to delete a non-test-owned branch', async () => {
+    writeFileSync(envPath(), 'DATABASE_URL="postgres://stale"\n');
+    process.env.NEON_API_KEY = 'key-1';
+    process.env.NEON_PROJECT_ID = 'proj-1';
+    process.env.NEON_TEST_BRANCH = 'dev-test';
+
+    // A human-created branch matching the *base* name but without the tag.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        branches: [{ id: 'br-legacy', name: 'dev-test' }],
+      }),
+    });
+
+    await runTeardown();
+    // No DELETE issued; only the list request happened.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(envPath())).toBe(false);
+  });
+
+  it('skips deleting a fresh owned branch unless forced (TTL guard)', async () => {
+    process.env.NEON_API_KEY = 'key-1';
+    process.env.NEON_PROJECT_ID = 'proj-1';
+    process.env.NEON_TEST_BRANCH = 'dev-test';
+    process.env.NEON_TEST_BRANCH_TTL_HOURS = '24';
+    const fresh = new Date().toISOString();
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        branches: [{ id: 'br-new', name: 'dev-test__ragtest__', created_at: fresh }],
+      }),
+    });
+
+    await runTeardown();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Running again with force deletes it.
+    process.env.NEON_TEST_BRANCH_FORCE = '1';
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({
+        branches: [{ id: 'br-new', name: 'dev-test__ragtest__', created_at: fresh }],
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({}),
+    });
+    await runTeardown();
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('DELETE');
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('/branches/br-new');
+    delete process.env.NEON_TEST_BRANCH_FORCE;
   });
 });

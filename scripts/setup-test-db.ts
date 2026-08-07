@@ -2,12 +2,24 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import 'dotenv/config';
-import { neonHeaders, neonApiUrl, fetchBranches, isMainModule } from './neon-api';
+import {
+  neonHeaders,
+  neonApiUrl,
+  fetchBranches,
+  isMainModule,
+  makeTestBranchName,
+  isStaleBranch,
+  deleteBranch,
+} from './neon-api';
 
 export async function main() {
   const PROJECT_ID = process.env.NEON_PROJECT_ID;
   const API_KEY = process.env.NEON_API_KEY;
-  const TEST_BRANCH = process.env.NEON_TEST_BRANCH ?? 'dev-test';
+  const TEST_BRANCH = makeTestBranchName(
+    process.env.NEON_TEST_BRANCH ?? 'dev-test',
+  );
+  const TTL_MS =
+    Number(process.env.NEON_TEST_BRANCH_TTL_HOURS ?? 24) * 3_600_000;
   if (!PROJECT_ID || !API_KEY) {
     console.warn(
       '[setup-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping branch creation.',
@@ -19,8 +31,16 @@ export async function main() {
   const api = (path: string) => neonApiUrl(PROJECT_ID, path);
 
   const branches = await fetchBranches(PROJECT_ID, TEST_BRANCH, API_KEY);
-  let branch: { id: string; name: string } | undefined =
+  let branch: { id: string; name: string; created_at?: string } | undefined =
     branches.find((b) => b.name === TEST_BRANCH);
+
+  // TTL guard: never reuse a stale branch left behind by a crashed run;
+  // delete it and create a fresh one.
+  if (branch && isStaleBranch(branch.created_at, TTL_MS)) {
+    console.log(`[setup-test-db] Branch ${branch.name} is stale; recreating.`);
+    await deleteBranch(PROJECT_ID, branch.id, API_KEY);
+    branch = undefined;
+  }
 
   if (!branch) {
     const primary = branches.find((b) => b.primary);

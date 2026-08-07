@@ -10,6 +10,11 @@
  *        - contextRelevancy: fraction of `mustMention` phrases present in the
  *          retrieved context (did retrieval bring the right chunks?)
  *
+ * Phrases are matched at word boundaries (so a substring like `refund` inside
+ * `refunding` is not a hit), refusals are graded explicitly against whether
+ * one was expected, and empty retrieval does not auto-credit faithfulness —
+ * a claim made with no context is unsupported.
+ *
  * All I/O is injected so the harness can run against mocks in CI (no real LLM /
  * DB) and against a keyed provider in a manual job.
  */
@@ -27,6 +32,8 @@ export interface EvalResult {
   question: string;
   answer: string;
   retrievedCount: number;
+  refusalExpected: boolean;
+  refused: boolean;
   faithfulness: number;
   correctness: number;
   contextRelevancy: number;
@@ -34,36 +41,82 @@ export interface EvalResult {
   passed: boolean;
 }
 
-function lowerContains(haystack: string, needle: string): boolean {
-  return haystack.toLowerCase().includes(needle.toLowerCase());
+const REFUSAL_PHRASES = [
+  'cannot answer',
+  "can't answer",
+  'unable to answer',
+  'not able to answer',
+  "i don't know",
+  'do not have',
+  'no information',
+];
+
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export async function evaluateOne(q: GoldenQuestion, deps: EvalDeps): Promise<EvalResult> {
+/** Word-boundary, case-insensitive phrase match (no substring hits). */
+export function matchesPhrase(haystack: string, phrase: string): boolean {
+  const needle = phrase.trim();
+  if (!needle) return false;
+  return new RegExp(`\\b${escapeRegExp(needle)}\\b`, 'i').test(haystack);
+}
+
+export function matchedCount(text: string, phrases: string[]): number {
+  return phrases.filter((p) => matchesPhrase(text, p)).length;
+}
+
+/** A generation that declines to answer from the given context. */
+export function isRefusal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return REFUSAL_PHRASES.some((p) => lower.includes(p));
+}
+
+/** Requires ≥ 2 distinct (case-insensitive, non-empty) phrases. */
+export function isDistinctPhrases(phrases: string[]): boolean {
+  return new Set(phrases.map((p) => p.trim().toLowerCase()).filter(Boolean)).size >= 2;
+}
+
+export async function evaluateOne(
+  q: GoldenQuestion,
+  deps: EvalDeps,
+): Promise<EvalResult> {
   const retrieved = await deps.searchChunks(q.question);
   const context = retrieved.map((r) => r.content).join('\n\n');
   const answer = await deps.generate(q.question, context);
+  const refusalExpected = q.refusalExpected ?? q.mustMention.length === 0;
+  const refused = isRefusal(answer);
 
+  // Faithfulness — graded explicitly, never auto-credited.
   let faithfulness = 0;
-  if (retrieved.length > 0) {
+  if (refused) {
+    // A refusal is only faithful when a refusal was expected; otherwise the
+    // model ducked a question it should have answered.
+    faithfulness = refusalExpected ? 1 : 0;
+  } else if (retrieved.length > 0) {
     faithfulness = (await deps.gradeFaithfulness(context, answer)) === 'yes' ? 1 : 0;
-  } else {
-    // No context ⇒ the question is (correctly) out-of-domain; faithfulness N/A.
-    faithfulness = 1;
   }
+  // else: no context AND no refusal ⇒ any claim is unsupported → 0.
 
-  const correctHits = q.mustMention.filter((phrase) => lowerContains(answer, phrase)).length;
-  const correctness = q.mustMention.length === 0 ? 1 : correctHits / q.mustMention.length;
-
-  const relevantHits = q.mustMention.filter((phrase) => lowerContains(context, phrase)).length;
-  const contextRelevancy = q.mustMention.length === 0 ? 1 : relevantHits / q.mustMention.length;
-
-  const forbiddenHit = (q.forbidden ?? []).filter((phrase) => lowerContains(answer, phrase));
+  const correctness =
+    q.mustMention.length === 0
+      ? 1
+      : matchedCount(answer, q.mustMention) / q.mustMention.length;
+  const contextRelevancy =
+    q.mustMention.length === 0
+      ? 1
+      : matchedCount(context, q.mustMention) / q.mustMention.length;
+  const forbiddenHit = (q.forbidden ?? []).filter((p) =>
+    matchesPhrase(answer, p),
+  );
 
   return {
     id: q.id,
     question: q.question,
     answer,
     retrievedCount: retrieved.length,
+    refusalExpected,
+    refused,
     faithfulness,
     correctness,
     contextRelevancy,
@@ -121,10 +174,16 @@ export function mockEvalDeps(): EvalDeps & { cache: AnswerCache } {
       return [];
     },
     async generate(_query: string, context: string) {
-      return context ? `Based on the docs: ${context.slice(0, 80)}` : 'I cannot answer that from the available docs.';
+      return context
+        ? `Based on the docs: ${context.slice(0, 80)}`
+        : 'I cannot answer that from the available docs.';
     },
-    async gradeFaithfulness(_documents: string, generation: string) {
-      return generation.toLowerCase().includes('cannot answer') ? 'no' : 'yes';
+    // Only consulted when context is non-empty and the generation is not a
+    // refusal (the harness grades refusals explicitly). Treat "docs present and
+    // an answer actually produced" as grounded; with a real grader this is the
+    // hallucination grader.
+    async gradeFaithfulness(documents: string, generation: string) {
+      return documents.trim() === '' || generation.trim() === '' ? 'no' : 'yes';
     },
   };
 }

@@ -49,7 +49,10 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
     gradeFaithfulness: async (documents: string, generation: string) => {
       if (!graders.hallucinationGrader) {
         console.warn('[eval] no hallucination grader configured; using lexical fallback.');
-        return (documents.trim() === '' || generation.toLowerCase().includes('cannot answer')) ? 'no' : 'yes';
+        // Only "no documents supplied" is unfaithful. Refusals are graded by
+        // the harness itself, not by this lexical fallback, so an instructed
+        // "cannot answer" is never scored as a hallucination here.
+        return documents.trim() === '' ? 'no' : 'yes';
       }
       return graders.hallucinationGrader.grade(documents, generation);
     },
@@ -72,7 +75,7 @@ async function main() {
   console.log('per-question:');
   for (const r of report.results) {
     console.log(
-      `  ${r.passed ? 'PASS' : 'FAIL'}  ${r.id.padEnd(20)} faith=${r.faithfulness} corr=${r.correctness} ctx=${r.contextRelevancy} hits=${r.retrievedCount} ${r.forbiddenHit.length ? `FORBIDDEN=${r.forbiddenHit.join(',')}` : ''}`,
+      `  ${r.passed ? 'PASS' : 'FAIL'}  ${r.id.padEnd(20)} faith=${r.faithfulness} corr=${r.correctness} ctx=${r.contextRelevancy} hits=${r.retrievedCount}${r.refused ? ' refused' : ''}${r.forbiddenHit.length ? ` FORBIDDEN=${r.forbiddenHit.join(',')}` : ''}`,
     );
   }
   console.log(`OVERALL: ${report.passed ? 'PASS' : 'FAIL'}\n`);
