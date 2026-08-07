@@ -37,8 +37,11 @@ async function main(): Promise<void> {
       await runSetup(REPO_ROOT);
       return;
     case 'seed': {
-      const { dir, userId } = parseSeedArgs(rest);
-      await runSeed({ userId, fixturesDir: resolve(REPO_ROOT, dir) });
+      const { dir, userId, yes } = parseSeedArgs(rest);
+      const res = await runSeed({ userId, fixturesDir: resolve(REPO_ROOT, dir), yes });
+      if (res.failed > 0) {
+        process.exit(1);
+      }
       return;
     }
     case 'upload': {
@@ -54,7 +57,10 @@ async function main(): Promise<void> {
       return;
     }
     case 'purge-chat-events': {
-      await runPurgeChatEvents(parsePurgeArgs(rest));
+      const res = await runPurgeChatEvents(parsePurgeArgs(rest));
+      if (res.cancelled) {
+        process.exit(0);
+      }
       return;
     }
     case 'db-migrate': {

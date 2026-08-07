@@ -6,5 +6,7 @@ export * as Storage from './storage/blob-storage-factory';
 export * as Queue from './queue/index';
 export * as Markdown from './markdown';
 export * as Chunking from './chunking';
+export { createRepositoryAdapters } from './db/repositories';
+export { createBlobStorage } from './storage/blob-storage-factory';
 export { answerCacheKey } from './auth/answer-cache-key';
 export { createUpstashAnswerCache, createInMemoryAnswerCache } from './auth/index';
