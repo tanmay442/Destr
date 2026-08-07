@@ -1094,7 +1094,7 @@ export function createChunkRepo(client: Client): ChunkRepository {
   };
 }
 
-function createAuditRepo(client: Client): AuditLog {
+export function createAuditRepo(client: Client = db): AuditLog {
   return {
     logEvent: (input) => auditRepo.logEvent(input, client),
     logDocumentEvent: (input) => auditRepo.logDocumentEvent(input, client),
@@ -1105,7 +1105,7 @@ function createAuditRepo(client: Client): AuditLog {
   };
 }
 
-function createTicketRepo(client: Client): TicketRepository {
+export function createTicketRepo(client: Client = db): TicketRepository {
   return {
     findByTicketId: (ticketId) => ticketRepo.findByTicketId(ticketId, client),
     list: (opts) => ticketRepo.list(opts, client),
@@ -1118,7 +1118,7 @@ function createTicketRepo(client: Client): TicketRepository {
   };
 }
 
-function createUserRepo(client: Client): UserRepository {
+export function createUserRepo(client: Client = db): UserRepository {
   return {
     upsertFromClerk: (input) => userRepo.upsertFromClerk(input, client),
     findByClerkId: (clerkUserId) => userRepo.findByClerkId(clerkUserId, client),
@@ -1131,17 +1131,22 @@ function createUserRepo(client: Client): UserRepository {
   };
 }
 
+export function createRepositoryAdapters(client: Client = db) {
+  return {
+    documents: createDocumentRepo(client),
+    chunks: createChunkRepo(client),
+    audit: createAuditRepo(client),
+    tickets: createTicketRepo(client),
+    users: createUserRepo(client),
+  };
+}
+
 export const transactionRunner: TransactionRunner = {
   async run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T> {
     return db.transaction(async (tx) => {
-      const ctx: TransactionContext = {
-        documents: createDocumentRepo(tx),
-        chunks: createChunkRepo(tx),
-        audit: createAuditRepo(tx),
-        tickets: createTicketRepo(tx),
-        users: createUserRepo(tx),
-      };
+      const ctx: TransactionContext = createRepositoryAdapters(tx);
       return fn(ctx);
     });
   },
 };
+

@@ -8,8 +8,8 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { type Interface } from 'node:readline';
 import pg from 'pg';
+const { Pool } = pg;
 import { config as loadEnv } from 'dotenv';
-loadEnv({ path: '.env.local' });
 
 import {
   makeRl,
@@ -34,9 +34,9 @@ import {
 } from '@app/domain';
 import * as Llm from '@app/infrastructure/llm';
 
-const { Pool } = pg;
+loadEnv({ path: resolve(getRepoRoot(), '.env.local') });
 
-function readEnvFile(envPath: string): { vars: Record<string, string>; lines: string[] } {
+export function readEnvFile(envPath: string): { vars: Record<string, string>; lines: string[] } {
   const lines = existsSync(envPath)
     ? readFileSync(envPath, 'utf8').split(/\r?\n/)
     : [];
@@ -48,7 +48,7 @@ function readEnvFile(envPath: string): { vars: Record<string, string>; lines: st
   return { vars, lines };
 }
 
-function writeEnvFile(
+export function writeEnvFile(
   envPath: string,
   vars: Record<string, string>,
   existingLines: string[],
@@ -58,15 +58,18 @@ function writeEnvFile(
   for (const line of existingLines) {
     const m = line.match(/^\s*([^=\s][^=]*?)\s*=/);
     const key = m?.[1];
-    if (key && vars[key] !== undefined && vars[key] !== '') {
-      out.push(`${key}=${vars[key]}`);
+    if (key && Object.prototype.hasOwnProperty.call(vars, key)) {
+      const val = vars[key];
+      if (val !== undefined && val !== '') {
+        out.push(`${key}=${val}`);
+      }
       updated.add(key);
     } else {
       out.push(line);
     }
   }
   for (const [k, v] of Object.entries(vars)) {
-    if (v === '' || updated.has(k)) continue;
+    if (v === '' || v === undefined || updated.has(k)) continue;
     out.push(`${k}=${v}`);
   }
   const existed = existsSync(envPath);
@@ -74,11 +77,20 @@ function writeEnvFile(
   if (existed) warn(`Updated existing ${envPath} (unrecognized lines preserved).`);
 }
 
-function applyToProcess(vars: Record<string, string>): void {
+export function applyToProcess(vars: Record<string, string>): void {
   for (const [k, v] of Object.entries(vars)) {
-    if (v) process.env[k] = v;
+    if (v !== undefined && v !== '') {
+      process.env[k] = v;
+    } else {
+      delete process.env[k];
+    }
   }
 }
+
+export function refreshEnvSnapshot(envPath: string): void {
+  loadEnv({ path: envPath, override: true });
+}
+
 
 async function askSecret(rl: Interface, question: string, existing: string): Promise<string> {
   const suffix = existing ? ' [press Enter to keep existing]' : '';
@@ -210,10 +222,9 @@ function validateClerkVars(): string | null {
 
 
 async function promptEnv(rl: Interface, envPath: string): Promise<void> {
-  const initial = readEnvFile(envPath);
-  let lines = initial.lines;
   while (true) {
-    const vars: Record<string, string> = { ...initial.vars };
+    const current = readEnvFile(envPath);
+    const vars: Record<string, string> = { ...current.vars };
 
     banner('Database');
     {
@@ -253,10 +264,8 @@ async function promptEnv(rl: Interface, envPath: string): Promise<void> {
     banner('Embedding (Google AI Studio)');
     vars.AI_STUDIO_KEY = await askSecret(rl, 'AI_STUDIO_KEY', vars.AI_STUDIO_KEY ?? '');
 
-    writeEnvFile(envPath, vars, lines);
-    lines = existsSync(envPath)
-      ? readFileSync(envPath, 'utf8').split(/\r?\n/)
-      : [];
+    writeEnvFile(envPath, vars, current.lines);
+    refreshEnvSnapshot(envPath);
     applyToProcess(vars);
 
     const errors: string[] = [];
@@ -302,7 +311,7 @@ function runMigration(repoRoot: string): boolean {
   ok('apply-migration.mjs completed');
 
   console.log('  Running drizzle-kit push...');
-  const push = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push', '--force'], {
+  const push = spawnSync('pnpm', ['exec', 'drizzle-kit', 'push'], {
     cwd: repoRoot,
     stdio: 'inherit',
     env: process.env,
@@ -374,7 +383,12 @@ export async function runSetup(repoRoot: string): Promise<void> {
 
   banner('Migration');
   if (await askYesNo(rl, 'Run database migration now?', true)) {
-    runMigration(repoRoot);
+    const success = runMigration(repoRoot);
+    if (!success) {
+      fail('Database migration failed. Stopping setup.');
+      rl.close();
+      process.exit(1);
+    }
   } else {
     warn('Skipped migration. Run `pnpm cli db-migrate` later.');
   }

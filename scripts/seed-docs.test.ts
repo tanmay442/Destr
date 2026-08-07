@@ -43,16 +43,9 @@ beforeEach(() => {
 
 describe('seed-docs', () => {
   it('exits with an error when no fixtures are present', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code}`);
-    }) as never);
     await expect(
       runSeed({ fixturesDir: join(HERE, 'does-not-exist') }),
-    ).rejects.toThrow('exit:1');
-    expect(errSpy).toHaveBeenCalled();
-    errSpy.mockRestore();
-    exitSpy.mockRestore();
+    ).rejects.toThrow(/Cannot read fixtures directory/);
   });
 });
 

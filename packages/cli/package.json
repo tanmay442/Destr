@@ -10,6 +10,9 @@
     "./prompts": "./src/prompts/index.ts"
   },
   "dependencies": {
+    "@app/application": "workspace:*",
+    "@app/domain": "workspace:*",
+    "@app/infrastructure": "workspace:*",
     "dotenv": "^17.4.2",
     "pg": "^8.21.0"
   },

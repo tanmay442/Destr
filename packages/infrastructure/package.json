@@ -12,7 +12,8 @@
     "./auth": "./src/auth/index.ts",
     "./pdf": "./src/pdf/index.ts",
     "./markdown": "./src/markdown/index.ts",
-    "./chunking": "./src/chunking/index.ts"
+    "./chunking": "./src/chunking/index.ts",
+    "./storage": "./src/storage/blob-storage-factory.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.83",

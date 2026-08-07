@@ -178,6 +178,15 @@ importers:
 
   packages/cli:
     dependencies:
+      '@app/application':
+        specifier: workspace:*
+        version: link:../application
+      '@app/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@app/infrastructure':
+        specifier: workspace:*
+        version: link:../infrastructure
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
