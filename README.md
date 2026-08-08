@@ -23,6 +23,12 @@ That's it. The defaults in `.env.example` boot against the Docker
 Postgres with Ollama for embeddings and chat — no external API keys
 needed for local development.
 
+> **Note:** The Docker Postgres uses password `ragagent_local_dev`
+> (set in `docker-compose.yml`). If you already have a local Postgres
+> volume from before that change, it keeps the old `postgres` password
+> — recreate it with `docker compose down -v && docker compose up -d db`
+> so the `DATABASE_URL` in `.env.example` matches.
+
 > **Note:** You still need Clerk keys for auth (`CLERK_SECRET_KEY` and
 > `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`). Copy `.env.example` to
 > `.env.local` and add them. Without Clerk, the app boots but you

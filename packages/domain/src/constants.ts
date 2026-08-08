@@ -1,3 +1,13 @@
+/**
+ * Env-independent defaults for the app's tunable knobs.
+ *
+ * The same names are re-exported at runtime by `@app/infrastructure/config`
+ * (`packages/infrastructure/src/config/env.ts`), which reads `process.env`
+ * once at module load and falls back to these values. Runtime wiring
+ * (composition, infrastructure) must import from `@app/infrastructure/config`;
+ * only code that cannot depend on infrastructure (e.g. the application layer)
+ * should import these static defaults directly. Keep the two in sync.
+ */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
 export const BLOB_GET_MAX_BYTES = 50_000_000;
@@ -18,7 +28,6 @@ export const MAX_AUDIT_LIMIT = 200;
 export const MAX_LIST_LIMIT = 100;
 export const MAX_TICKET_NOTES_LENGTH = 10_000;
 export const INGEST_CHUNK_SIZE = 800;
-export const INGEST_CHUNK_OVERLAP = Math.floor(INGEST_CHUNK_SIZE / 10);
 export const PARENT_CHUNK_SIZE = 1800;
 export const CHILD_CHUNK_SIZE = 400;
 export const PARENT_CHILD_MODE = 'parent' as 'parent' | 'window';
