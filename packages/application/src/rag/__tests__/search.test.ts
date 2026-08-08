@@ -39,13 +39,72 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
 }
 
 describe('searchChunks', () => {
-  it('propagates DB errors as ExternalServiceError', async () => {
+  it('propagates DB errors as ExternalServiceError when hybrid is disabled', async () => {
     const deps = makeDeps({
       chunks: {
         insertMany: vi.fn(),
         deleteByDocumentId: vi.fn(),
         searchByVector: vi.fn().mockRejectedValue(new Error('connection refused')),
         searchByLexical: vi.fn().mockResolvedValue([]),
+        getByIds: vi.fn(),
+        getByDocAndRange: vi.fn(),
+        getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
+        countForDocuments: vi.fn(),
+        countForAll: vi.fn(),
+        countForDocument: vi.fn(),
+        recountAll: vi.fn(),
+      },
+    });
+    const result = await searchChunks('test', { hybridEnabled: false }, deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/Vector search failed/);
+    }
+  });
+
+  it('falls back to lexical-only results when vector search fails but lexical is healthy', async () => {
+    const deps = makeDeps({
+      chunks: {
+        insertMany: vi.fn(),
+        deleteByDocumentId: vi.fn(),
+        searchByVector: vi.fn().mockRejectedValue(new Error('hnsw down')),
+        searchByLexical: vi.fn().mockResolvedValue([
+          {
+            id: 2,
+            documentId: 1,
+            fileName: 'test.pdf',
+            page: 1,
+            sectionTitle: 'Lex',
+            source: 'Page 1 — Lex',
+            content: 'lexical hit',
+            similarity: 0.7,
+            parentChunkId: null,
+            chunkIndex: 1,
+          },
+        ]),
+        getByIds: vi.fn().mockResolvedValue([]),
+        getByDocAndRange: vi.fn(),
+        getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),
+        countForDocuments: vi.fn(),
+        countForAll: vi.fn(),
+        countForDocument: vi.fn(),
+        recountAll: vi.fn(),
+      },
+    });
+    const result = await searchChunks('test', {}, deps);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.map((r) => r.id)).toEqual([2]);
+    }
+  });
+
+  it('propagates vector failure when both modalities fail', async () => {
+    const deps = makeDeps({
+      chunks: {
+        insertMany: vi.fn(),
+        deleteByDocumentId: vi.fn(),
+        searchByVector: vi.fn().mockRejectedValue(new Error('hnsw down')),
+        searchByLexical: vi.fn().mockRejectedValue(new Error('tsvector down')),
         getByIds: vi.fn(),
         getByDocAndRange: vi.fn(),
         getByDocAndRanges: vi.fn().mockResolvedValue(new Map()),

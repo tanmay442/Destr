@@ -216,7 +216,12 @@ async function uploadPdfSync(
     result = await deps.runner.run(async (tx) => {
       const res = await ingestFile(
         { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
-        { ...deps, documents: tx.documents, chunks: tx.chunks },
+        {
+          ...deps,
+          documents: tx.documents,
+          chunks: tx.chunks,
+          runner: { run: (fn) => fn(tx) },
+        },
       );
       if (!res.ok) return res;
       await tx.documents.setStorageKey(res.value.documentId, key);

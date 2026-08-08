@@ -287,6 +287,11 @@ function createComposition() {
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
       reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
+    sweepStaleQueued: () =>
+      Queue.createQueuedSweeper({
+        listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),
+        failDocument: (id) => documentRepo.failDocument(id),
+      }).sweep(),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>

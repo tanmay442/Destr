@@ -21,6 +21,8 @@ function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
       list: vi.fn(),
       countChunksForDocuments: vi.fn().mockResolvedValue(new Map()),
       countChunksForAll: vi.fn().mockResolvedValue(0),
+      listStaleQueued: vi.fn().mockResolvedValue([]),
+      failDocument: vi.fn().mockResolvedValue(undefined),
     },
     chunks: {
       insertMany,
@@ -97,6 +99,8 @@ describe('ingestFile', () => {
         list: vi.fn(),
         countChunksForDocuments: vi.fn().mockResolvedValue(new Map()),
         countChunksForAll: vi.fn().mockResolvedValue(0),
+        listStaleQueued: vi.fn().mockResolvedValue([]),
+        failDocument: vi.fn().mockResolvedValue(undefined),
       },
       chunks: {
         insertMany,

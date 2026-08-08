@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, sql, inArray, isNull, and } from 'drizzle-orm';
+import { eq, desc, ilike, or, sql, inArray, isNull, and, lt } from 'drizzle-orm';
 import { db } from './client';
 import { VECTOR_DIM } from './schema-vector';
 import {
@@ -126,6 +126,18 @@ export async function updateDocumentIngestStatus(
   client: Client = db,
 ): Promise<void> {
   await client.update(documents).set({ ingestStatus: status }).where(eq(documents.id, id));
+}
+
+export async function listStaleQueuedDocuments(olderThan: Date, client: Client = db): Promise<number[]> {
+  const rows = await client
+    .select({ id: documents.id })
+    .from(documents)
+    .where(and(eq(documents.ingestStatus, 'queued'), isNull(documents.deletedAt), lt(documents.uploadedAt, olderThan)));
+  return rows.map((r) => r.id);
+}
+
+export async function failDocumentById(id: number, client: Client = db): Promise<void> {
+  await client.update(documents).set({ ingestStatus: 'failed' }).where(and(eq(documents.id, id), eq(documents.ingestStatus, 'queued')));
 }
 
 /** Conditional claim: flips `queued`→`ingesting` atomically; true iff a row was updated. */
@@ -813,15 +825,20 @@ export const ticketRepo = {
         limit 5000
       ),
       changes as (
-        select a.target_id as ticket_id, a.at as changed_at
+        select
+          a.target_id as ticket_id,
+          a.at as changed_at,
+          max(a.at) over (partition by a.target_id) as last_change
         from ${auditEvents} a
-        where a.kind = 'ticket' and a.action = 'status_change'
+        where a.kind = 'ticket'
+          and a.action = 'status_change'
+          and a.target_id in (select s.ticket_id from scoped s)
       ),
       firsts as (
         select
           s.ticket_id,
           s.created_at,
-          min(c.changed_at) as first_change,
+          min(case when s.status = 'closed' and c.changed_at = c.last_change then null else c.changed_at end) as first_change,
           max(c.changed_at) as last_change,
           bool_or(s.status = 'closed') as is_closed
         from scoped s
@@ -1075,6 +1092,8 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     list: (opts) => listDocuments(opts, client),
     countChunksForDocuments: (ids) => countChunksForDocuments(ids, client),
     countChunksForAll: () => countChunksForAll(client),
+    listStaleQueued: (olderThan) => listStaleQueuedDocuments(olderThan, client),
+    failDocument: (id) => failDocumentById(id, client),
   };
 }
 

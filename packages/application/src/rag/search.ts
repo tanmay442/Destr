@@ -238,14 +238,22 @@ export async function searchChunks(
       )
     : Promise.resolve(null);
 
-  let vectorRows: RetrievedChunkRow[];
+  let vectorRows: RetrievedChunkRow[] = [];
+  let vectorError: unknown;
   try {
     vectorRows = await vectorPromise;
   } catch (cause) {
-    return err(new ExternalServiceError('Vector search failed', cause));
+    vectorError = cause;
   }
 
   const lexicalResult = await lexicalPromise;
+  if (vectorError !== undefined) {
+    if (!runHybrid || lexicalResult === null || !lexicalResult.ok) {
+      return err(new ExternalServiceError('Vector search failed', vectorError));
+    }
+    logger.warn('Vector search failed; falling back to lexical-only', { error: String(vectorError) });
+    return capAndResolve(lexicalResult.rows, query, topN, opts, deps);
+  }
   if (lexicalResult === null) {
     return capAndResolve(vectorRows, query, topN, opts, deps);
   }

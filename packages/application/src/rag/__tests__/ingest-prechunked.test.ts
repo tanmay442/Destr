@@ -26,6 +26,8 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
       list: vi.fn(),
       countChunksForDocuments: vi.fn().mockResolvedValue(new Map()),
       countChunksForAll: vi.fn().mockResolvedValue(0),
+      listStaleQueued: vi.fn().mockResolvedValue([]),
+      failDocument: vi.fn().mockResolvedValue(undefined),
     },
     chunks: {
       insertMany,
@@ -143,6 +145,8 @@ describe('ingestPrechunked', () => {
         list: vi.fn(),
         countChunksForDocuments: vi.fn(),
         countChunksForAll: vi.fn(),
+        listStaleQueued: vi.fn().mockResolvedValue([]),
+        failDocument: vi.fn().mockResolvedValue(undefined),
       },
     });
     const result = await ingestPrechunked({ fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user' }, deps);
@@ -156,6 +160,15 @@ describe('ingestPrechunked', () => {
     const result = await ingestPrechunked({ fileName: 'empty.md', chunks: [], uploadedBy: 'user' }, deps);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toMatch(/No chunks/);
+  });
+
+  it('rejects more than 5000 segments before embedding anything', async () => {
+    const deps = makeDeps();
+    const tooMany = Array.from({ length: 5001 }, (_, i) => ({ content: `chunk ${i}` }));
+    const result = await ingestPrechunked({ fileName: 'huge.md', chunks: tooMany, uploadedBy: 'user' }, deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/maximum is 5000/);
+    expect(deps.embeddings.embedBatch).not.toHaveBeenCalled();
   });
 
   it('returns ExternalServiceError when embedding fails', async () => {

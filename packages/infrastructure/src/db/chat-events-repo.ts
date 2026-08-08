@@ -200,14 +200,14 @@ export class ChatEventBatcher implements ChatEventsRepo {
     since.setUTCDate(since.getUTCDate() - (Math.max(days, 1) - 1));
     const rows = await this.client
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${chatEvents.createdAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`to_char(date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`,
         total: sql<number>`count(*)::int`,
         uniqueUsers: sql<number>`count(distinct ${chatEvents.userId})::int`,
       })
       .from(chatEvents)
       .where(gte(chatEvents.createdAt, since))
-      .groupBy(sql`date_trunc('day', ${chatEvents.createdAt})`)
-      .orderBy(sql`date_trunc('day', ${chatEvents.createdAt})`);
+      .groupBy(sql`date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC')`)
+      .orderBy(sql`date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC')`);
     return rows.map((r) => ({ day: r.day, total: r.total, uniqueUsers: r.uniqueUsers }));
   }
 

@@ -8,7 +8,9 @@ import type {
 import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
-/** Sanitize a filename for use inside a blob-storage key. */
+const MAX_PRECHUNKED_CHUNKS = 5000;
+const MAX_PRECHUNKED_DELIMITER_LENGTH = 200;
+
 function safeBlobName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
@@ -49,6 +51,9 @@ export async function ingestPrechunked(
   const { fileName, chunks, uploadedBy, pdfBuffer, pdfFileName } = input;
   if (chunks.length === 0) {
     return err(new ValidationError(`No chunks parsed from ${fileName}`));
+  }
+  if (chunks.length > MAX_PRECHUNKED_CHUNKS) {
+    return err(new ValidationError(`${fileName} has ${chunks.length} segments; maximum is ${MAX_PRECHUNKED_CHUNKS}`));
   }
 
   // Dedup hash covers the markdown AND any companion PDF so re-uploading the
@@ -137,6 +142,9 @@ export async function uploadPrechunkedMarkdown(
   input: UploadPrechunkedMarkdownInput,
   deps: PrechunkedIngestDeps & { markdownParser: MarkdownParser },
 ): Promise<Result<IngestResult>> {
+  if (input.delimiter && input.delimiter.length > MAX_PRECHUNKED_DELIMITER_LENGTH) {
+    return err(new ValidationError(`Delimiter exceeds ${MAX_PRECHUNKED_DELIMITER_LENGTH} characters`));
+  }
   const parsed = deps.markdownParser.parseChunkedMarkdown(input.mdText, input.delimiter);
   return ingestPrechunked(
     {

@@ -36,8 +36,9 @@ describe('ticketRepo.getTicketResponseTimes', () => {
     expect(sql).toContain("kind = 'ticket'");
     expect(sql).toContain("action = 'status_change'");
     expect(sql).toContain('extract(epoch');
-    expect(sql).toContain('min(c.changed_at) as first_change');
+    expect(sql).toContain('as first_change');
     expect(sql).toContain('max(c.changed_at) as last_change');
+    expect(sql).toContain("a.target_id in (select s.ticket_id from scoped s)");
     expect(sql).toContain("at time zone 'utc') - f.created_at");
     expect(sql).toContain('extract(epoch from ((f.first_change');
     expect(sql).toContain('order by t.created_at desc');
