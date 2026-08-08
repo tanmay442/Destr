@@ -2,8 +2,8 @@ import type { ChunkingStrategy } from '@app/domain';
 import { makeDocumentChunk, chunkBySentences, isHeadingLine, cleanTextArtifacts } from '../shared';
 
 interface SplitOptions {
-  maxChunkSize?: number;
-  overlap?: number;
+  maxChunkSize?: number | undefined;
+  overlap?: number | undefined;
 }
 
 interface Block {

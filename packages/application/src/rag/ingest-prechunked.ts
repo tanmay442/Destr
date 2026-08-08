@@ -20,9 +20,9 @@ export interface PrechunkedIngestInput {
   chunks: ParsedChunk[];
   uploadedBy: string;
   /** Optional companion PDF; stored as the document blob for preview/download. */
-  pdfBuffer?: Buffer;
+  pdfBuffer?: Buffer | undefined;
   /** Blob filename for the PDF when it differs from `fileName`. */
-  pdfFileName?: string;
+  pdfFileName?: string | undefined;
 }
 
 export interface PrechunkedIngestDeps {
@@ -36,6 +36,8 @@ export interface PrechunkedIngestDeps {
   runner?: TransactionRunner;
   /** Optional Contextual-Chunk-Header summarizer. */
   summarizer?: DocSummarizer;
+  /** Override the CCH toggle. */
+  cchEnabled?: boolean;
 }
 
 /** Ingest pre-chunked Markdown. An optional companion PDF is stored as
@@ -65,7 +67,7 @@ export async function ingestPrechunked(
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;
-  if (deps.summarizer && CCH_ENABLED) {
+  if (deps.summarizer && (deps.cchEnabled ?? CCH_ENABLED)) {
     const ctx = await deps.summarizer.generateDocContext(
       chunks.map((c) => c.content).join('\n').slice(0, CCH_CONTEXT_CHARS),
     );
@@ -122,10 +124,10 @@ export interface UploadPrechunkedMarkdownInput {
   fileName: string;
   /** Raw markdown text to parse. */
   mdText: string;
-  delimiter?: string;
+  delimiter?: string | undefined;
   uploadedBy: string;
-  pdfBuffer?: Buffer;
-  pdfFileName?: string;
+  pdfBuffer?: Buffer | undefined;
+  pdfFileName?: string | undefined;
 }
 
 /**

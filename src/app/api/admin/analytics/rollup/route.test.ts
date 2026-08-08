@@ -29,7 +29,10 @@ afterEach(() => {
 });
 
 function req(headers?: Record<string, string>) {
-  return new Request('http://localhost/api/admin/analytics/rollup', { method: 'GET', headers });
+  return new Request('http://localhost/api/admin/analytics/rollup', {
+    method: 'GET',
+    ...(headers === undefined ? {} : { headers }),
+  });
 }
 
 describe('GET /api/admin/analytics/rollup', () => {

@@ -26,12 +26,14 @@ export interface IngestDeps {
   pdfParser: PdfParser;
   textSplitter: TextSplitter;
   /** Optional: when present, chunking uses the new strategy path instead of the legacy TextSplitter. */
-  contentParser?: ContentParser;
-  chunkingStrategy?: ChunkingStrategy;
+  contentParser?: ContentParser | undefined;
+  chunkingStrategy?: ChunkingStrategy | undefined;
   /** Optional Contextual-Chunk-Header summarizer. */
-  summarizer?: DocSummarizer;
+  summarizer?: DocSummarizer | undefined;
   /** Optional transaction runner used to make the upsert+replace-chunks sequence atomic. */
-  runner?: TransactionRunner;
+  runner?: TransactionRunner | undefined;
+  /** Override the CCH toggle. */
+  cchEnabled?: boolean | undefined;
 }
 
 export interface PreparedChunk {
@@ -39,24 +41,26 @@ export interface PreparedChunk {
   content: string;
   embedding: number[];
   chunkIndex: number;
-  page?: number | null;
-  sectionTitle?: string | null;
-  source?: string | null;
-  title?: string | null;
-  parentChunkId?: number | null;
-  kind?: 'parent' | 'child' | 'summary';
-  embeddingModel?: string | null;
-  contentHash?: string | null;
+  page?: number | null | undefined;
+  sectionTitle?: string | null | undefined;
+  source?: string | null | undefined;
+  title?: string | null | undefined;
+  parentChunkId?: number | null | undefined;
+  kind?: 'parent' | 'child' | 'summary' | undefined;
+  embeddingModel?: string | null | undefined;
+  contentHash?: string | null | undefined;
 }
 
 export interface ParseDeps {
   embeddings: EmbeddingService;
   pdfParser: PdfParser;
   textSplitter: TextSplitter;
-  contentParser?: ContentParser;
-  chunkingStrategy?: ChunkingStrategy;
+  contentParser?: ContentParser | undefined;
+  chunkingStrategy?: ChunkingStrategy | undefined;
   /** CCH summarizer. When present (and `CCH_ENABLED`), one title+summary per document. */
-  summarizer?: DocSummarizer;
+  summarizer?: DocSummarizer | undefined;
+  /** Override the CCH toggle. */
+  cchEnabled?: boolean | undefined;
 }
 
 /**
@@ -67,7 +71,7 @@ async function buildCchHeader(
   deps: ParseDeps,
   sourceText: string,
 ): Promise<{ header: string; title: string | null; summary: string | null }> {
-  if (!deps.summarizer || !CCH_ENABLED) {
+  if (!deps.summarizer || !(deps.cchEnabled ?? CCH_ENABLED)) {
     return { header: '', title: null, summary: null };
   }
   const ctx = await deps.summarizer.generateDocContext(sourceText.slice(0, CCH_CONTEXT_CHARS));
@@ -191,7 +195,7 @@ export async function parseAndEmbed(
 export async function writeChunks(
   documents: DocumentRepository,
   chunks: ChunkRepository,
-  input: { fileName: string; fileHash: string; uploadedBy: string; storageKey?: string | null },
+  input: { fileName: string; fileHash: string; uploadedBy: string; storageKey?: string | null | undefined },
   rows: PreparedChunk[],
 ): Promise<{ documentId: number }> {
   const row = await documents.insert({ fileName: input.fileName, fileHash: input.fileHash, uploadedBy: input.uploadedBy });

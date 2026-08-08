@@ -1,7 +1,7 @@
 import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, createUIMessageStream, type InferUIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { getComposition, type MyUIMessage, type Composition } from '@/composition';
+import { getComposition, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import { NextResponse, after } from 'next/server';
@@ -9,7 +9,7 @@ import type { ChatEventInput } from '@app/domain';
 import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, TRACE_ENABLED, CHAT_MAX_BODY_BYTES } from '@app/domain';
+import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import type { AppConfig } from '@app/domain/app-config';
 import { dedupeCitations } from '@/chat/dedupe-citations';
@@ -44,7 +44,7 @@ interface TurnMetrics {
 
 function buildChatTools(deps: {
   effectiveMode: 'agentic' | 'normal';
-  searchChunks: (query: string, opts: { limit?: number }) => ReturnType<Composition['searchChunks']>;
+  searchChunks: (query: string, opts: { limit?: number | undefined }) => ReturnType<Composition['searchChunks']>;
   agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
   capturedCitations: EmittedCitation[];
   createTicket: Composition['createTicket'];

@@ -5,7 +5,7 @@ import type {
   HallucinationGrader,
 } from '@app/domain';
 import { getChatModel } from './index';
-import { GRADE_MODEL } from '@app/domain';
+import { GRADE_MODEL } from '@app/infrastructure/config';
 import { retryOnTransient } from './retry';
 
 const GRADE_RETRY_ATTEMPTS = 3;

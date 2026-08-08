@@ -13,22 +13,23 @@
     "./pdf": "./src/pdf/index.ts",
     "./markdown": "./src/markdown/index.ts",
     "./chunking": "./src/chunking/index.ts",
-    "./storage": "./src/storage/blob-storage-factory.ts"
+    "./storage": "./src/storage/blob-storage-factory.ts",
+    "./config": "./src/config/env.ts"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.83",
-    "@ai-sdk/openai": "^3.0.73",
-    "@ai-sdk/provider": "^3.0.10",
+    "@ai-sdk/google": "^3.0.90",
+    "@ai-sdk/openai": "^3.0.82",
+    "@ai-sdk/provider": "^3.0.13",
     "@app/domain": "workspace:*",
     "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/s3-request-presigner": "^3.1080.0",
-    "@clerk/nextjs": "^7.5.6",
+    "@clerk/nextjs": "^7.5.15",
     "@langchain/textsplitters": "^1.0.1",
     "@neondatabase/serverless": "^0.10.4",
     "@upstash/qstash": "^2.11.1",
-    "ai": "^6.0.208",
+    "ai": "^6.0.221",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.13.0"
+    "pg": "^8.22.0"
   },
   "optionalDependencies": {
     "@xenova/transformers": "^2.17.2"

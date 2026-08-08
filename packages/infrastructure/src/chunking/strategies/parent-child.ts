@@ -15,9 +15,9 @@ const DEFAULT_OVERLAP = 130;
 const SECTION_MERGE_MAX = 80;
 
 export interface ParentChildOptions {
-  parentSize?: number;
-  childSize?: number;
-  overlap?: number;
+  parentSize?: number | undefined;
+  childSize?: number | undefined;
+  overlap?: number | undefined;
 }
 
 /** Snap a character index back to the nearest word boundary. */

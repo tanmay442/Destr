@@ -1,25 +1,39 @@
 name: Eval
 
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - 'packages/application/src/rag/**'
-      - 'packages/infrastructure/src/chunking/**'
-      - 'scripts/eval/**'
-      - '.github/workflows/eval.yml'
+  schedule:
+    - cron: '0 3 * * 1'
   workflow_dispatch:
+    inputs:
+      run_real:
+        description: Run the keyed retrieval evaluation
+        required: true
+        default: true
+        type: boolean
 
-# Serialize per-ref runs so concurrent jobs never race the same test branch.
+# Serialize runs per ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   eval:
-    name: RAG Eval (mock)
+    if: github.event_name == 'schedule' || inputs.run_real == true
+    name: RAG Eval (real)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      EVAL_REAL: '1'
+      EVAL_FAITHFULNESS_THRESHOLD: '0.7'
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EMBEDDING_PROVIDER: ${{ secrets.EMBEDDING_PROVIDER }}
+      CHAT_PROVIDER: ${{ secrets.CHAT_PROVIDER }}
+      AI_STUDIO_KEY: ${{ secrets.AI_STUDIO_KEY }}
+      OPENAI_EMBEDDING_API_KEY: ${{ secrets.OPENAI_EMBEDDING_API_KEY }}
+      OPENAI_EMBEDDING_BASE_URL: ${{ secrets.OPENAI_EMBEDDING_BASE_URL }}
+      CUSTOM_LLM_API_KEY: ${{ secrets.CUSTOM_LLM_API_KEY }}
+      CUSTOM_LLM_BASE_URL: ${{ secrets.CUSTOM_LLM_BASE_URL }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
 
     steps:
       - name: Checkout

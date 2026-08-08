@@ -1,6 +1,11 @@
-import { requireAdminRoute, respond } from '@/composition';
+import {
+  requireAdminRoute,
+  respond,
+  MD_CHUNK_DELIMITER,
+  UPLOAD_CHUNKED_MAX_MD_BYTES,
+  UPLOAD_CHUNKED_MAX_PDF_BYTES,
+} from '@/composition';
 import { ValidationError } from '@app/domain';
-import { MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/domain';
 
 export const runtime = 'nodejs';
 

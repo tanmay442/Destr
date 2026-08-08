@@ -8,7 +8,7 @@
  */
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import type { TextSplitter } from '@app/domain';
-import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '@app/domain';
+import { INGEST_CHUNK_SIZE, INGEST_CHUNK_OVERLAP } from '@app/infrastructure/config';
 
 const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: INGEST_CHUNK_SIZE,

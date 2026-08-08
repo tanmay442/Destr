@@ -6,13 +6,13 @@ import { sanitizePagination } from '../service-result';
 
 export async function listAudit(
   input: {
-    kind?: AuditKind;
-    action?: string;
-    actor?: string;
-    from?: Date;
-    to?: Date;
-    documentId?: number;
-    ticketId?: string;
+    kind?: AuditKind | undefined;
+    action?: string | undefined;
+    actor?: string | undefined;
+    from?: Date | undefined;
+    to?: Date | undefined;
+    documentId?: number | undefined;
+    ticketId?: string | undefined;
     limit?: number;
     offset?: number;
     actorId: string;

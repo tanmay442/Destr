@@ -1,4 +1,5 @@
 import type { AppConfig } from '@app/domain/app-config';
+import { SIMILARITY_THRESHOLD } from '@app/domain';
 import {
   PARENT_CHUNK_SIZE,
   CHILD_CHUNK_SIZE,
@@ -7,14 +8,13 @@ import {
   AGENT_STEP_BUDGET,
   AGENTIC_RETRIEVE_LIMIT,
   AGENTIC_MAX_RETRIES,
-  SIMILARITY_THRESHOLD,
   HYBRID_ENABLED,
   RERANKER_PROVIDER,
   GRADE_MODEL,
   ANSWER_CACHE_ENABLED,
   ANSWER_CACHE_TTL_SEC,
   AGENTIC_ENABLED,
-} from '@app/domain';
+} from '@app/infrastructure/config';
 
 // Runtime configuration for this deployment of the RAG Knowledge Agent.
 //

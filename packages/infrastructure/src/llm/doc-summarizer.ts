@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
 import type { DocSummarizer } from '@app/domain';
 import { getChatModel } from './index';
-import { CCH_MODEL, CCH_CONTEXT_CHARS } from '@app/domain';
+import { CCH_CONTEXT_CHARS } from '@app/domain';
+import { CCH_MODEL } from '@app/infrastructure/config';
 
 /** Cap on the model's output. A title + 1-3 sentence summary is short. */
 const MAX_OUTPUT_TOKENS = 300;

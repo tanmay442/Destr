@@ -346,7 +346,7 @@ async function verifyRag(): Promise<void> {
 }
 
 
-function printNextSteps(repoRoot: string, config: AppConfig): void {
+function printNextSteps(config: AppConfig): void {
   banner('Setup complete — next steps');
   console.log();
   console.log('  \x1b[1m1.\x1b[0m  Start the dev server:');
@@ -446,7 +446,7 @@ export async function runSetup(repoRoot: string): Promise<void> {
 
   await verifyRag();
 
-  printNextSteps(repoRoot, config);
+  printNextSteps(config);
 }
 
 

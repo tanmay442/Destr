@@ -1,7 +1,8 @@
 import { promises as fs, createReadStream } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
-import { BLOB_GET_MAX_BYTES, PayloadTooLargeError, type BlobStorage } from '@app/domain';
+import { PayloadTooLargeError, type BlobStorage } from '@app/domain';
+import { BLOB_GET_MAX_BYTES } from '@app/infrastructure/config';
 
 export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTES): BlobStorage {
   const baseDir = resolve(process.env.BLOB_FS_DIR ?? './.blobs');

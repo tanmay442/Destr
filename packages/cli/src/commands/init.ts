@@ -107,7 +107,7 @@ export interface InitResult {
   copied: string[];
   skipped: Array<{ file: string; reason: string }>;
   ranSeed: boolean;
-  seedReason?: string;
+  seedReason?: string | undefined;
 }
 
 async function promptOrg(rl: Interface, config: AppConfig): Promise<void> {
@@ -195,7 +195,7 @@ async function promptBranding(rl: Interface, config: AppConfig): Promise<void> {
   };
 }
 
-async function promptSeed(rl: Interface, config: AppConfig, repoRoot: string): Promise<string> {
+async function promptSeed(rl: Interface, repoRoot: string): Promise<string> {
   banner('Seed PDFs');
   const sourceDir = await ask(
     rl,
@@ -222,7 +222,7 @@ export async function runConfigPrompts(
   await promptCustomInstructions(rl, config);
   await promptAdmin(rl, config);
   await promptBranding(rl, config);
-  return promptSeed(rl, config, repoRoot);
+  return promptSeed(rl, repoRoot);
 }
 
 export function validateConfig(

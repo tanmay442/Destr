@@ -22,11 +22,11 @@ export function AuditFilterForm({
   from,
   to,
 }: {
-  kind?: string;
-  action?: string;
-  actor?: string;
-  from?: string;
-  to?: string;
+  kind?: string | undefined;
+  action?: string | undefined;
+  actor?: string | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
 }) {
   const [kindValue, setKindValue] = useState(kind ?? '');
   const [prevKind, setPrevKind] = useState(kind);

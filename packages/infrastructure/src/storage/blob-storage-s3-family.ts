@@ -6,7 +6,8 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { BLOB_GET_MAX_BYTES, PayloadTooLargeError, type BlobStorage } from '@app/domain';
+import { PayloadTooLargeError, type BlobStorage } from '@app/domain';
+import { BLOB_GET_MAX_BYTES } from '@app/infrastructure/config';
 
 export interface S3FamilyConfig {
   bucket: string;

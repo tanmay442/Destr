@@ -42,8 +42,8 @@ async function ensureDocument(
 }
 
 interface ListDocumentsInput {
-  search?: string;
-  includeDeleted?: boolean;
+  search?: string | undefined;
+  includeDeleted?: boolean | undefined;
   limit?: number;
   offset?: number;
 }
@@ -340,7 +340,7 @@ export async function restoreDocument(
 export async function getDocumentById(
   documentId: number,
   deps: { documents: DocumentRepository },
-  opts: { includeDeleted?: boolean } = {},
+  opts: { includeDeleted?: boolean | undefined } = {},
 ): Promise<Result<{ document: import('@app/domain').DocumentRow | null }>> {
   return serviceResult(
     () => deps.documents.findById(documentId, opts).then((doc) => ({ document: doc })),

@@ -4,8 +4,6 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 export default function AdminError({
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  error,
   reset,
 }: {
   error: Error & { digest?: string };

@@ -112,6 +112,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
 vi.mock('@/composition', () => ({
   getComposition: () => compositionMock as unknown as Composition,
   appConfig: appConfigMock,
+  TRACE_ENABLED: false,
 }));
 
 vi.mock('ai', async () => {
