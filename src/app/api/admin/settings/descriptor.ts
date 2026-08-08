@@ -11,19 +11,19 @@ export type FieldSource = 'default' | 'db' | 'env-locked';
 
 export interface FieldIntrospection {
   type: 'string' | 'number' | 'boolean' | 'enum' | 'array' | 'object';
-  options?: string[];
+  options?: string[] | undefined;
 }
 
 export interface FieldDescriptor extends Partial<FieldMeta> {
   key: string;
   type: FieldIntrospection['type'];
-  options?: string[];
+  options?: string[] | undefined;
   default: unknown;
   current: unknown;
   source: FieldSource;
-  readOnly?: boolean;
+  readOnly?: boolean | undefined;
   available: boolean;
-  unavailableReason?: string;
+  unavailableReason?: string | undefined;
 }
 
 interface UnwrapResult {
@@ -102,7 +102,7 @@ export interface DescriptorContext {
   cfg: AppConfig;
   overrides: Partial<AppConfig>;
   lockedPaths: readonly string[];
-  rerankers: Map<string, { ok: boolean; reason?: string }>;
+  rerankers: Map<string, { ok: boolean; reason?: string | undefined }>;
   embeddingModel: string;
 }
 
@@ -110,7 +110,7 @@ function availability(
   path: string,
   current: unknown,
   rerankers: DescriptorContext['rerankers'],
-): { available: boolean; unavailableReason?: string } {
+): { available: boolean; unavailableReason?: string | undefined } {
   if (path === 'rerankerProvider' && typeof current === 'string') {
     const status = rerankers.get(current);
     if (status && !status.ok) return { available: false, unavailableReason: status.reason };

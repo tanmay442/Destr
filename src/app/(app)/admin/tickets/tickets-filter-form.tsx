@@ -24,9 +24,9 @@ export function TicketsFilterForm({
 }: {
   statuses: readonly string[];
   users: { clerkUserId: string; name: string | null; email: string }[];
-  status?: string;
-  assignee?: string;
-  search?: string;
+  status?: string | undefined;
+  assignee?: string | undefined;
+  search?: string | undefined;
 }) {
   const [statusValue, setStatusValue] = useState(status ?? '');
   const [assigneeValue, setAssigneeValue] = useState(assignee ?? '');

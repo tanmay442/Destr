@@ -7,7 +7,7 @@ import { logUserRoleChange } from './audit';
 import { safeAudit } from '../audit-reliability';
 
 export async function listUsers(
-  input: { search?: string; limit?: number; offset?: number },
+  input: { search?: string | undefined; limit?: number; offset?: number },
   deps: { users: UserRepository },
 ): Promise<Result<{ users: Array<{ clerkUserId: string; email: string; name: string | null; role: string; lastSeenAt: Date | null; createdAt: Date }>; total: number }>> {
   try {

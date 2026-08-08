@@ -15,12 +15,12 @@ export type ChunkingStrategyName =
 
 export interface ChunkingStrategyOptions {
   embeddings: EmbeddingService;
-  modelId?: string;
+  modelId?: string | undefined;
   /** Parent-child strategy tunables. */
-  parentSize?: number;
-  childSize?: number;
-  overlap?: number;
-  maxChunkSize?: number;
+  parentSize?: number | undefined;
+  childSize?: number | undefined;
+  overlap?: number | undefined;
+  maxChunkSize?: number | undefined;
 }
 
 export function getChunkingStrategy(

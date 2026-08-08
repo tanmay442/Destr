@@ -1,7 +1,7 @@
 export interface EventMetaInput {
-  rewritten?: boolean;
-  documentIds?: number[];
-  ticketId?: string | null;
+  rewritten?: boolean | undefined;
+  documentIds?: number[] | undefined;
+  ticketId?: string | null | undefined;
 }
 
 export function buildEventMeta(input: EventMetaInput): Record<string, unknown> {

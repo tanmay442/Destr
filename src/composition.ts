@@ -19,12 +19,17 @@ import {
   type AgenticDeps,
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking, answerCacheKey } from '@app/infrastructure';
+import {
+  RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
+  OUT_OF_DOMAIN_THRESHOLD, CCH_ENABLED,
+  LOG_LEVEL,
+} from '@app/infrastructure/config';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
+import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
 import type { MyUIMessage } from '@/chat/types';
 import type { DocumentRow } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
@@ -34,6 +39,8 @@ import { getRuntimeConfig } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LIST_LIMIT } from '@app/domain';
+
+configureLogger(LOG_LEVEL);
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -120,6 +127,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   contentParser: Pdf.unpdfParser,
   runner: Db.transactionRunner,
   summarizer: Llm.docSummarizer,
+  cchEnabled: CCH_ENABLED,
 };
 
 function buildChunkingStrategy(cfg: AppConfig) {
@@ -134,8 +142,8 @@ async function resolveIngestDeps(): Promise<IngestDeps> {
   const cfg = await getRuntimeConfig();
   return { ...ingestDeps, chunkingStrategy: buildChunkingStrategy(cfg) };
 }
-export type RerankerStatus = { ok: boolean; reason?: string };
-const rerankerRegistry = new Map<string, { reranker?: Reranker; status: RerankerStatus }>([
+export type RerankerStatus = { ok: boolean; reason?: string | undefined };
+const rerankerRegistry = new Map<string, { reranker?: Reranker | undefined; status: RerankerStatus }>([
   ['cosine', { reranker: undefined, status: { ok: true } }],
   [
     'cohere',
@@ -172,6 +180,8 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     hallucinationGrader: graders.hallucinationGrader!,
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
+    stepBudget: cfg.agentStepBudget,
+    outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
   };
 }
 const rateLimiter: RateLimiter =
@@ -211,6 +221,10 @@ function createComposition() {
           hybridEnabled: cfg.hybridEnabled,
           mode: cfg.parentChildMode,
           parentChildWindow: cfg.parentChildWindow,
+          rrfK: o.rrfK ?? RRF_K,
+          lexicalWeight: o.lexicalWeight ?? LEXICAL_WEIGHT,
+          rerankTopN: o.rerankTopN ?? RERANK_TOP_N,
+          candidateLimit: o.candidateLimit ?? CANDIDATE_POOL,
         },
         getSearchDeps(cfg),
       ),
@@ -244,7 +258,7 @@ function createComposition() {
       bind(updateTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
       bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
-    getDocumentById: (id: number, opts?: { includeDeleted?: boolean }) => getDocumentById(id, { documents: documentRepo }, opts),
+    getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
     replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
@@ -252,10 +266,10 @@ function createComposition() {
     uploadChunkedMarkdown: (input: {
       fileName: string;
       mdText: string;
-      delimiter?: string;
+      delimiter?: string | undefined;
       uploadedBy: string;
-      pdfBuffer?: Buffer;
-      pdfFileName?: string;
+      pdfBuffer?: Buffer | undefined;
+      pdfFileName?: string | undefined;
     }) =>
       bind(uploadPrechunkedMarkdown, input, {
         documents: documentRepo,
@@ -266,6 +280,7 @@ function createComposition() {
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
         summarizer: Llm.docSummarizer,
+        cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
@@ -304,6 +319,7 @@ function createComposition() {
 export { appConfig, isTicketStatus, TICKET_STATUSES, type MyUIMessage };
 export { requireAdmin, requireSession, getAppSession, ForbiddenError, unwrap };
 export { respond, respondResult };
+export { TRACE_ENABLED, MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/infrastructure/config';
 
 
 export type Composition = ReturnType<typeof createComposition>;

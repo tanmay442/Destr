@@ -65,18 +65,12 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
   });
 
   it('skips the header when CCH_ENABLED=false even if a summarizer exists', async () => {
-    // CCH_ENABLED is a frozen const read at module load, so re-import the module
-    // with the env set first to exercise the disabled path.
-    vi.stubEnv('CCH_ENABLED', 'false');
-    vi.resetModules();
-    const { parseAndEmbed: parseAndEmbedFresh } = await import('../ingest');
-
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),
     };
-    const deps = makeParseDeps({ summarizer });
+    const deps = makeParseDeps({ summarizer, cchEnabled: false });
 
-    const result = await parseAndEmbedFresh(
+    const result = await parseAndEmbed(
       { fileName: 'd.pdf', buffer: Buffer.from('x') },
       deps,
     );
@@ -86,8 +80,6 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(summarizer.generateDocContext).not.toHaveBeenCalled();
     expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(['Alpha text.', 'Beta text.']);
     expect(result.value.rows[0]!.title).toBeNull();
-    vi.unstubAllEnvs();
-    vi.resetModules();
   });
 
   it('stamps title metadata even when the summarizer returns only a summary (no header)', async () => {
@@ -108,7 +100,7 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(result.value.rows[0]!.title).toBeNull();
   });
 
-  it('stores a zero-vector placeholder for parent blocks and skips their embedding call (S5 Option C)', async () => {
+  it('stores a zero-vector placeholder for parent blocks and skips their embedding call', async () => {
     const contentParser: ContentParser = {
       extractPages: vi.fn().mockResolvedValue([{ page: 1, text: 'Parent block body. Child one. Child two.' }]),
       extractText: vi.fn(),
@@ -179,4 +171,3 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     ]);
   });
 });
-

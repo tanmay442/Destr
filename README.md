@@ -23,6 +23,12 @@ That's it. The defaults in `.env.example` boot against the Docker
 Postgres with Ollama for embeddings and chat — no external API keys
 needed for local development.
 
+> **Note:** The Docker Postgres uses password `ragagent_local_dev`
+> (set in `docker-compose.yml`). If you already have a local Postgres
+> volume from before that change, it keeps the old `postgres` password
+> — recreate it with `docker compose down -v && docker compose up -d db`
+> so the `DATABASE_URL` in `.env.example` matches.
+
 > **Note:** You still need Clerk keys for auth (`CLERK_SECRET_KEY` and
 > `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`). Copy `.env.example` to
 > `.env.local` and add them. Without Clerk, the app boots but you
@@ -46,7 +52,7 @@ pnpm dev
 2. Import the repo in Vercel.
 3. Add environment variables from `.env.example` — see the
    "Getting your API keys" section below for where to get each one.
-4. Deploy. `pnpm build` runs migrations then builds, unless `NEXT_SKIP_MIGRATIONS=1` is set (CI sets this and migrates in a separate, `main`-only step).
+4. Deploy. `pnpm build` runs migrations then builds locally. Vercel runs migrations only for production deployments.
 
 > **Reranking on Vercel:** `RERANKER_PROVIDER` is a **3-way feature flag**
 > (`cosine` | `local` | `cohere`). **Default is `cosine`** — the original
@@ -144,7 +150,7 @@ for detailed sign-up links and per-service walkthroughs.
   `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
   `Strict-Transport-Security` (HSTS), `Permissions-Policy`, a
   `Content-Security-Policy` header, and disables the `X-Powered-By`
-  header. Server actions have a 4 MB `bodySizeLimit`.
+   header. Server actions have a 20 MB `bodySizeLimit`, matching the upload action cap.
 
 ### Admin console
 
@@ -221,7 +227,7 @@ for detailed sign-up links and per-service walkthroughs.
   lock hint. Saving opens a diff preview (old → new) of only changed fields;
   the save is optimistic-concurrency-aware (409 → re-apply) and is itself
   audited. The system-prompt preview is rendered read-only so an admin cannot
-  override guardrail blocks. `INGEST_CHUNK_SIZE` / `INGEST_CHUNK_OVERLAP`
+  override guardrail blocks. `INGEST_CHUNK_SIZE`
   remain env-driven and are shown as a deploy-time note (no UI control).
   **Re-ingest All** (`POST /api/admin/reingest`) re-embeds every document
   under the current config.
@@ -257,7 +263,7 @@ paths like `agentPersona.tone` both work). Good candidates to pin are
 operational knobs you never want drifted via the UI — e.g. `retrievalMode`,
 `agentStepBudget`, `rerankerProvider`, `similarityThreshold`. Persona, prompt,
 retrieval knobs, and chunking-for-new-uploads are otherwise runtime-editable;
-`INGEST_CHUNK_SIZE` / `INGEST_CHUNK_OVERLAP` stay env-driven (no UI control).
+`INGEST_CHUNK_SIZE` stays env-driven (no UI control); overlap is derived from it.
 
 ### Data model
 
@@ -294,8 +300,8 @@ also backed by a sorted set); the call sites do not need to change.
 
 | File | Purpose |
 | --- | --- |
-| `@app/domain` (`packages/domain/src/constants.ts`) | Centralised business-logic constants (rate limits, thresholds, batch sizes). Single source of truth — root `config/constants.ts` re-export removed (M35). |
-| `src/lib/sanitize.ts` | `escapeHtml()` and `sanitizeText()` for user-supplied free-text fields |
+| `@app/domain` (`packages/domain/src/constants.ts`) | Centralised business-logic constants (rate limits, thresholds, batch sizes). Single source of truth; the former root re-export was removed (M35). |
+| `src/lib/sanitize.ts` | `sanitizeText()` for user-supplied free-text fields |
 | `src/lib/logger.ts` | Lightweight structured JSON logger with `LOG_LEVEL` env gate (replace with pino for richer features) |
 | `src/lib/http.ts` | `respond()`, `respondResult()`, `toSafeError()`, `toActionResult()`, and `isActionError()` for consistent error mapping |
 
@@ -305,20 +311,20 @@ also backed by a sorted set); the call sites do not need to change.
 | --- | --- |
 | `pnpm configure` | One-command interactive setup wizard (prompts for env vars, migrates DB, seeds docs, runs smoke test) |
 | `pnpm dev` | Run Next.js in dev mode |
-| `pnpm build` | Run migrations then production build (set `NEXT_SKIP_MIGRATIONS=1` to build without migrating) |
+| `pnpm build` | Run migrations then production build |
 | `pnpm start` | Run the production build |
 | `pnpm lint` | ESLint |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | Vitest unit + integration suite |
 | `pnpm test:ui` | Vitest with the interactive UI |
-| `pnpm test:ci` | Provision a local test DB via `scripts/setup-test-db.ts` + run vitest, tearing the DB down after. Neon branch provisioning is attempted only when `NEON_API_KEY`/`NEON_PROJECT_ID` are present; otherwise the suite runs against whatever `DATABASE_URL` points to. |
+| `pnpm test:ci` | Provision a test DB via `scripts/setup-test-db.ts` + run Vitest, tearing the DB down after. Neon branch provisioning is attempted only when `NEON_API_KEY`/`NEON_PROJECT_ID` are present. |
 | `pnpm db:push` | Apply the Drizzle schema to the configured DB (interactive) |
 | `pnpm db:generate` | Generate SQL migrations from `packages/infrastructure/src/db/schema.ts` |
 | `pnpm db:studio` | Drizzle Studio |
 | `pnpm db:migrate` | Run Drizzle migrations (`tsx scripts/migrate.ts`) |
 | `pnpm dev:db` | Start the local Docker Postgres (`docker compose up -d db`) |
 | `pnpm dev:ollama` | Start the local Ollama container (`docker compose --profile ollama up -d ollama`) |
-| `pnpm eval` | Run the Session-10 evaluation harness (`scripts/eval/run.ts`) over the 20-question golden dataset (`scripts/eval/golden.ts`). Mock mode is CI-safe (no keys); `EVAL_REAL=1` grades against a keyed provider. CI runs it via `.github/workflows/eval.yml` on PRs that touch retrieval code |
+| `pnpm eval` | Run the evaluation harness (`scripts/eval/run.ts`) over the golden dataset (`scripts/eval/golden.ts`). Mock mode is local-only; `EVAL_REAL=1` grades against keyed providers in scheduled or manually dispatched CI runs. |
 | `pnpm seed` | Seed the configured DB from `./documents/` (`tsx packages/cli/src/index.ts seed`) |
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm cli` | Run the `rag-agent` CLI dispatcher (`--help` for usage) |

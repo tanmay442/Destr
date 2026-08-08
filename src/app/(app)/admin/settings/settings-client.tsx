@@ -927,9 +927,9 @@ function FieldControl({
           <Slider
             id={id}
             className="flex-1"
-            min={field.min}
-            max={field.max}
-            step={field.step}
+            {...(field.min === undefined ? {} : { min: field.min })}
+            {...(field.max === undefined ? {} : { max: field.max })}
+            {...(field.step === undefined ? {} : { step: field.step })}
             disabled={disabled}
             value={[
               typeof value === 'number' && Number.isFinite(value)

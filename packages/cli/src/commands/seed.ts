@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { PDF_PARSE_MAX_BYTES } from '@app/domain';
+import { PDF_PARSE_MAX_BYTES } from '@app/infrastructure/config';
 import { createBlobStorage } from '@app/infrastructure/storage';
 import { warn, getRepoRoot } from './common';
 import { buildIngestDeps } from './deps';
@@ -8,8 +8,8 @@ import { isMainModule } from '../is-main-module';
 
 export interface SeedParseResult {
   dir: string;
-  userId?: string;
-  yes?: boolean;
+  userId?: string | undefined;
+  yes?: boolean | undefined;
 }
 
 export function parseSeedArgs(argv: string[]): SeedParseResult {
@@ -42,10 +42,10 @@ export function parseSeedArgs(argv: string[]): SeedParseResult {
 }
 
 export interface SeedOptions {
-  userId?: string;
-  fixturesDir?: string;
-  yes?: boolean;
-  skipEnvCheck?: boolean;
+  userId?: string | undefined;
+  fixturesDir?: string | undefined;
+  yes?: boolean | undefined;
+  skipEnvCheck?: boolean | undefined;
   ingest?: (input: { fileName: string; buffer: Buffer; uploadedBy: string }) => Promise<{
     documentId: number;
     chunks: number;
@@ -190,4 +190,3 @@ if (isMainModule()) {
       process.exit(1);
     });
 }
-

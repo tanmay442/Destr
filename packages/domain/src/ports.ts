@@ -40,8 +40,8 @@ export interface UserRow {
 
 
 export interface DocumentRepository {
-  findByName(fileName: string, opts?: { includeDeleted?: boolean }): Promise<DocumentRow | null>;
-  findById(id: number, opts?: { includeDeleted?: boolean }): Promise<DocumentRow | null>;
+  findByName(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
+  findById(id: number, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   setStorageKey(id: number, key: string): Promise<void>;
   updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
   /** Atomically flip `queued`→`ingesting`; returns true iff this caller won the claim. */
@@ -56,8 +56,8 @@ export interface DocumentRepository {
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
   restore(id: number): Promise<DocumentRow | null>;
   list(opts: {
-    search?: string;
-    includeDeleted?: boolean;
+    search?: string | undefined;
+    includeDeleted?: boolean | undefined;
     limit: number;
     offset: number;
   }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number }>;
@@ -82,19 +82,19 @@ export interface MarkdownParser {
 export interface DocumentChunk {
   content: string;
   chunkIndex: number;
-  page?: number | null;
-  sectionTitle?: string | null;
-  source?: string | null;
-  title?: string | null;
-  summary?: string | null;
+  page?: number | null | undefined;
+  sectionTitle?: string | null | undefined;
+  source?: string | null | undefined;
+  title?: string | null | undefined;
+  summary?: string | null | undefined;
   /** Contextual-Chunk-Header text embedded alongside `content`; excluded from stored content. */
-  embeddingPrefix?: string;
-  parentChunkId?: number | null;
-  sourceChunkId?: number | null;
+  embeddingPrefix?: string | undefined;
+  parentChunkId?: number | null | undefined;
+  sourceChunkId?: number | null | undefined;
   /** Kind of chunk: `parent` (large context block), `child` (embedded for retrieval), `summary` (LLM-generated). */
-  kind?: 'parent' | 'child' | 'summary';
-  embeddingModel?: string | null;
-  contentHash?: string | null;
+  kind?: 'parent' | 'child' | 'summary' | undefined;
+  embeddingModel?: string | null | undefined;
+  contentHash?: string | null | undefined;
 }
 
 /** Shape returned by vector/lookup queries: provenance + similarity. */
@@ -151,14 +151,14 @@ export interface ChunkRepository {
       content: string;
       embedding: number[];
       chunkIndex?: number;
-      page?: number | null;
-      sectionTitle?: string | null;
-      source?: string | null;
-      title?: string | null;
-      parentChunkId?: number | null;
-      kind?: 'parent' | 'child' | 'summary';
-      embeddingModel?: string | null;
-      contentHash?: string | null;
+      page?: number | null | undefined;
+      sectionTitle?: string | null | undefined;
+      source?: string | null | undefined;
+      title?: string | null | undefined;
+      parentChunkId?: number | null | undefined;
+      kind?: 'parent' | 'child' | 'summary' | undefined;
+      embeddingModel?: string | null | undefined;
+      contentHash?: string | null | undefined;
     }>,
   ): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
@@ -173,9 +173,9 @@ export interface TicketRepository {
   findByTicketId(ticketId: string): Promise<TicketRow | null>;
   list(
     opts: {
-      status?: 'created' | 'in_progress' | 'closed';
-      assignee?: string | null;
-      search?: string;
+      status?: 'created' | 'in_progress' | 'closed' | undefined;
+      assignee?: string | null | undefined;
+      search?: string | undefined;
       limit: number;
       offset: number;
     },
@@ -211,7 +211,7 @@ export interface UserRepository {
   setRole(clerkUserId: string, role: 'admin' | 'user'): Promise<UserRow | null>;
   touchLastSeen(clerkUserId: string): Promise<void>;
   list(opts: {
-    search?: string;
+    search?: string | undefined;
     limit: number;
     offset: number;
   }): Promise<{ rows: UserRow[]; total: number }>;
@@ -253,13 +253,13 @@ export interface AuditEventRecord {
 }
 
 export interface AuditListFilter {
-  kind?: AuditKind;
-  action?: string;
-  actorId?: string;
-  from?: Date;
-  to?: Date;
-  documentId?: number;
-  ticketId?: string;
+  kind?: AuditKind | undefined;
+  action?: string | undefined;
+  actorId?: string | undefined;
+  from?: Date | undefined;
+  to?: Date | undefined;
+  documentId?: number | undefined;
+  ticketId?: string | undefined;
   limit: number;
   offset: number;
 }
@@ -319,8 +319,8 @@ export interface ChatEventInput {
 }
 
 export interface ChatEventRange {
-  from?: Date;
-  to?: Date;
+  from?: Date | undefined;
+  to?: Date | undefined;
 }
 
 /** Aggregate per-turn metrics for the analytics dashboard. */

@@ -36,6 +36,6 @@ export function emitCitations(
   }));
 }
 
-export function citationDocumentIds(citations: Array<{ documentId?: number | null }>): number[] {
+export function citationDocumentIds(citations: Array<{ documentId?: number | null | undefined }>): number[] {
   return [...new Set(citations.map((c) => c.documentId).filter((id): id is number => typeof id === 'number' && id > 0))];
 }

@@ -1,17 +1,17 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MD_CHUNK_DELIMITER } from '@app/domain';
+import { MD_CHUNK_DELIMITER } from '@app/infrastructure/config';
 import { markdownParser } from '@app/infrastructure/markdown';
 import { warn } from './common';
 import { buildUploadDeps } from './deps';
 
 export interface UploadParseResult {
-  md?: string;
-  pdf?: string;
-  name?: string;
+  md?: string | undefined;
+  pdf?: string | undefined;
+  name?: string | undefined;
   user: string;
-  delimiter?: string;
+  delimiter?: string | undefined;
   dryRun: boolean;
 }
 
@@ -57,19 +57,19 @@ export function parseUploadArgs(argv: string[]): UploadParseResult {
 }
 
 export interface UploadOptions {
-  md?: string;
-  pdf?: string;
-  name?: string;
-  user?: string;
-  delimiter?: string;
-  dryRun?: boolean;
-  fixturesDir?: string;
+  md?: string | undefined;
+  pdf?: string | undefined;
+  name?: string | undefined;
+  user?: string | undefined;
+  delimiter?: string | undefined;
+  dryRun?: boolean | undefined;
+  fixturesDir?: string | undefined;
   upload?: (input: {
     fileName: string;
     mdText: string;
-    delimiter?: string;
+    delimiter?: string | undefined;
     uploadedBy: string;
-    pdfBuffer?: Buffer;
+    pdfBuffer?: Buffer | undefined;
   }) => Promise<{ documentId: number; chunks: number; status: 'inserted' | 'updated' | 'unchanged' }>;
   storeBlob?: (documentId: number, buffer: Buffer, fileName: string) => Promise<void>;
 }
@@ -109,7 +109,7 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
 
   const uploadFn =
     opts.upload ??
-    (async (input: { fileName: string; mdText: string; delimiter?: string; uploadedBy: string; pdfBuffer?: Buffer }) => {
+    (async (input: { fileName: string; mdText: string; delimiter?: string | undefined; uploadedBy: string; pdfBuffer?: Buffer | undefined }) => {
       const { uploadPrechunkedMarkdown } = await import('@app/application/rag/ingest-prechunked');
       const deps = await buildUploadDeps();
       const r = await uploadPrechunkedMarkdown(

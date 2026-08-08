@@ -26,7 +26,7 @@ export interface ChatAnalytics extends ChatEventMetrics {
 }
 
 export async function getChatAnalytics(
-  input: { actorId: string; range?: ChatEventRange; usageDays?: number },
+  input: { actorId: string; range?: ChatEventRange | undefined; usageDays?: number | undefined },
   deps: { users: UserRepository; chatEvents: ChatEventsRepo },
 ): Promise<Result<ChatAnalytics>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -80,7 +80,7 @@ export interface AnalyticsTrends {
 }
 
 export async function getAnalyticsTrends(
-  input: { actorId: string; days?: number },
+  input: { actorId: string; days?: number | undefined },
   deps: { users: UserRepository; chatEvents: ChatEventsRepo },
 ): Promise<Result<AnalyticsTrends>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -125,7 +125,7 @@ export interface DocumentAnalytics {
 }
 
 export async function getDocumentAnalytics(
-  input: { actorId: string; range?: ChatEventRange; limit?: number },
+  input: { actorId: string; range?: ChatEventRange | undefined; limit?: number | undefined },
   deps: { users: UserRepository; chatEvents: ChatEventsRepo; feedback: ChatFeedbackRepo },
 ): Promise<Result<DocumentAnalytics>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -167,7 +167,7 @@ export interface TicketIntelligence {
 }
 
 export async function getTicketIntelligence(
-  input: { actorId: string; range?: ChatEventRange },
+  input: { actorId: string; range?: ChatEventRange | undefined },
   deps: { users: UserRepository; chatEvents: ChatEventsRepo; tickets: TicketRepository },
 ): Promise<Result<TicketIntelligence>> {
   const authz = await requireAdminActor(input.actorId, deps);

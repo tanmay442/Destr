@@ -92,7 +92,7 @@ vi.mock('@app/infrastructure/auth', async () => {
   ]);
 
   async function resolveRole(
-    userId: string,
+    _userId: string,
     sessionClaims: unknown,
   ): Promise<'admin' | 'user'> {
     const claims = sessionClaims as { metadata?: { role?: unknown }; email?: unknown } | undefined;

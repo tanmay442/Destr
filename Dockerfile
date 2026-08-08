@@ -19,6 +19,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DOCKER_BUILD=1
+ENV SKIP_ENV_VALIDATION=1
 RUN pnpm next build
 
 # Stage 2: Runtime

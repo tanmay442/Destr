@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { MAX_UPLOAD_PDF_BYTES } from "./src/lib/limits";
 
 // Derive the set of origins permitted to call Server Actions. Next's default
 // (omitted) already whitelists the same-origin host, which is the safe choice.
@@ -26,12 +27,12 @@ const serverActionOrigins = resolveServerActionOrigins();
 
 const nextConfig: NextConfig = {
   // standalone only for Docker; Vercel's standalone breaks dynamic route routing (404s)
-  output: process.env.DOCKER_BUILD === '1' ? 'standalone' : undefined,
+  ...(process.env.DOCKER_BUILD === '1' ? { output: 'standalone' as const } : {}),
   poweredByHeader: false,
   experimental: {
     // limit server-action body size
     serverActions: {
-      bodySizeLimit: '4mb',
+      bodySizeLimit: `${MAX_UPLOAD_PDF_BYTES / (1024 * 1024)}mb`,
       // allowed origins for CSRF mitigation; omit when none derived so the
       // default same-origin check applies (safe for local dev).
       ...(serverActionOrigins.length ? { allowedOrigins: serverActionOrigins } : {}),
@@ -76,7 +77,7 @@ const nextConfig: NextConfig = {
   },
   // unpdf pulls in pdfjs-dist (ESM worker code) — keep it external to the
   // Next server bundle so it isn't mis-transformed at build time.
-  serverExternalPackages: ['unpdf', 'pdfjs-dist', '@xenova/transformers', 'onnxruntime-node', 'sharp'],
+  serverExternalPackages: ['unpdf', 'pdfjs-dist', '@xenova/transformers', 'onnxruntime-node'],
 };
 
 export default nextConfig;

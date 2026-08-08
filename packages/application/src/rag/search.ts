@@ -31,20 +31,26 @@ export interface SearchDeps {
   embeddings: EmbeddingService;
   /** Optional second-stage reranker. Retrieves a broad pool then reorders by
    *  relevance. Falls back to cosine ordering when absent. */
-  reranker?: Reranker;
+  reranker?: Reranker | undefined;
 }
 
 export interface SearchOpts {
-  threshold?: number;
-  limit?: number;
+  threshold?: number | undefined;
+  limit?: number | undefined;
   /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
-  mode?: 'parent' | 'window';
+  mode?: 'parent' | 'window' | undefined;
   /** Override `PARENT_CHILD_WINDOW` for this call. */
-  parentChildWindow?: number;
+  parentChildWindow?: number | undefined;
   /** Broad candidate-pool size before reranking. Ignored when no reranker. */
-  candidateLimit?: number;
+  candidateLimit?: number | undefined;
   /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
-  hybridEnabled?: boolean;
+  hybridEnabled?: boolean | undefined;
+  /** Override RRF_K (Reciprocal Rank Fusion constant). */
+  rrfK?: number | undefined;
+  /** Override LEXICAL_WEIGHT (lexical modality boost). */
+  lexicalWeight?: number | undefined;
+  /** Override RERANK_TOP_N (default search limit). */
+  rerankTopN?: number | undefined;
 }
 
 function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
@@ -181,16 +187,18 @@ function reciprocalRankFusion(
   vectorRows: RetrievedChunkRow[],
   lexicalRows: RetrievedChunkRow[],
   limit: number,
+  rrfK: number,
+  lexicalWeight: number,
 ): RetrievedChunkRow[] {
   const fused = new Map<number, { row: RetrievedChunkRow; score: number }>();
   const add = (rows: RetrievedChunkRow[], boost: number) => {
     rows.forEach((row, rank) => {
       const prev = fused.get(row.id)?.score ?? 0;
-      fused.set(row.id, { row, score: prev + boost / (RRF_K + rank + 1) });
+      fused.set(row.id, { row, score: prev + boost / (rrfK + rank + 1) });
     });
   };
   add(vectorRows, 1);
-  add(lexicalRows, LEXICAL_WEIGHT);
+  add(lexicalRows, lexicalWeight);
   return [...fused.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
@@ -205,7 +213,7 @@ export async function searchChunks(
   if (query.trim() === '') {
     return ok([]);
   }
-  const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, RERANK_TOP_N);
+  const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, opts.rerankTopN ?? RERANK_TOP_N);
   const rerankerEnabled = deps.reranker != null;
   const preThreshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
   const candidateLimit = rerankerEnabled ? (opts.candidateLimit ?? CANDIDATE_POOL) : topN;
@@ -251,7 +259,7 @@ export async function searchChunks(
     return ok([]);
   }
 
-  const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit);
+  const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, opts.rrfK ?? RRF_K, opts.lexicalWeight ?? LEXICAL_WEIGHT);
   return capAndResolve(fused, query, topN, opts, deps);
 }
 

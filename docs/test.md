@@ -2,8 +2,9 @@
 
 ## Unit + integration (Vitest)
 
-535 tests (527 passing, 8 DB-gated skips) across 68 files. Run with
-`pnpm test` (single run) or `pnpm test:ui` (interactive). Highlights:
+Run with `pnpm test` (single run) or `pnpm test:ui` (interactive). The suite
+count is reported by Vitest so this catalog does not duplicate a drifting
+number. Highlights:
 
 - `src/app/api/chat/route.test.ts` — 401 / 429 paths, the
   `searchDocumentation` and `createKnowledgeTicket` tool wiring
@@ -128,7 +129,7 @@
 - `src/components/admin/Charts.test.tsx` — `LineChart` edge cases (empty state, single point, all-zero series without `NaN` paths, threshold marker + destructive recolor)
 - `src/lib/__tests__/format-duration.test.ts` — `formatDuration` boundaries (`45s` / `2m` / `3.2h` / `30d`, non-positive / non-finite → `0s`)
 - `src/app/api/chat/route.test.ts` — extended: `chat_events` mode mapping (`normal→vector` / `agentic→agentic`), `captureQueryText=false → query:null`, cache-hit event
-- `src/lib/__tests__/sanitize.test.ts` — `escapeHtml` / `sanitizeText`
+- `src/lib/__tests__/sanitize.test.ts` — `sanitizeText`
 - `src/__tests__/chunking-strategy.test.ts` — chunking-strategy config
   resolution
 - `src/lib/__tests__/http.test.ts` — `respond()` edge cases
@@ -162,13 +163,12 @@ src/
 ├── lib/
 │   ├── http.ts             # respond() + respondResult() + toSafeError() + toActionResult() + isActionError()
 │   ├── logger.ts           # Structured JSON logger
-│   ├── sanitize.ts         # escapeHtml() + sanitizeText()
+│   ├── sanitize.ts         # sanitizeText()
 │   └── config/             # App-level config types
 ├── proxy.ts                # clerkMiddleware (Next 16 convention)
 └── ...
 config/
 ├── app.config.ts           # Org name, persona, admin emails, out-of-scope topics
-└── constants.ts            # Centralised business-logic constants
 scripts/                    # setup, seed, migration scripts
 ```
 
@@ -194,8 +194,8 @@ assertions, so the suite is green in any environment:
 - `packages/infrastructure/src/auth/upstash-rate-limiter.test.ts`
 - `src/lib/__tests__/env.test.ts`
 
-After this fix the full suite passes (currently **517 passing**, 8 DB-gated tests skip) even when
-`.env.realCredentials.local` is sourced (`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
+The full suite also passes when `.env.realCredentials.local` is sourced
+(`set -a && . ./.env.realCredentials.local && set +a && pnpm test`).
 
 If you add a new test that asserts "missing var" behavior, stub the var to
 `''` (not just `vi.unstubAllEnvs()`) so it does not depend on the ambient
@@ -203,14 +203,10 @@ environment.
 
 ## CI
 
-`pnpm test:ci` provisions a Neon test branch, runs the full Vitest
-suite, and tears the branch down. Requires `NEON_API_KEY` and
-`NEON_PROJECT_ID` in `.env.local`. When these are absent the
-branching step is skipped and the suite runs against whatever
-database `DATABASE_URL` points to.
+CI runs the full Vitest suite against a disposable pgvector Postgres service
+after applying the migration chain. `pnpm test:ci` can additionally provision
+a Neon test branch when `NEON_API_KEY` and `NEON_PROJECT_ID` are present.
 
-`.github/workflows/eval.yml` runs `pnpm eval` (mock mode, no keys) on
-pull requests to `master` that touch retrieval code
-(`packages/application/src/rag/**`, `packages/infrastructure/src/chunking/**`,
-`scripts/eval/**`, or the workflow itself), gating retrieval PRs on the
-20-question golden dataset.
+`.github/workflows/eval.yml` runs `EVAL_REAL=1 pnpm eval` on a weekly schedule
+or an explicit manual dispatch. It does not gate retrieval pull requests with
+the mock harness.

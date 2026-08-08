@@ -1,5 +1,6 @@
 import { getDocumentProxy } from 'unpdf';
-import { ParseError, PDF_PARSE_MAX_BYTES, PDF_PARSE_MAX_PAGES, PDF_PARSE_MAX_CHARS } from '@app/domain';
+import { ParseError } from '@app/domain';
+import { PDF_PARSE_MAX_BYTES, PDF_PARSE_MAX_PAGES, PDF_PARSE_MAX_CHARS } from '@app/infrastructure/config';
 import type { ContentParser } from '@app/domain';
 
 type PdfProxy = Awaited<ReturnType<typeof getDocumentProxy>>;

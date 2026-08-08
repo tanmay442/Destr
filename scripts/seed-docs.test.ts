@@ -19,14 +19,6 @@ vi.mock('@app/infrastructure', () => ({
   Storage: { createBlobStorage: () => ({ put: vi.fn() }) },
 }));
 
-vi.mock('drizzle-orm', () => ({
-  eq: () => undefined,
-  sql: Object.assign(
-    (strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join('?'), values }),
-    { raw: (s: string) => s },
-  ),
-}));
-
 vi.mock('dotenv/config', () => ({}));
 
 import { parseArgs } from './seed-docs';

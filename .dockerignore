@@ -1,8 +1,11 @@
 node_modules
 .next
 .git
-.env.local
-.env.test
+.env*
 .blobs
 documents
 drizzle
+*.tsbuildinfo
+.vercel
+docs
+coverage

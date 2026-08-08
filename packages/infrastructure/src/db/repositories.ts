@@ -24,7 +24,7 @@ function whereAnd(parts: ReturnType<typeof eq>[]) {
 export async function findDocumentByName(
   name: string,
   client: Client = db,
-  opts: { includeDeleted?: boolean } = {},
+  opts: { includeDeleted?: boolean | undefined } = {},
 ): Promise<Document | null> {
   const parts = [eq(documents.fileName, name)];
   if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
@@ -35,7 +35,7 @@ export async function findDocumentByName(
 export async function findDocumentById(
   id: number,
   client: Client = db,
-  opts: { includeDeleted?: boolean } = {},
+  opts: { includeDeleted?: boolean | undefined } = {},
 ): Promise<Document | null> {
   const parts = [eq(documents.id, id)];
   if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
@@ -312,15 +312,15 @@ function toChunkValues(r: {
   documentId: number;
   content: string;
   embedding: number[];
-  chunkIndex?: number;
-  page?: number | null;
-  sectionTitle?: string | null;
-  source?: string | null;
-  title?: string | null;
-  parentChunkId?: number | null;
-  kind?: 'parent' | 'child' | 'summary';
-  embeddingModel?: string | null;
-  contentHash?: string | null;
+  chunkIndex?: number | undefined;
+  page?: number | null | undefined;
+  sectionTitle?: string | null | undefined;
+  source?: string | null | undefined;
+  title?: string | null | undefined;
+  parentChunkId?: number | null | undefined;
+  kind?: 'parent' | 'child' | 'summary' | undefined;
+  embeddingModel?: string | null | undefined;
+  contentHash?: string | null | undefined;
 }) {
   return {
     documentId: r.documentId,
@@ -343,15 +343,15 @@ export async function insertChunks(
     documentId: number;
     content: string;
     embedding: number[];
-    chunkIndex?: number;
-    page?: number | null;
-    sectionTitle?: string | null;
-    source?: string | null;
-    title?: string | null;
-    parentChunkId?: number | null;
-    kind?: 'parent' | 'child' | 'summary';
-    embeddingModel?: string | null;
-    contentHash?: string | null;
+    chunkIndex?: number | undefined;
+    page?: number | null | undefined;
+    sectionTitle?: string | null | undefined;
+    source?: string | null | undefined;
+    title?: string | null | undefined;
+    parentChunkId?: number | null | undefined;
+    kind?: 'parent' | 'child' | 'summary' | undefined;
+    embeddingModel?: string | null | undefined;
+    contentHash?: string | null | undefined;
   }>,
   client: Client = db,
 ): Promise<void> {
@@ -688,8 +688,8 @@ export async function recountChunksForAll(client: Client = db): Promise<Array<{ 
 
 export async function listDocuments(
   opts: {
-    search?: string;
-    includeDeleted?: boolean;
+    search?: string | undefined;
+    includeDeleted?: boolean | undefined;
     limit: number;
     offset: number;
   },
@@ -731,9 +731,9 @@ export const ticketRepo = {
     return (row as TicketRow | undefined) ?? null;
   },
   async list(opts: {
-    status?: 'created' | 'in_progress' | 'closed';
-    assignee?: string | null;
-    search?: string;
+    status?: 'created' | 'in_progress' | 'closed' | undefined;
+    assignee?: string | null | undefined;
+    search?: string | undefined;
     limit: number;
     offset: number;
   }, client: Client = db): Promise<{ rows: TicketRow[]; total: number }> {
@@ -902,7 +902,7 @@ export const userRepo = {
   async touchLastSeen(clerkUserId: string, client: Client = db): Promise<void> {
     await client.update(users).set({ lastSeenAt: sql`now()` }).where(eq(users.clerkUserId, clerkUserId));
   },
-  async list(opts: { search?: string; limit: number; offset: number }, client: Client = db): Promise<{ rows: UserRow[]; total: number }> {
+  async list(opts: { search?: string | undefined; limit: number; offset: number }, client: Client = db): Promise<{ rows: UserRow[]; total: number }> {
     const search = opts.search?.trim();
     const where = search
       ? or(
@@ -1149,4 +1149,3 @@ export const transactionRunner: TransactionRunner = {
     });
   },
 };
-

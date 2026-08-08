@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { Save, MessageSquarePlus } from 'lucide-react';
 import { updateTicketAction } from '../actions';
 import { VALID_TRANSITIONS, type TicketStatus } from '@app/application/admin/tickets';
@@ -54,10 +55,16 @@ export function TicketDrawer({
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [currentStatus, setCurrentStatus] = useState(status);
+  const [prevStatus, setPrevStatus] = useState(status);
   const [currentAssignee, setCurrentAssignee] = useState(assignedTo ?? '');
   const [prevAssignee, setPrevAssignee] = useState(assignedTo ?? '');
   const cleanNote = sanitizeText(note);
+  const router = useRouter();
 
+  if (status !== prevStatus) {
+    setPrevStatus(status);
+    setCurrentStatus(status);
+  }
   if ((assignedTo ?? '') !== prevAssignee) {
     setPrevAssignee(assignedTo ?? '');
     setCurrentAssignee(assignedTo ?? '');
@@ -163,12 +170,14 @@ export function TicketDrawer({
             startTransition(async () => {
               setError(null);
               const res = await updateTicketAction(ticketId, {
-                ...(currentStatus !== 'closed'
-                  ? { status: currentStatus as 'created' | 'in_progress' }
-                  : {}),
+                status: currentStatus as TicketStatus,
                 assignedTo: currentAssignee || null,
               });
-              if (res.error) setError(res.error);
+              if (res.error) {
+                setError(res.error);
+              } else {
+                router.refresh();
+              }
             })
           }
           data-testid={`ticket-save-${ticketId}`}
@@ -209,6 +218,7 @@ export function TicketDrawer({
                 setError(res.error);
               } else {
                 setNote('');
+                router.refresh();
               }
             })
           }

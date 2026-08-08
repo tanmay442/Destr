@@ -7,7 +7,10 @@ const { authMock, submitMock, rateLimitMock } = vi.hoisted(() => ({
   rateLimitMock: vi.fn(),
 }));
 
-vi.mock('@clerk/nextjs/server', () => ({ auth: authMock }));
+vi.mock('@clerk/nextjs/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@clerk/nextjs/server')>()),
+  auth: authMock,
+}));
 
 vi.mock('@/composition', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/composition')>();

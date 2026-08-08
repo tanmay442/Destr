@@ -50,9 +50,9 @@ function capCodePoints(value: string, max: number): string {
 
 export async function listTickets(
   input: {
-    status?: TicketStatus;
-    assignee?: string | null;
-    search?: string;
+    status?: TicketStatus | undefined;
+    assignee?: string | null | undefined;
+    search?: string | undefined;
     limit?: number;
     offset?: number;
     actorId: string;
@@ -78,9 +78,9 @@ export async function listTickets(
 
 export interface UpdateTicketInput {
   ticketId: string;
-  status?: TicketStatus;
-  assignedTo?: string | null;
-  note?: string;
+  status?: TicketStatus | undefined;
+  assignedTo?: string | null | undefined;
+  note?: string | undefined;
   actorId: string;
 }
 

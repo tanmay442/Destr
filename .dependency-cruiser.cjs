@@ -79,6 +79,12 @@ module.exports = {
         path: 'node_modules/next/',
       },
     },
+    {
+      name: 'no-infrastructure-importing-application',
+      severity: 'error',
+      from: { path: '^packages/infrastructure' },
+      to: { path: '^packages/application' },
+    },
 
     // ---- CLI: cannot import from src/app|components ----
     {
@@ -92,17 +98,23 @@ module.exports = {
     {
       name: 'no-src-app-importing-infrastructure',
       severity: 'error',
-      from: { path: '^src/(app|components|lib)' },
+      from: { path: '^src/(?!composition\.ts$|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
       to: { path: '^packages/infrastructure' },
     },
     {
       name: 'no-src-app-importing-data-packages',
       severity: 'error',
-      from: { path: '^src/(app|components|lib)' },
+      from: { path: '^src/(?!composition\.ts$|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
       to: {
         dependencyTypes: ['npm'],
         path: 'node_modules/(drizzle-orm|pg|unpdf|@neondatabase|pdf-lib/)/',
       },
+    },
+    {
+      name: 'no-scripts-importing-src',
+      severity: 'error',
+      from: { path: '^scripts' },
+      to: { path: '^src' },
     },
 
   ],
