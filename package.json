@@ -38,7 +38,7 @@
     "@app/infrastructure": "workspace:*",
     "@clerk/nextjs": "^7.5.15",
     "@langchain/textsplitters": "^1.0.1",
-    "@neondatabase/serverless": "^0.10.4",
+    "@neondatabase/serverless": "^1.1.0",
     "@upstash/qstash": "^2.11.1",
     "@upstash/redis": "^1.38.0",
     "ai": "^6.0.221",
