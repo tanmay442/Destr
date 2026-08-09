@@ -355,7 +355,7 @@ describe('searchChunks parent-child resolution', () => {
     expect(result.value[0]!.id).toBe(3);
   });
 
-  it('dedupes overlapping windows and skips hits with no neighbours', async () => {
+  it('dedupes overlapping windows but always emits the hit itself (M1)', async () => {
     const deps = parentChildDeps(
       [
         { id: 3, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0.9, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
@@ -386,11 +386,55 @@ describe('searchChunks parent-child resolution', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const ids = result.value.map((r) => r.id);
-    expect(ids).not.toContain(20);
+    expect(ids).toEqual(expect.arrayContaining([3, 8, 20]));
     const contents = result.value.map((r) => r.content).join('\n');
     expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
     expect(contents.indexOf('four', contents.indexOf('four') + 1)).toBe(-1);
     expect(contents).toContain('six');
+    const lonely = result.value.find((r) => r.id === 20);
+    expect(lonely).toBeDefined();
+    expect(lonely!.content).toBe('lonely');
+  });
+
+  it('emits a fully subsumed hit without duplicating its content (M1)', async () => {
+    const deps = parentChildDeps(
+      [
+        { id: 3, documentId: 1, chunkIndex: 4, content: 'four', similarity: 0.9, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+        { id: 8, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0.8, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+      ],
+      [],
+    );
+    // Both hits share the same two-chunk document, so the second hit's entire
+    // window was already emitted inside the first hit's window.
+    (deps.chunks.getByDocAndRanges as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([
+        [
+          '1:2:6',
+          [
+            { id: 3, documentId: 1, chunkIndex: 4, content: 'four', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+            { id: 8, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+          ],
+        ],
+        [
+          '1:3:7',
+          [
+            { id: 3, documentId: 1, chunkIndex: 4, content: 'four', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+            { id: 8, documentId: 1, chunkIndex: 5, content: 'five', similarity: 0, parentChunkId: null, fileName: 'd.pdf', page: 1, sectionTitle: null, source: null, title: null },
+          ],
+        ],
+      ]),
+    );
+    const result = await searchChunks('q', { mode: 'window' }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ids = result.value.map((r) => r.id);
+    expect(ids).toEqual(expect.arrayContaining([3, 8]));
+    const subsumed = result.value.find((r) => r.id === 8);
+    expect(subsumed).toBeDefined();
+    expect(subsumed!.content).toBe('');
+    const contents = result.value.map((r) => r.content).join('\n');
+    expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
+    expect(contents.indexOf('five')).toBeGreaterThanOrEqual(0);
   });
 
   it('falls back to the child hit when its parent is missing', async () => {

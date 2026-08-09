@@ -104,7 +104,13 @@ async function tryInsert(
 
 export async function updateDocument(
   id: number,
-  patch: { fileName?: string; fileHash?: string; uploadedBy?: string; ingestStatus?: IngestStatus },
+  patch: {
+    fileName?: string;
+    fileHash?: string;
+    uploadedBy?: string;
+    ingestStatus?: IngestStatus;
+    storageKey?: string | null;
+  },
   client: Client = db,
 ): Promise<Document> {
   const [row] = await client.update(documents).set(patch).where(eq(documents.id, id)).returning();

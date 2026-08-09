@@ -278,6 +278,26 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     const result = await uploadPdf({ fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' }, mocks.deps);
     expect(result.ok).toBe(true);
     expect(mocks.documents.restore).toHaveBeenCalledWith(1);
+    expect(mocks.audit.logDocumentEvent).toHaveBeenCalledWith({ action: 'restore', documentId: 1, actorId: 'user_1' });
+    if (result.ok) expect(result.value.status).toBe('unchanged');
+  });
+
+  it('logs a restore audit event when the async path re-uploads a soft-deleted doc unchanged (M3)', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'x');
+    const mocks = makeUploadDeps({
+      documents: {
+        findByName: vi.fn().mockResolvedValue({
+          ...baseDocument({ id: 1, fileHash: 'newhash', storageKey: 'old-blob', deletedAt: new Date(Date.now() - 1000) }),
+        }),
+      },
+    });
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
+      mocks.deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(mocks.documents.restore).toHaveBeenCalledWith(1);
+    expect(mocks.audit.logDocumentEvent).toHaveBeenCalledWith({ action: 'restore', documentId: 1, actorId: 'user_1' });
     if (result.ok) expect(result.value.status).toBe('unchanged');
   });
 
@@ -332,7 +352,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.blobStorage.delete).toHaveBeenCalled();
   });
 
-  it('reverts fileHash and status on replace-enqueue failure so re-upload is not falsely unchanged', async () => {
+  it('reverts fileHash, status, and storageKey on replace-enqueue failure so re-upload is not falsely unchanged', async () => {
     vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
@@ -350,6 +370,32 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.documents.update).toHaveBeenLastCalledWith(1, {
       fileHash: 'old-hash',
       ingestStatus: 'done',
+      storageKey: 'docs/old/f.pdf',
+    });
+  });
+
+  it('cleans up the new blob and keeps the old one when enqueue fails on a reused row (M4)', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'x');
+    const mocks = makeUploadDeps({
+      documents: {
+        findByName: vi.fn().mockResolvedValue({
+          ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
+        }),
+      },
+      rejectEnqueue: true,
+    });
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
+      mocks.deps,
+    );
+    expect(result.ok).toBe(false);
+    expect(mocks.blobStorage.delete).not.toHaveBeenCalledWith('docs/old/f.pdf');
+    expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
+    // The reused row must point back at the old blob, not the deleted new key.
+    expect(mocks.documents.update).toHaveBeenLastCalledWith(1, {
+      fileHash: 'old-hash',
+      ingestStatus: 'done',
+      storageKey: 'docs/old/f.pdf',
     });
   });
 

@@ -128,18 +128,17 @@ async function resolveWindow(
     const neighbours = ranged.get(key) ?? [];
     const ordered = [...neighbours].sort((a, b) => a.chunkIndex - b.chunkIndex);
     const windowed = ordered.filter((n) => !seen.has(n.id));
-    if (windowed.length === 0) continue;
     for (const n of ordered) seen.add(n.id);
     resolved.push({
-      id: h.id,
-      documentId: h.documentId,
-      fileName: h.fileName,
-      page: h.page,
-      sectionTitle: h.sectionTitle,
-      source: h.source,
-      title: h.title,
-      content: windowed.map((n) => n.content).join('\n\n'),
-      similarity: h.similarity,
+      ...toRetrievedChunk(h),
+      // A fully subsumed hit is still emitted, but its content was already
+      // included in a sibling window, so do not duplicate the tokens.
+      content:
+        windowed.length > 0
+          ? windowed.map((n) => n.content).join('\n\n')
+          : seen.has(h.id)
+            ? ''
+            : h.content,
     });
   }
   return resolved;
