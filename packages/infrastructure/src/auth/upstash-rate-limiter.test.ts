@@ -107,6 +107,26 @@ describe('createUpstashRateLimiter', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('handles string zset scores from Upstash without corrupting Retry-After (M2)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    redisMock.eval.mockResolvedValue([0, '10000']);
+    const limiter = createUpstashRateLimiter();
+    const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.retryAfterMs).toBe(60_000);
+  });
+
+  it('coerces string remaining counts in the allowed branch (M2)', async () => {
+    redisMock.eval.mockResolvedValue([1, '29']);
+    const limiter = createUpstashRateLimiter();
+    const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.remaining).toBe(29);
+  });
+
   it('uses a sliding window so old timestamps do not block new requests', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);

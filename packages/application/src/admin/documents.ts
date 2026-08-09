@@ -143,6 +143,18 @@ async function resolveUploadTarget(
   return { doc: found, supersededKey: found.storageKey };
 }
 
+async function restoreForReupload(
+  row: DocumentRow | null,
+  actorId: string,
+  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner },
+): Promise<void> {
+  if (!row?.deletedAt) return;
+  await deps.runner.run(async (tx) => {
+    await tx.documents.restore(row.id);
+    await tx.audit.logDocumentEvent({ action: 'restore', documentId: row.id, actorId });
+  });
+}
+
 async function rollbackEnqueueFailure(
   row: { id: number; storageKey: string | null },
   previous: { fileHash: string | null; status: IngestStatus | null },
@@ -152,6 +164,7 @@ async function rollbackEnqueueFailure(
     await deps.documents
       .update(row.id, { fileHash: previous.fileHash, ingestStatus: previous.status ?? 'failed' })
       .catch(() => {});
+    if (row.storageKey) await deps.blobStorage.delete(row.storageKey).catch(() => {});
     return;
   }
   const key = row.storageKey;
@@ -188,7 +201,7 @@ async function uploadPdfSync(
   const target = await resolveUploadTarget(input.fileName, deps);
   const existing = target.doc;
   if (existing && existing.fileHash === fileHash) {
-    if (existing.deletedAt) await deps.documents.restore(existing.id);
+    await restoreForReupload(existing, input.actorId, deps);
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
   const oldStorageKey = existing?.storageKey ?? target.supersededKey;
@@ -241,7 +254,7 @@ async function queuePdfForIngest(
   const prepared = await prepareReplacementBlob(input, deps, existing);
   if (!prepared.ok) return prepared;
   if (prepared.value.unchanged) {
-    if (existing?.deletedAt) await deps.documents.restore(existing.id);
+    await restoreForReupload(existing, input.actorId, deps);
     return ok({ documentId: prepared.value.documentId, chunks: 0, status: 'unchanged' });
   }
   const { fileHash, key } = prepared.value;
@@ -266,14 +279,14 @@ async function queuePdfForIngest(
     await cleanupUncommittedBlob(key, deps);
     throw e;
   }
-  if (oldStorageKey) {
-    await deps.blobStorage.delete(oldStorageKey).catch(() => {});
-  }
   try {
     await deps.ingestQueue.enqueue({ documentId: row.id });
   } catch (e) {
     await rollbackEnqueueFailure({ id: row.id, storageKey: key }, previous, deps);
     throw e;
+  }
+  if (oldStorageKey) {
+    await deps.blobStorage.delete(oldStorageKey).catch(() => {});
   }
   return ok({ documentId: row.id, chunks: 0, status: 'queued' });
 }

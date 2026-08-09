@@ -33,11 +33,12 @@ export function createUpstashRateLimiter(): RateLimiter {
       const redisKey = `ratelimit:${key}`;
       const now = Date.now();
       const windowMs = opts.windowMs;
-      const [ok, second] = (await redis.eval(
+      const [ok, rawSecond] = (await redis.eval(
         RATE_LIMITER_LUA,
         [redisKey],
         [now, windowMs, opts.limit],
       )) as [number, number];
+      const second = Number(rawSecond);
       if (ok === 1) {
         return { ok: true, remaining: Math.max(0, second), resetMs: windowMs };
       }

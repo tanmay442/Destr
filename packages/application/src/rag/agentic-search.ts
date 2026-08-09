@@ -20,7 +20,7 @@ export interface AgenticDeps {
   /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
-  /** Absolute cap on total retrieval+grade passes this turn. */
+  /** Absolute cap on total grader LLM calls this turn. */
   stepBudget?: number;
   outOfDomainThreshold?: number;
 }
@@ -34,34 +34,35 @@ export interface AgenticResult {
   outOfDomain: boolean;
 }
 
-async function retrieveAndGrade(
+const GRADER_CONCURRENCY = 3;
+
+async function gradeBounded(
   query: string,
+  rows: RetrievedChunk[],
   deps: AgenticDeps,
-): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> {
-  const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
-  if (!found.ok) {
-    throw new ExternalServiceError('Agentic retrieval failed', found.error);
-  }
-  const rows = found.value;
-  const grades = await Promise.all(
-    rows.map(async (r) => {
+): Promise<Array<'yes' | 'no'>> {
+  const grades: Array<'yes' | 'no'> = new Array(rows.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const i = next++;
       try {
-        return await deps.documentGrader.grade(query, r.content);
+        grades[i] = await deps.documentGrader.grade(query, rows[i]!.content);
       } catch {
-        return 'yes' as const;
+        grades[i] = 'yes';
       }
-    }),
-  );
-  const kept = rows.filter((_, i) => grades[i] === 'yes');
-  const maxSimilarity = rows.reduce((m, r) => Math.max(m, r.similarity), 0);
-  return { chunks: kept, maxSimilarity };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(GRADER_CONCURRENCY, rows.length) }, worker));
+  return grades;
 }
 
 /**
  * Agentic retrieval loop: 1. rewrite query, 2. retrieve + grade/drop irrelevant
- * chunks, 3. retry with a fresh rewrite if nothing kept (bounded by the step
- * budget), 4. report out-of-domain when the final pool is empty and below
- * threshold. Generation + hallucination check happen in the route after
+ * chunks, 3. retry with a fresh rewrite of the previous rewrite if nothing kept
+ * (bounded by retries, a hard total grader-call budget, and a grading
+ * concurrency cap), 4. report out-of-domain when the final pool is empty and
+ * below threshold. Generation + hallucination check happen in the route after
  * `streamText` returns.
  */
 export async function agenticSearch(
@@ -83,13 +84,28 @@ export async function agenticSearch(
 
     const stepBudget = deps.stepBudget ?? AGENT_STEP_BUDGET;
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
+    let budget = Math.max(1, stepBudget);
+
+    const runPass = async (query: string): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> => {
+      const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
+      if (!found.ok) {
+        throw new ExternalServiceError('Agentic retrieval failed', found.error);
+      }
+      const rows = found.value;
+      const graded = rows.slice(0, budget);
+      budget -= graded.length;
+      const grades = await gradeBounded(query, graded, deps);
+      const kept = graded.filter((_, i) => grades[i] === 'yes');
+      const maxSimilarity = rows.reduce((m, r) => Math.max(m, r.similarity), 0);
+      return { chunks: kept, maxSimilarity };
+    };
 
     let rewritten = await tryRewrite(originalQuery);
-    let pass = await retrieveAndGrade(rewritten, deps);
+    let pass = await runPass(rewritten);
 
-    for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0; attempt++) {
-      rewritten = await tryRewrite(originalQuery);
-      pass = await retrieveAndGrade(rewritten, deps);
+    for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0 && budget > 0; attempt++) {
+      rewritten = await tryRewrite(rewritten);
+      pass = await runPass(rewritten);
     }
 
     const outOfDomain =

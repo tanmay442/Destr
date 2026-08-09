@@ -69,6 +69,46 @@ describe('document-aware strategy', () => {
     expect(chunks.every((c, i) => c.chunkIndex === i)).toBe(true);
   });
 
+  it('preserves numbered headings instead of fragmenting them (H1)', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: '3.1. Introduction\n\nBody text that follows the numbered heading.' },
+      { page: 2, text: '2.2.3 Overview\n\nMore body text.' },
+    ]);
+    const intro = chunks.find((c) => c.sectionTitle === '3.1. Introduction');
+    const overview = chunks.find((c) => c.sectionTitle === '2.2.3 Overview');
+    expect(intro).toBeDefined();
+    expect(overview).toBeDefined();
+    expect(intro!.source).toBe('Page 1 — 3.1. Introduction');
+    expect(overview!.source).toBe('Page 2 — 2.2.3 Overview');
+    expect(chunks.every((c) => c.chunkIndex === chunks.indexOf(c))).toBe(true);
+  });
+
+  it('separates a numbered heading that follows a sentence so it is detected (H1)', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: 'The results are shown below. 3.1 Methods\n\nBody.' },
+    ]);
+    expect(chunks.some((c) => c.sectionTitle === '3.1 Methods')).toBe(true);
+    expect(chunks.some((c) => c.content.includes('shown below.'))).toBe(true);
+  });
+
+  it('stamps chunks with the page their content came from, not the next page header', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: '3.1. Introduction\n\nEnd of page one body.' },
+      { page: 2, text: '2.2.3 Overview\n\nPage two body.' },
+    ]);
+    const p1 = chunks.find((c) => c.content.includes('End of page one body'));
+    const p2 = chunks.find((c) => c.content.includes('Page two body'));
+    expect(p1).toBeDefined();
+    expect(p2).toBeDefined();
+    expect(p1!.page).toBe(1);
+    expect(p1!.source).toBe('Page 1 — 3.1. Introduction');
+    expect(p2!.page).toBe(2);
+    expect(p2!.source).toBe('Page 2 — 2.2.3 Overview');
+  });
+
   it('stamps a title from ALL-CAPS headings', async () => {
     const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
     const chunks = await s.splitPages([

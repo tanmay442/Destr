@@ -15,9 +15,7 @@ interface Block {
 }
 
 function parseMarkdownBlocks(text: string, page: number): Block[] {
-  const normalized = text
-    .replace(/(\.)(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z])/g, '$1\n\n')
-    .replace(/([a-z0-9])\.(\d+(?:\.\d+)*\.?\s+[A-Z])/g, '$1. $2');
+  const normalized = text.replace(/(?<![0-9])\.(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z])/g, '.\n\n');
   const lines = normalized.split(/\r?\n/);
   const blocks: Block[] = [];
   let current: { type: Block['type']; level: number; lines: string[] } | null = null;
@@ -172,7 +170,6 @@ export function documentAwareSplitter(
       };
 
       for (const block of blocks) {
-        currentPage = block.page;
         if (block.type === 'header') {
           flush();
           activeHeaders = updateHeaderHierarchy(activeHeaders, block.level, block.text);
@@ -182,12 +179,14 @@ export function documentAwareSplitter(
         const combinedLength = currentChunk.length + block.raw.length;
 
         if (combinedLength <= MAX_SIZE) {
+          currentPage = block.page;
           currentChunk += (currentChunk ? '\n\n' : '') + block.raw;
         } else {
           flush();
 
           if (block.type === 'table') {
             if (block.raw.length <= MAX_SIZE) {
+              currentPage = block.page;
               currentChunk = block.raw;
             } else {
               for (const piece of splitTable(block.raw, MAX_SIZE)) {
@@ -224,6 +223,7 @@ export function documentAwareSplitter(
               );
             }
           } else {
+            currentPage = block.page;
             currentChunk = block.raw;
           }
         }
