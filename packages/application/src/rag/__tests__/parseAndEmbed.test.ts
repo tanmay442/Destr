@@ -95,7 +95,6 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // No title → no header prepended; the summary is header-only (never persisted).
     expect(result.value.rows[0]!.content).toBe('Alpha text.');
     expect(result.value.rows[0]!.title).toBeNull();
   });
@@ -113,7 +112,6 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
       ]),
     };
     const deps = makeParseDeps({ contentParser, chunkingStrategy });
-    // One embedding per embeddable chunk (children only), length 3.
     deps.embeddings.embedBatch = vi
       .fn()
       .mockImplementation(async (texts: string[]) => texts.map((_, i) => [i + 1, 0, 0]));
@@ -122,7 +120,6 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Parent content must NOT be sent to the embedding API (only the 2 children).
     expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(['Child one.', 'Child two.']);
     const [parent, child1, child2] = result.value.rows;
     expect(parent!.kind).toBe('parent');

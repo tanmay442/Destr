@@ -120,7 +120,6 @@ describe('document-aware strategy', () => {
     const rows = Array.from({ length: 40 }, (_, i) => `| Row ${i} | value ${i} |`);
     const table = ['| ID | Value |', '| --- | --- |', ...rows].join('\n');
     const chunks = await s.splitPages([{ page: 1, text: `## Data\n\n${table}` }]);
-    // Every table chunk must carry the header.
     const tableChunks = chunks.filter((c) => c.content.includes('| ID | Value |'));
     expect(tableChunks.length).toBeGreaterThan(1);
     expect(tableChunks.every((c) => c.content.includes('| ID | Value |'))).toBe(true);
@@ -128,7 +127,6 @@ describe('document-aware strategy', () => {
 
   it('never drops a small or single-line table block', async () => {
     const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
-    // A 1-2 line "table" (no separator) and a single-row-with-separator table.
     const oneLiner = '| Label | Value |';
     const singleRow = ['| Plan | Price |', '| --- | --- |', '| Free | $0 |'].join('\n');
     const chunks = await s.splitPages([
@@ -182,7 +180,6 @@ describe('degenerate inputs', () => {
       const one = await s.splitPages([{ page: 1, text: 'x' }]);
       expect(one.every((c) => c.content.trim().length > 0)).toBe(true);
     }
-    // pre-chunked keeps the 1 page -> 1 chunk positional contract even when blank.
     const pre = getChunkingStrategy('pre-chunked', { embeddings: mockEmbeddings() });
     expect(await pre.splitPages([{ page: 1, text: '' }])).toHaveLength(1);
     expect((await pre.splitPages([{ page: 1, text: 'x' }]))[0]!.content).toBe('x');
@@ -270,8 +267,6 @@ describe('semantic strategy', () => {
     const s = getChunkingStrategy('semantic', { embeddings });
     const text = Array.from({ length: 30 }, (_, i) => `Sentence number ${i + 1} here.`).join(' ');
     await s.splitPages([{ page: 1, text }]);
-    // 30 sentences batched at 50 -> a single call; the batch cap prevents an
-    // unbounded single-array call on much larger documents.
     expect(embedBatch.mock.calls.length).toBeGreaterThanOrEqual(1);
     for (const call of embedBatch.mock.calls) {
       expect((call[0] as string[]).length).toBeLessThanOrEqual(50);

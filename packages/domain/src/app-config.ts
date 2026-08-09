@@ -100,8 +100,6 @@ export const appConfigSchema = z.object({
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
-/** Recursively convert a Zod schema into its deep-partial form so a settings
- *  write can validate a partial patch without stripping unspecified fields. */
 type SchemaDef = {
   type?: string;
   shape?: Record<string, z.ZodTypeAny>;

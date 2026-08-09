@@ -30,7 +30,6 @@ const nextConfig: NextConfig = {
   ...(process.env.DOCKER_BUILD === '1' ? { output: 'standalone' as const } : {}),
   poweredByHeader: false,
   experimental: {
-    // limit server-action body size
     serverActions: {
       bodySizeLimit: `${MAX_UPLOAD_PDF_BYTES / (1024 * 1024)}mb`,
       // allowed origins for CSRF mitigation; omit when none derived so the

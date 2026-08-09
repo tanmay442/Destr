@@ -474,7 +474,6 @@ describe('searchChunks reranking', () => {
       flatRow(2, 'second by cosine', 0.8),
       flatRow(3, 'third by cosine', 0.7),
     ];
-    // Reranker prefers the reverse of the cosine order.
     const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
       docs.map((_d, index) => ({ index, relevanceScore: index })),
     );
@@ -546,7 +545,6 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Highest cosine similarity first; the 0.3 candidate is dropped below the threshold.
     expect(result.value.map((r) => r.id)).toEqual([2, 3]);
   });
 
@@ -555,7 +553,6 @@ describe('searchChunks reranking', () => {
       flatRow(1, 'noise', 0.2),
       flatRow(2, 'relevant', 0.8),
     ];
-    // The reranker loves the near-random low-similarity chunk.
     const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
       docs.map((_d, index) => ({ index, relevanceScore: docs.length - index })),
     );
@@ -573,12 +570,10 @@ describe('searchChunks reranking', () => {
       flatRow(2, 'b', 0.9),
       flatRow(3, 'c', 0.6),
     ];
-    // No `reranker` key — equivalent to RERANKER_PROVIDER=cosine (default).
     const deps = rerankDeps(rows, undefined);
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Original pre-S6 bi-encoder ordering (highest similarity first), no rerank call.
     expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
   });
 });
@@ -620,8 +615,6 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
   }
 
   it('recalls an error code the vector branch misses by fusing the lexical branch', async () => {
-    // Vector search alone would never surface the exact SKU/error code; the
-    // lexical (BM25) branch catches it and RRF lifts it into the results.
     const deps = hybridDeps(
       [flatRow(1, 'general troubleshooting steps', 0.85)],
       [flatRow(2, 'ERR-4291 rate limit exceeded', 0.4)],
@@ -630,8 +623,6 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const ids = result.value.map((r) => r.id);
-    // The exact error code lives only in the lexical branch, so pure cosine
-    // would never surface it; RRF fusion recalls it.
     expect(ids).toContain(2);
   });
 
@@ -687,10 +678,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     (deps.chunks.searchByLexical as ReturnType<typeof vi.fn>).mockReturnValue(
       new Promise<RetrievedChunkRow[]>((r) => { resolveLexical = r; }),
     );
-    // Kick off the search without awaiting: both branches must be in flight
-    // before either resolves (proving parallel, not sequential, dispatch).
     const pending = searchChunks('q', { limit: 3 }, deps);
-    // Flush the embed() microtask so both branches get dispatched.
     await new Promise((r) => setTimeout(r, 0));
     expect(deps.chunks.searchByVector).toHaveBeenCalledTimes(1);
     expect(deps.chunks.searchByLexical).toHaveBeenCalledTimes(1);

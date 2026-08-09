@@ -1,26 +1,9 @@
-/**
- * Evaluation harness logic — pure, provider-agnostic.
- *
- * Given a golden question, the harness:
- *   1. retrieves context via `searchChunks`,
- *   2. generates an answer via `generate`,
- *   3. scores three 0–1 metrics:
- *        - faithfulness : hallucination grader (`'yes'` ⇒ 1, `'no'` ⇒ 0)
- *        - correctness  : fraction of `mustMention` phrases present in the answer
- *        - contextRelevancy: fraction of `mustMention` phrases present in the
- *          retrieved context (did retrieval bring the right chunks?)
- *
- * Phrases are matched at word boundaries (so a substring like `refund` inside
- * `refunding` is not a hit), refusals are graded explicitly against whether
- * one was expected, and empty retrieval does not auto-credit faithfulness —
- * a claim made with no context is unsupported.
- *
- * All I/O is injected so the harness can run against mocks in CI (no real LLM /
- * DB) and against a keyed provider in a manual job.
- */
 import type { AnswerCache } from '@app/domain';
 import type { GoldenQuestion } from './golden';
 
+/** Pure, provider-agnostic eval logic. Scores each question on three 0–1
+ *  metrics: faithfulness (hallucination grader), correctness (mustMention
+ *  recall), and contextRelevancy (mustMention present in retrieved context). */
 export interface EvalDeps {
   searchChunks: (query: string) => Promise<Array<{ content: string }>>;
   generate: (query: string, context: string) => Promise<string>;
@@ -87,16 +70,12 @@ export async function evaluateOne(
   const refusalExpected = q.refusalExpected ?? q.mustMention.length === 0;
   const refused = isRefusal(answer);
 
-  // Faithfulness — graded explicitly, never auto-credited.
   let faithfulness = 0;
   if (refused) {
-    // A refusal is only faithful when a refusal was expected; otherwise the
-    // model ducked a question it should have answered.
     faithfulness = refusalExpected ? 1 : 0;
   } else if (retrieved.length > 0) {
     faithfulness = (await deps.gradeFaithfulness(context, answer)) === 'yes' ? 1 : 0;
   }
-  // else: no context AND no refusal ⇒ any claim is unsupported → 0.
 
   const correctness =
     q.mustMention.length === 0
@@ -178,10 +157,6 @@ export function mockEvalDeps(): EvalDeps & { cache: AnswerCache } {
         ? `Based on the docs: ${context.slice(0, 80)}`
         : 'I cannot answer that from the available docs.';
     },
-    // Only consulted when context is non-empty and the generation is not a
-    // refusal (the harness grades refusals explicitly). Treat "docs present and
-    // an answer actually produced" as grounded; with a real grader this is the
-    // hallucination grader.
     async gradeFaithfulness(documents: string, generation: string) {
       return documents.trim() === '' || generation.trim() === '' ? 'no' : 'yes';
     },

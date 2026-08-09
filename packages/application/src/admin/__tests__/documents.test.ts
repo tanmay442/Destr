@@ -120,7 +120,6 @@ describe('restoreDocument', () => {
     const result = await restoreDocument(1, 'user_1', deps);
     expect(result.ok).toBe(true);
     expect(deps.documents.restore).toHaveBeenCalledWith(1);
-    // Regression: a soft-deleted doc must be looked up including deleted rows.
     expect(deps.documents.findById).toHaveBeenCalledWith(1, { includeDeleted: true });
   });
 });
@@ -141,7 +140,6 @@ describe('hardDeleteDocument', () => {
     });
     const result = await hardDeleteDocument({ documentId: 1, actorId: 'user_1' }, deps);
     expect(result.ok).toBe(true);
-    // Regression: must resolve soft-deleted rows, then cascade-delete + drop blob.
     expect(deps.documents.findById).toHaveBeenCalledWith(1, { includeDeleted: true });
     expect(deps.documents.deleteById).toHaveBeenCalledWith(1);
     expect(deps.audit.logDocumentEvent).toHaveBeenCalledWith({
@@ -279,7 +277,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     });
     const result = await uploadPdf({ fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' }, mocks.deps);
     expect(result.ok).toBe(true);
-    // Same content re-uploaded of a soft-deleted doc → restore, not a fresh insert.
     expect(mocks.documents.restore).toHaveBeenCalledWith(1);
     if (result.ok) expect(result.value.status).toBe('unchanged');
   });
@@ -295,7 +292,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     });
     const result = await uploadPdf({ fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' }, mocks.deps);
     expect(result.ok).toBe(true);
-    // The orphaned blob of the superseded generation is cleaned up.
     expect(mocks.blobStorage.delete).toHaveBeenCalledWith(oldKey);
   });
 
@@ -332,7 +328,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       mocks.deps,
     );
     expect(result.ok).toBe(false);
-    // The never-committed row (and its blob) are removed, not left poisoned as `failed`.
     expect(mocks.documents.deleteById).toHaveBeenCalledWith(7);
     expect(mocks.blobStorage.delete).toHaveBeenCalled();
   });
@@ -352,8 +347,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       mocks.deps,
     );
     expect(result.ok).toBe(false);
-    // Last update must restore the previous hash/status so a re-upload of the
-    // SAME new buffer is no longer a dedup `unchanged` dead-end.
     expect(mocks.documents.update).toHaveBeenLastCalledWith(1, {
       fileHash: 'old-hash',
       ingestStatus: 'done',

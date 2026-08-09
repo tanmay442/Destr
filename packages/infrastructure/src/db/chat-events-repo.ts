@@ -148,7 +148,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
         cacheHits: sql<number>`count(*) filter (where ${chatEvents.cacheHit})::int`,
         hallucinations: sql<number>`count(*) filter (where ${chatEvents.hallucinationBlocked})::int`,
         agenticTotal: sql<number>`count(*) filter (where ${chatEvents.mode} = 'agentic')::int`,
-        // meta.rewritten records rewrite passes; real retry passes are not recorded yet.
         agenticRetries: sql<number>`count(*) filter (where ${chatEvents.mode} = 'agentic' and (${chatEvents.meta} ->> 'rewritten') = 'true')::int`,
         retrieveP50: sql<number>`coalesce(percentile_cont(0.5) within group (order by ${chatEvents.retrieveMs}), 0)`,
         retrieveP95: sql<number>`coalesce(percentile_cont(0.95) within group (order by ${chatEvents.retrieveMs}), 0)`,

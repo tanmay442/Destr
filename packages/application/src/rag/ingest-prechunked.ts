@@ -56,8 +56,8 @@ export async function ingestPrechunked(
     return err(new ValidationError(`${fileName} has ${chunks.length} segments; maximum is ${MAX_PRECHUNKED_CHUNKS}`));
   }
 
-  // Dedup hash covers the markdown AND any companion PDF so re-uploading the
-  // same PDF with different markdown (or vice versa) is never treated as unchanged.
+  // Dedup hash covers the markdown AND any companion PDF, so re-uploading one
+  // with different content for the other is never treated as unchanged.
   const markdownSource = Buffer.from(chunks.map((c) => c.content).join('\n'));
   const fileHash = pdfBuffer
     ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
@@ -68,7 +68,6 @@ export async function ingestPrechunked(
     return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
   }
 
-  // CCH: one title+summary per document, prepended to every chunk before embedding.
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;

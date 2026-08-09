@@ -1,5 +1,3 @@
-// Non-interactive SQL migrator. Applies Drizzle migrations from ./drizzle.
-// Applied files are tracked in `_migrations` so re-runs are idempotent.
 // Usage: node scripts/apply-migration.mjs
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,7 +5,6 @@ import pg from 'pg';
 
 const EXTENSION_SQL = 'CREATE EXTENSION IF NOT EXISTS vector;';
 
-// Applied migrations tracked by file name + content hash for idempotent re-runs.
 const MIGRATIONS_TABLE = 'public._migrations';
 
 // Arbitrary fixed key unique to this project, guards concurrent runners
@@ -121,8 +118,8 @@ try {
           logger.log(`-- ${file}: already applied, skipping`);
           continue;
         }
-        // M30: an applied migration file must never be edited in place.
         if (prevHash !== undefined) {
+          // An applied migration file must never be edited in place.
           const err = new Error(
             `Migration file ${file} is already applied but its content ` +
               'changed (hash mismatch). Create a new migration instead of ' +
@@ -150,11 +147,6 @@ try {
               if (!isBenignError(err)) {
                 throw err;
               }
-              // A benign "already exists" means the object predates this run.
-              // Since unchanged files are skipped and edited ones are refused
-              // above, this can only happen when the schema drifted from the
-              // migration history — silently skipping and recording the file
-              // would hide real drift (C5: the 0011-0014 gap).
               logger.error(
                 `  REFUSE: "${file}" hit "${err.message.split('\n')[0]}" — ` +
                   'refusing benign skip so drift is never masked. ' +
@@ -193,7 +185,6 @@ function simpleHash(str) {
 
 export const __test = { isBenignError, simpleHash };
 
-// CLI entry — only run when this module is the program root.
 const invokedDirectly = (() => {
   try {
     return import.meta.url === `file://${process.argv[1]}`;

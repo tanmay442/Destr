@@ -142,9 +142,6 @@ describe('runEval', () => {
 
   it('keeps the CI mock pass over the shipped golden set', async () => {
     const report = await runEval(goldenQuestions, mockEvalDeps(), 0.7);
-    // Faithfulness is evaluated explicitly; every grounded question should get
-    // a grounded answer and every out-of-scope question a refusal, so the mock
-    // run must stay green.
     expect(report.meanFaithfulness).toBe(1);
     expect(report.passed).toBe(true);
   });

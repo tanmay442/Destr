@@ -90,10 +90,8 @@ export function splitOutsideFences(text: string, delimiter: string): string[] {
       if (close && close[2]![0] === fence[0]) fence = null;
     }
   }
+  // Unclosed fence: fall back to naive splitting so delimiters still act as segment separators.
   if (fence !== null) {
-    // An unclosed fence means a typo'd opener silently merged the rest of the
-    // document. Recover by splitting naively so delimiter lines still act as
-    // segment separators instead of swallowing the remaining chunks.
     const out: string[] = [];
     let cur: string[] = [];
     for (const line of lines) {

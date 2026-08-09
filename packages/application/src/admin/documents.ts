@@ -26,7 +26,6 @@ import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '@app/domain';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
 import { requireAdminActor } from './authz';
 
-/** Generate a unique blob-storage key for the given filename. */
 function newBlobKey(fileName: string): string {
   const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
   return `docs/${randomUUID()}/${safe}`;
@@ -108,7 +107,6 @@ export async function listDocuments(
 /** ≥4 MB uses the async QStash path (when QSTASH_TOKEN is set). */
 const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
 
-/** Returns true when QSTASH_TOKEN is set. */
 function asyncIngestEnabled(): boolean {
   return Boolean(process.env.QSTASH_TOKEN);
 }
@@ -119,11 +117,6 @@ interface PreparedReplacement {
   oldStorageKey: string | null;
 }
 
-/**
- * Shared blob-before-tx + dedup-by-hash logic for both upload-by-name and
- * replace-by-id. Uploads the new blob first, dedups identical content, and
- * returns the new storage key plus the superseded key for post-commit cleanup.
- */
 async function prepareReplacementBlob(
   input: { fileName: string; buffer: Buffer; actorId: string },
   deps: { hasher: Hasher; blobStorage: BlobStorage; documents: DocumentRepository },
@@ -138,11 +131,6 @@ async function prepareReplacementBlob(
   return ok({ unchanged: false, fileHash, key, oldStorageKey: existing?.storageKey ?? null });
 }
 
-/**
- * Look up the upload target by name *including* soft-deleted rows so a re-upload
- * correctly reuses (within `RESTORE_WINDOW_MS`) or supersedes (beyond it) the
- * previous generation instead of silently resurrecting it or orphaning its blob.
- */
 async function resolveUploadTarget(
   fileName: string,
   deps: { documents: DocumentRepository },
@@ -155,9 +143,6 @@ async function resolveUploadTarget(
   return { doc: found, supersededKey: found.storageKey };
 }
 
-/** Roll an enqueued document back so a failed publish is not a dead end:
- *  reused rows restore their previous hash/status; brand-new rows are removed
- *  (row + blob) so a retry re-uploads from scratch. */
 async function rollbackEnqueueFailure(
   row: { id: number; storageKey: string | null },
   previous: { fileHash: string | null; status: IngestStatus | null },
@@ -174,7 +159,6 @@ async function rollbackEnqueueFailure(
   if (key) await deps.blobStorage.delete(key).catch(() => {});
 }
 
-/** Delete a freshly-uploaded blob when its document write never committed. */
 async function cleanupUncommittedBlob(
   key: string,
   deps: { blobStorage: BlobStorage },
@@ -240,7 +224,6 @@ async function uploadPdfSync(
     await cleanupUncommittedBlob(key, deps);
     return result;
   }
-  // Delete superseded blob after the new row has committed.
   if (oldStorageKey) {
     // Best-effort cleanup: orphaned blob beats failing the upload.
     await deps.blobStorage.delete(oldStorageKey).catch(() => {});
@@ -270,7 +253,6 @@ async function queuePdfForIngest(
   let row: DocumentRow;
   try {
     row = await deps.runner.run(async (tx) => {
-      // Reuse the existing id (upsert-in-place) so references stay stable.
       const doc = existing
         ? await tx.documents.update(existing.id, { fileName: input.fileName, fileHash, uploadedBy: input.actorId })
         : await tx.documents.insert({ fileName: input.fileName, fileHash, uploadedBy: input.actorId });
@@ -285,7 +267,6 @@ async function queuePdfForIngest(
     throw e;
   }
   if (oldStorageKey) {
-    // Best-effort cleanup: orphaned blob beats blocking the re-upload.
     await deps.blobStorage.delete(oldStorageKey).catch(() => {});
   }
   try {
@@ -372,7 +353,6 @@ export async function hardDeleteDocument(
       await tx.documents.deleteById(input.documentId);
     });
     if (storageKey) {
-      // Best-effort cleanup: orphaned blob beats failing the hard-delete.
       await deps.blobStorage.delete(storageKey).catch(() => {});
     }
     return ok(undefined);
@@ -394,8 +374,6 @@ export async function replacePdf(
       return ok({ documentId: input.documentId, chunks: 0, status: 'unchanged' });
     }
 
-    // Resolve by documentId (never by fileName) and reuse the row in place
-    // so bookmarks/audit/queued references stay stable across sync/async paths.
     const oldStorageKey = existing.storageKey;
     const key = newBlobKey(input.fileName);
     await deps.blobStorage.put(key, input.buffer, 'application/pdf');
@@ -461,7 +439,6 @@ export async function replacePdf(
     }
 
     if (oldStorageKey) {
-      // Best-effort cleanup: orphaned blob beats failing the replace.
       await deps.blobStorage.delete(oldStorageKey).catch(() => {});
     }
 

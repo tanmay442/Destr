@@ -138,7 +138,6 @@ describe('setUserRole', () => {
       expect(result.error).toBeInstanceOf(ExternalServiceError);
     }
     expect(syncClerkRole).toHaveBeenCalledWith('user_1', 'admin');
-    // Compensating write: DB role restored to the original role after the Clerk failure.
     expect(setRole).toHaveBeenLastCalledWith('user_1', 'admin');
   });
 

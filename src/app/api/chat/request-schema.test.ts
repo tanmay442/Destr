@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ChatRequestSchema } from './request-schema';
 
-// Regression: the client (AI SDK v3 `useChat`) round-trips the full message
-// history on every request, including assistant parts spawned by the agentic
-// loop (e.g. `step-start`) and tool-invocation phases. These must validate,
-// otherwise the 2nd+ user message fails with "Unsupported message part type".
 describe('ChatRequestSchema multi-turn round-trip', () => {
   const baseMessage = (role: 'user' | 'assistant', parts: unknown[]) => ({
     id: 'm1',

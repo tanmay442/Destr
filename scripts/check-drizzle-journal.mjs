@@ -1,11 +1,6 @@
-// First-party runner for `drizzle/meta/_journal.json` consistency.
-// Verifies in CI (and locally via `pnpm db:check`) that:
-//   1. every journal entry maps to an existing `drizzle/<tag>.sql` file
-//   2. every journal entry has a matching `drizzle/meta/<idx>_snapshot.json`
-//   3. the snapshot chain is contiguous (snapshot.prevId == prior id, root = zeros)
-//   4. no two snapshots claim the same parent (drizzle-kit aborts on collision)
-//   5. no leftover snapshot files that the journal doesn't reference
-// Exits nonzero on any drift so a broken migration history never ships.
+// Verifies drizzle/meta/_journal.json consistency: every entry maps to a
+// SQL file + snapshot, the snapshot chain is contiguous, and no leftover files
+// exist. Exits nonzero on any drift.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 

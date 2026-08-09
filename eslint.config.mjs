@@ -27,8 +27,6 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // Prefer the structured logger over raw console.* in app/lib code.
-    // Console is legitimate only in the logger module, the CLI, and scripts.
     files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/lib/logger.ts", "src/components/react-bits/**"],
     rules: {

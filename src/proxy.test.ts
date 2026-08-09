@@ -18,8 +18,6 @@ process.env.ADMIN_EMAILS = ADMIN_EMAILS.join(',');
 
 vi.mock('@clerk/nextjs/server', () => ({
   clerkMiddleware: (handler: (auth: unknown, req: unknown) => unknown) => {
-    // The returned function is what Next.js calls; we capture the
-    // handler so tests can invoke it with a fake request + auth.
     return (req: unknown) => {
       const fakeAuth = {
         protect: protectMock,
@@ -32,8 +30,6 @@ vi.mock('@clerk/nextjs/server', () => ({
       users: { getUser: vi.fn() },
     }),
   createRouteMatcher: (routes: string[]) => {
-    // Simplified path matcher. The proxy uses (.*) at the end of each
-    // route; we recognise that pattern and treat it as a prefix.
     return (req: { nextUrl: { pathname: string } }) => {
       const path = req.nextUrl.pathname;
       return routes.some((r) => {

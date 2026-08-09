@@ -18,9 +18,7 @@ type CrossEncoder = {
   model: (inputs: Record<string, unknown>) => Promise<{ logits: { data: ArrayLike<number> } }>;
 };
 
-/** Sigmoid squash of the cross-encoder logit so scores land in the same 0..1
- *  range as hosted rerankers, keeping `relevanceScore` comparable across
- *  providers if callers ever threshold on it. */
+/** Sigmoid squash of the cross-encoder logit so scores land in the same 0..1 range as hosted rerankers. */
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
@@ -30,7 +28,7 @@ let encoderPromise: Promise<CrossEncoder> | null = null;
 async function getEncoder(): Promise<CrossEncoder> {
   if (!encoderPromise) {
     encoderPromise = (async () => {
-      // Point cache at a writable dir (default FS is read-only except /tmp).
+      // Default FS is read-only except /tmp; point the cache at a writable dir.
       const transformers = await import('@xenova/transformers');
       transformers.env.cacheDir =
         process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'xenova-cache');

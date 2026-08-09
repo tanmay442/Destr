@@ -114,9 +114,7 @@ export function splitSentences(
   text: string,
   maxLen = 600,
 ): Array<{ text: string; start: number }> {
-  // Mask internal dots that are NOT sentence terminators (decimals, versions,
-  // URLs, filenames) so multi-dotted runs like "v1.2.3" stay together. A dot
-  // followed by whitespace/end-of-input is a genuine terminator and stays.
+  // Mask internal dots that are NOT sentence terminators (decimals, versions, URLs, filenames).
   const MASK = String.fromCharCode(1);
   const masked = text.replace(/\.(?=\S)/g, MASK);
 

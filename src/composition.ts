@@ -60,8 +60,6 @@ const embeddingService = Llm.getEmbeddingService();
 
 const blobStorage: BlobStorage = Storage.createBlobStorage();
 
-// Filesystem storage is ephemeral on serverless/edge — warn so misconfig in
-// production is visible rather than silently losing uploaded PDFs.
 if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
 }

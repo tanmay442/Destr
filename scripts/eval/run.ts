@@ -1,13 +1,4 @@
 /**
- * `pnpm eval` entrypoint.
- *
- * Wires the evaluation harness to real adapters when the env is present
- * (embedding/chat LLM providers, Postgres chunks),
- * and otherwise runs a fully mocked harness so CI can gate the wiring without
- * any provider keys. The faithful scoring path requires a keyed provider; when
- * none is configured it logs a warning and uses the mock grader so the script
- * still passes in CI. Run a real graded pass in a manual job with keys set.
- *
  * Usage:
  *   pnpm eval                 # mock harness (CI-safe)
  *   EVAL_REAL=1 pnpm eval    # wire real search + generation + graders
@@ -49,9 +40,6 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
     gradeFaithfulness: async (documents: string, generation: string) => {
       if (!graders.hallucinationGrader) {
         console.warn('[eval] no hallucination grader configured; using lexical fallback.');
-        // Only "no documents supplied" is unfaithful. Refusals are graded by
-        // the harness itself, not by this lexical fallback, so an instructed
-        // "cannot answer" is never scored as a hallucination here.
         return documents.trim() === '' ? 'no' : 'yes';
       }
       return graders.hallucinationGrader.grade(documents, generation);

@@ -4,7 +4,6 @@ const BANNED_PACKAGES =
 
 module.exports = {
   forbidden: [
-    // ---- DOMAIN: pure types + zod, no I/O, no node APIs ----
     {
       name: 'no-domain-importing-other-packages',
       severity: 'error',
@@ -34,7 +33,6 @@ module.exports = {
       to: { path: '^node:' },
     },
 
-    // ---- APPLICATION: depends on Domain only, not Infrastructure ----
     {
       name: 'no-application-importing-infrastructure',
       severity: 'error',
@@ -63,7 +61,6 @@ module.exports = {
       to: { path: '^src/lib' },
     },
 
-    // ---- INFRASTRUCTURE: no Next, no src/app ----
     {
       name: 'no-infrastructure-importing-app',
       severity: 'error',
@@ -86,7 +83,6 @@ module.exports = {
       to: { path: '^packages/application' },
     },
 
-    // ---- CLI: cannot import from src/app|components ----
     {
       name: 'cli-cannot-import-app-src',
       severity: 'error',
@@ -94,7 +90,6 @@ module.exports = {
       to: { path: '^src/(app|components)' },
     },
 
-    // ---- SRC APP/COMPONENTS: no direct infra or data layers ----
     {
       name: 'no-src-app-importing-infrastructure',
       severity: 'error',

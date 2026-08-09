@@ -191,7 +191,6 @@ describe('ingestPrechunked', () => {
     );
     expect(resultA.ok).toBe(true);
 
-    // Same PDF but different markdown must NOT dedup as unchanged.
     const CHUNKS_CHANGED: typeof CHUNKS = [{ content: 'Completely different body.', page: 1 }];
     const depsB = makeDeps({ hasher: makeHashing() });
     depsB.embeddings = { embed: vi.fn(), embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]) };

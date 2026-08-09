@@ -7,7 +7,6 @@ export { schema };
 
 const url = process.env.DATABASE_URL ?? '';
 
-// Typed as NeonDatabase so repositories' `Client` stays a single type; node-postgres branch casts soundly.
 export const db: NeonDatabase<typeof schema> = !url
   ? drizzleNeon(buildMissingPool(), { schema })
   : isNeonUrl(url)
