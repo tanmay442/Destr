@@ -79,10 +79,11 @@ async function renderWithBoundTurn(assistant: Msg) {
   });
   fireEvent.click(screen.getByTestId('chat-send'));
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-  const options = sendMessage.mock.calls[0]![1] as { body: { turnId: string } };
-  const turnId = options.body.turnId;
+  const firstCall = sendMessage.mock.calls[0]!;
+  const { messageId } = firstCall[0] as { text: string; messageId: string };
+  const turnId = (firstCall[1] as { body: { turnId: string } }).body.turnId;
   setupChat(
-    [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
+    [{ id: messageId, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
     { send: sendMessage },
   );
   view.rerender(<ChatInterface />);
@@ -290,7 +291,7 @@ describe('ChatInterface', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() =>
       expect(sendMessage).toHaveBeenCalledWith(
-        { text: 'What is the dental plan?' },
+        { text: 'What is the dental plan?', messageId: expect.any(String) },
         {
           body: {
             turnId: expect.stringMatching(
@@ -438,6 +439,79 @@ describe('ChatInterface', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId('chat-feedback-up')).toHaveAttribute('aria-pressed', 'true');
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('binds each turn to its own user message even when a failed stream finishes late', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    const view = render(<ChatInterface />);
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'A?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const callA = sendMessage.mock.calls[0]!;
+    const msgA = (callA[0] as { text: string; messageId: string }).messageId;
+    const turnA = (callA[1] as { body: { turnId: string } }).body.turnId;
+
+    // First stream errors, freeing the composer; the retry starts a new turn.
+    setupChat(
+      [{ id: msgA, role: 'user', parts: [{ type: 'text', text: 'A?' }] }],
+      { send: sendMessage, status: 'error' },
+    );
+    view.rerender(<ChatInterface />);
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'B?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    const callB = sendMessage.mock.calls[1]!;
+    const msgB = (callB[0] as { text: string; messageId: string }).messageId;
+    const turnB = (callB[1] as { body: { turnId: string } }).body.turnId;
+
+    const assistantB: Msg = {
+      id: 'a-b',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'Answer B.' }],
+    };
+    setupChat(
+      [
+        { id: msgA, role: 'user', parts: [{ type: 'text', text: 'A?' }] },
+        { id: msgB, role: 'user', parts: [{ type: 'text', text: 'B?' }] },
+        assistantB,
+      ],
+      { send: sendMessage },
+    );
+    view.rerender(<ChatInterface />);
+    const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+
+    // B finishes first; A's error onFinish arrives afterwards. B must keep turnB.
+    act(() =>
+      chatOptions.onFinish({
+        message: assistantB,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    act(() =>
+      chatOptions.onFinish({
+        message: { id: 'a-a', role: 'assistant', parts: [{ type: 'text', text: 'partial A' }] } as Msg,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId('chat-feedback-up'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as { body: string }).body,
+    ) as { turnId: string };
+    expect(body.turnId).toBe(turnB);
+    expect(body.turnId).not.toBe(turnA);
   });
 
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {

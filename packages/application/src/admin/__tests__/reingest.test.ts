@@ -117,7 +117,7 @@ describe('reingestAll', () => {
     expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
   });
 
-  it('deletes chunks before enqueueing when a chunk repo is provided', async () => {
+  it('deletes chunks only after enqueueing when a chunk repo is provided', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2])));
     const chunks = { deleteByDocumentId: vi.fn().mockResolvedValue(undefined) };
@@ -128,6 +128,9 @@ describe('reingestAll', () => {
     expect(chunks.deleteByDocumentId).toHaveBeenCalledTimes(2);
     expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(1);
     expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(2);
+    expect(chunks.deleteByDocumentId.mock.invocationCallOrder[0]!).toBeGreaterThan(
+      enqueue.mock.invocationCallOrder[0]!,
+    );
   });
 
   it('refuses to re-ingest when the queue is a no-op (no worker wired)', async () => {

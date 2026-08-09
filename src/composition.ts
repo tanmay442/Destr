@@ -83,39 +83,46 @@ async function ingestQueuedDocumentStandalone(
   if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
   if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
   if (!doc.storageKey) return err(new NotFoundError(`Document ${documentId} has no stored blob`));
+
+  // Claim before the expensive parse/embed so concurrent deliveries can never
+  // both pay for it; losers report `busy` and the winner covers the whole phase.
+  const claimed = await documentRepo.claimIngest(documentId);
+  if (!claimed) return ok({ status: 'busy', chunks: 0 });
+
+  const requeue = () => documentRepo.updateIngestStatus(documentId, 'queued').catch(() => {});
+
   let buffer: Buffer;
   try {
     buffer = await blobStorage.get(doc.storageKey);
   } catch (e) {
-    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    await requeue();
     return err(new ExternalServiceError('Blob read failed', e));
   }
+
+  // Skip the work if the row was replaced or deleted after we claimed it.
+  const current = await documentRepo.findById(documentId);
+  if (!current || current.fileHash !== systemHasher.sha256(buffer)) {
+    await requeue();
+    return ok({ status: 'busy', chunks: 0 });
+  }
+
   const prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
   if (!prepared.ok) {
-    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    await requeue();
     return prepared;
   }
+
   try {
-    const outcome = await Db.transactionRunner.run(async (tx) => {
-      const claimed = await tx.documents.claimIngest(documentId);
-      if (!claimed) return { claimed: false } as const;
-      const current = await tx.documents.findById(documentId);
-      if (!current || current.fileHash !== systemHasher.sha256(buffer)) {
-        await tx.documents.updateIngestStatus(documentId, 'queued');
-        return { claimed: true, stale: true } as const;
-      }
+    await Db.transactionRunner.run(async (tx) => {
       await tx.chunks.deleteByDocumentId(documentId);
       await tx.chunks.insertMany(prepared.value.rows);
       await tx.documents.updateIngestStatus(documentId, 'done');
-      return { claimed: true, stale: false, chunks: prepared.value.chunks } as const;
     });
-    if (!outcome.claimed) return ok({ status: 'busy', chunks: 0 });
-    if (outcome.stale) return ok({ status: 'busy', chunks: 0 });
-    return ok({ status: 'done', chunks: outcome.chunks });
   } catch (e) {
-    await documentRepo.updateIngestStatus(documentId, 'failed').catch(() => {});
+    await requeue();
     return err(new ExternalServiceError('Chunk insert failed', e));
   }
+  return ok({ status: 'done', chunks: prepared.value.chunks });
 }
 
 const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
@@ -170,12 +177,14 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
-  const graders = Llm.getGraders(true, cfg.gradeModel);
+  const graders = Llm.getGraders(undefined, cfg.gradeModel);
+  if (!graders.queryRewriter || !graders.documentGrader) {
+    throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
+  }
   return {
     search: getSearchDeps(cfg),
-    queryRewriter: graders.queryRewriter!,
-    documentGrader: graders.documentGrader!,
-    hallucinationGrader: graders.hallucinationGrader!,
+    queryRewriter: graders.queryRewriter,
+    documentGrader: graders.documentGrader,
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
@@ -226,8 +235,14 @@ function createComposition() {
         },
         getSearchDeps(cfg),
       ),
-    agenticSearch: (cfg: AppConfig, query: string) => agenticSearch(query, getAgenticDeps(cfg)),
-    getHallucinationGrader: (cfg: AppConfig) => getAgenticDeps(cfg).hallucinationGrader.grade,
+    agenticSearch: async (cfg: AppConfig, query: string) => {
+      try {
+        return await agenticSearch(query, getAgenticDeps(cfg));
+      } catch (e) {
+        return err(new ExternalServiceError('Agentic retrieval unavailable', e));
+      }
+    },
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -339,6 +354,18 @@ export function startVectorDimensionCheck(): void {
   _vectorCheckStarted = true;
   Db.validateVectorDimension().catch((e: unknown) => {
     logger.error('Embedding dimension validation failed at startup', { error: e });
+  });
+}
+
+let _rerankerCheckStarted = false;
+export function startLocalRerankerCheck(): void {
+  if (_rerankerCheckStarted) return;
+  _rerankerCheckStarted = true;
+  if (process.env.RERANKER_PROVIDER !== 'local') return;
+  Llm.checkLocalRerankerAvailable().then((available) => {
+    if (available) return;
+    logger.warn('RERANKER_PROVIDER=local but @xenova/transformers is not installed; reranking silently falls back to cosine ordering. Install the optional dependency or set RERANKER_PROVIDER=cosine/cohere.');
+    rerankerRegistry.set('local', { reranker: undefined, status: { ok: false, reason: '@xenova/transformers is not installed' } });
   });
 }
 

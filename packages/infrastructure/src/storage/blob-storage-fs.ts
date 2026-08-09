@@ -1,7 +1,7 @@
 import { promises as fs, createReadStream } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
-import { PayloadTooLargeError, type BlobStorage } from '@app/domain';
+import { logger, PayloadTooLargeError, type BlobStorage } from '@app/domain';
 import { BLOB_GET_MAX_BYTES } from '@app/infrastructure/config';
 
 export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTES): BlobStorage {
@@ -43,7 +43,7 @@ export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTE
       try {
         await fs.unlink(assertSafeKey(key));
       } catch (e) {
-        console.warn(`[blob-storage] delete failed for ${key}`, e);
+        logger.warn(`[blob-storage] delete failed for ${key}`, { error: e });
       }
     },
   };

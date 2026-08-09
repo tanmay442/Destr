@@ -67,7 +67,11 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
   };
 }
 
-async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
+async function resolveParents(
+  hits: RetrievedChunkRow[],
+  deps: SearchDeps,
+  topN: number,
+): Promise<RetrievedChunk[]> {
   const childHits = hits.filter((h) => h.parentChunkId != null);
   const flatHits = hits.filter((h) => h.parentChunkId == null);
   if (childHits.length === 0) {
@@ -111,7 +115,9 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
     .filter((h) => !parentByIdHas(h.parentChunkId))
     .map(toRetrievedChunk);
 
-  return [...resolved, ...orphanedChildren, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
+  return [...resolved, ...orphanedChildren, ...flatHits.map(toRetrievedChunk)]
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topN);
 }
 
 async function resolveWindow(
@@ -275,6 +281,6 @@ async function capAndResolve(
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'
       ? await resolveWindow(capped, deps, opts.parentChildWindow ?? PARENT_CHILD_WINDOW)
-      : await resolveParents(capped, deps);
+      : await resolveParents(capped, deps, topN);
   return ok(resolved);
 }

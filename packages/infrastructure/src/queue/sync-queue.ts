@@ -1,4 +1,4 @@
-import type { IngestQueue } from '@app/domain';
+import { logger, type IngestQueue } from '@app/domain';
 
 export interface SyncQueueOptions {
   ingest?: (documentId: number) => Promise<void>;
@@ -8,7 +8,7 @@ export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
   const env = process.env.NODE_ENV ?? 'development';
   const isProd = env === 'production';
   if (!opts.ingest) {
-    console.warn(
+    logger.warn(
       '[ingest-queue] Sync (no-op) queue is active. Documents enqueued here will NOT be ingested. ' +
         'Set QSTASH_TOKEN to enable async ingest.' +
         (isProd ? ' Running in production without QSTASH_TOKEN means uploads never get chunked/embedded.' : ''),
@@ -20,7 +20,7 @@ export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
         await opts.ingest(documentId);
         return;
       }
-      console.warn(
+      logger.warn(
         `[ingest-queue] enqueue(${documentId}) is a no-op: document will not be ingested. ` +
           'Set QSTASH_TOKEN to enable async ingest.',
       );

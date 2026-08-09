@@ -6,7 +6,7 @@ import {
 } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
-import { ForbiddenError, UnauthorizedError } from '@app/domain';
+import { ForbiddenError, UnauthorizedError, logger } from '@app/domain';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
@@ -99,7 +99,7 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
     const client = await clerkClient();
     await client.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } })
       .catch((e: unknown) => {
-        console.warn('[clerk] failed to write-back role=admin to Clerk publicMetadata', { userId, error: e });
+        logger.warn('[clerk] failed to write-back role=admin to Clerk publicMetadata', { userId, error: e });
       });
   }
   void touchLastSeen(userId).catch(() => {});
@@ -188,7 +188,7 @@ function createMiddleware(): AuthAdapter['middleware'] {
     }
     if (req.nextUrl.pathname.startsWith('/api/')) {
       if (process.env.NODE_ENV !== 'production') {
-        console.warn(
+        logger.warn(
           `[clerk] Unmatched API route ${req.nextUrl.pathname} rejected with 401; add it to isPublicRoute or isProtectedRoute.`,
         );
       }

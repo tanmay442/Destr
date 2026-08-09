@@ -290,21 +290,43 @@ const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
   { label: 'Open a ticket', text: "I'd like to open a knowledge ticket." },
 ];
 
+function precedingUserMessageId(
+  messages: MyUIMessage[],
+  assistant: MyUIMessage,
+): string | undefined {
+  const index = messages.findIndex((m) => m.id === assistant.id);
+  for (let i = index >= 0 ? index - 1 : messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m && m.role === 'user') return m.id;
+  }
+  return undefined;
+}
+
 export function ChatInterface() {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>({});
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
-  const pendingTurnIdRef = useRef<string[]>([]);
+  // Pending turns keyed by the id of the user message that started them, so a
+  // late/failed stream can never steal the turn of a newer message.
+  const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
+  const messagesRef = useRef<MyUIMessage[]>([]);
   const submittingRef = useRef(false);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
     transport,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
-      const turnId = pendingTurnIdRef.current.shift();
-      if (!turnId || isAbort || isDisconnect || isError) return;
+      if (isAbort || isDisconnect || isError) return;
       if (message.role !== 'assistant') return;
+      const userMessageId = precedingUserMessageId(messagesRef.current, message);
+      if (!userMessageId) return;
+      const turnId = pendingTurnIdRef.current.get(userMessageId);
+      if (!turnId) return;
+      pendingTurnIdRef.current.delete(userMessageId);
       setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
     },
+  });
+  useEffect(() => {
+    messagesRef.current = messages;
   });
 
   const submit = async (text: string) => {
@@ -313,14 +335,13 @@ export function ChatInterface() {
     if (submittingRef.current) return;
     submittingRef.current = true;
     const turnId = crypto.randomUUID();
-    pendingTurnIdRef.current.push(turnId);
+    const messageId = crypto.randomUUID();
+    pendingTurnIdRef.current.set(messageId, turnId);
     try {
-      await sendMessage({ text: trimmed }, { body: { turnId } });
+      await sendMessage({ text: trimmed, messageId }, { body: { turnId } });
       setInput('');
     } catch {
-      pendingTurnIdRef.current = pendingTurnIdRef.current.filter(
-        (queued) => queued !== turnId,
-      );
+      pendingTurnIdRef.current.delete(messageId);
       submittingRef.current = false;
     }
   };

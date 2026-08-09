@@ -17,7 +17,6 @@ function makeDeps(): AgenticDeps {
     search: {} as AgenticDeps['search'],
     queryRewriter: { rewrite: rewriterMock },
     documentGrader: { grade: graderMock },
-    hallucinationGrader: { grade: vi.fn() },
   };
 }
 
