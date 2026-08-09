@@ -118,8 +118,8 @@ describe('createUpstashRateLimiter', () => {
     expect(result.retryAfterMs).toBe(60_000);
   });
 
-  it('coerces string remaining counts in the allowed branch (M2)', async () => {
-    redisMock.eval.mockResolvedValue([1, '29']);
+  it('coerces a string ok flag in the allowed branch (M2)', async () => {
+    redisMock.eval.mockResolvedValue(['1', '29']);
     const limiter = createUpstashRateLimiter();
     const result = await limiter.check('user:1', { limit: 30, windowMs: 60_000 });
     expect(result.ok).toBe(true);

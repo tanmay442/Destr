@@ -352,7 +352,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.blobStorage.delete).toHaveBeenCalled();
   });
 
-  it('reverts fileHash and status on replace-enqueue failure so re-upload is not falsely unchanged', async () => {
+  it('reverts fileHash, status, and storageKey on replace-enqueue failure so re-upload is not falsely unchanged', async () => {
     vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
@@ -370,6 +370,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.documents.update).toHaveBeenLastCalledWith(1, {
       fileHash: 'old-hash',
       ingestStatus: 'done',
+      storageKey: 'docs/old/f.pdf',
     });
   });
 
@@ -390,6 +391,12 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(result.ok).toBe(false);
     expect(mocks.blobStorage.delete).not.toHaveBeenCalledWith('docs/old/f.pdf');
     expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
+    // The reused row must point back at the old blob, not the deleted new key.
+    expect(mocks.documents.update).toHaveBeenLastCalledWith(1, {
+      fileHash: 'old-hash',
+      ingestStatus: 'done',
+      storageKey: 'docs/old/f.pdf',
+    });
   });
 
   it('does not delete chunks on the async replace path (worker-side delete owns it)', async () => {

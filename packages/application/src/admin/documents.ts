@@ -157,12 +157,17 @@ async function restoreForReupload(
 
 async function rollbackEnqueueFailure(
   row: { id: number; storageKey: string | null },
-  previous: { fileHash: string | null; status: IngestStatus | null },
+  previous: { fileHash: string | null; status: IngestStatus | null; storageKey: string | null },
   deps: { documents: DocumentRepository; blobStorage: BlobStorage },
 ): Promise<void> {
   if (previous.fileHash) {
+    // Point the row back at the old blob so it never references the deleted key.
     await deps.documents
-      .update(row.id, { fileHash: previous.fileHash, ingestStatus: previous.status ?? 'failed' })
+      .update(row.id, {
+        fileHash: previous.fileHash,
+        ingestStatus: previous.status ?? 'failed',
+        storageKey: previous.storageKey,
+      })
       .catch(() => {});
     if (row.storageKey) await deps.blobStorage.delete(row.storageKey).catch(() => {});
     return;
@@ -262,6 +267,7 @@ async function queuePdfForIngest(
   const previous = {
     fileHash: existing?.fileHash ?? null,
     status: existing?.ingestStatus ?? null,
+    storageKey: existing?.storageKey ?? null,
   };
   let row: DocumentRow;
   try {
@@ -392,7 +398,11 @@ export async function replacePdf(
     await deps.blobStorage.put(key, input.buffer, 'application/pdf');
 
     const useAsync = input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled();
-    const previous = { fileHash: existing.fileHash, status: existing.ingestStatus };
+    const previous = {
+      fileHash: existing.fileHash,
+      status: existing.ingestStatus,
+      storageKey: existing.storageKey,
+    };
     let parsed: Awaited<ReturnType<typeof parseAndEmbed>> | null = null;
     if (!useAsync) {
       parsed = await parseAndEmbed(

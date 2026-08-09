@@ -33,11 +33,13 @@ export function createUpstashRateLimiter(): RateLimiter {
       const redisKey = `ratelimit:${key}`;
       const now = Date.now();
       const windowMs = opts.windowMs;
-      const [ok, rawSecond] = (await redis.eval(
+      const [rawOk, rawSecond] = (await redis.eval(
         RATE_LIMITER_LUA,
         [redisKey],
         [now, windowMs, opts.limit],
-      )) as [number, number];
+      )) as [unknown, unknown];
+      // Upstash may surface integer zset values as strings; coerce before comparing.
+      const ok = Number(rawOk);
       const second = Number(rawSecond);
       if (ok === 1) {
         return { ok: true, remaining: Math.max(0, second), resetMs: windowMs };

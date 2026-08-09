@@ -93,6 +93,25 @@ describe('document-aware strategy', () => {
     expect(chunks.some((c) => c.content.includes('shown below.'))).toBe(true);
   });
 
+  it('splits a sentence that ends in a digit before a numbered heading (H1)', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: 'The count is 5. 3.1 Results\n\nBody.' },
+    ]);
+    expect(chunks.some((c) => c.sectionTitle === '3.1 Results')).toBe(true);
+    expect(chunks.some((c) => c.content.includes('The count is 5.'))).toBe(true);
+  });
+
+  it('keeps the audit numbered heading intact (H1)', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: 'Section 4.2.1. Deployment\n\nBody under the section.' },
+    ]);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('Section 4.2.1. Deployment');
+    expect(body).not.toContain('\n\n2.1. Deployment');
+  });
+
   it('stamps chunks with the page their content came from, not the next page header', async () => {
     const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
     const chunks = await s.splitPages([

@@ -131,7 +131,14 @@ async function resolveWindow(
     for (const n of ordered) seen.add(n.id);
     resolved.push({
       ...toRetrievedChunk(h),
-      content: windowed.length > 0 ? windowed.map((n) => n.content).join('\n\n') : h.content,
+      // A fully subsumed hit is still emitted, but its content was already
+      // included in a sibling window, so do not duplicate the tokens.
+      content:
+        windowed.length > 0
+          ? windowed.map((n) => n.content).join('\n\n')
+          : seen.has(h.id)
+            ? ''
+            : h.content,
     });
   }
   return resolved;

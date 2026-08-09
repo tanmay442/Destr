@@ -14,8 +14,15 @@ interface Block {
   page: number;
 }
 
+// Split sentences that run into a numbered heading ("below. 3.1 Methods"),
+// including when the sentence ends in a digit ("count is 5. 3.1 Results"),
+// while never touching dots inside a numbering run ("3.1. Introduction",
+// "Section 4.2.1. Deployment") or decimals ("3.5 Dollars").
+const HEADING_SPLIT_RE =
+  /(?<![0-9])\.(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z])|(?<=\s\d)\.(?=\s\d+\.\d+(?:\.\d+)*\.?\s+[A-Z])/g;
+
 function parseMarkdownBlocks(text: string, page: number): Block[] {
-  const normalized = text.replace(/(?<![0-9])\.(?=\s*\d+(?:\.\d+)*\.?\s+[A-Z])/g, '.\n\n');
+  const normalized = text.replace(HEADING_SPLIT_RE, '.\n\n');
   const lines = normalized.split(/\r?\n/);
   const blocks: Block[] = [];
   let current: { type: Block['type']; level: number; lines: string[] } | null = null;

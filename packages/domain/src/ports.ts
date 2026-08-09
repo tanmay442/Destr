@@ -50,7 +50,13 @@ export interface DocumentRepository {
   /** Update mutable metadata of an existing row in place (keeps its id). */
   update(
     id: number,
-    patch: { fileName?: string; fileHash?: string; uploadedBy?: string; ingestStatus?: IngestStatus },
+    patch: {
+      fileName?: string;
+      fileHash?: string;
+      uploadedBy?: string;
+      ingestStatus?: IngestStatus;
+      storageKey?: string | null;
+    },
   ): Promise<DocumentRow>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;

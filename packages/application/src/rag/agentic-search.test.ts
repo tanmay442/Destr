@@ -139,10 +139,42 @@ describe('agenticSearch', () => {
       inflight--;
       return 'yes';
     });
-    const res = await agenticSearch('q', makeDeps());
+    const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 0 });
     expect(res.ok).toBe(true);
     expect(unwrap(res).chunks).toHaveLength(6);
     expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('still retries when the first pass fills the retrieval limit (M5 default knobs)', async () => {
+    // Defaults: stepBudget 8, retrieveLimit 10, maxRetries 1. The first pass
+    // grades 4 rows and must leave room for a retry pass instead of spending
+    // the whole budget up front.
+    searchChunksMock.mockResolvedValue(ok(Array.from({ length: 10 }, (_, i) => chunk(`doc ${i}`, 0.2))));
+    graderMock.mockResolvedValue('no');
+    const res = await agenticSearch('q', makeDeps());
+    expect(res.ok).toBe(true);
+    expect(searchChunksMock).toHaveBeenCalledTimes(2);
+    expect(graderMock).toHaveBeenCalledTimes(8);
+    expect(unwrap(res).chunks).toHaveLength(0);
+    expect(unwrap(res).outOfDomain).toBe(true);
+  });
+
+  it('ignores ungraded rows when deciding out-of-domain (M5)', async () => {
+    // 8 low-similarity rows are graded across both passes; the 2 high-similarity
+    // rows fall outside the budget and were never graded, so they must not
+    // suppress the out-of-domain flag.
+    searchChunksMock.mockResolvedValue(
+      ok([
+        ...Array.from({ length: 8 }, (_, i) => chunk(`doc ${i}`, 0.1)),
+        chunk('high sim ungraded', 0.99),
+        chunk('high sim ungraded 2', 0.98),
+      ]),
+    );
+    graderMock.mockResolvedValue('no');
+    const res = await agenticSearch('q', makeDeps());
+    expect(res.ok).toBe(true);
+    expect(unwrap(res).chunks).toHaveLength(0);
+    expect(unwrap(res).outOfDomain).toBe(true);
   });
 
   it('keeps a chunk when its grader call throws instead of aborting the search', async () => {

@@ -82,9 +82,11 @@ export async function agenticSearch(
       }
     };
 
-    const stepBudget = deps.stepBudget ?? AGENT_STEP_BUDGET;
+    const stepBudget = Math.max(1, deps.stepBudget ?? AGENT_STEP_BUDGET);
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
-    let budget = Math.max(1, stepBudget);
+    // Share the budget across all passes so a dense first retrieval cannot starve the retry loop.
+    const perPassBudget = Math.max(1, Math.floor(stepBudget / (maxRetries + 1)));
+    let budget = stepBudget;
 
     const runPass = async (query: string): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> => {
       const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
@@ -92,11 +94,11 @@ export async function agenticSearch(
         throw new ExternalServiceError('Agentic retrieval failed', found.error);
       }
       const rows = found.value;
-      const graded = rows.slice(0, budget);
+      const graded = rows.slice(0, Math.min(perPassBudget, budget));
       budget -= graded.length;
       const grades = await gradeBounded(query, graded, deps);
       const kept = graded.filter((_, i) => grades[i] === 'yes');
-      const maxSimilarity = rows.reduce((m, r) => Math.max(m, r.similarity), 0);
+      const maxSimilarity = graded.reduce((m, r) => Math.max(m, r.similarity), 0);
       return { chunks: kept, maxSimilarity };
     };
 
