@@ -82,7 +82,6 @@ describe('ingestFile', () => {
     const deleteById = vi.fn().mockResolvedValue(undefined);
     const deleteByDocumentId = vi.fn().mockResolvedValue(undefined);
     const insertMany = vi.fn().mockResolvedValue(undefined);
-    // Upsert-by-name reuses the existing row id (1).
     const insert = vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null });
     const deps = makeDeps({
       documents: {
@@ -122,8 +121,6 @@ describe('ingestFile', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.status).toBe('updated');
-    // Regression: never delete the row we just upserted (previously caused an FK
-    // violation on the audit insert), and replace its chunks wholesale.
     expect(deleteById).not.toHaveBeenCalled();
     expect(deleteByDocumentId).toHaveBeenCalledWith(1);
     expect(deleteByDocumentId).toHaveBeenCalledBefore(insertMany);

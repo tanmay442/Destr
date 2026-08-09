@@ -67,9 +67,6 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
   };
 }
 
-/** Resolve child vector hits to their parent blocks (`parent` mode).
- *  Returns one entry per parent, using parent content with the most-relevant
- *  child's citation. Flat chunks pass through unchanged. */
 async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Promise<RetrievedChunk[]> {
   const childHits = hits.filter((h) => h.parentChunkId != null);
   const flatHits = hits.filter((h) => h.parentChunkId == null);
@@ -108,8 +105,7 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
     })
     .sort((a, b) => b.similarity - a.similarity);
 
-  // Children whose parent is missing fall back to the child hit itself so
-  // they are not silently dropped (recall loss).
+  // Orphaned children (parent missing) fall back to the child hit so recall is not silently lost.
   const parentByIdHas = (id: number | null | undefined) => id != null && parentById.has(id);
   const orphanedChildren = childHits
     .filter((h) => !parentByIdHas(h.parentChunkId))
@@ -118,9 +114,6 @@ async function resolveParents(hits: RetrievedChunkRow[], deps: SearchDeps): Prom
   return [...resolved, ...orphanedChildren, ...flatHits.map(toRetrievedChunk)].sort((a, b) => b.similarity - a.similarity);
 }
 
-/** Pad each hit with its `±N` neighbouring chunks (`window` mode).
- *  Concatenates neighbour content for context in a single batched round-trip.
- *  Hits with no neighbours are skipped; overlapping windows are deduped by chunk id. */
 async function resolveWindow(
   hits: RetrievedChunkRow[],
   deps: SearchDeps,
@@ -152,12 +145,10 @@ async function resolveWindow(
   return resolved;
 }
 
-/** Drop candidates below the similarity threshold (post-rerank cutoff). */
 function filterByThreshold(rows: RetrievedChunkRow[], threshold: number): RetrievedChunkRow[] {
   return rows.filter((r) => r.similarity >= threshold);
 }
 
-/** Reorder by reranker relevance score, drop below-threshold candidates, cap to `topN`. Falls back to cosine on failure. */
 async function rerankRows(
   query: string,
   rows: RetrievedChunkRow[],
@@ -181,8 +172,7 @@ function sortBySimilarity(rows: RetrievedChunkRow[]): RetrievedChunkRow[] {
   return [...rows].sort((a, b) => b.similarity - a.similarity);
 }
 
-/** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and
- *  lexical rankings, rewarding chunks that rank well in either modality. */
+/** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and lexical rankings. */
 function reciprocalRankFusion(
   vectorRows: RetrievedChunkRow[],
   lexicalRows: RetrievedChunkRow[],
@@ -271,7 +261,6 @@ export async function searchChunks(
   return capAndResolve(fused, query, topN, opts, deps);
 }
 
-/** Apply optional reranker + parent/window resolution, then cap to `topN`. */
 async function capAndResolve(
   rows: RetrievedChunkRow[],
   query: string,

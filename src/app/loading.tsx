@@ -1,4 +1,3 @@
-// Shown while the root layout resolves auth/data; route groups supply their own skeletons.
 export default function RootLoading() {
   return (
     <div

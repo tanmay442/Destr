@@ -15,8 +15,6 @@ describe('splitSentences', () => {
   });
 
   it('splits CJK text on 。！？', () => {
-    // Regression for M45: ASCII-only splitter left an entire CJK document as
-    // one "sentence"; CJK uses 。！？ as terminators, not .!?
     const s = splitSentences('这是第一句。这是第二句！这是第三句？');
     expect(s).toHaveLength(3);
   });
@@ -52,8 +50,6 @@ describe('splitSentences', () => {
   });
 
   it('tracks hard-split offsets incrementally without re-searching', () => {
-    // Regression for H27: repeated words must not resolve to an earlier
-    // occurrence, and no start may be -1.
     const s = splitSentences('word word word '.repeat(60).trim(), 100);
     expect(s.length).toBeGreaterThan(1);
     expect(s.every((x) => x.start >= 0)).toBe(true);
@@ -98,7 +94,6 @@ describe('chunkBySentences', () => {
   it('enforces both the char maxSize and the token cap (H26)', () => {
     const text = Array.from({ length: 30 }, (_, i) => `Sentence number ${i + 1} here now.`).join(' ');
     const chunks = chunkBySentences(text, 120, 0, 'text-embedding-3-small', 400);
-    // OpenAI rate ~0.25 tok/char: 120 chars ≈ 30 tokens — chars bind first.
     expect(chunks.every((c) => c.length <= 120)).toBe(true);
     expect(chunks.every((c) => estimateTokens(c, 'text-embedding-3-small') <= 400)).toBe(true);
   });

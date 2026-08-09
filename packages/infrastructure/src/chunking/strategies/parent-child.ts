@@ -20,14 +20,12 @@ export interface ParentChildOptions {
   overlap?: number | undefined;
 }
 
-/** Snap a character index back to the nearest word boundary. */
 function snapToWordBoundary(text: string, targetIndex: number): number {
   if (targetIndex >= text.length) return text.length;
   const lastSpace = text.lastIndexOf(' ', targetIndex);
   return lastSpace > 0 ? lastSpace : targetIndex;
 }
 
-/** Split a section larger than maxSize into word-boundary chunks. */
 function splitOversizedText(text: string, maxSize: number): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -42,7 +40,6 @@ function splitOversizedText(text: string, maxSize: number): string[] {
   return parts;
 }
 
-/** Detect table-like content (spaced columns or pipe rows) to keep it atomic. */
 function looksLikeTable(text: string): boolean {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return false;
@@ -66,7 +63,6 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
       const sanitizedText = cleanTextArtifacts(s.text);
       if (!sanitizedText) continue;
 
-      // If a single section is larger than parentSize, split it first
       if (sanitizedText.length > parentSize) {
         if (current) {
           parents.push(current);
@@ -118,7 +114,6 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
           if (parent.title) lastTitle = parent.title;
           const parentSource = parentTitle ? `Page ${page} — ${parentTitle}` : `Page ${page}`;
 
-          // Emit the parent block.
           chunks.push(
             makeDocumentChunk({
               content: parent.text,

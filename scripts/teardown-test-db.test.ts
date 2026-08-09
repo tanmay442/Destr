@@ -71,7 +71,6 @@ describe('teardown-test-db', () => {
     process.env.NEON_PROJECT_ID = 'proj-1';
     process.env.NEON_TEST_BRANCH = 'dev-test';
 
-    // A human-created branch matching the *base* name but without the tag.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -82,7 +81,6 @@ describe('teardown-test-db', () => {
     });
 
     await runTeardown();
-    // No DELETE issued; only the list request happened.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(existsSync(envPath())).toBe(false);
   });
@@ -106,7 +104,6 @@ describe('teardown-test-db', () => {
     await runTeardown();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Running again with force deletes it.
     process.env.NEON_TEST_BRANCH_FORCE = '1';
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce({

@@ -170,7 +170,6 @@ describe('setup-test-db', () => {
     process.env.NEON_TEST_BRANCH_TTL_HOURS = '1';
     const stale = '2020-01-01T00:00:00Z';
 
-    // 1. list: stale owned branch exists
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -179,14 +178,12 @@ describe('setup-test-db', () => {
         branches: [{ id: 'br-old', name: 'dev-test__ragtest__', created_at: stale }],
       }),
     });
-    // 2. DELETE the stale branch
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       text: async () => '',
       json: async () => ({}),
     });
-    // 3. create a fresh branch
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -196,14 +193,12 @@ describe('setup-test-db', () => {
         operations: [],
       }),
     });
-    // 4. endpoints list (empty)
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       text: async () => '',
       json: async () => ({ endpoints: [] }),
     });
-    // 5. create endpoint (active immediately)
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -212,7 +207,6 @@ describe('setup-test-db', () => {
         endpoint: { id: 'ep-new', type: 'read_write', current_state: 'active' },
       }),
     });
-    // 6. connection uri
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,

@@ -34,8 +34,6 @@ export async function main() {
   }
   const headers = neonHeaders(API_KEY);
 
-  // Search by the base name so legacy/un-tagged branches surface in the list;
-  // anything that isn't test-owned is refused.
   const branches = await fetchBranches(PROJECT_ID, BASE_BRANCH, API_KEY);
   const owned = branches.filter((b) => isTestOwnedBranch(b.name));
   const branch = branches.find((b) => b.name === TEST_BRANCH);

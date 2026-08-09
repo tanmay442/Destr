@@ -17,10 +17,9 @@ async function main() {
   let migrated = 0;
   let skipped = 0;
   let lastId = 0;
+  // Keyset pagination: `id > lastId` stays stable even as the filter mutates
+  // while storage_key is set on each migrated row.
   let batch = await db.query.documents.findMany({
-    // Keyset pagination: `id > lastId` is stable even though the filter
-    // mutates as we set storage_key on each migrated row. Offset counting
-    // over a shrinking filter set would silently skip rows (M25).
     where: (cols, { and: andFn, gt: gtFn }) =>
       andFn(pending, gtFn(cols.id, lastId)),
     orderBy: (cols, { asc }) => [asc(cols.id)],
@@ -65,8 +64,6 @@ async function main() {
     });
   }
 
-  // No rows may remain un-migrated (they would have matched `pending` while
-  // lastId advanced past them only if the pagination had drifted).
   const remaining = await db.query.documents.findMany({
     where: pending,
     columns: { id: true },

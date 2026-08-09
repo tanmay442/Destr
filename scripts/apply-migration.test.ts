@@ -56,7 +56,6 @@ describe('applyMigrations', () => {
     const { query, release, end, factory } = makePoolFactory();
     await applyMigrations({ dir: tmp, poolFactory: factory, logger: silent });
 
-    // lock, extension, tracking, select, BEGIN, 2 stmts, record, COMMIT, unlock
     expect(query).toHaveBeenCalledTimes(10);
     expect(query.mock.calls[0]?.[0]).toBe('SELECT pg_advisory_lock($1)');
     expect(query.mock.calls[1]?.[0]).toMatch(/CREATE EXTENSION IF NOT EXISTS vector/);
@@ -91,18 +90,17 @@ describe('applyMigrations', () => {
   it('rolls back the file transaction when a statement fails mid-file', async () => {
     const { query, factory } = makePoolFactory();
     query
-      .mockResolvedValueOnce({ rows: [] }) // lock
-      .mockResolvedValueOnce({ rows: [] }) // extension
-      .mockResolvedValueOnce({ rows: [] }) // tracking
-      .mockResolvedValueOnce({ rows: [] }) // applied
-      .mockResolvedValueOnce({ rows: [] }) // BEGIN
-      .mockResolvedValueOnce({ rows: [] }) // statement 1
-      .mockRejectedValueOnce(Object.assign(new Error('boom'), { code: '23505' })); // statement 2
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(Object.assign(new Error('boom'), { code: '23505' }));
     await expect(
       applyMigrations({ dir: tmp, poolFactory: factory, logger: silent }),
     ).rejects.toThrow(/boom/);
     expect(query.mock.calls.some(([sql]) => sql === 'ROLLBACK')).toBe(true);
-    // No record inserted, no commit emitted.
     const inserted = query.mock.calls.some(
       ([sql]) => typeof sql === 'string' && sql.includes('INSERT INTO'),
     );
@@ -112,11 +110,11 @@ describe('applyMigrations', () => {
   it('refuses a benign skip for a migration file never recorded', async () => {
     const { query, factory } = makePoolFactory();
     query
-      .mockResolvedValueOnce({ rows: [] }) // lock
-      .mockResolvedValueOnce({ rows: [] }) // extension
-      .mockResolvedValueOnce({ rows: [] }) // tracking
-      .mockResolvedValueOnce({ rows: [] }) // applied (empty)
-      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockRejectedValueOnce(Object.assign(new Error('dup obj'), { code: '42710' }));
     await expect(
       applyMigrations({ dir: tmp, poolFactory: factory, logger: silent }),
@@ -126,9 +124,9 @@ describe('applyMigrations', () => {
 
   it('rejects re-running an already-applied file whose content changed', async () => {
     const { query, factory } = makePoolFactory();
-    query.mockResolvedValueOnce({ rows: [] }) // lock
-      .mockResolvedValueOnce({ rows: [] }) // extension
-      .mockResolvedValueOnce({ rows: [] }) // tracking
+    query.mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [{ file_name: '0000_init.sql', hash: 'different' }],
       });
@@ -142,14 +140,13 @@ describe('applyMigrations', () => {
     const content = readFileSync(join(tmp, '0000_init.sql'), 'utf8');
     const hash = __test.simpleHash(content);
     query
-      .mockResolvedValueOnce({ rows: [] }) // lock
-      .mockResolvedValueOnce({ rows: [] }) // extension
-      .mockResolvedValueOnce({ rows: [] }) // tracking
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [{ file_name: '0000_init.sql', hash }],
       });
     await applyMigrations({ dir: tmp, poolFactory: factory, logger: silent });
-    // No BEGIN means no statements were executed for the file.
     const began = query.mock.calls.some(([sql]) => sql === 'BEGIN');
     expect(began).toBe(false);
   });
@@ -157,11 +154,11 @@ describe('applyMigrations', () => {
   it('rethrows on an unknown error so the operator sees it', async () => {
     const { query, factory } = makePoolFactory();
     query
-      .mockResolvedValueOnce({ rows: [] }) // lock
-      .mockResolvedValueOnce({ rows: [] }) // extension
-      .mockResolvedValueOnce({ rows: [] }) // tracking
-      .mockResolvedValueOnce({ rows: [] }) // applied
-      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockRejectedValueOnce(new Error('connection refused'));
     await expect(
       applyMigrations({ dir: tmp, poolFactory: factory, logger: silent }),

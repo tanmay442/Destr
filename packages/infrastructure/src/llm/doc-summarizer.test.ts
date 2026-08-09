@@ -29,7 +29,6 @@ describe('docSummarizer (Contextual Chunk Headers)', () => {
     const call = generateText.mock.calls[0]![0];
     expect(call.model).toEqual({ id: 'fake-model' });
     expect(call.maxOutputTokens).toBeGreaterThan(0);
-    // The prompt wraps the (truncated) excerpt; it must not exceed the cap by much.
     expect(call.prompt.length).toBeLessThanOrEqual(CCH_CONTEXT_CHARS + 256);
   });
 

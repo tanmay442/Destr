@@ -98,7 +98,6 @@ describe('reingestAll', () => {
 
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
-    // The worker short-circuits on `done`; reingest must first flip the status.
     expect(documents.update).toHaveBeenCalledWith(1, { ingestStatus: 'queued' });
     expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
   });

@@ -12,7 +12,7 @@ import { MAX_LIST_LIMIT } from '@app/domain';
 
 const DEFAULT_DOCUMENT_LIMIT = 20;
 
-/** Rough blended token prices (USD per 1M tokens) for estimated-cost card. */
+/** Rough blended token prices (USD per 1M tokens) for the estimated-cost card. */
 const TOKEN_COST_PER_MILLION = { input: 0.15, output: 0.6 } as const;
 
 const DEFAULT_TREND_DAYS = 84;

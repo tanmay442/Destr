@@ -1,16 +1,5 @@
-/**
- * Golden question set for the evaluation harness.
- *
- * Each entry carries the question plus the grading criteria:
- * `mustMention` phrases that a faithful,
- * correct answer is expected to surface, and `forbidden` phrases an answer must
- * NOT contain (typically out-of-domain hallucination markers). The harness
- * scores faithfulness (hallucination grader), correctness (mustMention recall),
- * and context-relevancy (did retrieval return any chunk containing a mustMention
- * phrase).
- *
- * Replace/extend these with real questions mined from your org's docs.
- */
+/** Golden questions for the eval harness. `mustMention` phrases a faithful
+ *  answer should surface; `forbidden` phrases an answer must not contain. */
 export interface GoldenQuestion {
   id: string;
   question: string;

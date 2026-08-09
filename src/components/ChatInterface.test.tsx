@@ -1,13 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
-// Mock useChat to drive messages from the test.
 const useChatMock = vi.fn();
 vi.mock('@ai-sdk/react', () => ({
   useChat: (...args: unknown[]) => useChatMock(...args),
 }));
 
-// No-op class mock; real impl not needed.
 vi.mock('ai', () => ({
   DefaultChatTransport: class {
     constructor() {}
@@ -160,7 +158,6 @@ describe('ChatInterface', () => {
     render(<ChatInterface />);
     const citation = screen.getByTestId('chat-citation');
     expect(citation).toBeInTheDocument();
-    // Similarity rendered as a percentage match.
     expect(within(citation).getByText(/92% match/i)).toBeInTheDocument();
     expect(
       within(citation).getByText(/dental plan covers two cleanings/i),
@@ -446,7 +443,6 @@ describe('ChatInterface', () => {
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {
     setupChat();
     render(<ChatInterface />);
-    // flex-1 + min-h-0 give the flex column height; assert on className (jsdom no layout).
     const container = screen.getByTestId('chat-scroll');
     const cls = container.className;
     expect(cls).toContain('flex-1');

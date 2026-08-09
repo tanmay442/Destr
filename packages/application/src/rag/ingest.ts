@@ -63,10 +63,6 @@ export interface ParseDeps {
   cchEnabled?: boolean | undefined;
 }
 
-/**
- * Generate the Contextual Chunk Header (CCH) for a document, once.
- * Returns the header string and title/summary metadata.
- */
 async function buildCchHeader(
   deps: ParseDeps,
   sourceText: string,
@@ -81,8 +77,7 @@ async function buildCchHeader(
   return { header, title, summary };
 }
 
-/** Attach the CCH header as an embedding-only prefix and stamp title/summary metadata.
- *  `content` stays clean so citation snippets and LLM tool content are unpolluted. */
+/** Attach the CCH header as an embedding-only prefix; `content` stays clean so citations are unpolluted. */
 function applyCchHeader(
   docChunks: DocumentChunk[],
   header: string,
@@ -102,7 +97,6 @@ function embeddingInput(c: DocumentChunk): string {
   return c.embeddingPrefix ? c.embeddingPrefix + c.content : c.content;
 }
 
-/** Turn parsed/split chunks into fully-populated PreparedChunk rows (no DB writes). */
 function toPreparedRows(
   docChunks: DocumentChunk[],
   embeddings: number[][],
@@ -132,7 +126,6 @@ export async function parseAndEmbed(
   let docChunks: DocumentChunk[];
   let sourceText = '';
   if (deps.contentParser && deps.chunkingStrategy) {
-    // New strategy path: yields per-page provenance.
     const pages = await deps.contentParser.extractPages(input.buffer);
     docChunks = await deps.chunkingStrategy.splitPages(pages);
     sourceText = pages.map((p) => p.text).join('\n\n');
@@ -154,7 +147,7 @@ export async function parseAndEmbed(
     return err(new ValidationError(`No extractable text in ${input.fileName}`));
   }
 
-  // Parent blocks are filtered from vector queries; skip embedding them.
+  // Parent blocks are excluded from vector queries; skip embedding them.
   const hasParents = docChunks.some((c) => c.kind === 'parent');
   const embeddable = docChunks.filter((c) => c.kind !== 'parent');
   if (hasParents && embeddable.length > 0) {

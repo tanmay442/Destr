@@ -34,8 +34,6 @@ export async function main() {
   let branch: { id: string; name: string; created_at?: string } | undefined =
     branches.find((b) => b.name === TEST_BRANCH);
 
-  // TTL guard: never reuse a stale branch left behind by a crashed run;
-  // delete it and create a fresh one.
   if (branch && isStaleBranch(branch.created_at, TTL_MS)) {
     console.log(`[setup-test-db] Branch ${branch.name} is stale; recreating.`);
     await deleteBranch(PROJECT_ID, branch.id, API_KEY);
@@ -66,7 +64,6 @@ export async function main() {
       };
       branch = created.branch;
       console.log(`[setup-test-db] Created branch ${branch.name} (${branch.id})`);
-      // 423 until branch ready; poll ≤60s
       {
         const deadline = Date.now() + 60_000;
         let state = created.branch.current_state;
@@ -159,7 +156,6 @@ export async function main() {
     );
   }
 
-  // endpoint_id filter 404s; pin via branch_id
   const conn = await fetch(
     api(
       `/connection_uri?role_name=neondb_owner&database_name=neondb&branch_id=${branch.id}`,

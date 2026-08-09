@@ -31,11 +31,8 @@ describe('parent-child strategy', () => {
     const parents = chunks.filter((c) => c.kind === 'parent');
     const children = chunks.filter((c) => c.kind === 'child');
 
-    // Every parent's parentChunkId is null.
     expect(parents.every((p) => p.parentChunkId === null)).toBe(true);
 
-    // Every child references, via parentChunkId, the global chunkIndex of a
-    // parent that exists in this batch.
     const parentChunkIndexes = new Set(parents.map((p) => p.chunkIndex));
     expect(children.length).toBeGreaterThan(0);
     expect(children.every((c) => c.parentChunkId != null && parentChunkIndexes.has(c.parentChunkId!))).toBe(true);
@@ -54,7 +51,6 @@ describe('parent-child strategy', () => {
     const s = parentChildSplitter('m', { parentSize: 200, childSize: 60, overlap: 10 });
     const chunks = await s.splitPages(pages);
     const parents = chunks.filter((c) => c.kind === 'parent');
-    // With a tiny parent size, the input is forced into several small parents.
     expect(parents.length).toBeGreaterThan(1);
   });
 

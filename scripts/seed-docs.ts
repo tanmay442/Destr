@@ -21,7 +21,7 @@ if (invokedDirectly) {
   try {
     process.loadEnvFile('.env.local');
   } catch {
-    /* .env.local may not exist */
+    // .env.local may not exist.
   }
   const { parseSeedArgs } = await import('../packages/cli/src/commands/seed.js');
   const { dir, userId } = parseSeedArgs(process.argv.slice(2));

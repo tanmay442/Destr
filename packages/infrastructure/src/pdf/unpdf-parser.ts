@@ -10,8 +10,6 @@ function toParseError(cause: unknown): ParseError {
   return new ParseError(`Failed to parse PDF: ${msg}`, cause);
 }
 
-/** Open a PDF proxy, enforcing the byte and page-count guards up front. The
- *  input is viewed zero-copy (never copied, never detached by the parser). */
 async function openPdf(buffer: Buffer): Promise<PdfProxy> {
   if (buffer.length > PDF_PARSE_MAX_BYTES) {
     throw new ParseError(`PDF is ${buffer.length} bytes (> ${PDF_PARSE_MAX_BYTES})`);
@@ -32,7 +30,6 @@ async function openPdf(buffer: Buffer): Promise<PdfProxy> {
   }
 }
 
-/** Extract one page's text, mirroring unpdf's layout (EOL-aware str join). */
 async function getPageText(pdf: PdfProxy, pageNumber: number): Promise<string> {
   const page = await pdf.getPage(pageNumber);
   const content = await page.getTextContent();
@@ -42,7 +39,7 @@ async function getPageText(pdf: PdfProxy, pageNumber: number): Promise<string> {
     .join('');
 }
 
-/** Re-join spaces unpdf inserts inside dotted tokens (versions, URLs, emails). */
+// Re-join spaces unpdf inserts inside dotted tokens (versions, URLs, emails).
 function repairPdfSpacing(text: string): string {
   let out = text;
 
@@ -54,7 +51,6 @@ function repairPdfSpacing(text: string): string {
   return out;
 }
 
-/** Track a per-document running total; abort once the char budget is spent. */
 function checkCharBudget(additional: string, runningTotal: number): number {
   const total = runningTotal + additional.length;
   if (total > PDF_PARSE_MAX_CHARS) {

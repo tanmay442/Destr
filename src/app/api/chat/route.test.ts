@@ -318,7 +318,7 @@ describe('/api/chat searchDocumentation tool', () => {
     const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
       content: string;
     }>;
-    expect(result?.[0]?.content.length).toBe(800 + 1); // 800 chars + ellipsis
+    expect(result?.[0]?.content.length).toBe(800 + 1);
     expect(result?.[0]?.content.endsWith('\u2026')).toBe(true);
     searchChunksSpy.mockRestore();
   });
@@ -521,8 +521,6 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
 
 describe('/api/chat agentic loop (Session 8)', () => {
   beforeEach(() => {
-    // Mode selection is now driven by effectiveMode (cfg.retrievalMode), NOT by
-    // whether agenticSearch is defined — agenticSearch is always instantiated.
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = null;
   });

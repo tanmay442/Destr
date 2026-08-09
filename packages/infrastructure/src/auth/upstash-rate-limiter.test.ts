@@ -14,8 +14,6 @@ vi.mock('@upstash/redis', () => ({
   }),
 }));
 
-// Faithful emulation of the exported RATE_LIMITER_LUA script: a per-key sorted
-// set of unique `now:seq` members with a per-key sequence counter.
 class RedisZsetEmulator {
   private sets = new Map<string, Map<string, number>>();
   private seqs = new Map<string, number>();

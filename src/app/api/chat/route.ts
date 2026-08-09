@@ -32,7 +32,6 @@ function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'normal'): 
   });
 }
 
-/** Per-turn metrics accumulated while the tools run. Persisted to chat_events after generation completes. */
 interface TurnMetrics {
   retrieveMs: number;
   hitCount: number | null;
@@ -239,9 +238,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const isFirstTurn = messages.length <= 1;
 
-  // Canary rollout: decide once per request whether to honour the configured
-  // retrieval mode or its inverse, then thread that single decision through both
-  // the tool-selection gate and the step budget.
   const useConfiguredMode = Math.random() * 100 < cfg.retrievalModeRolloutPercent;
   const effectiveMode = useConfiguredMode
     ? cfg.retrievalMode

@@ -16,18 +16,8 @@ import {
   AGENTIC_ENABLED,
 } from '@app/infrastructure/config';
 
-// Runtime configuration for this deployment of the RAG Knowledge Agent.
-//
-// Edit any field, or run `pnpm configure` to be walked through the values
-// interactively. The schema at `@app/domain` validates
-// this object on load; required fields have defaults so an empty
-// file is valid.
-//
-// Required externally: nothing. This file is the source of truth for
-// org name, agent persona, admin bootstrap emails, and the seed-PDFs
-// directory. The setup CLI also writes `ADMIN_EMAILS` to .env.local
-// so the Clerk-based admin bootstrap code path keeps working.
-
+// Runtime configuration for this deployment. Edit any field here or run
+// `pnpm configure`; the schema at `@app/domain` validates it on load.
 const config: AppConfig = {
   // The full name of the org the agent represents. Used in the
   // system prompt and the landing page hero.
@@ -95,8 +85,6 @@ const config: AppConfig = {
   // Bootstrap admin emails. The first time a user with one of these
   // emails signs in via Clerk, they are auto-promoted to `admin`.
   // After that, admins promote others from /admin/users.
-  // The setup CLI also writes this list to ADMIN_EMAILS in
-  // .env.local so the existing bootstrap code path keeps working.
   adminEmails: [],
 
   // Browser tab title + meta description.

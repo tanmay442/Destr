@@ -1,4 +1,3 @@
-// Open Graph share image (1200x630); used by social link previews.
 import { ImageResponse } from 'next/og';
 
 export const alt = 'RAG Knowledge Agent';

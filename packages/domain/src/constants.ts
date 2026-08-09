@@ -1,13 +1,4 @@
-/**
- * Env-independent defaults for the app's tunable knobs.
- *
- * The same names are re-exported at runtime by `@app/infrastructure/config`
- * (`packages/infrastructure/src/config/env.ts`), which reads `process.env`
- * once at module load and falls back to these values. Runtime wiring
- * (composition, infrastructure) must import from `@app/infrastructure/config`;
- * only code that cannot depend on infrastructure (e.g. the application layer)
- * should import these static defaults directly. Keep the two in sync.
- */
+/** Env-independent defaults. Re-exported at runtime by `@app/infrastructure/config`; keep both in sync. */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
 export const BLOB_GET_MAX_BYTES = 50_000_000;
