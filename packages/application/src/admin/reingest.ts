@@ -18,9 +18,9 @@ export interface ReingestSummary {
 
 /**
  * Re-enqueue every non-deleted document for a full re-ingest against the
- * current strategy/model. Each doc is reset to `queued` (and its chunks
- * cleared when a chunk repo is available) before enqueueing, so the worker
- * actually re-parses instead of short-circuiting on the `done` status.
+ * current strategy/model. Each doc is reset to `queued` before enqueueing so
+ * the worker re-parses instead of short-circuiting on the `done` status;
+ * chunks are cleared only after the message is safely queued.
  */
 export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSummary>> {
   if (deps.queue.isNoOp()) {
@@ -47,8 +47,10 @@ export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSu
           if (doc.ingestStatus !== 'queued') {
             await deps.documents.update(doc.id, { ingestStatus: 'queued' });
           }
-          if (deps.chunks) await deps.chunks.deleteByDocumentId(doc.id);
           await deps.queue.enqueue({ documentId: doc.id });
+          // Drop chunks only after the message is safely queued so an enqueue
+          // failure never leaves a `queued` doc without an index to search.
+          if (deps.chunks) await deps.chunks.deleteByDocumentId(doc.id);
         } catch (e) {
           return err(new ExternalServiceError(`Failed to enqueue document ${doc.id}`, e));
         }

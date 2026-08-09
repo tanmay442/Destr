@@ -13,22 +13,31 @@ export function createSettingsRepo(client: Client = db): SettingsRepo {
       const existing = await client.query.appSettings.findFirst({
         where: eq(appSettings.id, ROW_ID),
       });
-      if (!existing) {
-        await client
-          .insert(appSettings)
-          .values({ id: ROW_ID, overrides: {}, version: 0 })
-          .onConflictDoNothing();
-        const seeded = await client.query.appSettings.findFirst({
-          where: eq(appSettings.id, ROW_ID),
-        });
+      if (existing) {
         return {
-          overrides: (seeded?.overrides ?? {}) as Partial<AppConfig>,
-          version: seeded?.version ?? 0,
+          overrides: (existing.overrides ?? {}) as Partial<AppConfig>,
+          version: existing.version,
         };
       }
+      // Seed on first read in a single round-trip; the returning row is the result.
+      const [seeded] = await client
+        .insert(appSettings)
+        .values({ id: ROW_ID, overrides: {}, version: 0 })
+        .onConflictDoNothing()
+        .returning({ overrides: appSettings.overrides, version: appSettings.version });
+      if (seeded) {
+        return {
+          overrides: (seeded.overrides ?? {}) as Partial<AppConfig>,
+          version: seeded.version,
+        };
+      }
+      // Lost a concurrent seed race: read the winner's row.
+      const row = await client.query.appSettings.findFirst({
+        where: eq(appSettings.id, ROW_ID),
+      });
       return {
-        overrides: (existing.overrides ?? {}) as Partial<AppConfig>,
-        version: existing.version,
+        overrides: (row?.overrides ?? {}) as Partial<AppConfig>,
+        version: row?.version ?? 0,
       };
     },
 

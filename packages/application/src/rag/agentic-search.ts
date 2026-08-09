@@ -1,9 +1,5 @@
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
-import type {
-  QueryRewriter,
-  DocumentGrader,
-  HallucinationGrader,
-} from '@app/domain';
+import type { QueryRewriter, DocumentGrader } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
 import {
   OUT_OF_DOMAIN_THRESHOLD,
@@ -16,7 +12,6 @@ export interface AgenticDeps {
   search: SearchDeps;
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
-  hallucinationGrader: HallucinationGrader;
   /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;

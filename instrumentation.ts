@@ -7,6 +7,7 @@ export async function register() {
       throw new Error(result.message);
     }
   }
-  const { startVectorDimensionCheck } = await import('@/composition');
+  const { startVectorDimensionCheck, startLocalRerankerCheck } = await import('@/composition');
   startVectorDimensionCheck();
+  startLocalRerankerCheck();
 }

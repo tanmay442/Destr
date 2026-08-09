@@ -23,6 +23,16 @@ function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
 
+/** True when the optional `@xenova/transformers` package can be imported. */
+export async function checkLocalRerankerAvailable(): Promise<boolean> {
+  try {
+    await import('@xenova/transformers');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let encoderPromise: Promise<CrossEncoder> | null = null;
 
 async function getEncoder(): Promise<CrossEncoder> {

@@ -15,6 +15,10 @@ COPY packages/domain/package.json ./packages/domain/
 COPY packages/infrastructure/package.json ./packages/infrastructure/
 COPY packages/cli/package.json ./packages/cli/
 COPY tsconfig.base.json ./
+# The local reranker (`RERANKER_PROVIDER=local`) needs the optional
+# @xenova/transformers package. It is installed by the line below; keep
+# --no-optional off, and in the runtime stage make TRANSFORMERS_CACHE a
+# writable path if you use it.
 RUN pnpm install --frozen-lockfile
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1

@@ -80,7 +80,9 @@ describe('filesystem blob storage', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = createFilesystemBlobStorage();
     await store.delete('does-not-exist');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('delete failed'), expect.anything());
+    const line = String(warn.mock.calls[0]?.[0] ?? '');
+    expect(line).toContain('delete failed');
+    expect(line).toContain('does-not-exist');
     warn.mockRestore();
   });
 });

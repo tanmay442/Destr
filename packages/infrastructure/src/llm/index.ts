@@ -14,7 +14,7 @@ import { getGoogleChatModel } from './google-chat-service';
 import { getOllamaChatModel } from './ollama-chat-service';
 import { getGoogleEmbeddingModelId } from './google-embedding-service';
 import { docSummarizer } from './doc-summarizer';
-import { localReranker } from './local-reranker';
+import { localReranker, checkLocalRerankerAvailable } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
 import {
   createGraders,
@@ -98,6 +98,7 @@ export { getEmbeddingModel, EMBEDDING_OPTIONS, getGoogleEmbeddingModelId } from 
 export {
   docSummarizer,
   localReranker,
+  checkLocalRerankerAvailable,
   cohereReranker,
   createGraders,
   queryRewriter,

@@ -1,22 +1,15 @@
 import { generateText } from 'ai';
-import type {
-  QueryRewriter,
-  DocumentGrader,
-  HallucinationGrader,
+import {
+  logger,
+  type QueryRewriter,
+  type DocumentGrader,
+  type HallucinationGrader,
 } from '@app/domain';
 import { getChatModel } from './index';
 import { GRADE_MODEL } from '@app/infrastructure/config';
 import { retryOnTransient } from './retry';
 
 const GRADE_RETRY_ATTEMPTS = 3;
-
-function redact(message: unknown): string {
-  const s = String(message);
-  return s
-    .replace(/sk-[a-zA-Z0-9]+/g, '[REDACTED]')
-    .replace(/Bearer\s+[^\s]+/gi, 'Bearer [REDACTED]')
-    .replace(/postgres:\/\/[^@\s]+@/gi, 'postgres://[REDACTED]@');
-}
 
 /**
  * Counters for grader failures. Incremented when a grader gives up on a
@@ -100,10 +93,10 @@ export function createGraders(gradeModelId?: string): Graders {
           return trimmed.length > 0 ? trimmed : query;
         } catch (err) {
           failureCounters.queryRewriter += 1;
-          console.error('[graders] query rewriter failed; echoing original query', {
+          logger.error('[graders] query rewriter failed; echoing original query', {
             severity: 'error',
             event: 'graders.query_rewriter.failed',
-            error: redact(err),
+            error: err,
           });
           return query;
         }
@@ -128,10 +121,10 @@ export function createGraders(gradeModelId?: string): Graders {
           return gradeVerdict(text);
         } catch (err) {
           failureCounters.documentGrader += 1;
-          console.error('[graders] document grader failed; dropping document (fail-closed)', {
+          logger.error('[graders] document grader failed; dropping document (fail-closed)', {
             severity: 'error',
             event: 'graders.document_grader.failed',
-            error: redact(err),
+            error: err,
           });
           return 'no';
         }
@@ -156,10 +149,10 @@ export function createGraders(gradeModelId?: string): Graders {
           return gradeVerdict(text);
         } catch (err) {
           failureCounters.hallucinationGrader += 1;
-          console.error('[graders] hallucination grader failed; treating answer as ungrounded (fail-closed)', {
+          logger.error('[graders] hallucination grader failed; treating answer as ungrounded (fail-closed)', {
             severity: 'error',
             event: 'graders.hallucination_grader.failed',
-            error: redact(err),
+            error: err,
           });
           return 'no';
         }

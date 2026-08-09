@@ -1,5 +1,5 @@
 import { Client } from '@upstash/qstash';
-import type { IngestQueue } from '@app/domain';
+import { logger, type IngestQueue } from '@app/domain';
 
 /**
  * Resolves the public ingest-worker base URL.
@@ -21,7 +21,7 @@ export function resolveIngestWorkerUrl(): string {
     }
     if (origin) {
       if (process.env.NODE_ENV === 'production') {
-        console.warn('[ingest-queue] QSTASH_INGEST_WORKER_URL is not set; falling back to NEXT_PUBLIC_APP_URL. Set the dedicated variable in production.');
+        logger.warn('[ingest-queue] QSTASH_INGEST_WORKER_URL is not set; falling back to NEXT_PUBLIC_APP_URL. Set the dedicated variable in production.');
       }
       return normalizeWorkerUrl(origin);
     }
@@ -29,7 +29,7 @@ export function resolveIngestWorkerUrl(): string {
   const vercelUrl = process.env.VERCEL_URL;
   if (vercelUrl && vercelUrl.trim()) {
     if (process.env.NODE_ENV === 'production') {
-      console.warn('[ingest-queue] QSTASH_INGEST_WORKER_URL is not set; falling back to VERCEL_URL. Set the dedicated variable in production.');
+      logger.warn('[ingest-queue] QSTASH_INGEST_WORKER_URL is not set; falling back to VERCEL_URL. Set the dedicated variable in production.');
     }
     return normalizeWorkerUrl(`https://${vercelUrl.trim().replace(/^https?:\/\//, '')}`);
   }
@@ -50,7 +50,7 @@ function normalizeWorkerUrl(raw: string): string {
       `[ingest-queue] Refusing worker URL ${url}: QStash cannot reach a localhost address. ` +
       'Set QSTASH_INGEST_WORKER_URL to a publicly reachable URL.';
     if (process.env.NODE_ENV === 'production') throw new Error(message);
-    console.warn(message);
+    logger.warn(message);
     return '';
   }
   return url;
@@ -69,10 +69,10 @@ export function createQstashQueue(): IngestQueue {
   const dlqUrl = process.env.QSTASH_DLQ_URL ?? '';
   const failureCallbackUrl = process.env.QSTASH_FAILURE_CALLBACK_URL ?? '';
   if (!baseUrl) {
-    console.warn('[ingest-queue] QSTASH_TOKEN is set but no ingest worker URL resolved; enqueues will fail. Set QSTASH_INGEST_WORKER_URL.');
+    logger.warn('[ingest-queue] QSTASH_TOKEN is set but no ingest worker URL resolved; enqueues will fail. Set QSTASH_INGEST_WORKER_URL.');
   }
   if (!dlqUrl && !failureCallbackUrl) {
-    console.warn(
+    logger.warn(
       '[ingest-queue] QStash is configured without QSTASH_DLQ_URL or QSTASH_FAILURE_CALLBACK_URL. ' +
         'After retries are exhausted, failed messages are silently dropped and documents stay queued.',
     );

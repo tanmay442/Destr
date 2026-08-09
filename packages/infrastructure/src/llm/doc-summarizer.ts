@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
-import type { DocSummarizer } from '@app/domain';
+import { logger, type DocSummarizer } from '@app/domain';
 import { getChatModel } from './index';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 import { CCH_MODEL } from '@app/infrastructure/config';
@@ -104,7 +104,7 @@ async function generateDocContext(excerpt: string): Promise<{ title: string; sum
     });
     return parseDocContext(raw);
   } catch (err) {
-    console.error('[doc-summarizer] generation failed; returning empty context', String(err));
+    logger.error('[doc-summarizer] generation failed; returning empty context', { error: err });
     return { title: '', summary: '' };
   }
 }
