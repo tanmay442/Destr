@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { TableSkeleton } from "@/components/admin/TableShell";
 
 export default function AuditLoading() {
   return (
@@ -9,12 +10,7 @@ export default function AuditLoading() {
           <Skeleton key={i} className="h-10 w-32 rounded-xl" />
         ))}
       </div>
-      <div className="overflow-hidden rounded-xl border border-border-subtle">
-        <Skeleton className="h-10 rounded-none" />
-        {Array.from({ length: 10 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 rounded-none border-t border-border-subtle" />
-        ))}
-      </div>
+      <TableSkeleton rows={10} rowClassName="h-12" />
     </section>
   );
 }

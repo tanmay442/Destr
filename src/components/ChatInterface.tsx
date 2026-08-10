@@ -174,7 +174,7 @@ const MessageItem = memo(function MessageItem({
   return (
     <div
       className={cn(
-        'flex w-full animate-in flex-col gap-3 fade-in-0 slide-in-from-bottom-2 duration-300',
+        'flex w-full animate-in flex-col gap-3 duration-300 fade-in-0 slide-in-from-bottom-2',
         isUser ? 'items-end' : 'items-start',
       )}
       data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
@@ -184,7 +184,7 @@ const MessageItem = memo(function MessageItem({
           isUser ? (
             <div
               key={i}
-              className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground"
+              className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-primary-foreground"
               data-testid="chat-text"
             >
               {part.text}
@@ -224,7 +224,7 @@ const MessageItem = memo(function MessageItem({
                 data-testid="chat-citation"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  <span className="text-[11px] font-semibold tracking-[0.1em] text-muted-foreground uppercase">
                     Source {i + 1}
                   </span>
                   <span
@@ -461,7 +461,7 @@ export function ChatInterface() {
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
           {messages.length === 0 ? (
-            <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center fade-in-0 slide-in-from-bottom-2 duration-500">
+            <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center duration-500 fade-in-0 slide-in-from-bottom-2">
               <div className="flex flex-col items-center gap-4">
                 <Image
                   src="/logo.svg"
@@ -572,10 +572,10 @@ export function ChatInterface() {
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6 sm:pb-6">
+      <div className="shrink-0 px-4 pt-2 pb-4 sm:px-6 sm:pb-6">
         <form
           onSubmit={onSubmit}
-          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-3xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-xl focus-within:shadow-primary/5"
+          className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-xl focus-within:shadow-primary/5"
           data-testid="chat-composer"
         >
           <textarea
@@ -587,8 +587,8 @@ export function ChatInterface() {
             placeholder="Message the knowledge assistant…"
             rows={1}
             className={cn(
-              'min-h-[36px] max-h-[220px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-[15px] leading-relaxed text-foreground shadow-none outline-none transition-colors',
-              'placeholder:text-foreground-faint focus:outline-none focus:ring-0 focus-visible:ring-0 disabled:opacity-60',
+              'max-h-[220px] min-h-[36px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-[15px] leading-relaxed text-foreground shadow-none transition-colors outline-none',
+              'placeholder:text-foreground-faint focus:ring-0 focus:outline-none focus-visible:ring-0 disabled:opacity-60',
             )}
             data-testid="chat-input"
             aria-label="Chat message"

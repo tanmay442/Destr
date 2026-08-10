@@ -3,9 +3,10 @@ import { getComposition, getAppSession, TICKET_STATUSES, unwrap, parsePageParam 
 import { TicketOverlay, type TicketRow } from './ticket-overlay';
 import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
+import { TableShell } from '@/components/admin/TableShell';
+import { EmptyStateCard } from '@/components/admin/EmptyStateCard';
 import { Badge } from '@/components/ui/badge';
 import { PAGE_SIZE, statusBadgeClass } from '@/components/admin/admin-helpers';
-import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Table,
   TableHeader,
@@ -87,16 +88,12 @@ export default async function TicketsPage({
         search={search}
       />
       {result.tickets.length === 0 ? (
-        <Card className="border-dashed p-8 shadow-none">
-          <div className="flex flex-col items-center gap-1 text-center">
-            <CardTitle className="text-base">No tickets</CardTitle>
-            <CardDescription>
-              No tickets matched your filters. Adjust the filters to see more.
-            </CardDescription>
-          </div>
-        </Card>
+        <EmptyStateCard
+          title="No tickets"
+          description="No tickets matched your filters. Adjust the filters to see more."
+        />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
+        <TableShell>
           <Table data-testid="tickets-table" aria-label="Tickets">
             <TableHeader>
               <TableRow>
@@ -177,7 +174,7 @@ export default async function TicketsPage({
                   <TableCell>
                     <Badge
                       variant="outline"
-                      className={`text-[11px] font-medium uppercase tracking-[0.05em] ${statusBadgeClass(t.status)}`}
+                      className={`text-[11px] font-medium tracking-[0.05em] uppercase ${statusBadgeClass(t.status)}`}
                     >
                       {t.status.replace('_', ' ')}
                     </Badge>
@@ -190,7 +187,7 @@ export default async function TicketsPage({
                       {t.assignedTo ?? '—'}
                     </span>
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums md:table-cell">
+                  <TableCell className="hidden text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums md:table-cell">
                     <time dateTime={t.createdAt.toISOString()} title={t.createdAt.toISOString()}>
                       {t.createdAt.toISOString().slice(0, 10)}
                     </time>
@@ -199,7 +196,7 @@ export default async function TicketsPage({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </TableShell>
       )}
       <Pagination
         page={page}

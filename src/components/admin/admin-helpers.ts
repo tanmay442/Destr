@@ -27,7 +27,3 @@ export function setDeep(target: Record<string, unknown>, path: string, value: un
   }
   cur[parts[parts.length - 1]!] = value;
 }
-
-export function cn(...classes: (string | false | null | undefined)[]): string {
-  return classes.filter(Boolean).join(' ');
-}

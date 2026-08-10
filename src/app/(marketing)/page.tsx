@@ -8,7 +8,7 @@ export default function MarketingHome() {
     <>
       <main
         data-testid="landing-main"
-        className="relative flex flex-1 flex-col items-center overflow-x-clip pb-16 pt-12 sm:pb-20 sm:pt-20"
+        className="relative flex flex-1 flex-col items-center overflow-x-clip pt-12 pb-16 sm:pt-20 sm:pb-20"
       >
         <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-14 px-5 sm:gap-16 sm:px-6">
           <section className="grid w-full items-center gap-10 md:grid-cols-[3fr_2fr] md:gap-12 lg:gap-16">

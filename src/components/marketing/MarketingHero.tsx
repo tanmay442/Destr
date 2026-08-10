@@ -6,15 +6,15 @@ import {
 export function MarketingHero() {
   return (
     <section className="flex flex-col gap-5" data-testid="landing-left">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <p className="text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
         {HERO.eyebrow}
       </p>
 
-      <h1 className="text-balance text-3xl font-semibold tracking-tight text-foreground sm:text-4xl sm:leading-[1.05] md:text-5xl">
+      <h1 className="text-3xl font-semibold tracking-tight text-balance text-foreground sm:text-4xl sm:leading-[1.05] md:text-5xl">
         {HERO.headline}
       </h1>
 
-      <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-[15px]">
+      <p className="max-w-xl text-sm leading-relaxed text-pretty text-muted-foreground sm:text-[15px]">
         {HERO.subcopy}
       </p>
 

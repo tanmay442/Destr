@@ -12,6 +12,7 @@ import {
   SettingsRevertButton,
   type SettingsChange,
 } from '@/components/admin/settings-revert-button';
+import { TableShell, TableEmptyRow } from '@/components/admin/TableShell';
 
 export function auditTargetLabel(
   e: Pick<AuditEventRecord, 'kind' | 'targetId'>,
@@ -106,7 +107,7 @@ export function AuditLogTable({
   testId?: string;
 }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
+    <TableShell>
       <Table data-testid={testId} aria-label="Audit events">
         <TableHeader>
           <TableRow>
@@ -120,15 +121,11 @@ export function AuditLogTable({
         </TableHeader>
         <TableBody>
           {events.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                No audit events.
-              </TableCell>
-            </TableRow>
+            <TableEmptyRow colSpan={6}>No audit events.</TableEmptyRow>
           ) : (
             events.map((e) => (
               <TableRow key={e.id}>
-                <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                <TableCell className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
                   <time dateTime={e.at.toISOString()} title={e.at.toISOString()}>
                     {e.at.toISOString().slice(0, 16).replace('T', ' ')}
                   </time>
@@ -155,6 +152,6 @@ export function AuditLogTable({
           )}
         </TableBody>
       </Table>
-    </div>
+    </TableShell>
   );
 }

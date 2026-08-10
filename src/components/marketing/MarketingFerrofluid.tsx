@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 
-const Ferrofluid = dynamic(() => import('@/components/react-bits/Ferrofluid'), {
+const Ferrofluid = dynamic(() => import('@/components/marketing/Ferrofluid'), {
   ssr: false,
   loading: () => null,
 });

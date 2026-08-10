@@ -4,6 +4,7 @@ import { RecountAllButton } from './recount-all-button';
 import { UploadDocumentDialog } from './upload-document-dialog';
 import { IngestStatusPoller } from './ingest-status-poller';
 import { Pagination } from '@/components/admin/Pagination';
+import { TableShell, TableEmptyRow } from '@/components/admin/TableShell';
 import { PAGE_SIZE } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -72,7 +73,7 @@ export default async function DocumentsPage({
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <form
-            className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-1"
+            className="flex flex-col gap-2 sm:flex-1 sm:flex-row sm:items-center"
             method="get"
             aria-label="Search documents"
           >
@@ -99,7 +100,7 @@ export default async function DocumentsPage({
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
+      <TableShell>
         <Table data-testid="documents-table" aria-label="Documents">
           <TableHeader>
             <TableRow>
@@ -114,11 +115,7 @@ export default async function DocumentsPage({
           </TableHeader>
           <TableBody>
             {result.documents.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                  No documents.
-                </TableCell>
-              </TableRow>
+              <TableEmptyRow colSpan={7}>No documents.</TableEmptyRow>
             ) : (
               result.documents.map((d) => (
                 <TableRow
@@ -138,12 +135,12 @@ export default async function DocumentsPage({
                   <TableCell className="hidden text-muted-foreground md:table-cell">
                     {d.uploaderName ?? d.uploadedBy}
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums lg:table-cell">
+                  <TableCell className="hidden text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:table-cell">
                     <time dateTime={d.uploadedAt.toISOString()} title={d.uploadedAt.toISOString()}>
                       {d.uploadedAt.toISOString().slice(0, 10)}
                     </time>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-right text-foreground tabular-nums">
+                  <TableCell className="text-right whitespace-nowrap text-foreground tabular-nums">
                     {d.chunkCount.toLocaleString()}
                   </TableCell>
                   <TableCell>
@@ -179,7 +176,7 @@ export default async function DocumentsPage({
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableShell>
       <Pagination
         page={page}
         totalPages={totalPages}
