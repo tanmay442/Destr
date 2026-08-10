@@ -1,4 +1,4 @@
-import { MarketingFerrofluid } from '@/components/react-bits/MarketingFerrofluid';
+import { MarketingFerrofluid } from '@/components/marketing/MarketingFerrofluid';
 
 export default function MarketingLayout({
   children,

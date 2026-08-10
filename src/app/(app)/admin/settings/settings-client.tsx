@@ -358,7 +358,7 @@ export function SettingsClient() {
         </div>
       </div>
 
-      <Tabs defaultValue="persona" className="w-full flex flex-col gap-6">
+      <Tabs defaultValue="persona" className="flex w-full flex-col gap-6">
         <TabsList className="grid h-auto w-full grid-cols-1 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-3 sm:gap-0">
           <TabsTrigger
             value="persona"
@@ -383,7 +383,7 @@ export function SettingsClient() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="persona" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
+        <TabsContent value="persona" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden">
           <div data-testid="group-Persona & Prompt" className="flex flex-col gap-6">
             <Card className="gap-0">
               <CardHeader>
@@ -474,7 +474,7 @@ export function SettingsClient() {
               <CardContent>
                 <pre
                   data-testid="prompt-preview"
-                  className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border-subtle bg-surface-sunken p-4 font-mono text-xs text-foreground"
+                  className="max-h-96 overflow-auto rounded-lg border border-border-subtle bg-surface-sunken p-4 font-mono text-xs whitespace-pre-wrap text-foreground"
                 >
                   {preview}
                 </pre>
@@ -483,7 +483,7 @@ export function SettingsClient() {
           </div>
         </TabsContent>
 
-        <TabsContent value="chunking" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
+        <TabsContent value="chunking" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden">
           <div data-testid="group-Chunking" className="flex flex-col gap-6">
             <Card className="gap-0">
               <CardHeader>
@@ -599,7 +599,7 @@ export function SettingsClient() {
           </div>
         </TabsContent>
 
-        <TabsContent value="retrieval" forceMount className="data-[state=inactive]:hidden flex flex-col gap-6">
+        <TabsContent value="retrieval" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden">
           <div data-testid="group-Retrieval" className="flex flex-col gap-6">
             <Card className="gap-0">
               <CardHeader>
@@ -750,7 +750,7 @@ export function SettingsClient() {
                 >
                   <div className="font-medium text-foreground">{field?.label ?? key}</div>
                   <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="line-through text-foreground-faint">{serialize(baseline[key])}</span>
+                    <span className="text-foreground-faint line-through">{serialize(baseline[key])}</span>
                     <span aria-hidden className="font-bold">→</span>
                     <span className="font-medium text-foreground">{serialize(values[key])}</span>
                   </div>
@@ -938,7 +938,7 @@ function FieldControl({
             ]}
             onValueChange={(v) => onChange(v[0])}
           />
-          <span className="w-12 text-right font-mono text-sm tabular-nums text-muted-foreground">
+          <span className="w-12 text-right font-mono text-sm text-muted-foreground tabular-nums">
             {String(value)}
           </span>
         </div>
@@ -1030,12 +1030,12 @@ function OutOfScopeEditor({
                 {value.map((item, index) => (
                   <TableRow key={index} data-testid="oos-item">
                     <TableCell className="w-1/4 font-medium text-foreground">
-                      {item.topic || <span className="italic text-foreground-faint">Untitled</span>}
+                      {item.topic || <span className="text-foreground-faint italic">Untitled</span>}
                     </TableCell>
                     <TableCell className="max-w-md text-muted-foreground">
                       <span className="line-clamp-2">
                         {item.handling || (
-                          <span className="italic text-foreground-faint">No handling summary</span>
+                          <span className="text-foreground-faint italic">No handling summary</span>
                         )}
                       </span>
                     </TableCell>

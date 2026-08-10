@@ -24,7 +24,7 @@ export function MarketingQuickStart() {
         <button
           type="button"
           onClick={handleCopy}
-          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-card/60 px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-elevated hover:text-foreground"
+          className="absolute top-3 right-3 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-card/60 px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-elevated hover:text-foreground"
           data-testid="landing-quickstart-copy"
           aria-label="Copy quick start commands"
         >
@@ -35,7 +35,7 @@ export function MarketingQuickStart() {
         <div className="flex flex-col gap-1.5 pr-20">
           {QUICK_START.commands.map((command) => (
             <div key={command} className="whitespace-pre-wrap">
-              <span className="select-none text-foreground-faint">$ </span>
+              <span className="text-foreground-faint select-none">$ </span>
               {command}
             </div>
           ))}

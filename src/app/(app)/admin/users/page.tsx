@@ -1,12 +1,13 @@
 import { getComposition, unwrap, parsePageParam } from '@/composition';
 import { UserRowActions } from './user-row-actions';
 import { Pagination } from '@/components/admin/Pagination';
+import { TableShell } from '@/components/admin/TableShell';
+import { EmptyStateCard } from '@/components/admin/EmptyStateCard';
 import { PAGE_SIZE } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Table,
   TableHeader,
@@ -74,14 +75,12 @@ export default async function UsersPage({
         </Button>
       </form>
       {result.users.length === 0 ? (
-        <Card className="border-dashed p-8 shadow-none">
-          <div className="flex flex-col items-center gap-1 text-center">
-            <CardTitle className="text-base">No users</CardTitle>
-            <CardDescription>No users matched your filters.</CardDescription>
-          </div>
-        </Card>
+        <EmptyStateCard
+          title="No users"
+          description="No users matched your filters."
+        />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border-strong bg-card/50">
+        <TableShell>
           <Table data-testid="users-table" aria-label="Users">
             <TableHeader>
               <TableRow>
@@ -123,10 +122,10 @@ export default async function UsersPage({
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums lg:table-cell">
+                  <TableCell className="hidden text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:table-cell">
                     {formatRelative(u.lastSeenAt)}
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-right text-xs text-muted-foreground tabular-nums lg:table-cell">
+                  <TableCell className="hidden text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:table-cell">
                     <time dateTime={u.createdAt.toISOString()} title={u.createdAt.toISOString()}>
                       {u.createdAt.toISOString().slice(0, 10)}
                     </time>
@@ -141,7 +140,7 @@ export default async function UsersPage({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </TableShell>
       )}
       <Pagination
         page={page}

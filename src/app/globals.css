@@ -135,26 +135,24 @@
 
   --primary: #e5e5e5;
   --primary-foreground: #0a0a0a;
-  --secondary: #1c1c1c;
+  --secondary: var(--surface-elevated);
   --secondary-foreground: #f5f5f5;
 
-  --muted: #141414;
+  --muted: var(--card);
   --muted-foreground: #a3a3a3;
 
-  --accent: #1c1c1c;
+  --accent: var(--surface-elevated);
   --accent-foreground: #f5f5f5;
 
   --destructive: oklch(0.7 0.18 25);
   --destructive-foreground: #f5f5f5;
 
   --border: #333333;
-  --input: #333333;
+  --input: var(--border);
   --ring: rgba(229,229,229,0.55);
 
-  /* Elevated input containers — distinct from card surface */
   --input-elevated: #1a1a1a;
 
-  /* supplementary (kept) */
   --surface-elevated: #1c1c1c;
   --surface-sunken: #070707;
   --border-subtle: #1f1f1f;
@@ -181,6 +179,8 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-xl: var(--radius-md);
+  --radius-2xl: var(--radius-lg);
   --radius: 12px;
 
   /* Reveal animation utility */

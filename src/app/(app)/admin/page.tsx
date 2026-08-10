@@ -13,6 +13,7 @@ import {
   BarList,
   ChartLegend,
 } from '@/components/admin/Charts';
+import { Eyebrow } from '@/components/ui/eyebrow';
 import { Separator } from '@/components/ui/separator';
 
 export const dynamic = 'force-dynamic';
@@ -112,14 +113,14 @@ export default async function AdminOverviewPage() {
                 },
               ]}
             >
-              <span className="text-3xl font-semibold tabular-nums text-foreground">
+              <span className="text-3xl font-semibold text-foreground tabular-nums">
                 {hasTickets
                   ? `${Math.round((openTickets / summary.ticketCount) * 100)}%`
                   : '—'}
               </span>
-              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+              <Eyebrow className="tracking-[0.1em]">
                 {hasTickets ? 'open' : 'no tickets'}
-              </span>
+              </Eyebrow>
             </DonutChart>
             <Separator className="opacity-50" />
             <ChartLegend

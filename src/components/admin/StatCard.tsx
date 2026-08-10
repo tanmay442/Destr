@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Card } from '@/components/ui/card';
+import { Eyebrow } from '@/components/ui/eyebrow';
 import { cn } from '@/lib/utils';
 
 interface StatCardProps {
@@ -12,10 +13,8 @@ interface StatCardProps {
 export function StatCard({ label, value, href, testId }: StatCardProps) {
   const content = (
     <>
-      <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-        {label}
-      </span>
-      <span className="text-2xl font-semibold tabular-nums text-foreground">
+      <Eyebrow>{label}</Eyebrow>
+      <span className="text-2xl font-semibold text-foreground tabular-nums">
         {value.toLocaleString()}
       </span>
     </>

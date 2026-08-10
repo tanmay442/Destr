@@ -1,6 +1,7 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import tailwindcss from "eslint-plugin-tailwindcss";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -28,9 +29,17 @@ const eslintConfig = defineConfig([
   },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/lib/logger.ts", "src/components/react-bits/**"],
+    ignores: ["src/lib/logger.ts", "src/components/marketing/Ferrofluid.tsx"],
+    plugins: { tailwindcss },
+    settings: {
+      tailwindcss: {
+        cssConfigPath: "src/app/globals.css",
+      },
+    },
     rules: {
       "no-console": "error",
+      "tailwindcss/classnames-order": "error",
+      "tailwindcss/no-contradicting-classname": "error",
     },
   },
 ]);

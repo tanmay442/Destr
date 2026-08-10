@@ -9,6 +9,7 @@ import { sanitizeText } from '@/lib/sanitize';
 import { statusBadgeClass } from '@/components/admin/admin-helpers';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Eyebrow } from '@/components/ui/eyebrow';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -76,22 +77,16 @@ export function TicketDrawer({
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Name
-          </span>
+          <Eyebrow>Name</Eyebrow>
           <span className="text-sm text-foreground">{name}</span>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Email
-          </span>
+          <Eyebrow>Email</Eyebrow>
           <span className="text-sm text-foreground">{email}</span>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Issue
-          </span>
-          <p className="whitespace-pre-wrap text-sm text-foreground">{issue}</p>
+          <Eyebrow>Issue</Eyebrow>
+          <p className="text-sm whitespace-pre-wrap text-foreground">{issue}</p>
         </div>
       </div>
 
@@ -103,7 +98,7 @@ export function TicketDrawer({
           <div className="flex flex-col gap-1.5">
             <Label
               htmlFor={`ticket-status-${ticketId}`}
-              className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase"
             >
               Status
             </Label>
@@ -136,7 +131,7 @@ export function TicketDrawer({
           <div className="flex flex-col gap-1.5">
             <Label
               htmlFor={`ticket-assignee-${ticketId}`}
-              className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase"
             >
               Assignee
             </Label>
@@ -193,7 +188,7 @@ export function TicketDrawer({
       <div className="flex flex-col gap-2">
         <Label
           htmlFor={`ticket-note-${ticketId}`}
-          className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+          className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase"
         >
           Add note
         </Label>
@@ -235,10 +230,8 @@ export function TicketDrawer({
           className="rounded-lg border border-border-subtle bg-surface-sunken p-3"
           data-testid={`ticket-notes-${ticketId}`}
         >
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Notes
-          </span>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{notes}</p>
+          <Eyebrow>Notes</Eyebrow>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-foreground">{notes}</p>
         </div>
       ) : null}
 

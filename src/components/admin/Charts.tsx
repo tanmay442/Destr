@@ -102,7 +102,7 @@ export function BarList({
         <li key={item.label} className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2 text-sm">
             <span className="min-w-0 truncate text-muted-foreground">{item.label}</span>
-            <span className="font-medium tabular-nums text-foreground">
+            <span className="font-medium text-foreground tabular-nums">
               {item.value.toLocaleString()}
               {unit ? (
                 <span className="ml-0.5 text-xs text-foreground-faint">{unit}</span>
@@ -153,7 +153,7 @@ export function ActivityBars({
         const heightPct = hasValue ? (bucket.value / max) * 100 : 0;
         return (
           <div key={i} className="flex h-full flex-1 flex-col items-stretch gap-1.5">
-            <span className="h-4 text-center text-[11px] font-medium tabular-nums text-foreground">
+            <span className="h-4 text-center text-[11px] font-medium text-foreground tabular-nums">
               {hasValue ? bucket.value.toLocaleString() : ""}
             </span>
             <div className="flex flex-1 items-end">
@@ -168,7 +168,7 @@ export function ActivityBars({
                 }}
               />
             </div>
-            <span className="text-center text-[11px] tabular-nums text-muted-foreground">
+            <span className="text-center text-[11px] text-muted-foreground tabular-nums">
               {bucket.label}
             </span>
           </div>

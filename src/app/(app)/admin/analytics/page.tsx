@@ -18,7 +18,8 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
-import { cn } from '@/components/admin/admin-helpers';
+import { Eyebrow } from '@/components/ui/eyebrow';
+import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/format-duration';
 import type { ReactNode } from 'react';
 import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox, BarChart3, Gauge, Sparkles } from 'lucide-react';
@@ -57,10 +58,10 @@ function MetricCard({
           : 'text-foreground';
   return (
     <Card className="gap-2 p-4 shadow-none">
-      <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <Eyebrow className="flex items-center gap-1.5">
         {icon ? <span aria-hidden>{icon}</span> : null}
         {label}
-      </span>
+      </Eyebrow>
       <span className={cn('text-2xl font-semibold tabular-nums', valueClass)}>
         {value}
       </span>
@@ -134,46 +135,44 @@ function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Avg tokens/query</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {num(Math.round(mode.avgTokensPerQuery))}
             </dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Avg similarity</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {mode.avgMaxSimilarity.toFixed(3)}
             </dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Ticket rate</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {pct(mode.ticketRate)}
             </dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Hallucination rate</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {pct(mode.hallucinationRate)}
             </dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Latency p50</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {ms(mode.totalP50Ms)}
             </dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Latency p95</dt>
-            <dd className="font-medium tabular-nums text-foreground">
+            <dd className="font-medium text-foreground tabular-nums">
               {ms(mode.totalP95Ms)}
             </dd>
           </div>
         </dl>
         <Separator className="opacity-50" />
         <div className="flex flex-col gap-2">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Query length
-          </span>
+          <Eyebrow>Query length</Eyebrow>
           <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
             <div
               className="bg-primary"
@@ -265,7 +264,7 @@ export default async function AnalyticsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="quality" className="w-full flex flex-col gap-6">
+      <Tabs defaultValue="quality" className="flex w-full flex-col gap-6">
         <TabsList className="grid h-auto w-full grid-cols-2 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
           <TabsTrigger
             value="quality"
@@ -300,7 +299,7 @@ export default async function AnalyticsPage() {
         <TabsContent
           value="quality"
           forceMount
-          className="data-[state=inactive]:hidden flex flex-col gap-5"
+          className="flex flex-col gap-5 data-[state=inactive]:hidden"
           data-testid="analytics-quality"
         >
           {hasChat ? (
@@ -423,7 +422,7 @@ export default async function AnalyticsPage() {
         <TabsContent
           value="performance"
           forceMount
-          className="data-[state=inactive]:hidden flex flex-col gap-5"
+          className="flex flex-col gap-5 data-[state=inactive]:hidden"
           data-testid="analytics-performance"
         >
           {hasChat ? (
@@ -507,9 +506,7 @@ export default async function AnalyticsPage() {
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
                       <div className="flex flex-col gap-1">
-                        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                          p50
-                        </span>
+                        <Eyebrow>p50</Eyebrow>
                         <LineChart
                           data={series((w) => w.totalP50Ms)}
                           valueSuffix=" ms"
@@ -517,9 +514,7 @@ export default async function AnalyticsPage() {
                         />
                       </div>
                       <div className="flex flex-col gap-1">
-                        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                          p95
-                        </span>
+                        <Eyebrow>p95</Eyebrow>
                         <LineChart
                           data={series((w) => w.totalP95Ms)}
                           valueSuffix=" ms"
@@ -580,7 +575,7 @@ export default async function AnalyticsPage() {
         <TabsContent
           value="tickets"
           forceMount
-          className="data-[state=inactive]:hidden flex flex-col gap-5"
+          className="flex flex-col gap-5 data-[state=inactive]:hidden"
           data-testid="analytics-tickets"
         >
           <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
@@ -641,7 +636,7 @@ export default async function AnalyticsPage() {
                     </CardHeader>
                     <CardContent>
                       {ticketIntel.responseTimes.respondedCount > 0 ? (
-                        <span className="text-2xl font-semibold tabular-nums text-foreground">
+                        <span className="text-2xl font-semibold text-foreground tabular-nums">
                           {formatDuration(ticketIntel.responseTimes.medianFirstResponseMs)}
                         </span>
                       ) : (
@@ -659,7 +654,7 @@ export default async function AnalyticsPage() {
                     </CardHeader>
                     <CardContent>
                       {ticketIntel.responseTimes.resolvedCount > 0 ? (
-                        <span className="text-2xl font-semibold tabular-nums text-foreground">
+                        <span className="text-2xl font-semibold text-foreground tabular-nums">
                           {formatDuration(ticketIntel.responseTimes.medianResolutionMs)}
                         </span>
                       ) : (
@@ -678,7 +673,7 @@ export default async function AnalyticsPage() {
         <TabsContent
           value="feedback"
           forceMount
-          className="data-[state=inactive]:hidden flex flex-col gap-5"
+          className="flex flex-col gap-5 data-[state=inactive]:hidden"
           data-testid="analytics-feedback"
         >
           <div className="flex flex-col gap-3">
@@ -856,7 +851,7 @@ export default async function AnalyticsPage() {
                               {d.fileName ?? `Document #${d.documentId}`}
                             </span>
                           </span>
-                          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                             {new Date(d.createdAt).toLocaleDateString()}
                           </span>
                         </li>

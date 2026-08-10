@@ -4,8 +4,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { SignInButton } from '@clerk/nextjs';
 import { ArrowRight } from 'lucide-react';
-import BorderGlow from '@/components/react-bits/BorderGlow';
-import { Button } from '@/components/ui/button';
+import BorderGlow from '@/components/marketing/BorderGlow';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Eyebrow } from '@/components/ui/eyebrow';
+import { cn } from '@/lib/utils';
 
 type MarketingAuthCardProps = {
   floating?: boolean;
@@ -54,7 +56,10 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           <SignInButton mode="modal">
             <button
               type="button"
-              className="inline-flex w-full items-center justify-center rounded-xl border border-border-subtle bg-card/40 px-5 py-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-primary/50 hover:bg-surface-elevated"
+              className={cn(
+                buttonVariants({ variant: 'outline', size: 'lg' }),
+                'w-full',
+              )}
               data-testid="home-sign-in"
             >
               Sign in
@@ -62,9 +67,9 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           </SignInButton>
         </div>
 
-        <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-foreground-subtle">
+        <Eyebrow className="tracking-[0.12em] text-foreground-subtle">
           Auth by Clerk
-        </p>
+        </Eyebrow>
       </div>
     </BorderGlow>
   );

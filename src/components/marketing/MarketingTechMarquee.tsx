@@ -1,6 +1,6 @@
 'use client';
 
-import LogoLoop from '@/components/react-bits/LogoLoop';
+import LogoLoop from '@/components/marketing/LogoLoop';
 import type { LucideIcon } from 'lucide-react';
 import {
   AppWindow,

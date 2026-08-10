@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { TableSkeleton } from "@/components/admin/TableShell";
 
 export default function AdminLoading() {
   return (
@@ -8,16 +9,7 @@ export default function AdminLoading() {
         <Skeleton className="h-10 flex-1 rounded-xl" />
         <Skeleton className="h-10 w-24 rounded-xl" />
       </div>
-      <div className="overflow-hidden rounded-xl border border-border-subtle">
-        <Skeleton className="h-10 rounded-none" />
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Skeleton
-            key={i}
-            className="h-12 rounded-none border-t border-border-subtle"
-            style={{ animationDelay: `${i * 50}ms` }}
-          />
-        ))}
-      </div>
+      <TableSkeleton rows={8} rowClassName="h-12" delay={50} />
     </section>
   );
 }

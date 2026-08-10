@@ -80,10 +80,10 @@ async function renderWithBoundTurn(assistant: Msg) {
   fireEvent.click(screen.getByTestId('chat-send'));
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   const firstCall = sendMessage.mock.calls[0]!;
-  const { messageId } = firstCall[0] as { text: string; messageId: string };
+  const { id } = firstCall[0] as { id: string };
   const turnId = (firstCall[1] as { body: { turnId: string } }).body.turnId;
   setupChat(
-    [{ id: messageId, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
+    [{ id, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
     { send: sendMessage },
   );
   view.rerender(<ChatInterface />);
@@ -291,7 +291,11 @@ describe('ChatInterface', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() =>
       expect(sendMessage).toHaveBeenCalledWith(
-        { text: 'What is the dental plan?', messageId: expect.any(String) },
+        {
+          parts: [{ type: 'text', text: 'What is the dental plan?' }],
+          id: expect.any(String),
+          role: 'user',
+        },
         {
           body: {
             turnId: expect.stringMatching(
@@ -301,7 +305,67 @@ describe('ChatInterface', () => {
         },
       ),
     );
+    expect(sendMessage.mock.calls[0]![0]).not.toHaveProperty('messageId');
     expect((input).value).toBe('');
+  });
+
+  it('sends a message when Enter is pressed in the composer', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface />);
+    const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'Enter question?' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const call = sendMessage.mock.calls[0]![0] as {
+      parts: Array<{ type: 'text'; text: string }>;
+    };
+    expect(call.parts[0]?.text).toBe('Enter question?');
+  });
+
+  it('sends a quick prompt when clicked', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface />);
+    fireEvent.click(screen.getAllByTestId('chat-quick-prompt')[0]!);
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const call = sendMessage.mock.calls[0]![0] as {
+      parts: Array<{ type: 'text'; text: string }>;
+    };
+    expect(call.parts[0]?.text).toBe('How do I change my password?');
+  });
+
+  it('shows a toast and unlocks the composer when sending fails', async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(undefined);
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface />);
+    const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'First attempt?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(toast.error).toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: 'Second attempt?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+  });
+
+  it('falls back to a non-crypto id generator in insecure contexts', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    vi.stubGlobal('crypto', {});
+    render(<ChatInterface />);
+    const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'Insecure question?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const call = sendMessage.mock.calls[0]![0] as { id: string };
+    expect(call.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
   });
 
   it('stops generation when the stop button is clicked while streaming', async () => {
@@ -452,7 +516,7 @@ describe('ChatInterface', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     const callA = sendMessage.mock.calls[0]!;
-    const msgA = (callA[0] as { text: string; messageId: string }).messageId;
+    const msgA = (callA[0] as { id: string }).id;
     const turnA = (callA[1] as { body: { turnId: string } }).body.turnId;
 
     // First stream errors, freeing the composer; the retry starts a new turn.
@@ -466,7 +530,7 @@ describe('ChatInterface', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
     const callB = sendMessage.mock.calls[1]!;
-    const msgB = (callB[0] as { text: string; messageId: string }).messageId;
+    const msgB = (callB[0] as { id: string }).id;
     const turnB = (callB[1] as { body: { turnId: string } }).body.turnId;
 
     const assistantB: Msg = {
