@@ -36,6 +36,18 @@ import {
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
 
+function uuidv4(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') {
+    return c.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const r = (Math.random() * 16) | 0;
+    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 function errorDigest(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (!message) return undefined;
@@ -334,14 +346,22 @@ export function ChatInterface() {
     if (!trimmed) return;
     if (submittingRef.current) return;
     submittingRef.current = true;
-    const turnId = crypto.randomUUID();
-    const messageId = crypto.randomUUID();
-    pendingTurnIdRef.current.set(messageId, turnId);
+    let userMessageId: string | undefined;
     try {
-      await sendMessage({ text: trimmed, messageId }, { body: { turnId } });
+      const turnId = uuidv4();
+      userMessageId = uuidv4();
+      pendingTurnIdRef.current.set(userMessageId, turnId);
+      await sendMessage(
+        { parts: [{ type: 'text', text: trimmed }], id: userMessageId, role: 'user' },
+        { body: { turnId } },
+      );
       setInput('');
     } catch {
-      pendingTurnIdRef.current.delete(messageId);
+      if (userMessageId) {
+        pendingTurnIdRef.current.delete(userMessageId);
+      }
+      toast.error('Could not send your message. Please try again.');
+    } finally {
       submittingRef.current = false;
     }
   };
