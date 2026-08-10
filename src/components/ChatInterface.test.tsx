@@ -304,6 +304,62 @@ describe('ChatInterface', () => {
     expect((input).value).toBe('');
   });
 
+  it('falls back to a generated id when crypto.randomUUID is unavailable', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    try {
+      render(<ChatInterface />);
+      const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: 'A?' } });
+      fireEvent.click(screen.getByTestId('chat-send'));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      const call = sendMessage.mock.calls[0]!;
+      const messageId = (call[0] as { text: string; messageId: string }).messageId;
+      const turnId = (call[1] as { body: { turnId: string } }).body.turnId;
+      expect(messageId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      expect(turnId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      fireEvent.change(input, { target: { value: 'B?' } });
+      fireEvent.click(screen.getByTestId('chat-send'));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    } finally {
+      delete (globalThis.crypto as { randomUUID?: unknown }).randomUUID;
+    }
+  });
+
+  it('unlocks the composer after id generation fails', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    const realUuid = globalThis.crypto.randomUUID.bind(globalThis.crypto);
+    let calls = 0;
+    const spy = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) throw new Error('unavailable');
+      return realUuid();
+    });
+    try {
+      render(<ChatInterface />);
+      const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: 'A?' } });
+      fireEvent.click(screen.getByTestId('chat-send'));
+      fireEvent.change(input, { target: { value: 'B?' } });
+      fireEvent.click(screen.getByTestId('chat-send'));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      const call = sendMessage.mock.calls[0]!;
+      expect((call[0] as { text: string }).text).toBe('B?');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('stops generation when the stop button is clicked while streaming', async () => {
     const stop = vi.fn();
     useChatMock.mockReturnValue({
