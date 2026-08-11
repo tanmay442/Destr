@@ -18,6 +18,7 @@ function makeDeps(overrides?: {
     list: vi.fn(),
     countAll: vi.fn(),
     countAdmins: vi.fn().mockResolvedValue(2),
+    countAdminsForUpdate: vi.fn().mockResolvedValue(2),
     syncClerkRole: vi.fn().mockResolvedValue(undefined),
     ...overrides?.users,
   } as UserRepository;
@@ -111,7 +112,7 @@ describe('setUserRole', () => {
   it('rejects demoting the last admin', async () => {
     const deps = makeDeps({
       users: {
-        countAdmins: vi.fn().mockResolvedValue(1),
+        countAdminsForUpdate: vi.fn().mockResolvedValue(1),
         findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'admin' }),
       },
     });
@@ -143,10 +144,10 @@ describe('setUserRole', () => {
 
   it('runs the last-admin check inside the same transaction as the update', async () => {
     const setRole = vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'user' });
-    const countAdmins = vi.fn().mockResolvedValue(2);
+    const countAdminsForUpdate = vi.fn().mockResolvedValue(2);
     const deps = makeDeps({
       users: {
-        countAdmins,
+        countAdminsForUpdate,
         setRole,
         findByClerkId: vi.fn().mockResolvedValue({ clerkUserId: 'admin_1', role: 'admin' }),
       },
@@ -156,7 +157,7 @@ describe('setUserRole', () => {
       deps as Parameters<typeof setUserRole>[1],
     );
     expect(result.ok).toBe(true);
-    expect(countAdmins).toHaveBeenCalled();
+    expect(countAdminsForUpdate).toHaveBeenCalled();
     expect(setRole).toHaveBeenCalledWith('admin_1', 'user');
   });
 });

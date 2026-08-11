@@ -9,7 +9,7 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
     put: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(),
     stream: vi.fn(),
-    delete: vi.fn(),
+    delete: vi.fn().mockResolvedValue(undefined),
   };
   return {
     documents: {
@@ -127,6 +127,26 @@ describe('ingestPrechunked', () => {
     await ingestPrechunked({ fileName: 'doc2.md', chunks: CHUNKS, uploadedBy: 'user' }, depsNoPdf);
     expect(depsNoPdf.blobStorage!.put).not.toHaveBeenCalled();
     expect(depsNoPdf.documents.setStorageKey).not.toHaveBeenCalled();
+  });
+
+  it('deletes the companion PDF blob when the transaction/writeChunks fails (M5)', async () => {
+    const runner = {
+      run: vi.fn().mockRejectedValue(new Error('tx failed')),
+    } as unknown as NonNullable<PrechunkedIngestDeps['runner']>;
+    const deps = makeDeps({ runner });
+    const pdf = Buffer.from('%PDF-1.4');
+    await expect(
+      ingestPrechunked(
+        { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user', pdfBuffer: pdf, pdfFileName: 'doc.pdf' },
+        deps,
+      ),
+    ).rejects.toThrow('tx failed');
+    expect(deps.blobStorage!.put).toHaveBeenCalledWith(
+      expect.stringContaining('doc.pdf'),
+      pdf,
+      'application/pdf',
+    );
+    expect(deps.blobStorage!.delete).toHaveBeenCalledWith(expect.stringContaining('doc.pdf'));
   });
 
   it('returns unchanged when the hash matches an existing document', async () => {

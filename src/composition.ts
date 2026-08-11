@@ -75,6 +75,9 @@ const ingestQueue: IngestQueue = Queue.createIngestQueue({
   },
 });
 
+const reingestQueue: IngestQueue =
+  process.env.QSTASH_TOKEN ? ingestQueue : Queue.createIngestQueue();
+
 async function ingestQueuedDocumentStandalone(
   documentId: number,
 ): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
@@ -299,7 +302,7 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
+      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
     sweepStaleQueued: () =>
       Queue.createQueuedSweeper({
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),

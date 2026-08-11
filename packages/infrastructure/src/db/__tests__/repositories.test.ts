@@ -10,6 +10,7 @@ import {
   searchChunksByVector,
   searchChunksByLexical,
   auditRepo,
+  createUserRepo,
 } from '../repositories';
 import { isNeonUrl } from '../pool';
 import { VECTOR_DIM } from '../schema-vector';
@@ -312,6 +313,19 @@ describe('auditRepo.list', () => {
       events: [],
       total: 0,
     });
+  });
+});
+
+describe('userRepo.countAdminsForUpdate', () => {
+  it('locks the admin rows in a subquery so the aggregate count is valid PostgreSQL', async () => {
+    const { client, executed } = makeExecuteClient([{ count: 2 }]);
+    const result = await createUserRepo(client).countAdminsForUpdate();
+    expect(result).toBe(2);
+    const s = queryOf(executed).sql.toLowerCase();
+    expect(s).toContain('count(*)::int');
+    expect(s).toContain('for update');
+    expect(s).toContain('(select 1 from "users" where "users"."role" = \'admin\' for update)');
+    expect(s).not.toContain('for update\n');
   });
 });
 

@@ -11,7 +11,13 @@ export function ask(
 ): Promise<string> {
   return new Promise((resolve) => {
     const suffix = defaultValue ? ` [${defaultValue}]` : '';
+    const onClose = () => {
+      rl.off('close', onClose);
+      resolve(defaultValue);
+    };
+    rl.on('close', onClose);
     rl.question(`${question}${suffix}: `, (answer) => {
+      rl.off('close', onClose);
       resolve(answer.trim() === '' ? defaultValue : answer.trim());
     });
   });
@@ -30,6 +36,15 @@ export function pickFromList<T extends string>(
   defaultValue: T,
 ): Promise<T> {
   return new Promise((resolve) => {
+    const onClose = () => {
+      rl.off('close', onClose);
+      resolve(defaultValue);
+    };
+    const done = (value: T) => {
+      rl.off('close', onClose);
+      resolve(value);
+    };
+    rl.on('close', onClose);
     console.log(question);
     for (let i = 0; i < options.length; i++) {
       const o = options[i]!;
@@ -40,21 +55,21 @@ export function pickFromList<T extends string>(
     rl.question(`Choose [1-${options.length}] (default: ${defaultValue}): `, (answer) => {
       const trimmed = answer.trim();
       if (trimmed === '') {
-        resolve(defaultValue);
+        done(defaultValue);
         return;
       }
       const n = Number.parseInt(trimmed, 10);
       if (Number.isFinite(n) && n >= 1 && n <= options.length) {
-        resolve(options[n - 1]!.value);
+        done(options[n - 1]!.value);
         return;
       }
       const match = options.find((o) => o.value === trimmed.toLowerCase());
       if (match) {
-        resolve(match.value);
+        done(match.value);
         return;
       }
       console.log(`  (unrecognised choice; keeping "${defaultValue}")`);
-      resolve(defaultValue);
+      done(defaultValue);
     });
   });
 }
@@ -66,7 +81,13 @@ export async function askYesNo(
 ): Promise<boolean> {
   const hint = defaultYes ? 'Y/n' : 'y/N';
   return new Promise((resolve) => {
+    const onClose = () => {
+      rl.off('close', onClose);
+      resolve(defaultYes);
+    };
+    rl.on('close', onClose);
     rl.question(`${question} (${hint}): `, (answer) => {
+      rl.off('close', onClose);
       const v = answer.trim().toLowerCase();
       if (v === '') resolve(defaultYes);
       else if (v === 'y' || v === 'yes') resolve(true);
@@ -92,16 +113,22 @@ export async function askMultiLine(
   const lines: string[] = [];
   return new Promise((resolve) => {
     const promptLine = '  > ';
+    const finish = (value: string) => {
+      rl.removeAllListeners('line');
+      rl.off('close', onClose);
+      resolve(value);
+    };
+    const onClose = () => finish(lines.join('\n'));
     rl.setPrompt(promptLine);
     rl.prompt();
     rl.on('line', (line) => {
       if (line.trim() === '..') {
-        rl.removeAllListeners('line');
-        resolve(lines.join('\n'));
+        finish(lines.join('\n'));
         return;
       }
       lines.push(line);
       rl.prompt();
     });
+    rl.on('close', onClose);
   });
 }

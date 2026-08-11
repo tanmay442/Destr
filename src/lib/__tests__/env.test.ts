@@ -28,6 +28,7 @@ describe('validateEnv', () => {
     const result = validateEnv();
     expect(result.ok).toBe(true);
     expect(result.missing).toHaveLength(0);
+    expect(result.invalid).toHaveLength(0);
     expect(result.message).toBe('');
   });
 
@@ -174,5 +175,93 @@ describe('validateEnv', () => {
     const result = validateEnv();
     expect(result.ok).toBe(true);
     expect(result.missing.map((m) => m.name)).not.toContain('LLM_MODEL');
+  });
+
+  it('requires AI_STUDIO_KEY when CHAT_PROVIDER=google even with OpenAI embeddings', () => {
+    vi.stubEnv('EMBEDDING_PROVIDER', 'openai');
+    vi.stubEnv('OPENAI_EMBEDDING_API_KEY', 'test-embed-key');
+    vi.stubEnv('OPENAI_EMBEDDING_BASE_URL', 'http://localhost:4000/v1');
+    vi.stubEnv('CHAT_PROVIDER', 'google');
+    vi.stubEnv('AI_STUDIO_KEY', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.missing.map((m) => m.name)).toContain('AI_STUDIO_KEY');
+  });
+
+  it('does not require AI_STUDIO_KEY when CHAT_PROVIDER=ollama with OpenAI embeddings', () => {
+    vi.stubEnv('EMBEDDING_PROVIDER', 'openai');
+    vi.stubEnv('OPENAI_EMBEDDING_API_KEY', 'test-embed-key');
+    vi.stubEnv('OPENAI_EMBEDDING_BASE_URL', 'http://localhost:4000/v1');
+    vi.stubEnv('CHAT_PROVIDER', 'ollama');
+    vi.stubEnv('OLLAMA_BASE_URL', 'http://localhost:11434');
+    vi.stubEnv('AI_STUDIO_KEY', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(true);
+    expect(result.missing.map((m) => m.name)).not.toContain('AI_STUDIO_KEY');
+  });
+
+  it('reports invalid EMBEDDING_PROVIDER values', () => {
+    vi.stubEnv('EMBEDDING_PROVIDER', 'bogus');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.invalid).toContainEqual({
+      name: 'EMBEDDING_PROVIDER',
+      value: 'bogus',
+      description: 'One of: google, openai, ollama',
+    });
+    expect(result.message).toContain('EMBEDDING_PROVIDER');
+  });
+
+  it('reports invalid CHAT_PROVIDER values', () => {
+    vi.stubEnv('CHAT_PROVIDER', 'bogus');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.invalid).toContainEqual({
+      name: 'CHAT_PROVIDER',
+      value: 'bogus',
+      description: 'One of: openai, google, ollama',
+    });
+  });
+
+  it('reports invalid BLOB_STORAGE_PROVIDER values', () => {
+    vi.stubEnv('BLOB_STORAGE_PROVIDER', 'bogus');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.invalid).toContainEqual({
+      name: 'BLOB_STORAGE_PROVIDER',
+      value: 'bogus',
+      description: 'One of: filesystem, r2, s3',
+    });
+  });
+
+  it('does not report unset providers as invalid (runtime defaults apply)', () => {
+    vi.stubEnv('EMBEDDING_PROVIDER', '');
+    vi.stubEnv('CHAT_PROVIDER', '');
+    vi.stubEnv('BLOB_STORAGE_PROVIDER', '');
+
+    const result = validateEnv();
+    expect(result.invalid).toHaveLength(0);
+  });
+
+  it('requires UPSTASH_REDIS_REST_TOKEN when UPSTASH_REDIS_REST_URL is set', () => {
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://example.upstash.io');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.missing.map((m) => m.name)).toContain('UPSTASH_REDIS_REST_TOKEN');
+  });
+
+  it('does not require UPSTASH_REDIS_REST_TOKEN when UPSTASH_REDIS_REST_URL is unset', () => {
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+
+    const result = validateEnv();
+    expect(result.ok).toBe(true);
+    expect(result.missing.map((m) => m.name)).not.toContain('UPSTASH_REDIS_REST_TOKEN');
   });
 });

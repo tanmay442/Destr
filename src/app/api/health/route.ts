@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getComposition } from '@/composition';
-import { getRuntimeConfig } from '@/lib/config/runtime';
+import { getRuntimeConfig, isRuntimeConfigDegraded } from '@/lib/config/runtime';
 
 export async function GET() {
   const comp = getComposition();
@@ -11,7 +11,7 @@ export async function GET() {
 
   try {
     await getRuntimeConfig();
-    checks.runtimeConfig = true;
+    checks.runtimeConfig = !isRuntimeConfigDegraded();
   } catch {
     checks.runtimeConfig = false;
   }

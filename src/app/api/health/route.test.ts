@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { state } = vi.hoisted(() => ({
-  state: { runtimeConfigOk: true, dbOk: true },
+  state: { runtimeConfigOk: true, runtimeConfigDegraded: false, dbOk: true },
 }));
 
 vi.mock('@/composition', async (importOriginal) => {
@@ -25,6 +25,7 @@ vi.mock('@/lib/config/runtime', async (importOriginal) => {
     getRuntimeConfig: async () => {
       if (!state.runtimeConfigOk) throw new Error('config missing');
     },
+    isRuntimeConfigDegraded: () => state.runtimeConfigDegraded,
   };
 });
 
@@ -32,6 +33,7 @@ import * as route from './route';
 
 beforeEach(() => {
   state.runtimeConfigOk = true;
+  state.runtimeConfigDegraded = false;
   state.dbOk = true;
 });
 
@@ -46,6 +48,15 @@ describe('GET /api/health', () => {
 
   it('returns 503 degraded with boolean flags when runtime config fails', async () => {
     state.runtimeConfigOk = false;
+    const res = await route.GET();
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json.status).toBe('degraded');
+    expect(json.checks.runtimeConfig).toBe(false);
+  });
+
+  it('returns 503 degraded when runtime config falls back to stale values', async () => {
+    state.runtimeConfigDegraded = true;
     const res = await route.GET();
     expect(res.status).toBe(503);
     const json = await res.json();

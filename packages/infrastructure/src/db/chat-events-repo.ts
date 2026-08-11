@@ -1,6 +1,6 @@
 import { and, gte, lte, sql } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, chatFeedback, auditDeadLetter, type NewChatEvent } from './schema';
+import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
   ChatEventInput,
@@ -259,7 +259,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
   }
 
   async getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]> {
-    const wordCount = sql`array_length(regexp_split_to_array(btrim(${chatEvents.query}), E'\\s+'), 1)`;
+    const wordCount = sql`array_length(regexp_split_to_array(NULLIF(btrim(${chatEvents.query}), ''), E'\\s+'), 1)`;
     const rows = await this.client
       .select({
         mode: chatEvents.mode,
@@ -367,8 +367,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
           ${chatEvents.ticketCreated} as ticket_created
         from ${chatEvents}
         where ${chatEvents.userId} is not null${range?.from ? sql` and ${chatEvents.createdAt} >= ${range.from}` : sql``}${range?.to ? sql` and ${chatEvents.createdAt} <= ${range.to}` : sql``}
-        order by ${chatEvents.createdAt} desc
-        limit 10000
       ),
       turns as (
         select
@@ -458,10 +456,32 @@ export class ChatEventBatcher implements ChatEventsRepo {
           where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
         )
         returning ${chatFeedback.turnId}
+      ),
+      removed_events as (
+        delete from ${chatEvents}
+        where ${chatEvents.userId} = ${userId}
+        returning ${chatEvents.id}
+      ),
+      removed_tickets as (
+        delete from ${tickets}
+        where ${tickets.userId} = ${userId}
+        returning ${tickets.id}
+      ),
+      removed_audit as (
+        delete from ${auditEvents}
+        where ${auditEvents.actorId} = ${userId}
+          or ${auditEvents.targetId} = ${userId}
+          or (${auditEvents.kind} = 'ticket' and ${auditEvents.targetId} in (
+            select ${tickets.ticketId} from ${tickets} where ${tickets.userId} = ${userId}
+          ))
+        returning ${auditEvents.id}
+      ),
+      removed_user as (
+        delete from ${users}
+        where ${users.clerkUserId} = ${userId}
+        returning ${users.clerkUserId}
       )
-      delete from ${chatEvents}
-      where ${chatEvents.userId} = ${userId}
-      returning ${chatEvents.id}
+      select id from removed_events
     `);
     const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
     return { deletedCount: rows.length };
@@ -469,13 +489,45 @@ export class ChatEventBatcher implements ChatEventsRepo {
 
   async anonymizeUserData(userId: string): Promise<{ updatedCount: number }> {
     const result = await this.client.execute(sql`
-      update ${chatEvents}
-      set
-        user_id = 'REDACTED',
-        query = null,
-        meta = ${chatEvents.meta} - 'documentIds' - 'ticketId'
-      where ${chatEvents.userId} = ${userId}
-      returning ${chatEvents.id}
+      with redacted_events as (
+        update ${chatEvents}
+        set
+          user_id = null,
+          query = null,
+          meta = ${chatEvents.meta} - 'documentIds' - 'ticketId'
+        where ${chatEvents.userId} = ${userId}
+        returning ${chatEvents.id}
+      ),
+      redacted_tickets as (
+        update ${tickets}
+        set
+          name = 'REDACTED',
+          email = 'REDACTED',
+          issue = 'REDACTED'
+        where ${tickets.userId} = ${userId}
+        returning ${tickets.id}
+      ),
+      redacted_user as (
+        update ${users}
+        set
+          name = null,
+          image_url = null,
+          last_seen_at = null,
+          email = 'REDACTED-' || ${userId} || '@redacted.invalid'
+        where ${users.clerkUserId} = ${userId}
+        returning ${users.clerkUserId}
+      ),
+      scrubbed_audit as (
+        update ${auditEvents}
+        set details = '{}'
+        where ${auditEvents.actorId} = ${userId}
+          or ${auditEvents.targetId} = ${userId}
+          or (${auditEvents.kind} = 'ticket' and ${auditEvents.targetId} in (
+            select ${tickets.ticketId} from ${tickets} where ${tickets.userId} = ${userId}
+          ))
+        returning ${auditEvents.id}
+      )
+      select id from redacted_events
     `);
     const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
     return { updatedCount: rows.length };

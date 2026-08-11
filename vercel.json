@@ -6,6 +6,13 @@
     {
       "path": "/api/admin/analytics/rollup",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/admin/queue/sweep",
+      "schedule": "0 3 * * *",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer $CRON_SECRET" }
+      ]
     }
   ]
 }
