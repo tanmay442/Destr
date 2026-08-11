@@ -26,30 +26,25 @@ export interface RetrievedChunk {
   similarity: number;
 }
 
+interface ScoredRow extends RetrievedChunkRow {
+  fusedScore?: number;
+}
+
 export interface SearchDeps {
   chunks: ChunkRepository;
   embeddings: EmbeddingService;
-  /** Optional second-stage reranker. Retrieves a broad pool then reorders by
-   *  relevance. Falls back to cosine ordering when absent. */
   reranker?: Reranker | undefined;
 }
 
 export interface SearchOpts {
   threshold?: number | undefined;
   limit?: number | undefined;
-  /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
   mode?: 'parent' | 'window' | undefined;
-  /** Override `PARENT_CHILD_WINDOW` for this call. */
   parentChildWindow?: number | undefined;
-  /** Broad candidate-pool size before reranking. Ignored when no reranker. */
   candidateLimit?: number | undefined;
-  /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
   hybridEnabled?: boolean | undefined;
-  /** Override RRF_K (Reciprocal Rank Fusion constant). */
   rrfK?: number | undefined;
-  /** Override LEXICAL_WEIGHT (lexical modality boost). */
   lexicalWeight?: number | undefined;
-  /** Override RERANK_TOP_N (default search limit). */
   rerankTopN?: number | undefined;
 }
 
@@ -68,7 +63,7 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
 }
 
 async function resolveParents(
-  hits: RetrievedChunkRow[],
+  hits: ScoredRow[],
   deps: SearchDeps,
   topN: number,
 ): Promise<RetrievedChunk[]> {
@@ -82,20 +77,26 @@ async function resolveParents(
   const parents = await deps.chunks.getByIds(parentIds);
   const parentById = new Map(parents.map((p) => [p.id, p]));
 
-  const bestSim = new Map<number, number>();
-  const bestChild = new Map<number, RetrievedChunkRow>();
+  const bestSimilarity = new Map<number, number>();
+  const bestScore = new Map<number, number>();
+  const bestChild = new Map<number, ScoredRow>();
   for (const h of childHits) {
     const pid = h.parentChunkId as number;
-    bestSim.set(pid, Math.max(bestSim.get(pid) ?? -Infinity, h.similarity));
+    bestSimilarity.set(pid, Math.max(bestSimilarity.get(pid) ?? -Infinity, h.similarity));
+    const score = h.fusedScore ?? h.similarity;
+    bestScore.set(pid, Math.max(bestScore.get(pid) ?? -Infinity, score));
     const prev = bestChild.get(pid);
-    if (!prev || h.similarity > prev.similarity) bestChild.set(pid, h);
+    if (!prev || score > (prev.fusedScore ?? prev.similarity)) bestChild.set(pid, h);
   }
 
-  const resolved: RetrievedChunk[] = parents
-    .filter((p) => parentById.has(p.id))
-    .map((p) => {
-      const child = bestChild.get(p.id);
-      return {
+  const parentByIdHas = (id: number | null | undefined) => id != null && parentById.has(id);
+  const entries: Array<{ chunk: RetrievedChunk; score: number }> = [];
+
+  for (const p of parents) {
+    if (!parentById.has(p.id)) continue;
+    const child = bestChild.get(p.id);
+    entries.push({
+      chunk: {
         id: p.id,
         documentId: p.documentId,
         fileName: p.fileName,
@@ -104,24 +105,29 @@ async function resolveParents(
         source: child?.source ?? p.source,
         title: p.title ?? child?.title ?? null,
         content: p.content,
-        similarity: bestSim.get(p.id) ?? child?.similarity ?? 0,
-      };
-    })
-    .sort((a, b) => b.similarity - a.similarity);
+        similarity: bestSimilarity.get(p.id) ?? child?.similarity ?? 0,
+      },
+      score: bestScore.get(p.id) ?? 0,
+    });
+  }
 
-  // Orphaned children (parent missing) fall back to the child hit so recall is not silently lost.
-  const parentByIdHas = (id: number | null | undefined) => id != null && parentById.has(id);
-  const orphanedChildren = childHits
-    .filter((h) => !parentByIdHas(h.parentChunkId))
-    .map(toRetrievedChunk);
+  for (const h of childHits) {
+    if (parentByIdHas(h.parentChunkId)) continue;
+    entries.push({ chunk: toRetrievedChunk(h), score: h.fusedScore ?? h.similarity });
+  }
 
-  return [...resolved, ...orphanedChildren, ...flatHits.map(toRetrievedChunk)]
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, topN);
+  for (const h of flatHits) {
+    entries.push({ chunk: toRetrievedChunk(h), score: h.fusedScore ?? h.similarity });
+  }
+
+  return entries
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map((entry) => entry.chunk);
 }
 
 async function resolveWindow(
-  hits: RetrievedChunkRow[],
+  hits: ScoredRow[],
   deps: SearchDeps,
   radius: number,
 ): Promise<RetrievedChunk[]> {
@@ -137,8 +143,6 @@ async function resolveWindow(
     for (const n of ordered) seen.add(n.id);
     resolved.push({
       ...toRetrievedChunk(h),
-      // A fully subsumed hit is still emitted, but its content was already
-      // included in a sibling window, so do not duplicate the tokens.
       content:
         windowed.length > 0
           ? windowed.map((n) => n.content).join('\n\n')
@@ -156,7 +160,7 @@ function filterByThreshold(rows: RetrievedChunkRow[], threshold: number): Retrie
 
 async function rerankRows(
   query: string,
-  rows: RetrievedChunkRow[],
+  rows: ScoredRow[],
   topN: number,
   reranker: Reranker,
   threshold: number,
@@ -167,24 +171,23 @@ async function rerankRows(
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .map((r) => rows[r.index])
       .filter((r): r is RetrievedChunkRow => r != null);
-    return filterByThreshold(ordered.length > 0 ? ordered : sortBySimilarity(rows), threshold).slice(0, topN);
+    return filterByThreshold(ordered.length > 0 ? ordered : sortByRelevance(rows), threshold).slice(0, topN);
   } catch {
-    return filterByThreshold(sortBySimilarity(rows), threshold).slice(0, topN);
+    return filterByThreshold(sortByRelevance(rows), threshold).slice(0, topN);
   }
 }
 
-function sortBySimilarity(rows: RetrievedChunkRow[]): RetrievedChunkRow[] {
-  return [...rows].sort((a, b) => b.similarity - a.similarity);
+function sortByRelevance(rows: ScoredRow[]): ScoredRow[] {
+  return [...rows].sort((a, b) => (b.fusedScore ?? b.similarity) - (a.fusedScore ?? a.similarity));
 }
 
-/** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and lexical rankings. */
 function reciprocalRankFusion(
   vectorRows: RetrievedChunkRow[],
   lexicalRows: RetrievedChunkRow[],
   limit: number,
   rrfK: number,
   lexicalWeight: number,
-): RetrievedChunkRow[] {
+): ScoredRow[] {
   const fused = new Map<number, { row: RetrievedChunkRow; score: number }>();
   const add = (rows: RetrievedChunkRow[], boost: number) => {
     rows.forEach((row, rank) => {
@@ -197,7 +200,7 @@ function reciprocalRankFusion(
   return [...fused.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map((entry) => entry.row);
+    .map((entry) => ({ ...entry.row, fusedScore: entry.score }));
 }
 
 export async function searchChunks(
@@ -224,7 +227,6 @@ export async function searchChunks(
   const searchByLexical = deps.chunks.searchByLexical;
   const runHybrid = hybridEnabled && searchByLexical != null;
 
-  // Run vector + lexical concurrently; lexical failure falls back to vector-only.
   const vectorPromise = deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit });
   const lexicalPromise = runHybrid
     ? searchByLexical(query, { limit: candidateLimit }).then(
@@ -261,13 +263,19 @@ export async function searchChunks(
   if (vectorRows.length === 0 && lexicalRows.length === 0) {
     return ok([]);
   }
+  if (vectorRows.length === 0) {
+    return capAndResolve(lexicalRows, query, topN, opts, deps);
+  }
+  if (lexicalRows.length === 0) {
+    return capAndResolve(vectorRows, query, topN, opts, deps);
+  }
 
   const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, opts.rrfK ?? RRF_K, opts.lexicalWeight ?? LEXICAL_WEIGHT);
   return capAndResolve(fused, query, topN, opts, deps);
 }
 
 async function capAndResolve(
-  rows: RetrievedChunkRow[],
+  rows: ScoredRow[],
   query: string,
   topN: number,
   opts: SearchOpts,
@@ -276,7 +284,7 @@ async function capAndResolve(
   const threshold = opts.threshold ?? SIMILARITY_THRESHOLD;
   const capped = deps.reranker
     ? await rerankRows(query, rows, topN, deps.reranker, threshold)
-    : sortBySimilarity(rows).slice(0, topN);
+    : sortByRelevance(rows).slice(0, topN);
 
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'

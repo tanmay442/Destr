@@ -742,4 +742,40 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     if (!result.ok) return;
     expect(result.value.map((r) => r.id)).toEqual([1]);
   });
+
+  it('orders fused results by RRF score, not raw similarity (H1)', async () => {
+    const deps = hybridDeps(
+      [flatRow(2, 'shared hit', 0.9), flatRow(1, 'cosine only', 0.95)],
+      [flatRow(3, 'lexical only', 0.02), flatRow(2, 'shared hit', 0.03)],
+    );
+    const result = await searchChunks('q', { limit: 3 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
+  });
+
+  it('keeps similarity ordering when the lexical branch is empty', async () => {
+    const deps = hybridDeps(
+      [flatRow(1, 'low', 0.4), flatRow(2, 'high', 0.9)],
+      [],
+    );
+    const result = await searchChunks('q', { limit: 3 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([2, 1]);
+  });
+
+  it('keeps fused ordering when child hits resolve to parents (H1)', async () => {
+    const deps = hybridDeps(
+      [{ ...flatRow(10, 'child hit', 0.9), parentChunkId: 5 }, flatRow(7, 'flat hit', 0.95)],
+      [{ ...flatRow(10, 'child hit', 0.03), parentChunkId: 5 }],
+    );
+    (deps.chunks.getByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...flatRow(5, 'parent block', 0), chunkIndex: 0 },
+    ]);
+    const result = await searchChunks('q', { limit: 5 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([5, 7]);
+  });
 });
