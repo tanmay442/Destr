@@ -29,7 +29,7 @@ const eslintConfig = defineConfig([
   },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/lib/logger.ts", "src/components/marketing/Ferrofluid.tsx"],
+    ignores: ["src/components/marketing/Ferrofluid.tsx"],
     plugins: { tailwindcss },
     settings: {
       tailwindcss: {

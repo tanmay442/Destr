@@ -33,18 +33,27 @@ interface ScoredRow extends RetrievedChunkRow {
 export interface SearchDeps {
   chunks: ChunkRepository;
   embeddings: EmbeddingService;
+  /** Optional second-stage reranker. Retrieves a broad pool then reorders by
+   *  relevance. Falls back to cosine ordering when absent. */
   reranker?: Reranker | undefined;
 }
 
 export interface SearchOpts {
   threshold?: number | undefined;
   limit?: number | undefined;
+  /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
   mode?: 'parent' | 'window' | undefined;
+  /** Override `PARENT_CHILD_WINDOW` for this call. */
   parentChildWindow?: number | undefined;
+  /** Broad candidate-pool size before reranking. Ignored when no reranker. */
   candidateLimit?: number | undefined;
+  /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
   hybridEnabled?: boolean | undefined;
+  /** Override RRF_K (Reciprocal Rank Fusion constant). */
   rrfK?: number | undefined;
+  /** Override LEXICAL_WEIGHT (lexical modality boost). */
   lexicalWeight?: number | undefined;
+  /** Override RERANK_TOP_N (default search limit). */
   rerankTopN?: number | undefined;
 }
 
@@ -111,6 +120,7 @@ async function resolveParents(
     });
   }
 
+  // Orphaned children (parent missing) fall back to the child hit so recall is not silently lost.
   for (const h of childHits) {
     if (parentByIdHas(h.parentChunkId)) continue;
     entries.push({ chunk: toRetrievedChunk(h), score: h.fusedScore ?? h.similarity });
@@ -143,6 +153,8 @@ async function resolveWindow(
     for (const n of ordered) seen.add(n.id);
     resolved.push({
       ...toRetrievedChunk(h),
+      // A fully subsumed hit is still emitted, but its content was already
+      // included in a sibling window, so do not duplicate the tokens.
       content:
         windowed.length > 0
           ? windowed.map((n) => n.content).join('\n\n')
@@ -181,6 +193,7 @@ function sortByRelevance(rows: ScoredRow[]): ScoredRow[] {
   return [...rows].sort((a, b) => (b.fusedScore ?? b.similarity) - (a.fusedScore ?? a.similarity));
 }
 
+/** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and lexical rankings. */
 function reciprocalRankFusion(
   vectorRows: RetrievedChunkRow[],
   lexicalRows: RetrievedChunkRow[],
@@ -227,6 +240,7 @@ export async function searchChunks(
   const searchByLexical = deps.chunks.searchByLexical;
   const runHybrid = hybridEnabled && searchByLexical != null;
 
+  // Run vector + lexical concurrently; lexical failure falls back to vector-only.
   const vectorPromise = deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit });
   const lexicalPromise = runHybrid
     ? searchByLexical(query, { limit: candidateLimit }).then(
