@@ -853,9 +853,9 @@ export const ticketRepo = {
       )
       select
         f.ticket_id,
-        extract(epoch from ((f.first_change AT TIME ZONE 'UTC') - f.created_at)) * 1000 as first_response_ms,
+        extract(epoch from (f.first_change - f.created_at)) * 1000 as first_response_ms,
         case when f.is_closed and f.last_change is not null
-          then extract(epoch from ((f.last_change AT TIME ZONE 'UTC') - f.created_at)) * 1000
+          then extract(epoch from (f.last_change - f.created_at)) * 1000
           else null end as resolution_ms
       from firsts f
     `)) as unknown as { rows: Array<{ first_response_ms: number | null; resolution_ms: number | null }> };
@@ -958,6 +958,14 @@ export const userRepo = {
       .from(users)
       .where(eq(users.role, 'admin'));
     return row?.count ?? 0;
+  },
+  async countAdminsForUpdate(client: Client = db): Promise<number> {
+    const result = await client.execute(sql`
+      select count(*)::int as count
+      from (select 1 from ${users} where ${users.role} = 'admin' for update) locked
+    `);
+    const rows = (result as unknown as { rows?: Array<{ count: number }> }).rows ?? [];
+    return Number(rows[0]?.count ?? 0);
   },
 };
 
@@ -1153,6 +1161,7 @@ export function createUserRepo(client: Client = db): UserRepository {
     list: (opts) => userRepo.list(opts, client),
     countAll: () => userRepo.countAll(client),
     countAdmins: () => userRepo.countAdmins(client),
+    countAdminsForUpdate: () => userRepo.countAdminsForUpdate(client),
   };
 }
 

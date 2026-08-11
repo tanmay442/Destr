@@ -60,4 +60,20 @@ describe('createTtlCache', () => {
     expect(cache.get('b')).toBe('2');
     expect(cache.get('c')).toBe('3');
   });
+
+  it('removes an entry immediately', () => {
+    const cache = createTtlCache<string>(60_000, 10);
+    cache.set('a', '1');
+    cache.remove('a');
+    expect(cache.get('a')).toBeUndefined();
+    expect(cache.size()).toBe(0);
+  });
+
+  it('remove is a no-op for a missing key', () => {
+    const cache = createTtlCache<string>(60_000, 10);
+    cache.set('a', '1');
+    cache.remove('missing');
+    expect(cache.get('a')).toBe('1');
+    expect(cache.size()).toBe(1);
+  });
 });

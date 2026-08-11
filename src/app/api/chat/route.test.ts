@@ -766,6 +766,38 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(body).toContain(CACHED);
   });
 
+  it('replays stored citations from a versioned cache payload on a cache hit', async () => {
+    const citation = {
+      id: 11,
+      documentId: 7,
+      similarity: 0.91,
+      snippet: 'The dental plan covers two cleanings per year.',
+      fileName: 'benefits.md',
+      page: 3,
+      sectionTitle: 'Dental',
+      source: null,
+    };
+    compositionMock.answerCache.get.mockResolvedValue(JSON.stringify({ v: 1, text: CACHED, citations: [citation] }));
+    authMock.mockResolvedValue({ userId: 'user_cache' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(streamTextImpl).not.toHaveBeenCalled();
+    const body = await readBody(res);
+    expect(body).toContain(CACHED);
+    expect(body).toMatch(/data-citation/);
+    expect(body).toMatch(/0\.91/);
+    expect(body).toMatch(/dental plan/);
+    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event?.cacheHit).toBe(true);
+    expect(event?.citationCount).toBe(1);
+  });
+
   it('writes a freshly-generated first-turn answer to the cache on miss', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
     authMock.mockResolvedValue({ userId: 'user_miss' });
@@ -782,7 +814,10 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
     const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
-    expect(value).toBe('freshly generated answer');
+    const payload = JSON.parse(value as string) as { v: number; text: string; citations: unknown[] };
+    expect(payload.v).toBe(1);
+    expect(payload.text).toBe('freshly generated answer');
+    expect(payload.citations).toEqual([]);
     expect(ttl).toBe(3600);
   });
 

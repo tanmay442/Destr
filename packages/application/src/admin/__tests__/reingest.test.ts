@@ -147,4 +147,24 @@ describe('reingestAll', () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
   });
+
+  it('restores a document status when enqueue fails, leaving earlier docs queued', async () => {
+    const enqueue = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('qstash down'));
+    const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2])));
+    const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
+
+    const result = await reingestAll({ documents, queue });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ExternalServiceError);
+      expect(result.error.message).toContain('Failed to enqueue document 2');
+    }
+    expect(documents.update).toHaveBeenCalledWith(1, { ingestStatus: 'queued' });
+    expect(documents.update).toHaveBeenCalledWith(2, { ingestStatus: 'queued' });
+    expect(documents.update).toHaveBeenCalledWith(2, { ingestStatus: 'done' });
+    expect(documents.update).not.toHaveBeenCalledWith(1, { ingestStatus: 'done' });
+  });
 });

@@ -65,7 +65,10 @@ export async function POST(req: Request) {
   const result = await getComposition().ingestQueuedDocument(documentId as number);
   if (!result.ok) {
     if (result.error instanceof NotFoundError) {
-      return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Document not found' },
+        { status: 489, headers: { 'Upstash-NonRetryable-Error': 'true' } },
+      );
     }
     return NextResponse.json({ error: 'Ingest failed' }, { status: 500 });
   }
