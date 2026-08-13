@@ -1,5 +1,7 @@
-import 'dotenv/config';
+import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
 import { Db, Storage } from '@app/infrastructure';
+
+loadDotEnv();
 const { and, isNull, isNotNull } = Db;
 
 function safeName(name: string): string {

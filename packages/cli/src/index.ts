@@ -1,3 +1,4 @@
+import { loadDotEnv } from '@app/infrastructure/config/dotenv-bootstrap';
 import { runInit } from './commands/init';
 import { runSetup } from './commands/setup';
 import { runSeed, parseSeedArgs } from './commands/seed';
@@ -24,6 +25,7 @@ Commands:
 }
 
 async function main(): Promise<void> {
+  loadDotEnv();
   const [, , cmd, ...rest] = process.argv;
   if (!cmd || cmd === '--help' || cmd === '-h') {
     usage();

@@ -14,7 +14,7 @@ import { createBlobStorage } from '@app/infrastructure/storage';
 type UploadIngestDeps = PrechunkedIngestDeps & { markdownParser: MarkdownParser };
 
 async function buildDbDeps() {
-  const adapters = createRepositoryAdapters(Db.db);
+  const adapters = createRepositoryAdapters(Db.createDbClient());
   const embeddings = Llm.getEmbeddingService();
   const hasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
   return {

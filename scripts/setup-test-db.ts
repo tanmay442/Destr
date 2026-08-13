@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import 'dotenv/config';
+import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
 import {
   neonHeaders,
   neonApiUrl,
@@ -11,6 +11,8 @@ import {
   isStaleBranch,
   deleteBranch,
 } from './neon-api';
+
+loadDotEnv();
 
 export async function main() {
   const PROJECT_ID = process.env.NEON_PROJECT_ID;
