@@ -600,3 +600,13 @@ export interface SettingsRepo {
     expectedVersion: number;
   }): Promise<{ version: number } | { conflict: true }>;
 }
+
+/** Keyed environment lookup (process.env, test fakes, future non-Node runtimes). */
+export interface EnvSource {
+  get(key: string): string | undefined;
+}
+
+/** Frozen, typed, mirrors the current config/env.ts exports. */
+export interface RuntimeConfig {
+  readonly [key: string]: unknown;
+}
