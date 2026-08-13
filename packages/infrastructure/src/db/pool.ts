@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { Pool as NeonPool } from '@neondatabase/serverless';
 import pg from 'pg';
 
@@ -21,16 +20,16 @@ export function isNeonUrl(url: string): boolean {
   return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
 }
 
-export function buildNeonPool(): NeonPool {
+export function buildNeonPool(url: string): NeonPool {
   return new NeonPool({
-    connectionString: process.env.DATABASE_URL ?? '',
+    connectionString: url,
     ...POOL_OPTS,
   });
 }
 
-export function buildPgPool(): pg.Pool {
+export function buildPgPool(url: string): pg.Pool {
   return new pg.Pool({
-    connectionString: process.env.DATABASE_URL ?? '',
+    connectionString: url,
     ...POOL_OPTS,
   });
 }
@@ -56,3 +55,4 @@ function makeMissingDatabasePool(): NeonPool {
 export function buildMissingPool(): NeonPool {
   return makeMissingDatabasePool();
 }
+

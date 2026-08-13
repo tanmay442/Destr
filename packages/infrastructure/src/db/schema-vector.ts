@@ -1,17 +1,25 @@
 import { customType } from 'drizzle-orm/pg-core';
+import type { EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 
-const parsedDim = parseInt(process.env.EMBEDDING_DIMENSION || '768', 10);
-if (!Number.isFinite(parsedDim) || parsedDim <= 0) {
-  throw new Error(
-    `Invalid EMBEDDING_DIMENSION: "${process.env.EMBEDDING_DIMENSION}". ` +
-      'Expected a positive integer (default 768).',
-  );
+export function resolveVectorDim(env?: EnvSource): number {
+  const raw = (env ?? defaultProcessEnv).get('EMBEDDING_DIMENSION');
+  const parsedDim = parseInt(raw || '768', 10);
+  if (!Number.isFinite(parsedDim) || parsedDim <= 0) {
+    throw new Error(
+      `Invalid EMBEDDING_DIMENSION: "${raw}". ` +
+        'Expected a positive integer (default 768).',
+    );
+  }
+  return parsedDim;
 }
-export const VECTOR_DIM = parsedDim;
+
+/** @deprecated Module-load evaluation kept for compat (same semantics as before E2); resolve at call time via resolveVectorDim(env?). */
+export const VECTOR_DIM: number = resolveVectorDim();
 
 export const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return `vector(${VECTOR_DIM})`;
+    return `vector(${resolveVectorDim()})`;
   },
   toDriver(value: number[]): string {
     return `[${value.join(',')}]`;
