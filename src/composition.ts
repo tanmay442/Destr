@@ -22,17 +22,17 @@ import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking, answerCacheKey 
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
   OUT_OF_DOMAIN_THRESHOLD, CCH_ENABLED,
-  LOG_LEVEL,
+  loadEnvConfig, defaultProcessEnv,
 } from '@app/infrastructure/config';
+import type { MyUIMessage } from '@/chat/types';
+import type { DocumentRow, LogLevel } from '@app/domain';
+import type { AppConfig } from '@app/domain/app-config';
+import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
-import type { MyUIMessage } from '@/chat/types';
-import type { DocumentRow } from '@app/domain';
-import type { AppConfig } from '@app/domain/app-config';
 import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';
 import { getRuntimeConfig } from './lib/config/runtime';
@@ -40,7 +40,8 @@ import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LIST_LIMIT } from '@app/domain';
 
-configureLogger(LOG_LEVEL);
+const cfg = loadEnvConfig();
+configureLogger(cfg.LOG_LEVEL as LogLevel);
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -50,11 +51,12 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const documentRepo = Db.createDocumentRepo(Db.db);
-const chunkRepo = Db.createChunkRepo(Db.db);
-const settingsRepo = Db.createSettingsRepo(Db.db);
-const chatEventBatcher = Db.createChatEventsRepo(Db.db);
-const chatFeedbackRepo = Db.createChatFeedbackRepo(Db.db);
+const dbClient = Db.createDbClient({ env: defaultProcessEnv });
+const documentRepo = Db.createDocumentRepo(dbClient);
+const chunkRepo = Db.createChunkRepo(dbClient);
+const settingsRepo = Db.createSettingsRepo(dbClient);
+const chatEventBatcher = Db.createChatEventsRepo(dbClient);
+const chatFeedbackRepo = Db.createChatFeedbackRepo(dbClient);
 
 const embeddingService = Llm.getEmbeddingService();
 
@@ -318,7 +320,7 @@ function createComposition() {
     submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
       bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
-    db: Db.db,
+    db: dbClient,
     schema: Db.schema,
     blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
