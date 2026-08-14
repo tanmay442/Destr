@@ -124,14 +124,6 @@ pnpm chunks:preview path/to/document.pdf
 
 ---
 
-## Recommended GitHub Repository Topics
-
-When configuring this repository on GitHub, we suggest adding the following topics for maximum discoverability:
-
-`nextjs-16` • `vercel-ai-sdk` • `rag-agent` • `pgvector` • `drizzle-orm` • `clean-architecture` • `typescript` • `pnpm-workspace` • `vitest` • `clerk-auth`
-
----
-
 ## Documentation Index
 
 - [Technical Reference Manual](docs/REFERENCE.md) — Comprehensive guide on Tech Stack, Architecture Deep Dive, Auth/RBAC, Admin Console, Database Schema, Rate Limiting, and Telemetry.
