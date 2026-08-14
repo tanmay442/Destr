@@ -1,5 +1,6 @@
 import { Client } from '@upstash/qstash';
 import { logger, type IngestQueue } from '@app/domain';
+import { registerIngestQueueProvider } from './ingest-queue-registry';
 
 /**
  * Resolves the public ingest-worker base URL.
@@ -99,3 +100,5 @@ export function createQstashQueue(): IngestQueue {
     },
   };
 }
+
+registerIngestQueueProvider('qstash', createQstashQueue);

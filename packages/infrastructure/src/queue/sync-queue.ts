@@ -1,4 +1,5 @@
 import { logger, type IngestQueue } from '@app/domain';
+import { registerIngestQueueProvider } from './ingest-queue-registry';
 
 export interface SyncQueueOptions {
   ingest?: (documentId: number) => Promise<void>;
@@ -30,3 +31,5 @@ export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
     },
   };
 }
+
+registerIngestQueueProvider('sync', createSyncQueue);

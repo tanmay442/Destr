@@ -6,14 +6,14 @@ import type {
   HallucinationGrader,
 } from '@app/domain';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { googleEmbeddingService } from './google-embedding-service-port';
-import { openAIEmbeddingService } from './openai-embedding-service';
-import { ollamaEmbeddingService } from './ollama-embedding-service';
-import { getChatModel as getOpenAIChatModel } from './openai-chat-service';
-import { getGoogleChatModel } from './google-chat-service';
-import { getOllamaChatModel } from './ollama-chat-service';
-import { getGoogleEmbeddingModelId } from './google-embedding-service';
-import { docSummarizer } from './doc-summarizer';
+import './openai-chat-service';
+import './google-chat-service';
+import './ollama-chat-service';
+import './google-embedding-service';
+import './google-embedding-service-port';
+import './openai-embedding-service';
+import './ollama-embedding-service';
+import { docSummarizer, createDocSummarizer } from './doc-summarizer';
 import { localReranker, checkLocalRerankerAvailable } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
 import {
@@ -22,33 +22,27 @@ import {
   documentGrader,
   hallucinationGrader,
 } from './graders';
+import {
+  chatProviderRegistry,
+  embeddingProviderRegistry,
+  rerankerProviderRegistry,
+  embeddingModelIdRegistry,
+  registerRerankerProvider,
+  type ChatModelProvider,
+} from './registries';
 
 export function getEmbeddingService(): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
-  switch (provider) {
-    case 'google':
-      return googleEmbeddingService;
-    case 'openai':
-      return openAIEmbeddingService;
-    case 'ollama':
-      return ollamaEmbeddingService;
-    default:
-      throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
-  }
+  const service = embeddingProviderRegistry.get(provider);
+  if (!service) throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
+  return service;
 }
 
 export function getChatModel(modelId?: string): LanguageModelV3 {
   const provider = process.env.CHAT_PROVIDER ?? 'openai';
-  switch (provider) {
-    case 'openai':
-      return getOpenAIChatModel(modelId);
-    case 'google':
-      return getGoogleChatModel(modelId);
-    case 'ollama':
-      return getOllamaChatModel(modelId);
-    default:
-      throw new Error(`Unknown CHAT_PROVIDER: ${provider}`);
-  }
+  const factory = chatProviderRegistry.get(provider);
+  if (!factory) throw new Error(`Unknown CHAT_PROVIDER: ${provider}`);
+  return factory(modelId);
 }
 
 /**
@@ -62,23 +56,22 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
  */
 export function getReranker(provider?: string): Reranker | undefined {
   const selected = provider ?? process.env.RERANKER_PROVIDER ?? 'cosine';
-  switch (selected) {
-    case 'local':
-      return localReranker;
-    case 'cohere':
-      // No key → don't attempt a doomed call; behave as cosine.
-      return process.env.COHERE_API_KEY ? cohereReranker : undefined;
-    case 'cosine':
-    default:
-      return undefined;
-  }
+  const factory = rerankerProviderRegistry.get(selected);
+  if (!factory) return undefined;
+  return factory();
 }
+
+registerRerankerProvider('cosine', () => undefined);
 
 /**
  * Return the agentic-loop graders, or `undefined` for each when the loop is
  * disabled (`AGENTIC_ENABLED=false`).
  */
-export function getGraders(enabled?: boolean, gradeModelId?: string): {
+export function getGraders(
+  enabled?: boolean,
+  gradeModelId?: string,
+  modelProvider: ChatModelProvider = getChatModel,
+): {
   queryRewriter: QueryRewriter | undefined;
   documentGrader: DocumentGrader | undefined;
   hallucinationGrader: HallucinationGrader | undefined;
@@ -91,12 +84,21 @@ export function getGraders(enabled?: boolean, gradeModelId?: string): {
       hallucinationGrader: undefined,
     };
   }
-  return gradeModelId ? createGraders(gradeModelId) : { queryRewriter, documentGrader, hallucinationGrader };
+  if (modelProvider === getChatModel && !gradeModelId) {
+    return { queryRewriter, documentGrader, hallucinationGrader };
+  }
+  const graders = createGraders(gradeModelId, modelProvider);
+  return {
+    queryRewriter: graders.queryRewriter,
+    documentGrader: graders.documentGrader,
+    hallucinationGrader: graders.hallucinationGrader,
+  };
 }
 
 export { getEmbeddingModel, EMBEDDING_OPTIONS, getGoogleEmbeddingModelId } from './google-embedding-service';
 export {
   docSummarizer,
+  createDocSummarizer,
   localReranker,
   checkLocalRerankerAvailable,
   cohereReranker,
@@ -110,14 +112,7 @@ export {
  *  Used to stamp `DocumentChunk.embeddingModel` metadata. */
 export function getEmbeddingModelId(): string {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
-  switch (provider) {
-    case 'google':
-      return getGoogleEmbeddingModelId();
-    case 'openai':
-      return process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
-    case 'ollama':
-      return process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
-    default:
-      return 'unknown';
-  }
+  const factory = embeddingModelIdRegistry.get(provider);
+  if (!factory) return 'unknown';
+  return factory();
 }

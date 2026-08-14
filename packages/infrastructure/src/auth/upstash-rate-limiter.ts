@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis';
 import type { RateLimiter } from '@app/domain';
+import { registerRateLimiterProvider } from './rate-limiter-registry';
 
 export const RATE_LIMITER_LUA = `
   local key = KEYS[1]
@@ -49,3 +50,5 @@ export function createUpstashRateLimiter(): RateLimiter {
     },
   };
 }
+
+registerRateLimiterProvider('upstash', createUpstashRateLimiter);

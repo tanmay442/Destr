@@ -3,6 +3,7 @@ import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import type { EmbeddingService } from '@app/domain';
 import { VECTOR_DIM } from '../db/schema-vector';
 import { embedBatchWithModel } from './embedding-batch-helper';
+import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
 
 export function getOllamaEmbeddingModelId(): string {
   return process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
@@ -44,3 +45,6 @@ export const ollamaEmbeddingService: EmbeddingService = {
     return embeddings;
   },
 };
+
+registerEmbeddingProvider('ollama', ollamaEmbeddingService);
+registerEmbeddingModelIdProvider('ollama', getOllamaEmbeddingModelId);

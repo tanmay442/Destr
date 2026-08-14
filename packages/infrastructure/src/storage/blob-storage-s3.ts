@@ -1,5 +1,6 @@
 import { createS3FamilyBlobStorage } from './blob-storage-s3-family';
 import type { BlobStorage } from '@app/domain';
+import { registerBlobStorageProvider } from './blob-storage-registry';
 
 // Also works with MinIO via S3_ENDPOINT.
 export function createS3BlobStorage(): BlobStorage {
@@ -17,3 +18,5 @@ export function createS3BlobStorage(): BlobStorage {
     credentials: { accessKeyId, secretAccessKey },
   });
 }
+
+registerBlobStorageProvider('s3', createS3BlobStorage);

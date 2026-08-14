@@ -1,5 +1,6 @@
 import type { RankedDocument, Reranker } from '@app/domain';
 import { retryOnTransient } from './retry';
+import { registerRerankerProvider } from './registries';
 
 /** Cohere Rerank API endpoint. */
 const COHERE_RERANK_URL = 'https://api.cohere.ai/v1/rerank';
@@ -65,3 +66,5 @@ export const cohereReranker: Reranker = {
     );
   },
 };
+
+registerRerankerProvider('cohere', () => (process.env.COHERE_API_KEY ? cohereReranker : undefined));

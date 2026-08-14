@@ -1,4 +1,5 @@
 import type { AnswerCache } from '@app/domain';
+import { answerCacheRegistry, registerAnswerCacheProvider } from './answer-cache-registry';
 
 const MAX_KEYS = 5_000;
 
@@ -32,4 +33,18 @@ export function createInMemoryAnswerCache(): AnswerCache {
       sweep();
     },
   };
+}
+
+registerAnswerCacheProvider('memory', createInMemoryAnswerCache);
+
+export function createAnswerCache(onInitError?: (error: unknown) => void): AnswerCache {
+  const provider = process.env.UPSTASH_REDIS_REST_URL ? 'upstash' : 'memory';
+  const factory = answerCacheRegistry.get(provider);
+  if (!factory) throw new Error(`Unknown answer cache provider: ${provider}`);
+  try {
+    return factory();
+  } catch (error) {
+    onInitError?.(error);
+    return createInMemoryAnswerCache();
+  }
 }

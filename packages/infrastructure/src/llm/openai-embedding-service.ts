@@ -4,6 +4,7 @@ import { embed } from 'ai';
 import type { EmbeddingService } from '@app/domain';
 import { embedBatchWithModel } from './embedding-batch-helper';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
+import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
 
 export function getOpenAIEmbeddingModel(): EmbeddingModelV3 {
   const apiKey = process.env.OPENAI_EMBEDDING_API_KEY ?? process.env.CUSTOM_LLM_API_KEY;
@@ -40,3 +41,6 @@ export const openAIEmbeddingService: EmbeddingService = {
     return embedBatchWithModel(values, getOpenAIEmbeddingModel(), getOpenAIEmbeddingOptions());
   },
 };
+
+registerEmbeddingProvider('openai', openAIEmbeddingService);
+registerEmbeddingModelIdProvider('openai', () => process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small');
