@@ -8,6 +8,7 @@ import {
 import { getChatModel } from './index';
 import { GRADE_MODEL } from '@app/infrastructure/config';
 import { retryOnTransient } from './retry';
+import type { ChatModelProvider } from './registries';
 
 const GRADE_RETRY_ATTEMPTS = 3;
 
@@ -68,8 +69,11 @@ export interface Graders {
  *  - Every give-up is logged at error severity and counted (see
  *    `getGraderFailureCounts`) so outages surface in monitoring.
  */
-export function createGraders(gradeModelId?: string): Graders {
-  const model = () => getChatModel(gradeModelId || GRADE_MODEL || undefined);
+export function createGraders(
+  gradeModelId?: string,
+  modelProvider: ChatModelProvider = getChatModel,
+): Graders {
+  const model = () => modelProvider(gradeModelId || GRADE_MODEL || undefined);
 
   const gradeVerdict = (text: string): 'yes' | 'no' =>
     /(^|[^a-z])no([^a-z]|$)/i.test(text) ? 'no' : 'yes';
