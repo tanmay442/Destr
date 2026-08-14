@@ -18,6 +18,7 @@
 </p>
 
 ---
+[![CI](https://github.com/tanmay442/rag_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tanmay442/rag_agent/actions/workflows/ci.yml)
 
 ## Overview
 
