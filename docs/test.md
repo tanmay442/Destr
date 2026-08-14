@@ -1,6 +1,18 @@
-# Test Suite & Verification Documentation
+# Test Suite & Verification Metrics
 
-This project uses **Vitest** for unit, integration, and contract testing, **TypeScript** (`tsc`) for static type checking, **ESLint** for code style, and **dependency-cruiser** for Clean Architecture layer verification.
+This project uses **Vitest** for unit, integration, and contract testing, **TypeScript** (`tsc`) for static type checking, **ESLint** for code style, and **dependency-cruiser** for Clean Architecture layer validation.
+
+---
+
+## Test Suite Metrics
+
+| Metric | Count / Status | Notes |
+|---|---|---|
+| **Total Test Files** | **126 files** | 122 passed, 4 skipped (live-DB gated) |
+| **Total Test Cases** | **1,106 tests** | 1,049 passed, 57 skipped (live-DB / external network gated) |
+| **Architecture Modules** | **494 modules** | 1,256 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~45–50s** | Full suite execution including transform, setup, import, and runner |
+| **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
 
@@ -27,11 +39,22 @@ pnpm test:ci
 
 ---
 
-## Test Organization & Contract Testing Matrix
+## Test Organization by Architecture Layer
 
-Tests are structured across application use-cases, domain schemas, infrastructure ports, and Next.js routes. Multi-implementation ports are validated through **shared contract-assertion harnesses** to guarantee identical behavior across all implementations.
+```
+test-distribution/
+├── packages/domain/         # Pure schema, error hierarchy, sanitization tests
+├── packages/application/    # Pure use-case tests (chat-turn, ingest, search, tickets, analytics)
+├── packages/infrastructure/ # Database repos, LLM services, and shared contract suites
+├── packages/cli/            # CLI command tests (init, setup, seed, db-migrate)
+└── src/                     # API route handlers, UI components, parity suites, middleware gating
+```
 
-### 1. Port Contract Testing Matrix (`packages/infrastructure/src/`)
+---
+
+## Port Contract Testing Matrix (`packages/infrastructure/src/`)
+
+Multi-implementation ports are validated through **shared contract-assertion harnesses** to guarantee identical behavior across all implementations:
 
 | Port Interface | Implementations Tested | Contract Harness Path | Contract Test Files |
 |---|---|---|---|
@@ -45,7 +68,7 @@ Tests are structured across application use-cases, domain schemas, infrastructur
 
 ---
 
-### 2. Core & Parity Test Suites
+## Core & Parity Test Suites
 
 - **Composition Singleton (`packages/infrastructure/src/core.test.ts`)**:
   Validates `buildCoreDeps()` singleton semantics, default environment memoization, and custom environment isolation.
@@ -58,7 +81,7 @@ Tests are structured across application use-cases, domain schemas, infrastructur
 
 ---
 
-### 3. Application Use-Case & Route Test Catalog
+## Application Use-Case & Route Test Catalog
 
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
   Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, first-turn prefetching, and answer cache hit/miss semantics.
