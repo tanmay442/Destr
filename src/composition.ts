@@ -43,6 +43,8 @@ import { MAX_LIST_LIMIT } from '@app/domain';
 const cfg = loadEnvConfig();
 configureLogger(cfg.LOG_LEVEL as LogLevel);
 
+const asyncIngest = Boolean(cfg.QSTASH_TOKEN);
+
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
 
@@ -133,7 +135,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   contentParser: Pdf.unpdfParser,
   runner: Db.transactionRunner,
-  summarizer: Llm.docSummarizer,
+  summarizer: Llm.createDocSummarizer(Llm.getChatModel),
   cchEnabled: CCH_ENABLED,
 };
 
@@ -179,7 +181,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
-  const graders = Llm.getGraders(undefined, cfg.gradeModel);
+  const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
   if (!graders.queryRewriter || !graders.documentGrader) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
@@ -193,23 +195,7 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
   };
 }
-const rateLimiter: RateLimiter =
-  process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashRateLimiter() : Auth.lruRateLimiter;
-
-function createAnswerCache() {
-  if (process.env.UPSTASH_REDIS_REST_URL) {
-    try {
-      return Auth.createUpstashAnswerCache();
-    } catch (e) {
-      logger.error(
-        'UPSTASH_REDIS_REST_URL is set but the Upstash answer cache could not be initialized; falling back to in-memory cache. Provide UPSTASH_REDIS_REST_TOKEN or unset UPSTASH_REDIS_REST_URL.',
-        { error: e },
-      );
-      return Auth.createInMemoryAnswerCache();
-    }
-  }
-  return Auth.createInMemoryAnswerCache();
-}
+const rateLimiter: RateLimiter = Auth.createRateLimiter();
 
 const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 
@@ -244,7 +230,7 @@ function createComposition() {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
     },
-    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel).hallucinationGrader?.grade ?? null,
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -263,7 +249,7 @@ function createComposition() {
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: async (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+      bind(uploadPdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
@@ -277,7 +263,7 @@ function createComposition() {
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
     replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+      bind(replacePdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     uploadChunkedMarkdown: (input: {
       fileName: string;
       mdText: string;
@@ -294,7 +280,7 @@ function createComposition() {
         blobStorage,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
-        summarizer: Llm.docSummarizer,
+        summarizer: Llm.createDocSummarizer(Llm.getChatModel),
         cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
@@ -327,7 +313,12 @@ function createComposition() {
     getChatModel: Llm.getChatModel,
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
-    answerCache: createAnswerCache(),
+    answerCache: Auth.createAnswerCache((error) => {
+      logger.error(
+        'UPSTASH_REDIS_REST_URL is set but the Upstash answer cache could not be initialized; falling back to in-memory cache. Provide UPSTASH_REDIS_REST_TOKEN or unset UPSTASH_REDIS_REST_URL.',
+        { error },
+      );
+    }),
     settingsRepo,
     chatEventBatcher,
     session: Auth.clerkSessionStore,
