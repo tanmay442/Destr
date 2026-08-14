@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { users } from '../db/schema';
 import type { SessionStore } from '@app/domain';
 import { getClerkUserCached, isVerifiedAdminEmail, primaryEmailAddress } from './clerk-shared';
+import { invalidateRoleCache } from './clerk-adapter';
 
 export const clerkSessionStore: SessionStore = {
   async getSession() {
@@ -31,6 +32,7 @@ export const clerkSessionStore: SessionStore = {
 export async function syncClerkUserRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void> {
   const clerk = await clerkClient();
   await clerk.users.updateUserMetadata(clerkUserId, { publicMetadata: { role } });
+  invalidateRoleCache(clerkUserId);
 }
 
 export { clerkClient };

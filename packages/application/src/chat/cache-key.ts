@@ -1,6 +1,6 @@
 import type { AppConfig } from '@app/domain/app-config';
 
-export const SYSTEM_PROMPT_VERSION = 1;
+export const SYSTEM_PROMPT_VERSION = 2;
 
 export function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'normal'): string {
   return JSON.stringify({

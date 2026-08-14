@@ -105,7 +105,6 @@ export async function ingestPrechunked(
     contentHash: null,
   }));
 
-  // Upload blob before the tx so a rolled-back tx never orphans a blob.
   const blobKey = pdfBuffer && deps.blobStorage
     ? `docs/${randomUUID()}/${safeBlobName(pdfFileName ?? fileName)}`
     : undefined;
@@ -113,9 +112,15 @@ export async function ingestPrechunked(
     await deps.blobStorage.put(blobKey, pdfBuffer, 'application/pdf');
   }
 
-  const outcome = deps.runner
-    ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows))
-    : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows);
+  let outcome: { documentId: number };
+  try {
+    outcome = deps.runner
+      ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows))
+      : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows);
+  } catch (cause) {
+    if (blobKey) await deps.blobStorage?.delete(blobKey).catch(() => {});
+    throw cause;
+  }
 
   return ok({
     documentId: outcome.documentId,

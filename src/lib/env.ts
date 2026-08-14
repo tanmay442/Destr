@@ -5,10 +5,34 @@ interface EnvVarSpec {
   condition?: () => boolean;
 }
 
+interface EnvVarValueSpec {
+  name: string;
+  description: string;
+  allowed: string[];
+}
+
 const PROVIDER_DEFAULTS: Record<string, string> = {
   EMBEDDING_PROVIDER: 'google',
   CHAT_PROVIDER: 'openai',
 };
+
+const ENV_VAR_VALUES: EnvVarValueSpec[] = [
+  {
+    name: 'EMBEDDING_PROVIDER',
+    description: 'One of: google, openai, ollama',
+    allowed: ['google', 'openai', 'ollama'],
+  },
+  {
+    name: 'CHAT_PROVIDER',
+    description: 'One of: openai, google, ollama',
+    allowed: ['openai', 'google', 'ollama'],
+  },
+  {
+    name: 'BLOB_STORAGE_PROVIDER',
+    description: 'One of: filesystem, r2, s3',
+    allowed: ['filesystem', 'r2', 's3'],
+  },
+];
 
 function providerIs(provider: string, envVar: string): boolean {
   const raw = process.env[envVar]?.trim();
@@ -36,7 +60,9 @@ const ENV_VARS: EnvVarSpec[] = [
     name: 'AI_STUDIO_KEY',
     required: true,
     description: 'Google AI Studio API key',
-    condition: () => providerIs('google', 'EMBEDDING_PROVIDER'),
+    condition: () =>
+      providerIs('google', 'EMBEDDING_PROVIDER') ||
+      providerIs('google', 'CHAT_PROVIDER'),
   },
   {
     name: 'OPENAI_EMBEDDING_API_KEY',
@@ -125,6 +151,12 @@ const ENV_VARS: EnvVarSpec[] = [
     condition: () => providerIs('s3', 'BLOB_STORAGE_PROVIDER'),
   },
   {
+    name: 'UPSTASH_REDIS_REST_TOKEN',
+    required: true,
+    description: 'Upstash Redis REST token',
+    condition: () => Boolean(process.env.UPSTASH_REDIS_REST_URL),
+  },
+  {
     name: 'QSTASH_CURRENT_SIGNING_KEY',
     required: true,
     description: 'QStash current signing key',
@@ -147,11 +179,13 @@ const ENV_VARS: EnvVarSpec[] = [
 export interface ValidationResult {
   ok: boolean;
   missing: Array<{ name: string; description: string }>;
+  invalid: Array<{ name: string; value: string; description: string }>;
   message: string;
 }
 
 export function validateEnv(): ValidationResult {
   const missing: Array<{ name: string; description: string }> = [];
+  const invalid: Array<{ name: string; value: string; description: string }> = [];
 
   for (const spec of ENV_VARS) {
     if (!spec.required) continue;
@@ -162,20 +196,46 @@ export function validateEnv(): ValidationResult {
     }
   }
 
-  if (missing.length === 0) {
-    return { ok: true, missing: [], message: '' };
+  for (const spec of ENV_VAR_VALUES) {
+    const value = process.env[spec.name]?.trim();
+    if (!value) continue;
+    if (!spec.allowed.includes(value)) {
+      invalid.push({ name: spec.name, value, description: spec.description });
+    }
   }
 
-  const lines = missing.map(
-    (m) => `  - ${m.name.padEnd(35)} ${m.description}`,
-  );
-  const message = [
-    'Missing required environment variables for the selected providers:',
-    ...lines,
-    '',
-    'Copy these into .env.local or your Vercel project settings.',
-    'To skip a provider, change the corresponding *_PROVIDER env var.',
-  ].join('\n');
+  if (missing.length === 0 && invalid.length === 0) {
+    return { ok: true, missing: [], invalid: [], message: '' };
+  }
 
-  return { ok: false, missing, message };
+  const sections: string[] = [];
+  if (missing.length > 0) {
+    const lines = missing.map(
+      (m) => `  - ${m.name.padEnd(35)} ${m.description}`,
+    );
+    sections.push(
+      [
+        'Missing required environment variables for the selected providers:',
+        ...lines,
+        '',
+        'Copy these into .env.local or your Vercel project settings.',
+        'To skip a provider, change the corresponding *_PROVIDER env var.',
+      ].join('\n'),
+    );
+  }
+  if (invalid.length > 0) {
+    const lines = invalid.map(
+      (v) => `  - ${v.name.padEnd(35)} ${v.description} (got "${v.value}")`,
+    );
+    sections.push(
+      [
+        'Invalid environment variable values:',
+        ...lines,
+        '',
+        'Fix the *_PROVIDER env vars to one of the supported values.',
+      ].join('\n'),
+    );
+  }
+
+  return { ok: false, missing, invalid, message: sections.join('\n\n') };
 }

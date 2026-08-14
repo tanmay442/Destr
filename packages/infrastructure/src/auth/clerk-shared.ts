@@ -74,6 +74,9 @@ export function createTtlCache<V>(ttlMs: number, maxEntries: number) {
       }
       entries.set(key, { value, expiresAt: Date.now() + ttlMs });
     },
+    remove(key: string): void {
+      entries.delete(key);
+    },
     size(): number {
       return entries.size;
     },

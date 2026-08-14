@@ -31,6 +31,36 @@ import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit
 import { ChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
 
+interface CachedAnswerPayload {
+  text: string;
+  citations: EmittedCitation[];
+}
+
+function parseCachedAnswer(value: string): CachedAnswerPayload {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const candidate = parsed as { v?: unknown; text?: unknown; citations?: unknown };
+      if (
+        candidate.v === 1 &&
+        typeof candidate.text === 'string' &&
+        Array.isArray(candidate.citations) &&
+        candidate.citations.every(
+          (c) =>
+            typeof c === 'object' &&
+            c !== null &&
+            typeof (c as Record<string, unknown>).snippet === 'string',
+        )
+      ) {
+        return { text: candidate.text, citations: candidate.citations as EmittedCitation[] };
+      }
+    }
+  } catch {
+    // legacy plain-text cache entry
+  }
+  return { text: value, citations: [] };
+}
+
 export type AiSdk = {
   streamText: typeof streamText;
   tool: typeof tool;
@@ -286,11 +316,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     const cached = await deps.answerCache.get(cacheKey).catch(() => null);
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
+      const cachedAnswer = parseCachedAnswer(cached);
       const stream = deps.ai.createUIMessageStream({
         execute: ({ writer }) => {
           writer.write({ type: 'text-start', id: 'cached' });
-          writer.write({ type: 'text-delta', id: 'cached', delta: cached });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
           writer.write({ type: 'text-end', id: 'cached' });
+          for (const src of dedupeCitations(cachedAnswer.citations)) {
+            writer.write({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<UIMessage>);
+          }
         },
       });
       deps.eventSink.record({
@@ -300,6 +337,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         mode: persistedMode,
         cacheHit: true,
         totalMs: Math.round(performance.now() - turnStart),
+        ...(cachedAnswer.citations.length > 0
+          ? {
+              citationCount: cachedAnswer.citations.length,
+              meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+            }
+          : {}),
       });
       return {
         kind: 'stream',
@@ -376,7 +419,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 if (deps.traceEnabled) {
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
                 }
-                await deps.answerCache.set(cacheKey, finalAnswer, cfg.answerCacheTtlSec);
+                await deps.answerCache.set(
+                  cacheKey,
+                  JSON.stringify({ v: 1, text: finalAnswer, citations: finalCitations }),
+                  cfg.answerCacheTtlSec,
+                );
               }
             } catch (err) {
               logger.warn('Answer cache write skipped', { error: String(err) });

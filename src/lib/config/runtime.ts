@@ -93,6 +93,11 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
 
 let cache: CacheEntry | null = null;
 let refreshInFlight: Promise<AppConfig> | null = null;
+let degraded = false;
+
+export function isRuntimeConfigDegraded(): boolean {
+  return degraded;
+}
 
 export async function getRuntimeConfig(): Promise<AppConfig> {
   const now = Date.now();
@@ -123,9 +128,11 @@ async function refreshCache(): Promise<AppConfig> {
       hardExpiry: now + HARD_TTL_MS,
       version,
     };
+    degraded = false;
     return validated;
   } catch (err) {
     logger.error('[runtime-config] DB read failed, entering degraded mode', { error: err });
+    degraded = true;
     const now = Date.now();
     cache = {
       value: cache ? cache.value : appConfig,

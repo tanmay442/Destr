@@ -28,7 +28,7 @@ import type { RerankerStatus } from '@app/infrastructure/llm';
 import type { MyUIMessage } from '@/chat/types';
 import type { DocumentRow, LogLevel } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type Reranker } from '@app/domain';
+import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type IngestQueue, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
@@ -81,6 +81,8 @@ if (process.env.NODE_ENV === 'production' && !process.env.UPSTASH_REDIS_REST_URL
   logger.warn('NODE_ENV=production without UPSTASH_REDIS_REST_URL: answer cache and rate limiting fall back to in-memory state that is not shared across instances.');
 }
 
+const reingestQueue: IngestQueue =
+  process.env.QSTASH_TOKEN ? ingestQueue : Queue.createIngestQueue();
 async function ingestQueuedDocumentStandalone(
   documentId: number,
 ): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
@@ -274,7 +276,7 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
+      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
     sweepStaleQueued: () =>
       Queue.createQueuedSweeper({
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),

@@ -21,6 +21,35 @@ import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
 import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
+interface CachedAnswerPayload {
+  text: string;
+  citations: EmittedCitation[];
+}
+
+function parseCachedAnswer(value: string): CachedAnswerPayload {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const candidate = parsed as { v?: unknown; text?: unknown; citations?: unknown };
+      if (
+        candidate.v === 1 &&
+        typeof candidate.text === 'string' &&
+        Array.isArray(candidate.citations) &&
+        candidate.citations.every(
+          (c) =>
+            typeof c === 'object' &&
+            c !== null &&
+            typeof (c as Record<string, unknown>).snippet === 'string',
+        )
+      ) {
+        return { text: candidate.text, citations: candidate.citations as EmittedCitation[] };
+      }
+    }
+  } catch {
+    // legacy plain-text cache entry
+  }
+  return { text: value, citations: [] };
+}
 
 interface TurnMetrics {
   retrieveMs: number;
@@ -287,11 +316,18 @@ async function streamChatResponse(req: Request): Promise<Response> {
     const cached = await comp.answerCache.get(cacheKey).catch(() => null);
     if (cached) {
       if (TRACE_ENABLED) logger.info('rag.cache.hit', { key: cacheKey });
-      const stream = createUIMessageStream({
+      const cachedAnswer = parseCachedAnswer(cached);
+      const stream = createUIMessageStream<MyUIMessage>({
         execute: ({ writer }) => {
           writer.write({ type: 'text-start', id: 'cached' });
-          writer.write({ type: 'text-delta', id: 'cached', delta: cached });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
           writer.write({ type: 'text-end', id: 'cached' });
+          for (const src of dedupeCitations(cachedAnswer.citations)) {
+            writer.write({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<MyUIMessage>);
+          }
         },
       });
       comp.chatEventBatcher.record({
@@ -301,6 +337,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
         mode: persistedMode,
         cacheHit: true,
         totalMs: Math.round(performance.now() - turnStart),
+        ...(cachedAnswer.citations.length > 0
+          ? {
+              citationCount: cachedAnswer.citations.length,
+              meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+            }
+          : {}),
       });
       scheduleFlush(comp);
       return createUIMessageStreamResponse({ stream });
@@ -373,7 +415,11 @@ async function streamChatResponse(req: Request): Promise<Response> {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 if (TRACE_ENABLED) logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
-                await comp.answerCache.set(cacheKey, finalAnswer, cfg.answerCacheTtlSec);
+                await comp.answerCache.set(
+                  cacheKey,
+                  JSON.stringify({ v: 1, text: finalAnswer, citations: finalCitations }),
+                  cfg.answerCacheTtlSec,
+                );
               }
             } catch (err) {
               logger.warn('Answer cache write skipped', { error: String(err) });

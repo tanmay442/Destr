@@ -280,7 +280,7 @@ describe('chatTurn', () => {
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
     const [key, value, ttl] = fakes.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:/);
-    expect(value).toBe('freshly generated answer');
+    expect(JSON.parse(value)).toEqual({ v: 1, text: 'freshly generated answer', citations: [] });
     expect(ttl).toBe(3600);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.tokensIn).toBe(10);
@@ -319,7 +319,7 @@ describe('chatTurn', () => {
     expect(ctx.chatModel).toBe('gpt-4o-mini');
     expect(ctx.fingerprint).toContain('"mode":"agentic"');
     expect(ctx.fingerprint).toContain('"retrievalMode":"agentic"');
-    expect(ctx.fingerprint).toContain('"promptVersion":1');
+    expect(ctx.fingerprint).toContain('"promptVersion":2');
   });
 
   it('does not cache an out-of-domain answer', async () => {
