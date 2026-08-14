@@ -64,7 +64,7 @@ export const tickets = pgTable('tickets', {
   email: text('email').notNull(),
   issue: text('issue').notNull(),
   status: text('status').notNull().default('created'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   assignedTo: text('assigned_to'),
   notes: text('notes'),
 }, (table) => [

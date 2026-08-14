@@ -81,6 +81,16 @@ if (process.env.NODE_ENV === 'production' && !process.env.UPSTASH_REDIS_REST_URL
   logger.warn('NODE_ENV=production without UPSTASH_REDIS_REST_URL: answer cache and rate limiting fall back to in-memory state that is not shared across instances.');
 }
 
+const ingestQueue: IngestQueue = Queue.createIngestQueue({
+  ingest: async (documentId: number) => {
+    const result = await ingestQueuedDocumentStandalone(documentId);
+    if (!result.ok) throw new Error(`Inline ingest failed for document ${documentId}: ${result.error.message}`);
+  },
+});
+
+const reingestQueue: IngestQueue =
+  process.env.QSTASH_TOKEN ? ingestQueue : Queue.createIngestQueue();
+
 async function ingestQueuedDocumentStandalone(
   documentId: number,
 ): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
@@ -274,7 +284,7 @@ function createComposition() {
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      reingestAll({ documents: documentRepo, queue: ingestQueue, chunks: chunkRepo }),
+      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
     sweepStaleQueued: () =>
       Queue.createQueuedSweeper({
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),

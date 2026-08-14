@@ -56,6 +56,10 @@ function parseClerkRole(value: unknown): AppRole | null {
 const ROLE_TTL_MS = 30_000;
 const roleCache = createTtlCache<'admin' | 'user'>(ROLE_TTL_MS, 2_000);
 
+export function invalidateRoleCache(clerkUserId: string): void {
+  roleCache.remove(clerkUserId);
+}
+
 async function resolveRoleCached(
   userId: string,
   sessionClaims: Record<string, unknown> | null | undefined,
@@ -101,6 +105,7 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       .catch((e: unknown) => {
         logger.warn('[clerk] failed to write-back role=admin to Clerk publicMetadata', { userId, error: e });
       });
+    invalidateRoleCache(userId);
   }
   void touchLastSeen(userId).catch(() => {});
   return {

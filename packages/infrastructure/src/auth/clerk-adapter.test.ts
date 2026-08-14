@@ -52,7 +52,7 @@ vi.mock('../db/client', () => ({
 }));
 
 import { resolveRole, createClerkAdapter, getAppSession, requireAdmin } from './clerk-adapter';
-import { clerkSessionStore } from './clerk-session';
+import { clerkSessionStore, syncClerkUserRole } from './clerk-session';
 
 function userRow(role: 'admin' | 'user') {
   return {
@@ -215,6 +215,49 @@ describe('middleware role resolution', () => {
     const blocked = await middleware(makeReq('/api/admin/users'));
     expect(blocked.type).toBe('json');
     expect((blocked as { status?: number }).status).toBe(403);
+  });
+
+  it('syncClerkUserRole invalidates the middleware role cache immediately', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    mocks.findFirstMock.mockResolvedValue(userRow('admin'));
+    mocks.protectMock.mockResolvedValue({
+      userId: 'user_sync_inv',
+      sessionClaims: { metadata: { role: 'admin' } },
+    });
+    const allowed = await middleware(makeReq('/api/admin/users'));
+    expect(allowed.type).toBe('next');
+    await syncClerkUserRole('user_sync_inv', 'user');
+    mocks.findFirstMock.mockResolvedValue(userRow('user'));
+    const blocked = await middleware(makeReq('/api/admin/users'));
+    expect(blocked.type).toBe('json');
+    expect((blocked as { status?: number }).status).toBe(403);
+  });
+
+  it('getAppSession promotion invalidates the cached role immediately', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    mocks.findFirstMock.mockResolvedValue(userRow('user'));
+    mocks.protectMock.mockResolvedValue({
+      userId: 'user_promo_inv',
+      sessionClaims: { metadata: { role: 'user' } },
+    });
+    const blocked = await middleware(makeReq('/api/admin/users'));
+    expect(blocked.type).toBe('json');
+    mocks.authMock.mockResolvedValue({ userId: 'user_promo_inv' });
+    mocks.currentUserMock.mockResolvedValue(
+      clerkUser({
+        id: 'user_promo_inv',
+        emailAddresses: [
+          { id: 'email_a', emailAddress: 'admin@example.com', verification: { status: 'verified' } },
+        ],
+      }),
+    );
+    const session = await getAppSession();
+    expect(session?.user.role).toBe('admin');
+    mocks.findFirstMock.mockResolvedValue(userRow('admin'));
+    const allowed = await middleware(makeReq('/api/admin/users'));
+    expect(allowed.type).toBe('next');
   });
 
   it('warns in dev when an unmatched /api route silently 401s', async () => {

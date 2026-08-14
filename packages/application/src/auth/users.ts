@@ -43,7 +43,7 @@ export async function setUserRole(
       | { kind: 'not_found' };
     const outcome = await deps.runner.run<Outcome>(async (ctx) => {
       if (target.role === 'admin' && input.role === 'user') {
-        const adminCount = await ctx.users.countAdmins();
+        const adminCount = await ctx.users.countAdminsForUpdate();
         if (adminCount <= 1) {
           return { kind: 'last_admin' };
         }

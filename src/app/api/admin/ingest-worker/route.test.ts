@@ -132,11 +132,12 @@ describe('POST /api/admin/ingest-worker', () => {
     expect(res.status).toBe(409);
   });
 
-  it('returns 404 when the document is not found', async () => {
+  it('returns 489 with Upstash-NonRetryable-Error when the document is not found (L7)', async () => {
     verifyMock.mockResolvedValue(true);
     ingestQueuedDocumentMock.mockResolvedValue(err(new NotFoundError('missing')));
     const res = await route.POST(signedPost(JSON.stringify({ documentId: 99 })));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(489);
+    expect(res.headers.get('Upstash-NonRetryable-Error')).toBe('true');
   });
 
   it('returns 500 on an embed/ingest failure so QStash retries', async () => {

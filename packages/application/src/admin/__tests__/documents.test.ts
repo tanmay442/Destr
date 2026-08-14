@@ -395,6 +395,25 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     });
   });
 
+  it('deletes the newly-uploaded blob when parseAndEmbed fails on replace (M1)', async () => {
+    const mocks = makeUploadDeps({
+      documents: {
+        findById: vi.fn().mockResolvedValue({
+          ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
+        }),
+      },
+    });
+    mocks.deps.pdfParser.extractText = vi.fn().mockRejectedValue(new Error('corrupt pdf'));
+    const result = await replacePdf(
+      { documentId: 1, fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' },
+      mocks.deps,
+    );
+    expect(result.ok).toBe(false);
+    expect(mocks.blobStorage.put).toHaveBeenCalledTimes(1);
+    expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
+    expect(mocks.documents.update).not.toHaveBeenCalled();
+  });
+
   it('does not delete chunks on the async replace path (worker-side delete owns it)', async () => {
     const mocks = makeUploadDeps({
       documents: {

@@ -261,6 +261,8 @@ export interface UserRepository {
   }): Promise<{ rows: UserRow[]; total: number }>;
   countAll(): Promise<number>;
   countAdmins(): Promise<number>;
+  /** Count admin rows while holding row locks so concurrent demotions serialize on the same count. */
+  countAdminsForUpdate(): Promise<number>;
 }
 
 

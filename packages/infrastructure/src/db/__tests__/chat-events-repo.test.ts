@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, isNull, sql, SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
-import { chatEvents, chatFeedback, auditDeadLetter } from '../schema';
+import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter } from '../schema';
 import { db } from '../client';
 import type { ChatEventInput } from '@app/domain';
 
@@ -194,6 +194,17 @@ let insertCalls = 0;
     expect(query).toContain('delete from "chat_events"');
   });
 
+  it('purgeUserData also removes the tickets, audit trail and users row', async () => {
+    const { client, executed } = makeExecuteClient([{ id: 1 }]);
+    await new ChatEventBatcher(client).purgeUserData('u1');
+    const query = compiled(executed);
+    expect(query).toContain('delete from "tickets"');
+    expect(query).toContain('delete from "audit_events"');
+    expect(query).toContain('"audit_events"."kind" = \'ticket\'');
+    expect(query).toContain('delete from "users"');
+    expect(query).toContain('select id from removed_events');
+  });
+
   it('purgeOlderThan removes feedback for the affected turns before the events', async () => {
     const { client, executed } = makeExecuteClient([{ id: 1 }]);
     const result = await new ChatEventBatcher(client).purgeOlderThan(new Date());
@@ -208,9 +219,66 @@ let insertCalls = 0;
     const result = await new ChatEventBatcher(client).anonymizeUserData('u1');
     expect(result).toEqual({ updatedCount: 1 });
     const query = compiled(executed);
-    expect(query).toContain(`'redacted'`);
+    expect(query).toContain('user_id = null');
+    expect(query).not.toContain("user_id = 'redacted'");
     expect(query).toContain(`- 'documentids'`);
     expect(query).toContain(`- 'ticketid'`);
+  });
+
+  it('anonymizeUserData redacts tickets, the users row and scrubs audit details', async () => {
+    const { client, executed } = makeExecuteClient([{ id: 7 }]);
+    await new ChatEventBatcher(client).anonymizeUserData('u1');
+    const query = compiled(executed);
+    expect(query).toContain('update "tickets"');
+    expect(query).toContain("name = 'redacted'");
+    expect(query).toContain("email = 'redacted'");
+    expect(query).toContain("issue = 'redacted'");
+    expect(query).toContain('update "users"');
+    expect(query).toContain('image_url = null');
+    expect(query).toContain('last_seen_at = null');
+    expect(query).toContain("email = 'redacted-' ||");
+    expect(query).toContain("'@redacted.invalid'");
+    expect(query).toContain('update "audit_events"');
+    expect(query).toContain('set details = \'{}\'');
+    expect(query).toContain('select id from redacted_events');
+  });
+
+  it('getModeComparison treats empty and whitespace-only queries as wordless', async () => {
+    const queries: SQL[] = [];
+    const row = {
+      mode: 'vector', total: 0, avgTokens: 0, avgMaxSimilarity: 0, tickets: 0,
+      hallucinations: 0, totalP50: 0, totalP95: 0, short: 0, medium: 0, long: 0,
+    };
+    const client = {
+      select(fields: Record<string, SQL>) {
+        queries.push(...Object.values(fields).filter((f): f is SQL => f instanceof SQL));
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  groupBy: () => Promise.resolve([row]),
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const result = await new ChatEventBatcher(client as never).getModeComparison();
+    expect(result).toEqual([{
+      mode: 'vector',
+      total: 0,
+      avgTokensPerQuery: 0,
+      avgMaxSimilarity: 0,
+      ticketRate: 0,
+      hallucinationRate: 0,
+      totalP50Ms: 0,
+      totalP95Ms: 0,
+      queryLengthBuckets: { short: 0, medium: 0, long: 0 },
+    }]);
+    const compiledQueries = queries.map((q) => dialect.sqlToQuery(q).sql.toLowerCase());
+    expect(compiledQueries.some((q) => q.includes('nullif(btrim'))).toBe(true);
   });
 
   it('getMetrics maps the aggregate row and derives the corrected rates', async () => {
@@ -271,7 +339,7 @@ let insertCalls = 0;
   });
 
   it('getTurnsToTicket sessionizes with lag and buckets first ticket turns', async () => {
-    const { client } = makeExecuteClient([
+    const { client, executed } = makeExecuteClient([
       {
         total_sessions: 3,
         avg_turns: '2.33',
@@ -292,6 +360,9 @@ let insertCalls = 0;
       { label: '4', turns: 4, count: 0 },
       { label: '5+', turns: 5, count: 1 },
     ]);
+    const query = compiled(executed);
+    expect(query).not.toContain('limit 10000');
+    expect(query).not.toContain('order by "chat_events"."created_at" desc');
   });
 
   it('getTurnsToTicket returns empty buckets when there are no ticket sessions', async () => {
@@ -350,6 +421,40 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
     }
   });
 
+  it('purgeUserData removes the tickets, audit trail and users row', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        await tx.insert(chatEvents).values([
+          { turnId: uuid(1), userId: 'purge-u2', query: 'q', mode: 'vector' },
+        ]);
+        await tx.insert(users).values({ clerkUserId: 'purge-u2', email: 'purge@example.com', role: 'user' });
+        await tx.insert(tickets).values({
+          ticketId: 'TKT-purge',
+          userId: 'purge-u2',
+          name: 'Purge',
+          email: 'purge@example.com',
+          issue: 'purge me',
+          status: 'created',
+        });
+        await tx.insert(auditEvents).values([
+          { kind: 'ticket', action: 'create', actorId: 'admin-1', targetType: 'ticket', targetId: 'TKT-purge', details: {} },
+          { kind: 'ticket', action: 'status_change', actorId: 'purge-u2', targetType: 'ticket', targetId: 'TKT-purge', details: {} },
+          { kind: 'document', action: 'upload', actorId: 'purge-u2', targetType: 'document', targetId: '1', details: {} },
+        ]);
+        const result = await batcher.purgeUserData('purge-u2');
+        expect(result.deletedCount).toBe(1);
+        expect(await tx.select().from(tickets).where(eq(tickets.userId, 'purge-u2'))).toHaveLength(0);
+        expect(await tx.select().from(users).where(eq(users.clerkUserId, 'purge-u2'))).toHaveLength(0);
+        const auditLeft = await tx.select({ id: auditEvents.id }).from(auditEvents);
+        expect(auditLeft).toHaveLength(0);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
   it('purgeOlderThan removes old events and their feedback, keeping newer ones', async () => {
     const old = new Date(Date.now() - 86_400_000);
     const recent = new Date();
@@ -395,7 +500,7 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
         ]);
         const result = await batcher.anonymizeUserData('anon-u');
         expect(result.updatedCount).toBe(2);
-        const rows = await tx.select().from(chatEvents).where(eq(chatEvents.userId, 'REDACTED'));
+        const rows = await tx.select().from(chatEvents).where(isNull(chatEvents.userId));
         expect(rows).toHaveLength(2);
         expect(rows.find((r) => r.turnId === uuid(1))?.meta).toEqual({ rewritten: false });
         expect(rows.find((r) => r.turnId === uuid(2))?.meta).toEqual({});

@@ -52,6 +52,9 @@ export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSu
           // failure never leaves a `queued` doc without an index to search.
           if (deps.chunks) await deps.chunks.deleteByDocumentId(doc.id);
         } catch (e) {
+          // doc.ingestStatus is still the pre-update status here; restore it so a
+          // failed enqueue never strands the doc in `queued` without a message.
+          await deps.documents.update(doc.id, { ingestStatus: doc.ingestStatus }).catch(() => {});
           return err(new ExternalServiceError(`Failed to enqueue document ${doc.id}`, e));
         }
         documentIds.push(doc.id);

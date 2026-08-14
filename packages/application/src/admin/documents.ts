@@ -405,7 +405,10 @@ export async function replacePdf(
         { fileName: input.fileName, buffer: input.buffer },
         deps,
       );
-      if (!parsed.ok) return parsed;
+      if (!parsed.ok) {
+        await cleanupUncommittedBlob(key, deps);
+        return parsed;
+      }
     }
 
     let rowId: number;
