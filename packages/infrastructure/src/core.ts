@@ -98,6 +98,15 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
 
 let _defaultCore: CoreDeps | undefined;
 
+/**
+ * Builds or returns the shared core dependencies singleton for the default process environment.
+ *
+ * INTENTIONAL DESIGN:
+ * - For `defaultProcessEnv`, `buildCoreDeps` memoizes `_defaultCore` on the first call.
+ * - This prevents spawning duplicate database connection pools or duplicate background timers in the process.
+ * - Note: Options passed on subsequent calls for defaultProcessEnv are ignored (first caller wins).
+ * - If a caller requires isolated core dependencies (e.g. test suites), pass an explicit non-default `env`.
+ */
 export function buildCoreDeps(options: CoreDepsOptions = {}): CoreDeps {
   const env = options.env ?? defaultProcessEnv;
   if (env !== defaultProcessEnv) {

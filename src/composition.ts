@@ -153,7 +153,8 @@ function buildChunkingStrategy(cfg: AppConfig) {
 
 async function resolveIngestDeps(): Promise<IngestDeps> {
   const cfg = await getRuntimeConfig();
-  return { ...ingestDeps, chunkingStrategy: buildChunkingStrategy(cfg) };
+  const cchEnabled = (cfg as unknown as { cchEnabled?: boolean }).cchEnabled ?? CCH_ENABLED;
+  return { ...ingestDeps, cchEnabled, chunkingStrategy: buildChunkingStrategy(cfg) };
 }
 
 export type { RerankerStatus };

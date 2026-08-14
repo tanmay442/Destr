@@ -50,6 +50,7 @@ function resolveRuntimeConfig(env: EnvSource) {
   const CCH_ENABLED = env.get('CCH_ENABLED') !== 'false';
   const CCH_MODEL = env.get('CCH_MODEL') ?? DEFAULT_CCH_MODEL;
   const MD_CHUNK_DELIMITER = env.get('MD_CHUNK_DELIMITER') ?? DEFAULT_MD_CHUNK_DELIMITER;
+  const CHUNKING_STRATEGY = (env.get('CHUNKING_STRATEGY') ?? 'document-aware') as 'document-aware' | 'recursive-adaptive' | 'semantic' | 'parent-child';
   const INGEST_CHUNK_SIZE = finiteOrDefault(env.get('INGEST_CHUNK_SIZE'), DEFAULT_INGEST_CHUNK_SIZE);
   const INGEST_CHUNK_OVERLAP = Math.floor(INGEST_CHUNK_SIZE / 10);
   const PARENT_CHUNK_SIZE = finiteOrDefault(env.get('PARENT_CHUNK_SIZE'), DEFAULT_PARENT_CHUNK_SIZE);
@@ -85,6 +86,7 @@ function resolveRuntimeConfig(env: EnvSource) {
     CCH_ENABLED,
     CCH_MODEL,
     MD_CHUNK_DELIMITER,
+    CHUNKING_STRATEGY,
     INGEST_CHUNK_SIZE,
     INGEST_CHUNK_OVERLAP,
     PARENT_CHUNK_SIZE,
@@ -113,6 +115,14 @@ function resolveRuntimeConfig(env: EnvSource) {
 
 let _defaultConfig: RuntimeConfig | undefined;
 
+/**
+ * Resolves runtime configuration from an EnvSource.
+ *
+ * INTENTIONAL DESIGN:
+ * For `defaultProcessEnv`, environment variables are resolved once at process startup
+ * and memoized in `_defaultConfig` to eliminate process.env parsing overhead on hot paths.
+ * Explicit `env` parameters (e.g. test fakes) bypass memoization and resolve freshly.
+ */
 export function loadEnvConfig(env: EnvSource = defaultProcessEnv): RuntimeConfig {
   if (env === defaultProcessEnv) {
     _defaultConfig ??= Object.freeze(resolveRuntimeConfig(env));
@@ -133,6 +143,8 @@ export const PDF_PARSE_MAX_CHARS: number = defaultConfig.PDF_PARSE_MAX_CHARS as 
 export const CCH_ENABLED: boolean = defaultConfig.CCH_ENABLED as boolean;
 export const CCH_MODEL: string = defaultConfig.CCH_MODEL as string;
 export const MD_CHUNK_DELIMITER: string = defaultConfig.MD_CHUNK_DELIMITER as string;
+export const CHUNKING_STRATEGY: 'document-aware' | 'recursive-adaptive' | 'semantic' | 'parent-child' =
+  defaultConfig.CHUNKING_STRATEGY as 'document-aware' | 'recursive-adaptive' | 'semantic' | 'parent-child';
 export const INGEST_CHUNK_SIZE: number = defaultConfig.INGEST_CHUNK_SIZE as number;
 export const INGEST_CHUNK_OVERLAP: number = defaultConfig.INGEST_CHUNK_OVERLAP as number;
 export const PARENT_CHUNK_SIZE: number = defaultConfig.PARENT_CHUNK_SIZE as number;
