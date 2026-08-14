@@ -23,7 +23,7 @@ vi.mock('./retry', async () => {
   return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) };
 });
 
-import { queryRewriter, documentGrader, hallucinationGrader, getGraderFailureCounts } from './graders';
+import { queryRewriter, documentGrader, hallucinationGrader, getGraderFailureCounts, createGraders } from './graders';
 import { getGraders } from './index';
 
 let consoleError: ReturnType<typeof vi.spyOn>;
@@ -152,5 +152,24 @@ describe('getGraders selector', () => {
     expect(g.documentGrader).toBeDefined();
     expect(g.hallucinationGrader).toBeDefined();
     process.env.AGENTIC_ENABLED = prev ?? '';
+  });
+});
+
+describe('createGraders with an injected model provider', () => {
+  it('uses the injected provider instead of the default chat model', async () => {
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const graders = createGraders(undefined, modelProvider);
+    generateTextMock.mockResolvedValue({ text: 'yes' });
+    await graders.documentGrader.grade('q', 'doc');
+    expect(modelProvider).toHaveBeenCalledTimes(1);
+    expect(getChatModelMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the grade model override to the injected provider', async () => {
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const graders = createGraders('custom-grade-model', modelProvider);
+    generateTextMock.mockResolvedValue({ text: 'no' });
+    await graders.hallucinationGrader.grade('docs', 'answer');
+    expect(modelProvider).toHaveBeenCalledWith('custom-grade-model');
   });
 });

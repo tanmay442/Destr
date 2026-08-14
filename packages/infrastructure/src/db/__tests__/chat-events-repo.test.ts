@@ -98,6 +98,29 @@ describe('ChatEventBatcher', () => {
     expect(inserts).toHaveLength(1);
   });
 
+  it('uses the injected flush scheduler instead of the interval timer', async () => {
+    const { client, inserts } = makeFakeClient();
+    const scheduled: Array<() => void> = [];
+    const batcher = new ChatEventBatcher(client, { flushScheduler: (fn) => scheduled.push(fn) });
+    batcher.record(sample);
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]!();
+    await vi.runOnlyPendingTimersAsync();
+    expect(inserts).toHaveLength(1);
+  });
+
+  it('falls back to the interval timer when the flush scheduler throws', async () => {
+    const { client, inserts } = makeFakeClient();
+    const batcher = new ChatEventBatcher(client, {
+      flushScheduler: () => {
+        throw new Error('outside request scope');
+      },
+    });
+    batcher.record(sample);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(inserts).toHaveLength(1);
+  });
+
   it('serializes a size-triggered flush behind an in-flight flush', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {

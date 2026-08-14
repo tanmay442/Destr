@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import type { RankedDocument, Reranker } from '@app/domain';
+import { registerRerankerProvider } from './registries';
 
 /**
  * Local cross-encoder reranker — runs on-device via `@xenova/transformers`
@@ -84,3 +85,5 @@ export const localReranker: Reranker = {
     }));
   },
 };
+
+registerRerankerProvider('local', () => localReranker);

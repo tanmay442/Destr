@@ -14,7 +14,9 @@
     "./markdown": "./src/markdown/index.ts",
     "./chunking": "./src/chunking/index.ts",
     "./storage": "./src/storage/blob-storage-factory.ts",
-    "./config": "./src/config/env.ts"
+    "./core": "./src/core.ts",
+    "./config": "./src/config/env.ts",
+    "./config/dotenv-bootstrap": "./src/config/dotenv-bootstrap.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.90",

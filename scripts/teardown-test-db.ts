@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
 import { existsSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -10,6 +10,8 @@ import {
   isTestOwnedBranch,
   isStaleBranch,
 } from './neon-api';
+
+loadDotEnv();
 
 export async function main() {
   const PROJECT_ID = process.env.NEON_PROJECT_ID;

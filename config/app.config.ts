@@ -14,6 +14,7 @@ import {
   ANSWER_CACHE_ENABLED,
   ANSWER_CACHE_TTL_SEC,
   AGENTIC_ENABLED,
+  CHUNKING_STRATEGY,
 } from '@app/infrastructure/config';
 
 // Runtime configuration for this deployment. Edit any field here or run
@@ -104,10 +105,9 @@ const config: AppConfig = {
   // model to call the tool every turn.
   prefetchFirstTurn: false,
 
-  // Chunking strategy at ingest. Override with the CHUNKING_STRATEGY env var.
-  // Default `document-aware` yields per-section `sectionTitle` provenance.
-  // `parent-child` emits small children + large parent blocks.
-  chunkingStrategy: (process.env.CHUNKING_STRATEGY ?? 'document-aware') as AppConfig['chunkingStrategy'],
+  // Chunking strategy at ingest. Default `document-aware` yields per-section
+  // `sectionTitle` provenance. `parent-child` emits small children + large parent blocks.
+  chunkingStrategy: CHUNKING_STRATEGY as AppConfig['chunkingStrategy'],
 
   // Parent-child indexing. Only used when `chunkingStrategy === 'parent-child'`.
   parentChunkSize: PARENT_CHUNK_SIZE,

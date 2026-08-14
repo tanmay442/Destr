@@ -26,4 +26,18 @@ describe('unpdfParser', () => {
     expect(pages[0]!.text).toContain('Gardenia Public School');
     expect(pages[0]!.text).not.toContain('\n\n\n\n');
   });
+
+  it('parity: explicit Uint8Array input yields identical output to the Buffer baseline', async () => {
+    const bufferBaseline = {
+      pages: await unpdfParser.extractPages(samplePdf),
+      text: await unpdfParser.extractText(samplePdf),
+    };
+    const uint8Input = new Uint8Array(samplePdf.buffer, samplePdf.byteOffset, samplePdf.byteLength);
+    const uint8Result = {
+      pages: await unpdfParser.extractPages(uint8Input),
+      text: await unpdfParser.extractText(uint8Input),
+    };
+    expect(uint8Result.pages).toEqual(bufferBaseline.pages);
+    expect(uint8Result.text).toBe(bufferBaseline.text);
+  });
 });

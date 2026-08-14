@@ -120,10 +120,10 @@ export interface RetrievedChunkRow {
   chunkIndex: number;
 }
 
-/** Parses raw content (e.g. PDF buffer) into structured pages. */
+/** Parses raw content (e.g. PDF bytes) into structured pages. Runtime-neutral: accepts `Uint8Array` (a `Buffer` satisfies it). */
 export interface ContentParser {
-  extractPages(buffer: Buffer): Promise<Array<{ page: number; text: string }>>;
-  extractText(buffer: Buffer): Promise<string>;
+  extractPages(buffer: Uint8Array): Promise<Array<{ page: number; text: string }>>;
+  extractText(buffer: Uint8Array): Promise<string>;
 }
 
 /** A chunking strategy that turns structured pages into DocumentChunk[]. */
@@ -131,16 +131,40 @@ export interface ChunkingStrategy {
   splitPages(pages: Array<{ page: number; text: string }>): Promise<DocumentChunk[]>;
 }
 
-export interface ChunkRepository {
+/** A chunk row prepared for storage (relational + vector). */
+export interface InsertChunkInput {
+  documentId: number;
+  content: string;
+  embedding: number[];
+  chunkIndex?: number;
+  page?: number | null | undefined;
+  sectionTitle?: string | null | undefined;
+  source?: string | null | undefined;
+  title?: string | null | undefined;
+  parentChunkId?: number | null | undefined;
+  kind?: 'parent' | 'child' | 'summary' | undefined;
+  embeddingModel?: string | null | undefined;
+  contentHash?: string | null | undefined;
+}
+
+/** Vector (embedding) retrieval, ranked by similarity. */
+export interface VectorSearch {
   searchByVector(
     embedding: number[],
     opts: { threshold: number; limit: number; filter?: { documentId?: number } },
   ): Promise<RetrievedChunkRow[]>;
-  /** Lexical (BM25) retrieval ranked by ts_rank. */
+}
+
+/** Lexical (BM25) retrieval ranked by ts_rank. */
+export interface LexicalSearch {
   searchByLexical(
     query: string,
     opts: { limit: number; filter?: { documentId?: number } },
   ): Promise<RetrievedChunkRow[]>;
+}
+
+/** Relational chunk CRUD (parent/child self-FK resolution, ranges, counts). */
+export interface ChunkStore {
   /** Fetch chunks by ids. Caller overrides `similarity`; used to resolve child→parent. */
   getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
   /** Fetch chunks in `[start, end]` range. Used by window parent-child mode. */
@@ -153,22 +177,34 @@ export interface ChunkRepository {
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
   ): Promise<Map<string, RetrievedChunkRow[]>>;
-  insertMany(
-    rows: Array<{
-      documentId: number;
-      content: string;
-      embedding: number[];
-      chunkIndex?: number;
-      page?: number | null | undefined;
-      sectionTitle?: string | null | undefined;
-      source?: string | null | undefined;
-      title?: string | null | undefined;
-      parentChunkId?: number | null | undefined;
-      kind?: 'parent' | 'child' | 'summary' | undefined;
-      embeddingModel?: string | null | undefined;
-      contentHash?: string | null | undefined;
-    }>,
-  ): Promise<void>;
+  insertMany(rows: InsertChunkInput[]): Promise<void>;
+  deleteByDocumentId(documentId: number): Promise<void>;
+  countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
+  countForAll(): Promise<number>;
+  countForDocument(documentId: number): Promise<number>;
+  recountAll(): Promise<Array<{ documentId: number; count: number }>>;
+}
+
+/** The original composite surface, kept for existing consumers — signature-identical. */
+export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore {
+  searchByVector(
+    embedding: number[],
+    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+  ): Promise<RetrievedChunkRow[]>;
+  searchByLexical(
+    query: string,
+    opts: { limit: number; filter?: { documentId?: number } },
+  ): Promise<RetrievedChunkRow[]>;
+  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  getByDocAndRange(
+    documentId: number,
+    start: number,
+    end: number,
+  ): Promise<RetrievedChunkRow[]>;
+  getByDocAndRanges(
+    ranges: Array<{ documentId: number; start: number; end: number }>,
+  ): Promise<Map<string, RetrievedChunkRow[]>>;
+  insertMany(rows: InsertChunkInput[]): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
   countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countForAll(): Promise<number>;
@@ -601,4 +637,14 @@ export interface SettingsRepo {
     actorId: string;
     expectedVersion: number;
   }): Promise<{ version: number } | { conflict: true }>;
+}
+
+/** Keyed environment lookup (process.env, test fakes, future non-Node runtimes). */
+export interface EnvSource {
+  get(key: string): string | undefined;
+}
+
+/** Frozen, typed, mirrors the current config/env.ts exports. */
+export interface RuntimeConfig {
+  readonly [key: string]: unknown;
 }

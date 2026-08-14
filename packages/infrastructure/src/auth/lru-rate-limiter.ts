@@ -1,5 +1,6 @@
 // In-process sliding-window limiter; single-instance only (best-effort across replicas).
 import type { RateLimiter } from '@app/domain';
+import { rateLimiterRegistry, registerRateLimiterProvider } from './rate-limiter-registry';
 
 const MAX_KEYS = 5_000;
 
@@ -43,3 +44,12 @@ export function createLruRateLimiter(): RateLimiter {
 }
 
 export const lruRateLimiter: RateLimiter = createLruRateLimiter();
+
+registerRateLimiterProvider('lru', () => lruRateLimiter);
+
+export function createRateLimiter(): RateLimiter {
+  const provider = process.env.UPSTASH_REDIS_REST_URL ? 'upstash' : 'lru';
+  const factory = rateLimiterRegistry.get(provider);
+  if (!factory) throw new Error(`Unknown rate limiter provider: ${provider}`);
+  return factory();
+}

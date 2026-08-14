@@ -3,6 +3,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { logger, PayloadTooLargeError, type BlobStorage } from '@app/domain';
 import { BLOB_GET_MAX_BYTES } from '@app/infrastructure/config';
+import { registerBlobStorageProvider } from './blob-storage-registry';
 
 export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTES): BlobStorage {
   const baseDir = resolve(process.env.BLOB_FS_DIR ?? './.blobs');
@@ -48,3 +49,5 @@ export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTE
     },
   };
 }
+
+registerBlobStorageProvider('filesystem', createFilesystemBlobStorage);

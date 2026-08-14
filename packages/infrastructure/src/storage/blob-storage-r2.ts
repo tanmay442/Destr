@@ -1,5 +1,6 @@
 import { createS3FamilyBlobStorage } from './blob-storage-s3-family';
 import type { BlobStorage } from '@app/domain';
+import { registerBlobStorageProvider } from './blob-storage-registry';
 
 export function createR2BlobStorage(): BlobStorage {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -16,3 +17,5 @@ export function createR2BlobStorage(): BlobStorage {
     credentials: { accessKeyId, secretAccessKey },
   });
 }
+
+registerBlobStorageProvider('r2', createR2BlobStorage);

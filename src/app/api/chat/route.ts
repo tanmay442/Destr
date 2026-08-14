@@ -4,22 +4,23 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
+import {
+  chatTurn,
+  cacheFingerprint,
+  ChatRequestSchema,
+  dedupeCitations,
+  emitCitations,
+  citationDocumentIds,
+  resolveTurnId,
+  buildEventMeta,
+  type EmittedCitation,
+} from '@app/application/chat';
 import { NextResponse, after } from 'next/server';
 import type { ChatEventInput } from '@app/domain';
-import { ChatRequestSchema } from './request-schema';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { TOOL_CONTENT_CAP, CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '@app/domain';
+import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
-import type { AppConfig } from '@app/domain/app-config';
-import { dedupeCitations } from '@/chat/dedupe-citations';
-import { emitCitations, citationDocumentIds, type EmittedCitation } from '@/chat/emit-citations';
-import { resolveTurnId } from '@/chat/turn-id';
-import { buildEventMeta } from '@/chat/build-event-meta';
-
-/** Bump when the system prompt or retrieval defaults change materially — busts cached answers. */
-const SYSTEM_PROMPT_VERSION = 2;
-
 interface CachedAnswerPayload {
   text: string;
   citations: EmittedCitation[];
@@ -48,18 +49,6 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
     // legacy plain-text cache entry
   }
   return { text: value, citations: [] };
-}
-
-function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'normal'): string {
-  return JSON.stringify({
-    promptVersion: SYSTEM_PROMPT_VERSION,
-    mode: effectiveMode,
-    retrievalMode: cfg.retrievalMode,
-    similarityThreshold: cfg.similarityThreshold,
-    hybridEnabled: cfg.hybridEnabled,
-    rerankerProvider: cfg.rerankerProvider,
-    prefetchFirstTurn: cfg.prefetchFirstTurn,
-  });
 }
 
 interface TurnMetrics {
@@ -213,6 +202,40 @@ function scheduleFlush(comp: Composition): void {
   } catch {
     void comp.chatEventBatcher.flush();
   }
+}
+
+/**
+ * Post-generation guardrail: if retrieval was out-of-domain or the grounded-grader
+ * flags the answer as not supported, nudge the client toward a knowledge ticket.
+ */
+async function runHallucinationCheck(opts: {
+  controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
+  result: { text: PromiseLike<string> };
+  capturedCitations: EmittedCitation[];
+  hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  outOfDomain: boolean;
+}): Promise<boolean> {
+  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
+  if (!hallucinationGrader) return false;
+
+  let ungrounded = outOfDomain;
+  if (!ungrounded && capturedCitations.length > 0) {
+    try {
+      const generation = await result.text;
+      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
+      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
+    } catch (err) {
+      logger.error('Hallucination check failed', { error: err });
+    }
+  }
+
+  if (ungrounded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain, offerTicket: true },
+    } as InferUIMessageChunk<MyUIMessage>);
+  }
+  return ungrounded;
 }
 
 async function streamChatResponse(req: Request): Promise<Response> {
@@ -440,40 +463,76 @@ async function streamChatResponse(req: Request): Promise<Response> {
   return createUIMessageStreamResponse({ stream: citationStream });
 }
 
-/**
- * Post-generation guardrail: if retrieval was out-of-domain or the grounded-grader
- * flags the answer as not supported, nudge the client toward a knowledge ticket.
- */
-async function runHallucinationCheck(opts: {
-  controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
-  result: { text: PromiseLike<string> };
-  capturedCitations: EmittedCitation[];
-  hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
-  outOfDomain: boolean;
-}): Promise<boolean> {
-  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
-  if (!hallucinationGrader) return false;
-
-  let ungrounded = outOfDomain;
-  if (!ungrounded && capturedCitations.length > 0) {
-    try {
-      const generation = await result.text;
-      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
-      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
-    } catch (err) {
-      logger.error('Hallucination check failed', { error: err });
-    }
+async function streamChatResponseUseCase(req: Request): Promise<Response> {
+  const turnStart = performance.now();
+  const { userId } = await auth();
+  if (!userId) {
+    return new Response('Unauthorized', { status: 401 });
   }
-
-  if (ungrounded) {
-    controller.enqueue({
-      type: 'data-guardrail',
-      data: { outOfDomain, offerTicket: true },
-    } as InferUIMessageChunk<MyUIMessage>);
+  const contentType = req.headers.get('content-type');
+  if (!contentType?.includes('application/json')) {
+    return new Response('Content-Type must be application/json', { status: 415 });
   }
-  return ungrounded;
+  const contentLength = Number(req.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength > CHAT_MAX_BODY_BYTES) {
+    return new Response('Payload too large', { status: 413 });
+  }
+  const comp = getComposition();
+  const result = await chatTurn(
+    { request: req, userId, startedAt: turnStart },
+    {
+      ai: { streamText, tool, stepCountIs, convertToModelMessages, createUIMessageStream },
+      getChatModel: () => comp.getChatModel(),
+      getChatModelId: () => (comp.getChatModel() as { modelId?: string })?.modelId ?? 'unknown',
+      getEmbeddingModelId: () => comp.getEmbeddingModelId(),
+      getRuntimeConfig,
+      searchChunks: (cfg, query, opts) => comp.searchChunks(cfg, query, opts),
+      agenticSearch: (cfg, query) => comp.agenticSearch(cfg, query),
+      hallucinationGrader: (cfg) => comp.getHallucinationGrader(cfg),
+      answerCache: comp.answerCache,
+      answerCacheKey: (query, ctx) => comp.answerCacheKey(query, ctx),
+      rateLimit: { check: (key, opts) => comp.rateLimit(key, opts) },
+      createTicket: (input) => comp.createTicket(input),
+      userResolver: async () => {
+        const clerkUser = await currentUser();
+        if (!clerkUser) {
+          logger.warn('createKnowledgeTicket: currentUser() returned null after auth() succeeded');
+          return { userId, name: 'Unknown', email: `${userId}@clerk.user` };
+        }
+        const name = clerkUser.fullName ?? clerkUser.firstName ?? clerkUser.username ?? 'User';
+        const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress;
+        const email =
+          primaryEmail && primaryEmail.includes('@')
+            ? primaryEmail
+            : `${clerkUser.id}@clerk.user`;
+        return { userId, name, email };
+      },
+      eventSink: {
+        record: (event) => comp.chatEventBatcher.record(event),
+        flush: () => comp.chatEventBatcher.flush(),
+      },
+      traceEnabled: TRACE_ENABLED,
+    },
+  );
+  switch (result.kind) {
+    case 'rate-limited':
+      return new Response('Too Many Requests', {
+        status: 429,
+        ...(result.retryAfterSec ? { headers: { 'Retry-After': result.retryAfterSec } } : {}),
+      });
+    case 'payload-too-large':
+      return new Response('Payload too large', { status: 413 });
+    case 'invalid-request':
+      return NextResponse.json({ error: 'invalid_request', issues: result.issues }, { status: 400 });
+    case 'stream':
+      scheduleFlush(comp);
+      return createUIMessageStreamResponse({ stream: result.stream });
+  }
 }
 
 export async function POST(req: Request) {
+  if (process.env.CHAT_TURN_USE_CASE === '1') {
+    return streamChatResponseUseCase(req);
+  }
   return streamChatResponse(req);
 }

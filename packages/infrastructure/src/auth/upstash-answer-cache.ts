@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis';
 import type { AnswerCache } from '@app/domain';
+import { registerAnswerCacheProvider } from './answer-cache-registry';
 
 /**
  * Answer cache backed by Upstash Redis. Values are base64-wrapped to ensure
@@ -34,3 +35,5 @@ export function createUpstashAnswerCache(): AnswerCache {
     },
   };
 }
+
+registerAnswerCacheProvider('upstash', createUpstashAnswerCache);

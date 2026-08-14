@@ -1,5 +1,7 @@
-import 'dotenv/config';
+import { loadDotEnv } from './packages/infrastructure/src/config/dotenv-bootstrap';
 import { defineConfig } from 'drizzle-kit';
+
+loadDotEnv();
 
 // DATABASE_URL is only required for commands that open a live connection
 // (`push`, `introspect`, `studio`). `generate` only reads the schema, so we

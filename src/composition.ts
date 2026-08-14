@@ -18,29 +18,48 @@ import {
   type IngestDeps, type SearchDeps, type RateLimitDeps,
   type AgenticDeps,
 } from '@app/application';
-import { Db, Llm, Auth, Pdf, Storage, Queue, Markdown, Chunking, answerCacheKey } from '@app/infrastructure';
+import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
   OUT_OF_DOMAIN_THRESHOLD, CCH_ENABLED,
-  LOG_LEVEL,
+  defaultProcessEnv,
 } from '@app/infrastructure/config';
+import type { RerankerStatus } from '@app/infrastructure/llm';
+import type { MyUIMessage } from '@/chat/types';
+import type { DocumentRow, LogLevel } from '@app/domain';
+import type { AppConfig } from '@app/domain/app-config';
+import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type IngestQueue, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
 
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type BlobStorage, type IngestQueue, type RateLimiter, type Reranker } from '@app/domain';
-import type { MyUIMessage } from '@/chat/types';
-import type { DocumentRow } from '@app/domain';
-import type { AppConfig } from '@app/domain/app-config';
 import { createHash } from 'node:crypto';
 import { appConfig } from './lib/config';
 import { getRuntimeConfig } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LIST_LIMIT } from '@app/domain';
+import { after } from 'next/server';
 
-configureLogger(LOG_LEVEL);
+const core = buildCoreDeps({
+  env: defaultProcessEnv,
+  flushScheduler: after,
+  onQueueIngest: async (documentId) => {
+    const result = await ingestQueuedDocumentStandalone(documentId);
+    if (!result.ok) throw new Error(`Inline ingest failed for document ${documentId}: ${result.error.message}`);
+  },
+  onAnswerCacheInitError: (error) => {
+    logger.error(
+      'UPSTASH_REDIS_REST_URL is set but the Upstash answer cache could not be initialized; falling back to in-memory cache. Provide UPSTASH_REDIS_REST_TOKEN or unset UPSTASH_REDIS_REST_URL.',
+      { error },
+    );
+  },
+});
+
+configureLogger(core.config.LOG_LEVEL as LogLevel);
+
+const asyncIngest = Boolean(core.config.QSTASH_TOKEN);
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -50,15 +69,9 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const documentRepo = Db.createDocumentRepo(Db.db);
-const chunkRepo = Db.createChunkRepo(Db.db);
-const settingsRepo = Db.createSettingsRepo(Db.db);
-const chatEventBatcher = Db.createChatEventsRepo(Db.db);
-const chatFeedbackRepo = Db.createChatFeedbackRepo(Db.db);
-
-const embeddingService = Llm.getEmbeddingService();
-
-const blobStorage: BlobStorage = Storage.createBlobStorage();
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, embeddingService, blobStorage } = core;
+const ingestQueue = core.ingestQueue;
+const rateLimiter = core.rateLimiter;
 
 if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
@@ -68,16 +81,8 @@ if (process.env.NODE_ENV === 'production' && !process.env.UPSTASH_REDIS_REST_URL
   logger.warn('NODE_ENV=production without UPSTASH_REDIS_REST_URL: answer cache and rate limiting fall back to in-memory state that is not shared across instances.');
 }
 
-const ingestQueue: IngestQueue = Queue.createIngestQueue({
-  ingest: async (documentId: number) => {
-    const result = await ingestQueuedDocumentStandalone(documentId);
-    if (!result.ok) throw new Error(`Inline ingest failed for document ${documentId}: ${result.error.message}`);
-  },
-});
-
 const reingestQueue: IngestQueue =
   process.env.QSTASH_TOKEN ? ingestQueue : Queue.createIngestQueue();
-
 async function ingestQueuedDocumentStandalone(
   documentId: number,
 ): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
@@ -134,7 +139,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   contentParser: Pdf.unpdfParser,
   runner: Db.transactionRunner,
-  summarizer: Llm.docSummarizer,
+  summarizer: Llm.createDocSummarizer(Llm.getChatModel),
   cchEnabled: CCH_ENABLED,
 };
 
@@ -148,31 +153,18 @@ function buildChunkingStrategy(cfg: AppConfig) {
 
 async function resolveIngestDeps(): Promise<IngestDeps> {
   const cfg = await getRuntimeConfig();
-  return { ...ingestDeps, chunkingStrategy: buildChunkingStrategy(cfg) };
+  const cchEnabled = (cfg as unknown as { cchEnabled?: boolean }).cchEnabled ?? CCH_ENABLED;
+  return { ...ingestDeps, cchEnabled, chunkingStrategy: buildChunkingStrategy(cfg) };
 }
-export type RerankerStatus = { ok: boolean; reason?: string | undefined };
-const rerankerRegistry = new Map<string, { reranker?: Reranker | undefined; status: RerankerStatus }>([
-  ['cosine', { reranker: undefined, status: { ok: true } }],
-  [
-    'cohere',
-    process.env.COHERE_API_KEY
-      ? { reranker: Llm.getReranker('cohere'), status: { ok: true } }
-      : { reranker: undefined, status: { ok: false, reason: 'COHERE_API_KEY not set' } },
-  ],
-  [
-    'local',
-    process.env.VERCEL
-      ? { reranker: undefined, status: { ok: false, reason: 'local reranker unavailable on Vercel serverless' } }
-      : { reranker: Llm.getReranker('local'), status: { ok: true } },
-  ],
-]);
+
+export type { RerankerStatus };
 
 export function availableRerankers(): Map<string, RerankerStatus> {
-  return new Map([...rerankerRegistry].map(([name, entry]) => [name, entry.status]));
+  return core.availableRerankers();
 }
 
 export function resolveReranker(cfg: AppConfig): Reranker | undefined {
-  return rerankerRegistry.get(cfg.rerankerProvider)?.reranker;
+  return core.resolveReranker(cfg.rerankerProvider);
 }
 
 function getSearchDeps(cfg: AppConfig): SearchDeps {
@@ -180,7 +172,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
-  const graders = Llm.getGraders(undefined, cfg.gradeModel);
+  const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
   if (!graders.queryRewriter || !graders.documentGrader) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
@@ -194,29 +186,12 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
   };
 }
-const rateLimiter: RateLimiter =
-  process.env.UPSTASH_REDIS_REST_URL ? Auth.createUpstashRateLimiter() : Auth.lruRateLimiter;
-
-function createAnswerCache() {
-  if (process.env.UPSTASH_REDIS_REST_URL) {
-    try {
-      return Auth.createUpstashAnswerCache();
-    } catch (e) {
-      logger.error(
-        'UPSTASH_REDIS_REST_URL is set but the Upstash answer cache could not be initialized; falling back to in-memory cache. Provide UPSTASH_REDIS_REST_TOKEN or unset UPSTASH_REDIS_REST_URL.',
-        { error: e },
-      );
-      return Auth.createInMemoryAnswerCache();
-    }
-  }
-  return Auth.createInMemoryAnswerCache();
-}
 
 const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 
 function createComposition() {
-  const auditDeps = { audit: Db.auditRepo };
-  const userDeps = { users: Db.userRepo };
+  const auditDeps = { audit: core.auditRepo };
+  const userDeps = { users: core.userRepo };
   const txRunner = Db.transactionRunner;
 
   return {
@@ -245,7 +220,7 @@ function createComposition() {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
     },
-    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel).hallucinationGrader?.grade ?? null,
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -264,21 +239,21 @@ function createComposition() {
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
     uploadPdf: async (input: Parameters<typeof uploadPdf>[0]) =>
-      bind(uploadPdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+      bind(uploadPdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
-    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: Db.ticketRepo, ...userDeps }),
+    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
-      bind(updateTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
+      bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
-      bind(createTicket, input, { tickets: Db.ticketRepo, ...auditDeps }),
+      bind(createTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
     replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
-      bind(replacePdf, input, { ...(await resolveIngestDeps()), ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
+      bind(replacePdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     uploadChunkedMarkdown: (input: {
       fileName: string;
       mdText: string;
@@ -295,7 +270,7 @@ function createComposition() {
         blobStorage,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
-        summarizer: Llm.docSummarizer,
+        summarizer: Llm.createDocSummarizer(Llm.getChatModel),
         cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
@@ -309,7 +284,7 @@ function createComposition() {
         failDocument: (id) => documentRepo.failDocument(id),
       }).sweep(),
     getAnalyticsSummary: (input: { actorId: string }) =>
-      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: Db.ticketRepo, ...userDeps }),
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
     getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
@@ -317,18 +292,18 @@ function createComposition() {
     getDocumentAnalytics: (input: Parameters<typeof getDocumentAnalytics>[0]) =>
       bind(getDocumentAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher, feedback: chatFeedbackRepo }),
     getTicketIntelligence: (input: Parameters<typeof getTicketIntelligence>[0]) =>
-      bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: Db.ticketRepo }),
+      bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: core.ticketRepo }),
     submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
       bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
-    db: Db.db,
+    db: core.dbClient,
     schema: Db.schema,
     blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
-    answerCache: createAnswerCache(),
+    answerCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
     session: Auth.clerkSessionStore,
@@ -368,7 +343,7 @@ export function startLocalRerankerCheck(): void {
   Llm.checkLocalRerankerAvailable().then((available) => {
     if (available) return;
     logger.warn('RERANKER_PROVIDER=local but @xenova/transformers is not installed; reranking silently falls back to cosine ordering. Install the optional dependency or set RERANKER_PROVIDER=cosine/cohere.');
-    rerankerRegistry.set('local', { reranker: undefined, status: { ok: false, reason: '@xenova/transformers is not installed' } });
+    Llm.updateRerankerAvailability('local', { reranker: undefined, status: { ok: false, reason: '@xenova/transformers is not installed' } });
   });
 }
 

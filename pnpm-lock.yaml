@@ -174,9 +174,18 @@ importers:
 
   packages/application:
     dependencies:
+      '@ai-sdk/provider':
+        specifier: ^3.0.13
+        version: 3.0.13
       '@app/domain':
         specifier: workspace:*
         version: link:../domain
+      ai:
+        specifier: ^6.0.221
+        version: 6.0.221(zod@4.4.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/cli:
     dependencies:

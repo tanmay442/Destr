@@ -77,23 +77,43 @@ function rangeWhere(range?: ChatEventRange) {
   return parts.length ? and(...parts) : undefined;
 }
 
+export interface ChatEventBatcherOptions {
+  flushScheduler?: (fn: () => void) => void;
+}
+
 export class ChatEventBatcher implements ChatEventsRepo {
   private buffer: NewChatEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: Promise<void> | null = null;
   private droppedBatches = 0;
 
-  constructor(private readonly client: Client = db) {}
+  constructor(
+    private readonly client: Client = db,
+    private readonly options: ChatEventBatcherOptions = {},
+  ) {}
 
   record(event: ChatEventInput): void {
     this.buffer.push(toRow(event));
     if (this.buffer.length >= MAX_BUFFER) {
       void this.flush();
     } else if (!this.timer) {
-      this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
-      // Keep the event loop free in serverless; explicit flushes run via after().
-      this.timer.unref?.();
+      this.scheduleFlush();
     }
+  }
+
+  private scheduleFlush(): void {
+    const scheduler = this.options.flushScheduler;
+    if (scheduler) {
+      try {
+        scheduler(() => void this.flush());
+        return;
+      } catch {
+        // Not inside a request scope; fall back to the interval timer.
+      }
+    }
+    this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
+    // Keep the event loop free in serverless; explicit flushes run via after().
+    this.timer.unref?.();
   }
 
   /** Metrics counter; batches lost when both the primary and dead-letter inserts fail. */
@@ -534,6 +554,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
   }
 }
 
-export function createChatEventsRepo(client: Client = db): ChatEventsRepo {
-  return new ChatEventBatcher(client);
+export function createChatEventsRepo(client: Client = db, options: ChatEventBatcherOptions = {}): ChatEventsRepo {
+  return new ChatEventBatcher(client, options);
 }

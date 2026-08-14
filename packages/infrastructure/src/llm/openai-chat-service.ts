@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
+import { registerChatProvider } from './registries';
 
 export function getChatModel(modelId?: string): LanguageModelV3 {
   const apiKey = process.env.CUSTOM_LLM_API_KEY;
@@ -15,3 +16,5 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
   const provider = createOpenAI({ apiKey, baseURL: normalizeOpenAIBaseURL(baseURL) });
   return provider.chat(resolved) as LanguageModelV3;
 }
+
+registerChatProvider('openai', getChatModel);

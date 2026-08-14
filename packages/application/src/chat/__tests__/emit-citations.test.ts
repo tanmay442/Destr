@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emitCitations, citationDocumentIds } from './emit-citations';
+import { emitCitations, citationDocumentIds } from '../emit-citations';
 import type { RetrievedChunk } from '@app/application/rag/search';
 
 function chunk(over: Partial<RetrievedChunk>): RetrievedChunk {

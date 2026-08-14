@@ -4,6 +4,7 @@ import { logger, type DocSummarizer } from '@app/domain';
 import { getChatModel } from './index';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 import { CCH_MODEL } from '@app/infrastructure/config';
+import type { ChatModelProvider } from './registries';
 
 /** Cap on the model's output. A title + 1-3 sentence summary is short. */
 const MAX_OUTPUT_TOKENS = 300;
@@ -93,8 +94,11 @@ function setEntry(key: string, promise: Promise<{ title: string; summary: string
   cchCache.set(key, { promise, createdAt: Date.now() });
 }
 
-async function generateDocContext(excerpt: string): Promise<{ title: string; summary: string }> {
-  const model = getChatModel(CCH_MODEL || undefined);
+async function generateDocContext(
+  excerpt: string,
+  modelProvider: ChatModelProvider,
+): Promise<{ title: string; summary: string }> {
+  const model = modelProvider(CCH_MODEL || undefined);
   try {
     const { text: raw } = await generateText({
       model,
@@ -121,21 +125,25 @@ async function generateDocContext(excerpt: string): Promise<{ title: string; sum
  * in-flight promise is cached so concurrent ingests of identical documents
  * share a single request.
  */
-export const docSummarizer: DocSummarizer = {
-  generateDocContext(text: string): Promise<{ title: string; summary: string }> {
-    const key = createHash('sha256').update(text).digest('hex');
-    const cached = getEntry(key);
-    if (cached) return cached.promise;
+export function createDocSummarizer(modelProvider: ChatModelProvider = getChatModel): DocSummarizer {
+  return {
+    generateDocContext(text: string): Promise<{ title: string; summary: string }> {
+      const key = createHash('sha256').update(text).digest('hex');
+      const cached = getEntry(key);
+      if (cached) return cached.promise;
 
-    const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
-    const pending = generateDocContext(excerpt);
-    setEntry(key, pending);
-    pending.then(
-      (result) => {
-        if (!result.title && !result.summary) cchCache.delete(key);
-      },
-      () => cchCache.delete(key),
-    );
-    return pending;
-  },
-};
+      const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
+      const pending = generateDocContext(excerpt, modelProvider);
+      setEntry(key, pending);
+      pending.then(
+        (result) => {
+          if (!result.title && !result.summary) cchCache.delete(key);
+        },
+        () => cchCache.delete(key),
+      );
+      return pending;
+    },
+  };
+}
+
+export const docSummarizer: DocSummarizer = createDocSummarizer();

@@ -1,5 +1,8 @@
+import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+loadDotEnv();
 
 export { parseSeedArgs as parseArgs } from '../packages/cli/src/commands/seed.js';
 export type { SeedParseResult, SeedOptions } from '../packages/cli/src/commands/seed.js';

@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
+
+loadDotEnv();
 
 const isLocal =
   process.env.NODE_ENV === 'development' &&

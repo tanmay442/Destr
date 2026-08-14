@@ -1,6 +1,5 @@
-import { eq, desc, ilike, or, sql, inArray, isNull, and, lt } from 'drizzle-orm';
+import { eq, desc, ilike, or, sql, isNull, and, lt } from 'drizzle-orm';
 import { db } from './client';
-import { VECTOR_DIM } from './schema-vector';
 import {
   documents,
   chunks,
@@ -12,6 +11,23 @@ import {
 } from './schema';
 import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
 import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
+import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
+import { createVectorSearch } from './vector-search';
+import { createLexicalSearch } from './lexical-search';
+
+export { searchChunksByVector } from './vector-search';
+export { searchChunksByLexical } from './lexical-search';
+export {
+  insertChunks,
+  getChunksByIds,
+  getChunksByDocAndRange,
+  getChunksByDocAndRanges,
+  deleteChunksByDocumentId,
+  countChunksForDocuments,
+  countChunksForAll,
+  countChunksForDocument,
+  recountChunksForAll,
+} from './chunk-store';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -164,544 +180,6 @@ export async function softDeleteDocument(id: number, at: Date, client: Client = 
 export async function restoreDocument(id: number, client: Client = db): Promise<Document | null> {
   const [row] = await client.update(documents).set({ deletedAt: null }).where(eq(documents.id, id)).returning();
   return (row as Document | null) ?? null;
-}
-
-export async function searchChunksByVector(
-  embedding: number[],
-  opts: { threshold: number; limit: number; filter?: { documentId?: number } },
-  client: Client = db,
-): Promise<
-  Array<{
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    similarity: number;
-    parentChunkId: number | null;
-    chunkIndex: number;
-  }>
-> {
-  if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every((v) => Number.isFinite(v))) {
-    throw new Error('Invalid embedding: must be a non-empty array of finite numbers');
-  }
-  if (embedding.length !== VECTOR_DIM) {
-    throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${embedding.length}`);
-  }
-  const vectorLiteral = `[${embedding.join(',')}]`;
-  const candidatePool = Math.max(opts.limit * 10, 50);
-  const result = await client.execute(sql`
-    WITH candidates AS (
-      SELECT ch.id
-      FROM chunks ch
-      JOIN documents doc ON doc.id = ch.document_id
-      WHERE doc.deleted_at IS NULL
-        AND ch.kind <> 'parent'
-      ORDER BY ch.embedding <=> ${vectorLiteral}::vector
-      LIMIT ${candidatePool}
-    )
-    SELECT
-      c.id AS id,
-      c.document_id AS "documentId",
-      d.file_name AS "fileName",
-      c.page AS page,
-      c.section_title AS "sectionTitle",
-      c.source AS source,
-      c.title AS title,
-      c.content AS content,
-      c.parent_chunk_id AS "parentChunkId",
-      c.chunk_index AS "chunkIndex",
-      1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-    JOIN candidates cand ON cand.id = c.id
-    WHERE d.deleted_at IS NULL
-      AND c.kind <> 'parent'
-      AND (1 - (c.embedding <=> ${vectorLiteral}::vector)) > ${opts.threshold}
-      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
-    ORDER BY similarity DESC
-    LIMIT ${opts.limit}
-  `);
-  type RawRow = {
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    parentChunkId: number | null;
-    chunkIndex: number;
-    similarity: number;
-  };
-  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
-  return rows.map((r) => ({
-    id: Number(r.id),
-    documentId: Number(r.documentId),
-    fileName: r.fileName ?? null,
-    page: r.page != null ? Number(r.page) : null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    content: r.content,
-    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
-    chunkIndex: Number(r.chunkIndex),
-    similarity: Number(r.similarity),
-  }));
-}
-
-export async function searchChunksByLexical(
-  query: string,
-  opts: { limit: number; filter?: { documentId?: number } },
-  client: Client = db,
-): Promise<
-  Array<{
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    similarity: number;
-    parentChunkId: number | null;
-    chunkIndex: number;
-  }>
-> {
-  if (!query.trim()) return [];
-  const lexQuery = sql`plainto_tsquery('english', ${query})`;
-  const result = await client.execute(sql`
-    SELECT
-      c.id AS id,
-      c.document_id AS "documentId",
-      d.file_name AS "fileName",
-      c.page AS page,
-      c.section_title AS "sectionTitle",
-      c.source AS source,
-      c.title AS title,
-      c.content AS content,
-      c.parent_chunk_id AS "parentChunkId",
-      c.chunk_index AS "chunkIndex",
-      ts_rank(c.tsv, ${lexQuery}) AS similarity
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-    WHERE d.deleted_at IS NULL
-      AND c.kind <> 'parent'
-      AND c.tsv @@ ${lexQuery}
-      ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
-    ORDER BY similarity DESC
-    LIMIT ${opts.limit}
-  `);
-  type RawRow = {
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    parentChunkId: number | null;
-    chunkIndex: number;
-    similarity: number;
-  };
-  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
-  return rows.map((r) => ({
-    id: Number(r.id),
-    documentId: Number(r.documentId),
-    fileName: r.fileName ?? null,
-    page: r.page != null ? Number(r.page) : null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    content: r.content,
-    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
-    chunkIndex: Number(r.chunkIndex),
-    similarity: Number(r.similarity),
-  }));
-}
-
-function toChunkValues(r: {
-  documentId: number;
-  content: string;
-  embedding: number[];
-  chunkIndex?: number | undefined;
-  page?: number | null | undefined;
-  sectionTitle?: string | null | undefined;
-  source?: string | null | undefined;
-  title?: string | null | undefined;
-  parentChunkId?: number | null | undefined;
-  kind?: 'parent' | 'child' | 'summary' | undefined;
-  embeddingModel?: string | null | undefined;
-  contentHash?: string | null | undefined;
-}) {
-  return {
-    documentId: r.documentId,
-    content: r.content,
-    embedding: r.embedding,
-    chunkIndex: r.chunkIndex ?? 0,
-    page: r.page ?? null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    parentChunkId: r.parentChunkId ?? null,
-    kind: r.kind ?? 'child',
-    embeddingModel: r.embeddingModel ?? null,
-    contentHash: r.contentHash ?? null,
-  };
-}
-
-export async function insertChunks(
-  rows: Array<{
-    documentId: number;
-    content: string;
-    embedding: number[];
-    chunkIndex?: number | undefined;
-    page?: number | null | undefined;
-    sectionTitle?: string | null | undefined;
-    source?: string | null | undefined;
-    title?: string | null | undefined;
-    parentChunkId?: number | null | undefined;
-    kind?: 'parent' | 'child' | 'summary' | undefined;
-    embeddingModel?: string | null | undefined;
-    contentHash?: string | null | undefined;
-  }>,
-  client: Client = db,
-): Promise<void> {
-  if (rows.length === 0) return;
-  for (const r of rows) {
-    if (!Array.isArray(r.embedding) || r.embedding.length !== VECTOR_DIM) {
-      throw new ValidationError(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${r.embedding.length}`);
-    }
-    if (!r.embedding.every((v) => Number.isFinite(v))) {
-      throw new ValidationError(`Invalid embedding: chunk ${r.chunkIndex} contains non-finite values`);
-    }
-  }
-  const BATCH_SIZE = 500;
-
-  const parents = rows.filter((r) => r.kind === 'parent');
-  if (parents.length === 0) {
-    for (const r of rows) {
-      if (r.parentChunkId != null) {
-        throw new ValidationError(
-          `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
-        );
-      }
-    }
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE).map(toChunkValues));
-    }
-    return;
-  }
-
-  const parentIndices = parents.map((r) => r.chunkIndex ?? 0);
-  const uniqueIndices = new Set(parentIndices);
-  if (uniqueIndices.size !== parentIndices.length) {
-    throw new Error(
-      'insertChunks: parent chunkIndex values must be unique within a batch for self-FK resolution',
-    );
-  }
-
-  const indexToId = new Map<number, number>();
-  for (let i = 0; i < parents.length; i += BATCH_SIZE) {
-    const batch = parents.slice(i, i + BATCH_SIZE);
-    const inserted = await client
-      .insert(chunks)
-      .values(batch.map(toChunkValues))
-      .returning({ id: chunks.id, chunkIndex: chunks.chunkIndex });
-    for (const row of inserted) {
-      indexToId.set(Number(row.chunkIndex), Number(row.id));
-    }
-  }
-
-  const children = rows.filter((r) => r.kind !== 'parent');
-  for (let i = 0; i < children.length; i += BATCH_SIZE) {
-    const batch = children.slice(i, i + BATCH_SIZE);
-    await client.insert(chunks).values(
-      batch.map((r) => {
-        const realParentId =
-          r.parentChunkId != null ? indexToId.get(r.parentChunkId) ?? null : null;
-        if (r.parentChunkId != null && realParentId == null) {
-          throw new ValidationError(
-            `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
-          );
-        }
-        return { ...toChunkValues(r), parentChunkId: realParentId };
-      }),
-    );
-  }
-}
-
-export async function getChunksByIds(
-  ids: number[],
-  client: Client = db,
-): Promise<
-  Array<{
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    similarity: number;
-    parentChunkId: number | null;
-    chunkIndex: number;
-  }>
-> {
-  if (ids.length === 0) return [];
-  const result = await client.execute(sql`
-    SELECT
-      c.id AS id,
-      c.document_id AS "documentId",
-      d.file_name AS "fileName",
-      c.page AS page,
-      c.section_title AS "sectionTitle",
-      c.source AS source,
-      c.title AS title,
-      c.content AS content,
-      c.parent_chunk_id AS "parentChunkId",
-      c.chunk_index AS "chunkIndex",
-      0 AS similarity
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-    WHERE d.deleted_at IS NULL
-      AND c.id IN ${ids}
-    ORDER BY c.id
-  `);
-  type RawRow = {
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    parentChunkId: number | null;
-    chunkIndex: number;
-    similarity: number;
-  };
-  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
-  return rows.map((r) => ({
-    id: Number(r.id),
-    documentId: Number(r.documentId),
-    fileName: r.fileName ?? null,
-    page: r.page != null ? Number(r.page) : null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    content: r.content,
-    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
-    chunkIndex: Number(r.chunkIndex),
-    similarity: Number(r.similarity),
-  }));
-}
-
-export async function getChunksByDocAndRange(
-  documentId: number,
-  start: number,
-  end: number,
-  client: Client = db,
-): Promise<
-  Array<{
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    similarity: number;
-    parentChunkId: number | null;
-    chunkIndex: number;
-  }>
-> {
-  const result = await client.execute(sql`
-    SELECT
-      c.id AS id,
-      c.document_id AS "documentId",
-      d.file_name AS "fileName",
-      c.page AS page,
-      c.section_title AS "sectionTitle",
-      c.source AS source,
-      c.title AS title,
-      c.content AS content,
-      c.parent_chunk_id AS "parentChunkId",
-      c.chunk_index AS "chunkIndex",
-      0 AS similarity
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-    WHERE d.deleted_at IS NULL
-      AND c.document_id = ${documentId}
-      AND c.chunk_index >= ${start}
-      AND c.chunk_index <= ${end}
-    ORDER BY c.chunk_index
-  `);
-  type RawRow = {
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    parentChunkId: number | null;
-    chunkIndex: number;
-    similarity: number;
-  };
-  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
-  return rows.map((r) => ({
-    id: Number(r.id),
-    documentId: Number(r.documentId),
-    fileName: r.fileName ?? null,
-    page: r.page != null ? Number(r.page) : null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    content: r.content,
-    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
-    chunkIndex: Number(r.chunkIndex),
-    similarity: Number(r.similarity),
-  }));
-}
-
-export async function getChunksByDocAndRanges(
-  ranges: Array<{ documentId: number; start: number; end: number }>,
-  client: Client = db,
-): Promise<Map<string, Array<{
-  id: number;
-  documentId: number;
-  fileName: string | null;
-  page: number | null;
-  sectionTitle: string | null;
-  source: string | null;
-  title: string | null;
-  content: string;
-  similarity: number;
-  parentChunkId: number | null;
-  chunkIndex: number;
-}>>> {
-  const map = new Map<string, Array<{
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    similarity: number;
-    parentChunkId: number | null;
-    chunkIndex: number;
-  }>>();
-  if (ranges.length === 0) return map;
-  const conditions = ranges.map((r) =>
-    and(sql`c.document_id = ${r.documentId}`, sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
-  );
-  const result = await client.execute(sql`
-    SELECT
-      c.id AS id,
-      c.document_id AS "documentId",
-      d.file_name AS "fileName",
-      c.page AS page,
-      c.section_title AS "sectionTitle",
-      c.source AS source,
-      c.title AS title,
-      c.content AS content,
-      c.parent_chunk_id AS "parentChunkId",
-      c.chunk_index AS "chunkIndex",
-      0 AS similarity
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-    WHERE d.deleted_at IS NULL
-      AND (${or(...conditions)})
-    ORDER BY c.document_id, c.chunk_index
-  `);
-  type RawRow = {
-    id: number;
-    documentId: number;
-    fileName: string | null;
-    page: number | null;
-    sectionTitle: string | null;
-    source: string | null;
-    title: string | null;
-    content: string;
-    parentChunkId: number | null;
-    chunkIndex: number;
-    similarity: number;
-  };
-  const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
-  const parsed = rows.map((r) => ({
-    id: Number(r.id),
-    documentId: Number(r.documentId),
-    fileName: r.fileName ?? null,
-    page: r.page != null ? Number(r.page) : null,
-    sectionTitle: r.sectionTitle ?? null,
-    source: r.source ?? null,
-    title: r.title ?? null,
-    content: r.content,
-    parentChunkId: r.parentChunkId != null ? Number(r.parentChunkId) : null,
-    chunkIndex: Number(r.chunkIndex),
-    similarity: Number(r.similarity),
-  }));
-  for (const r of parsed) {
-    for (const range of ranges) {
-      if (r.documentId === range.documentId && r.chunkIndex >= range.start && r.chunkIndex <= range.end) {
-        const key = `${range.documentId}:${range.start}:${range.end}`;
-        const arr = map.get(key);
-        if (arr) arr.push(r);
-        else map.set(key, [r]);
-      }
-    }
-  }
-  return map;
-}
-
-export async function deleteChunksByDocumentId(documentId: number, client: Client = db): Promise<void> {
-  await client.delete(chunks).where(eq(chunks.documentId, documentId));
-}
-
-export async function countChunksForDocuments(
-  documentIds: number[],
-  client: Client = db,
-): Promise<Map<number, number>> {
-  if (documentIds.length === 0) return new Map();
-  const rows = await client
-    .select({ documentId: chunks.documentId, count: sql<number>`count(*)::int` })
-    .from(chunks)
-    .where(inArray(chunks.documentId, documentIds))
-    .groupBy(chunks.documentId);
-  return new Map(rows.map((r) => [r.documentId, r.count]));
-}
-
-export async function countChunksForAll(client: Client = db): Promise<number> {
-  const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(chunks);
-  return row?.count ?? 0;
-}
-
-export async function countChunksForDocument(id: number, client: Client = db): Promise<number> {
-  const [row] = await client
-    .select({ count: sql<number>`count(*)::int` })
-    .from(chunks)
-    .where(eq(chunks.documentId, id));
-  return row?.count ?? 0;
-}
-
-export async function recountChunksForAll(client: Client = db): Promise<Array<{ documentId: number; count: number }>> {
-  const rows = await client
-    .select({ documentId: chunks.documentId, count: sql<number>`count(*)::int` })
-    .from(chunks)
-    .groupBy(chunks.documentId);
-  return rows;
 }
 
 export async function listDocuments(
@@ -1089,7 +567,7 @@ export const auditRepo = {
   },
 };
 
-import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRepository, AuditLog, TicketRepository, UserRepository } from '@app/domain';
+import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRepository, ChunkStore, VectorSearch, LexicalSearch, AuditLog, TicketRepository, UserRepository } from '@app/domain';
 
 export function createDocumentRepo(client: Client): DocumentRepository {
   return {
@@ -1111,20 +589,32 @@ export function createDocumentRepo(client: Client): DocumentRepository {
   };
 }
 
-export function createChunkRepo(client: Client): ChunkRepository {
+export function createChunkRepositoryCompat(
+  store: ChunkStore,
+  vector: VectorSearch,
+  lexical: LexicalSearch,
+): ChunkRepository {
   return {
-    searchByVector: (embedding, opts) => searchChunksByVector(embedding, opts, client),
-    searchByLexical: (query, opts) => searchChunksByLexical(query, opts, client),
-    getByIds: (ids) => getChunksByIds(ids, client),
-    getByDocAndRange: (documentId, start, end) => getChunksByDocAndRange(documentId, start, end, client),
-    getByDocAndRanges: (ranges) => getChunksByDocAndRanges(ranges, client),
-    insertMany: (rows) => insertChunks(rows, client),
-    deleteByDocumentId: (documentId) => deleteChunksByDocumentId(documentId, client),
-    countForDocuments: (ids) => countChunksForDocuments(ids, client),
-    countForAll: () => countChunksForAll(client),
-    countForDocument: (id) => countChunksForDocument(id, client),
-    recountAll: () => recountChunksForAll(client),
+    searchByVector: (embedding, opts) => vector.searchByVector(embedding, opts),
+    searchByLexical: (query, opts) => lexical.searchByLexical(query, opts),
+    getByIds: (ids) => store.getByIds(ids),
+    getByDocAndRange: (documentId, start, end) => store.getByDocAndRange(documentId, start, end),
+    getByDocAndRanges: (ranges) => store.getByDocAndRanges(ranges),
+    insertMany: (rows) => store.insertMany(rows),
+    deleteByDocumentId: (documentId) => store.deleteByDocumentId(documentId),
+    countForDocuments: (ids) => store.countForDocuments(ids),
+    countForAll: () => store.countForAll(),
+    countForDocument: (id) => store.countForDocument(id),
+    recountAll: () => store.recountAll(),
   };
+}
+
+export function createChunkRepo(client: Client): ChunkRepository {
+  return createChunkRepositoryCompat(
+    createChunkStore(client),
+    createVectorSearch(client),
+    createLexicalSearch(client),
+  );
 }
 
 export function createAuditRepo(client: Client = db): AuditLog {

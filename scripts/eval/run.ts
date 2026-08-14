@@ -3,8 +3,11 @@
  *   pnpm eval                 # mock harness (CI-safe)
  *   EVAL_REAL=1 pnpm eval    # wire real search + generation + graders
  */
+import { loadDotEnv } from '../../packages/infrastructure/src/config/dotenv-bootstrap';
 import { goldenQuestions } from './golden';
 import { runEval, mockEvalDeps, type EvalDeps } from './harness';
+
+loadDotEnv();
 
 async function buildDeps(useReal: boolean): Promise<EvalDeps> {
   if (!useReal) {
