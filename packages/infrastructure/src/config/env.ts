@@ -72,6 +72,7 @@ function resolveRuntimeConfig(env: EnvSource) {
   const ANSWER_CACHE_TTL_SEC = finiteOrDefault(env.get('ANSWER_CACHE_TTL_SEC'), DEFAULT_ANSWER_CACHE_TTL_SEC);
   const TRACE_ENABLED = env.get('TRACE_ENABLED') === 'true';
   const EVAL_FAITHFULNESS_THRESHOLD = finiteOrDefault(env.get('EVAL_FAITHFULNESS_THRESHOLD'), DEFAULT_EVAL_FAITHFULNESS_THRESHOLD);
+  const QSTASH_TOKEN = env.get('QSTASH_TOKEN');
 
   return {
     LOG_LEVEL,
@@ -106,6 +107,7 @@ function resolveRuntimeConfig(env: EnvSource) {
     ANSWER_CACHE_TTL_SEC,
     TRACE_ENABLED,
     EVAL_FAITHFULNESS_THRESHOLD,
+    QSTASH_TOKEN,
   };
 }
 
@@ -153,3 +155,4 @@ export const ANSWER_CACHE_ENABLED: boolean = defaultConfig.ANSWER_CACHE_ENABLED 
 export const ANSWER_CACHE_TTL_SEC: number = defaultConfig.ANSWER_CACHE_TTL_SEC as number;
 export const TRACE_ENABLED: boolean = defaultConfig.TRACE_ENABLED as boolean;
 export const EVAL_FAITHFULNESS_THRESHOLD: number = defaultConfig.EVAL_FAITHFULNESS_THRESHOLD as number;
+export const QSTASH_TOKEN: string | undefined = defaultConfig.QSTASH_TOKEN as string | undefined;

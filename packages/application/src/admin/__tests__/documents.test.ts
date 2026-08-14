@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotFoundError, ValidationError, GoneError } from '@app/domain';
 import type { DocumentRepository, AuditLog, Clock, TransactionRunner, TransactionContext } from '@app/domain';
 import { restoreDocument, softDeleteDocument, hardDeleteDocument, uploadPdf, replacePdf } from '../documents';
@@ -198,6 +198,7 @@ function makeUploadDeps(opts: {
   documents?: Partial<Record<string, unknown>>;
   rejectEnqueue?: boolean;
   runnerError?: boolean;
+  asyncIngest?: boolean;
 } = {}): {
   deps: Parameters<typeof uploadPdf>[1];
   documents: DocumentRepository;
@@ -258,15 +259,12 @@ function makeUploadDeps(opts: {
     blobStorage,
     ingestQueue,
     users,
+    asyncIngest: opts.asyncIngest ?? false,
   };
   return { deps: deps as unknown as Parameters<typeof uploadPdf>[1], documents, blobStorage, ingestQueue, runner, audit, chunks };
 }
 
 describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it('resurrects a soft-deleted doc that is re-uploaded unchanged within the restore window', async () => {
     const mocks = makeUploadDeps({
       documents: {
@@ -283,13 +281,13 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('logs a restore audit event when the async path re-uploads a soft-deleted doc unchanged (M3)', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
         findByName: vi.fn().mockResolvedValue({
           ...baseDocument({ id: 1, fileHash: 'newhash', storageKey: 'old-blob', deletedAt: new Date(Date.now() - 1000) }),
         }),
       },
+      asyncIngest: true,
     });
     const result = await uploadPdf(
       { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
@@ -324,8 +322,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('enqueues large uploads asynchronously and marks the row queued', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
-    const mocks = makeUploadDeps();
+    const mocks = makeUploadDeps({ asyncIngest: true });
     const result = await uploadPdf(
       { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
       mocks.deps,
@@ -341,8 +338,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('rolls back a brand-new async upload when enqueue fails so a retry can re-upload', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
-    const mocks = makeUploadDeps({ rejectEnqueue: true });
+    const mocks = makeUploadDeps({ rejectEnqueue: true, asyncIngest: true });
     const result = await uploadPdf(
       { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
       mocks.deps,
@@ -353,7 +349,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('reverts fileHash, status, and storageKey on replace-enqueue failure so re-upload is not falsely unchanged', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
         findById: vi.fn().mockResolvedValue({
@@ -361,6 +356,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
         }),
       },
       rejectEnqueue: true,
+      asyncIngest: true,
     });
     const result = await replacePdf(
       { documentId: 1, fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
@@ -375,7 +371,6 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('cleans up the new blob and keeps the old one when enqueue fails on a reused row (M4)', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
         findByName: vi.fn().mockResolvedValue({
@@ -383,6 +378,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
         }),
       },
       rejectEnqueue: true,
+      asyncIngest: true,
     });
     const result = await uploadPdf(
       { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
@@ -400,13 +396,13 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   });
 
   it('does not delete chunks on the async replace path (worker-side delete owns it)', async () => {
-    vi.stubEnv('QSTASH_TOKEN', 'x');
     const mocks = makeUploadDeps({
       documents: {
         findById: vi.fn().mockResolvedValue({
           ...baseDocument({ id: 1, fileHash: 'old', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
         }),
       },
+      asyncIngest: true,
     });
     const result = await replacePdf(
       { documentId: 1, fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
@@ -419,5 +415,18 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     }
     expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith({ documentId: 1 });
     expect(mocks.chunks.deleteByDocumentId).not.toHaveBeenCalled();
+  });
+
+  it('ingests synchronously for large uploads when asyncIngest is false (flag parity)', async () => {
+    const mocks = makeUploadDeps({ asyncIngest: false });
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
+      mocks.deps,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.status).toBe('inserted');
+    }
+    expect(mocks.ingestQueue.enqueue).not.toHaveBeenCalled();
   });
 });

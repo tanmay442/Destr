@@ -104,12 +104,8 @@ export async function listDocuments(
   }, 'Failed to list documents');
 }
 
-/** ≥4 MB uses the async QStash path (when QSTASH_TOKEN is set). */
+/** ≥4 MB uses the async QStash path (when async ingest is enabled). */
 const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
-
-function asyncIngestEnabled(): boolean {
-  return Boolean(process.env.QSTASH_TOKEN);
-}
 
 interface PreparedReplacement {
   fileHash: string;
@@ -186,12 +182,12 @@ async function cleanupUncommittedBlob(
 
 export async function uploadPdf(
   input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
-    if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled()) {
+    if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest) {
       return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
     }
     return uploadPdfSync(input, deps);
@@ -380,7 +376,7 @@ export async function hardDeleteDocument(
 
 export async function replacePdf(
   input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
-  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository },
+  deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
@@ -397,7 +393,7 @@ export async function replacePdf(
     const key = newBlobKey(input.fileName);
     await deps.blobStorage.put(key, input.buffer, 'application/pdf');
 
-    const useAsync = input.buffer.length >= ASYNC_INGEST_THRESHOLD && asyncIngestEnabled();
+    const useAsync = input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest;
     const previous = {
       fileHash: existing.fileHash,
       status: existing.ingestStatus,
