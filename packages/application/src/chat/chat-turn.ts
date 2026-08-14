@@ -1,0 +1,454 @@
+import type {
+  convertToModelMessages,
+  createUIMessageStream,
+  stepCountIs,
+  streamText,
+  tool,
+  InferUIMessageChunk,
+  UIMessage,
+} from 'ai';
+import type { LanguageModelV3 } from '@ai-sdk/provider';
+import { z } from 'zod';
+import {
+  CHAT_MAX_BODY_BYTES,
+  CHAT_RATE_LIMIT,
+  logger,
+  sanitizeText,
+  TOOL_CONTENT_CAP,
+  type AnswerCache,
+  type ChatEventInput,
+  type RateLimiter,
+  type Result,
+} from '@app/domain';
+import type { AppConfig } from '@app/domain/app-config';
+import { buildSystemPrompt } from '../prompt/build-system-prompt';
+import type { AgenticResult } from '../rag/agentic-search';
+import type { RetrievedChunk } from '../rag/search';
+import { cacheFingerprint } from './cache-key';
+import { buildEventMeta } from './build-event-meta';
+import { dedupeCitations } from './dedupe-citations';
+import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit-citations';
+import { ChatRequestSchema } from './request-schema';
+import { resolveTurnId } from './turn-id';
+
+export type AiSdk = {
+  streamText: typeof streamText;
+  tool: typeof tool;
+  stepCountIs: typeof stepCountIs;
+  convertToModelMessages: typeof convertToModelMessages;
+  createUIMessageStream: typeof createUIMessageStream;
+};
+
+export interface ChatTurnDeps {
+  ai: AiSdk;
+  getChatModel(): LanguageModelV3;
+  getChatModelId(): string;
+  getEmbeddingModelId(): string;
+  getRuntimeConfig(): Promise<AppConfig>;
+  searchChunks(
+    cfg: AppConfig,
+    query: string,
+    opts: { limit?: number | undefined },
+  ): Promise<Result<RetrievedChunk[]>>;
+  agenticSearch(cfg: AppConfig, query: string): Promise<Result<AgenticResult>>;
+  hallucinationGrader(
+    cfg: AppConfig,
+  ): ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  answerCache: AnswerCache;
+  answerCacheKey(
+    query: string,
+    ctx: { embeddingModel: string; chatModel: string; userId?: string; fingerprint?: string },
+  ): string;
+  rateLimit: RateLimiter;
+  createTicket(input: {
+    userId: string;
+    name: string;
+    email: string;
+    issue: string;
+  }): Promise<Result<{ ticketId: string; status: 'created' }>>;
+  userResolver(req: Request): Promise<{ userId: string; name?: string; email?: string }>;
+  eventSink: {
+    record(event: ChatEventInput): void;
+    flush(): Promise<void>;
+  };
+  traceEnabled: boolean;
+}
+
+export interface ChatTurnRequest {
+  request: Request;
+  userId: string;
+  startedAt?: number;
+}
+
+export type ChatTurnResult =
+  | {
+      kind: 'stream';
+      stream: ReadableStream<InferUIMessageChunk<UIMessage>>;
+      meta: { turnId: string | null; mode: 'vector' | 'agentic'; cacheHit: boolean };
+    }
+  | { kind: 'rate-limited'; retryAfterSec: string | undefined }
+  | { kind: 'payload-too-large' }
+  | { kind: 'invalid-request'; issues: z.ZodIssue[] };
+
+interface TurnMetrics {
+  retrieveMs: number;
+  hitCount: number | null;
+  maxSimilarity: number | null;
+  ticketCreated: boolean;
+  ticketId: string | null;
+  rewritten: boolean;
+}
+
+function buildChatTools(deps: ChatTurnDeps, opts: {
+  cfg: AppConfig;
+  effectiveMode: 'agentic' | 'normal';
+  userId: string;
+  request: Request;
+  capturedCitations: EmittedCitation[];
+  outOfDomainRef: { value: boolean };
+  metrics: TurnMetrics;
+}) {
+  const { cfg, effectiveMode, userId, request, capturedCitations, outOfDomainRef, metrics } = opts;
+  return {
+    searchDocumentation: deps.ai.tool({
+      description:
+        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity, documentTitle, section } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; the full chunk is still available, but only the top chunks are returned by default. Do NOT call this for non-documentation questions (medical, legal, personal).",
+      inputSchema: z.object({
+        query: z
+          .string()
+          .min(1)
+          .max(2000)
+          .describe(
+            'A focused, specific search query. Reformulate vague user wording into a tight phrase (e.g. "school cell phone policy" instead of "phones").',
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe(
+            'Maximum number of chunks to return. Defaults to 3. Use a larger value only if the first call returned nothing useful.',
+          ),
+      }),
+      execute: async ({ query, limit }) => {
+        let matches: RetrievedChunk[];
+        const t0 = performance.now();
+        if (effectiveMode === 'agentic') {
+          const r = await deps.agenticSearch(cfg, query);
+          if (!r.ok) {
+            logger.error('Agentic retrieval failed', { error: r.error });
+            return [];
+          }
+          if (deps.traceEnabled) {
+            logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
+          }
+          outOfDomainRef.value = r.value.outOfDomain;
+          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
+          matches = r.value.chunks;
+        } else {
+          const r = await deps.searchChunks(cfg, query, { limit });
+          if (!r.ok) {
+            logger.error('RAG retrieval failed', { error: r.error });
+            return [];
+          }
+          if (deps.traceEnabled) {
+            logger.info('rag.retrieve', { mode: 'vector', query, ms: performance.now() - t0, hits: r.value.length });
+          }
+          matches = r.value;
+        }
+        metrics.retrieveMs += Math.round(performance.now() - t0);
+        metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
+        for (const m of matches) {
+          if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
+        }
+        const capped = matches.map((m) => ({
+          content:
+            m.content.length > TOOL_CONTENT_CAP
+              ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
+              : m.content,
+          similarity: m.similarity,
+          documentTitle: m.title ?? undefined,
+          section: m.sectionTitle ?? undefined,
+        }));
+        for (const citation of emitCitations(matches)) {
+          capturedCitations.push(citation);
+        }
+        return capped;
+      },
+    }),
+    createKnowledgeTicket: deps.ai.tool({
+      description:
+        'Open a knowledge ticket. Invoke this tool when the user\'s issue cannot be resolved via the available documentation content or the user has explicitly asked to open one, file one, escalate, talk to a human, or submit a complaint. When invoking, provide a structured `issue` summary with appropriate context so the reviewer can understand the full situation without reading the transcript: Product / Question / What was tried / Docs searched / User context.',
+      inputSchema: z.object({
+        name: z
+          .string()
+          .describe(
+            "Ignored by the server \u2014 the signed-in user's name is used instead.",
+          ),
+        email: z
+          .string()
+          .regex(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/)
+          .describe(
+            "Ignored by the server \u2014 the signed-in user's email is used instead.",
+          ),
+        issue: z
+          .string()
+          .max(10_000)
+          .describe(
+            'Structured ticket summary in the form: Question: ...\nWhat was tried: ...\nDocs searched: ...\nUser context: ...',
+          ),
+      }),
+      execute: async ({ issue }) => {
+        const userProfile = await deps.userResolver(request);
+        const realName = userProfile.name ?? 'User';
+        const realEmail = userProfile.email ?? `${userId}@clerk.user`;
+        const result = await deps.createTicket({
+          userId,
+          name: realName,
+          email: realEmail,
+          issue: sanitizeText(issue),
+        });
+        if (!result.ok) {
+          logger.error('createKnowledgeTicket: createTicket failed', { error: result.error });
+          return { ticketId: null, status: 'error' };
+        }
+        metrics.ticketCreated = true;
+        metrics.ticketId = result.value.ticketId;
+        return result.value;
+      },
+    }),
+  };
+}
+
+export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
+  const turnStart = input.startedAt ?? performance.now();
+  const { request, userId } = input;
+  const cfg = await deps.getRuntimeConfig();
+  const limit = await deps.rateLimit.check(`chat:${userId}`, CHAT_RATE_LIMIT);
+  if (!limit.ok) {
+    return {
+      kind: 'rate-limited',
+      retryAfterSec: Number.isFinite(limit.retryAfterMs)
+        ? String(Math.ceil(limit.retryAfterMs / 1000))
+        : undefined,
+    };
+  }
+
+  const raw = await request.json().catch((e) => {
+    logger.debug('JSON parse failed', { error: String(e) });
+    return null;
+  });
+  if (raw !== null && JSON.stringify(raw).length > CHAT_MAX_BODY_BYTES) {
+    return { kind: 'payload-too-large' };
+  }
+  const parsed = ChatRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { kind: 'invalid-request', issues: parsed.error.issues };
+  }
+  const messages = parsed.data.messages as unknown as UIMessage[];
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const lastUserText = lastUserMessage
+    ? lastUserMessage.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n')
+    : '';
+
+  const capturedCitations: EmittedCitation[] = [];
+
+  const turnId = resolveTurnId(parsed.data.turnId);
+
+  const isFirstTurn = messages.length <= 1;
+
+  const useConfiguredMode = Math.random() * 100 < cfg.retrievalModeRolloutPercent;
+  const effectiveMode = useConfiguredMode
+    ? cfg.retrievalMode
+    : cfg.retrievalMode === 'agentic'
+      ? 'normal'
+      : 'agentic';
+
+  const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
+  const queryText = cfg.captureQueryText ? lastUserText || null : null;
+  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+
+  const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
+  const cacheKey = cacheable
+      ? deps.answerCacheKey(lastUserText, {
+        embeddingModel: deps.getEmbeddingModelId(),
+        chatModel: deps.getChatModelId(),
+        userId,
+        fingerprint: cacheFingerprint(cfg, effectiveMode),
+      })
+    : null;
+  if (cacheKey) {
+    if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
+    const cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    if (cached) {
+      if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
+      const stream = deps.ai.createUIMessageStream({
+        execute: ({ writer }) => {
+          writer.write({ type: 'text-start', id: 'cached' });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cached });
+          writer.write({ type: 'text-end', id: 'cached' });
+        },
+      });
+      deps.eventSink.record({
+        turnId,
+        userId,
+        query: queryText,
+        mode: persistedMode,
+        cacheHit: true,
+        totalMs: Math.round(performance.now() - turnStart),
+      });
+      return {
+        kind: 'stream',
+        stream,
+        meta: { turnId, mode: persistedMode, cacheHit: true },
+      };
+    }
+    if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
+  }
+
+  let prefetch: RetrievedChunk[] | null = null;
+  if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
+    const prefetchResult = await deps.searchChunks(cfg, lastUserText, {});
+    if (!prefetchResult.ok) {
+      logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
+      prefetch = null;
+    } else {
+      prefetch = prefetchResult.value;
+      for (const citation of emitCitations(prefetch)) {
+        capturedCitations.push(citation);
+      }
+    }
+  }
+
+  const outOfDomainRef = { value: false };
+
+  const result = deps.ai.streamText({
+    model: deps.getChatModel(),
+    system: buildSystemPrompt(cfg, prefetch),
+    messages: await deps.ai.convertToModelMessages(messages),
+    stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
+    abortSignal: request.signal,
+    tools: buildChatTools(deps, {
+      cfg,
+      effectiveMode,
+      userId,
+      request,
+      capturedCitations,
+      outOfDomainRef,
+      metrics,
+    }),
+  });
+
+  const llmStream = result.toUIMessageStream({ originalMessages: messages });
+
+  const citationStream = new ReadableStream<InferUIMessageChunk<UIMessage>>({
+    start(controller) {
+      const reader = llmStream.getReader();
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          const finalCitations = dedupeCitations(capturedCitations);
+          for (const src of finalCitations) {
+            controller.enqueue({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<UIMessage>);
+          }
+          const hallucinationBlocked = await runHallucinationCheck({
+            controller,
+            result,
+            capturedCitations: finalCitations,
+            hallucinationGrader: deps.hallucinationGrader(cfg),
+            outOfDomain: outOfDomainRef.value,
+          });
+          if (cacheKey && !hallucinationBlocked && !outOfDomainRef.value && !metrics.ticketCreated) {
+            try {
+              const finalAnswer = await result.text;
+              if (finalAnswer && finalAnswer.trim() !== '') {
+                if (deps.traceEnabled) {
+                  logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
+                }
+                await deps.answerCache.set(cacheKey, finalAnswer, cfg.answerCacheTtlSec);
+              }
+            } catch (err) {
+              logger.warn('Answer cache write skipped', { error: String(err) });
+            }
+          }
+          const usage = await Promise.resolve(result.usage).catch(() => null);
+          const totalMs = Math.round(performance.now() - turnStart);
+          deps.eventSink.record({
+            turnId,
+            userId,
+            query: queryText,
+            mode: persistedMode,
+            retrieveMs: metrics.retrieveMs,
+            generateMs: Math.max(0, totalMs - metrics.retrieveMs),
+            totalMs,
+            hitCount: metrics.hitCount,
+            maxSimilarity: metrics.maxSimilarity,
+            outOfDomain: outOfDomainRef.value,
+            hallucinationBlocked,
+            ticketCreated: metrics.ticketCreated,
+            citationCount: finalCitations.length,
+            tokensIn: usage?.inputTokens ?? 0,
+            tokensOut: usage?.outputTokens ?? 0,
+            meta: buildEventMeta({
+              rewritten: metrics.rewritten,
+              documentIds: citationDocumentIds(finalCitations),
+              ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+            }),
+          });
+        } catch (err) {
+          logger.error('Chat stream error', { error: err });
+          controller.error(err);
+          return;
+        }
+        controller.close();
+      })();
+    },
+  });
+
+  return {
+    kind: 'stream',
+    stream: citationStream,
+    meta: { turnId, mode: persistedMode, cacheHit: false },
+  };
+}
+
+async function runHallucinationCheck(opts: {
+  controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
+  result: { text: PromiseLike<string> };
+  capturedCitations: EmittedCitation[];
+  hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  outOfDomain: boolean;
+}): Promise<boolean> {
+  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
+  if (!hallucinationGrader) return false;
+
+  let ungrounded = outOfDomain;
+  if (!ungrounded && capturedCitations.length > 0) {
+    try {
+      const generation = await result.text;
+      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
+      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
+    } catch (err) {
+      logger.error('Hallucination check failed', { error: err });
+    }
+  }
+
+  if (ungrounded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain, offerTicket: true },
+    } as InferUIMessageChunk<UIMessage>);
+  }
+  return ungrounded;
+}

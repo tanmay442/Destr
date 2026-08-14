@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ChatRequestSchema } from './request-schema';
+import { ChatRequestSchema } from '../request-schema';
 
 describe('ChatRequestSchema multi-turn round-trip', () => {
   const baseMessage = (role: 'user' | 'assistant', parts: unknown[]) => ({
