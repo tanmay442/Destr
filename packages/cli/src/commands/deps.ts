@@ -4,33 +4,34 @@ import type { PrechunkedIngestDeps } from '@app/application/rag/ingest-prechunke
 import type { ChunkingStrategyName } from '@app/infrastructure/chunking';
 import type { MarkdownParser } from '@app/domain';
 import { markdownParser } from '@app/infrastructure/markdown';
-import * as Db from '@app/infrastructure/db';
-import { createRepositoryAdapters } from '@app/infrastructure/db';
-import * as Llm from '@app/infrastructure/llm';
+import { buildCoreDeps } from '@app/infrastructure/core';
 import * as Pdf from '@app/infrastructure/pdf';
 import * as Chunking from '@app/infrastructure/chunking';
-import { createBlobStorage } from '@app/infrastructure/storage';
 
 type UploadIngestDeps = PrechunkedIngestDeps & { markdownParser: MarkdownParser };
 
-async function buildDbDeps() {
-  const adapters = createRepositoryAdapters(Db.createDbClient());
-  const embeddings = Llm.getEmbeddingService();
-  const hasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
+function buildBaseDeps() {
+  const core = buildCoreDeps({
+    onQueueIngest: async () => {},
+  });
   return {
-    documents: adapters.documents,
-    chunks: adapters.chunks,
-    embeddings,
-    hasher,
+    documents: core.documentRepo,
+    chunks: core.chunkRepo,
+    embeddings: core.embeddingService,
+    blobStorage: core.blobStorage,
+    hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
   };
 }
 
 export async function buildIngestDeps(): Promise<IngestDeps> {
-  const base = await buildDbDeps();
+  const base = buildBaseDeps();
   const strategyName = (process.env.CHUNKING_STRATEGY ?? 'document-aware') as ChunkingStrategyName;
   const useStrategy = !process.env.SEED_LEGACY_SPLITTER;
   return {
-    ...base,
+    documents: base.documents,
+    chunks: base.chunks,
+    embeddings: base.embeddings,
+    hasher: base.hasher,
     pdfParser: Pdf.unpdfParser,
     textSplitter: Pdf.langchainSplitter,
     contentParser: useStrategy ? Pdf.unpdfParser : undefined,
@@ -41,11 +42,13 @@ export async function buildIngestDeps(): Promise<IngestDeps> {
 }
 
 export async function buildUploadDeps(): Promise<UploadIngestDeps> {
-  const base = await buildDbDeps();
+  const base = buildBaseDeps();
   return {
-    ...base,
-    blobStorage: createBlobStorage(),
+    documents: base.documents,
+    chunks: base.chunks,
+    embeddings: base.embeddings,
+    hasher: base.hasher,
+    blobStorage: base.blobStorage,
     markdownParser,
   };
 }
-

@@ -10,3 +10,4 @@ export { createRepositoryAdapters } from './db/repositories';
 export { createBlobStorage } from './storage/blob-storage-factory';
 export { answerCacheKey } from './auth/answer-cache-key';
 export { createUpstashAnswerCache, createInMemoryAnswerCache } from './auth/index';
+export { buildCoreDeps, type CoreDeps, type CoreDepsOptions } from './core';

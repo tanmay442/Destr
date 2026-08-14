@@ -63,6 +63,41 @@ export function getReranker(provider?: string): Reranker | undefined {
 
 registerRerankerProvider('cosine', () => undefined);
 
+export type RerankerStatus = { ok: boolean; reason?: string | undefined };
+
+export interface RerankerAvailability {
+  reranker?: Reranker | undefined;
+  status: RerankerStatus;
+}
+
+const rerankerRegistry = new Map<string, RerankerAvailability>([
+  ['cosine', { reranker: undefined, status: { ok: true } }],
+  [
+    'cohere',
+    process.env.COHERE_API_KEY
+      ? { reranker: getReranker('cohere'), status: { ok: true } }
+      : { reranker: undefined, status: { ok: false, reason: 'COHERE_API_KEY not set' } },
+  ],
+  [
+    'local',
+    process.env.VERCEL
+      ? { reranker: undefined, status: { ok: false, reason: 'local reranker unavailable on Vercel serverless' } }
+      : { reranker: getReranker('local'), status: { ok: true } },
+  ],
+]);
+
+export function availableRerankers(): Map<string, RerankerStatus> {
+  return new Map([...rerankerRegistry].map(([name, entry]) => [name, entry.status]));
+}
+
+export function resolveReranker(provider: string): Reranker | undefined {
+  return rerankerRegistry.get(provider)?.reranker;
+}
+
+export function updateRerankerAvailability(provider: string, availability: RerankerAvailability): void {
+  rerankerRegistry.set(provider, availability);
+}
+
 /**
  * Return the agentic-loop graders, or `undefined` for each when the loop is
  * disabled (`AGENTIC_ENABLED=false`).
