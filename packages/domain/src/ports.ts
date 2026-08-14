@@ -120,10 +120,10 @@ export interface RetrievedChunkRow {
   chunkIndex: number;
 }
 
-/** Parses raw content (e.g. PDF buffer) into structured pages. */
+/** Parses raw content (e.g. PDF bytes) into structured pages. Runtime-neutral: accepts `Uint8Array` (a `Buffer` satisfies it). */
 export interface ContentParser {
-  extractPages(buffer: Buffer): Promise<Array<{ page: number; text: string }>>;
-  extractText(buffer: Buffer): Promise<string>;
+  extractPages(buffer: Uint8Array): Promise<Array<{ page: number; text: string }>>;
+  extractText(buffer: Uint8Array): Promise<string>;
 }
 
 /** A chunking strategy that turns structured pages into DocumentChunk[]. */

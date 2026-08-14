@@ -10,7 +10,7 @@ function toParseError(cause: unknown): ParseError {
   return new ParseError(`Failed to parse PDF: ${msg}`, cause);
 }
 
-async function openPdf(buffer: Buffer): Promise<PdfProxy> {
+async function openPdf(buffer: Uint8Array): Promise<PdfProxy> {
   if (buffer.length > PDF_PARSE_MAX_BYTES) {
     throw new ParseError(`PDF is ${buffer.length} bytes (> ${PDF_PARSE_MAX_BYTES})`);
   }
@@ -60,7 +60,7 @@ function checkCharBudget(additional: string, runningTotal: number): number {
 }
 
 export const unpdfParser: ContentParser = {
-  async extractText(buffer: Buffer): Promise<string> {
+  async extractText(buffer: Uint8Array): Promise<string> {
     let pdf: PdfProxy | undefined;
     try {
       pdf = await openPdf(buffer);
@@ -80,7 +80,7 @@ export const unpdfParser: ContentParser = {
     }
   },
 
-  async extractPages(buffer: Buffer): Promise<Array<{ page: number; text: string }>> {
+  async extractPages(buffer: Uint8Array): Promise<Array<{ page: number; text: string }>> {
     let pdf: PdfProxy | undefined;
     try {
       pdf = await openPdf(buffer);
