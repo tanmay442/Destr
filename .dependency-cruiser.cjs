@@ -70,11 +70,15 @@ module.exports = {
     {
       name: 'no-infrastructure-importing-next',
       severity: 'error',
-      from: { path: '^packages/infrastructure' },
-      to: {
-        dependencyTypes: ['npm'],
-        path: 'node_modules/next/',
+      comment: 'Clerk adapters are vendor-locked in this program (see MODULARITY_IMPROVEMENT_PLAN §10).',
+      from: {
+        path: '^packages/infrastructure',
+        // Sanctioned by MODULARITY_IMPROVEMENT_PLAN.md §10 — Clerk is
+        // vendor-locked in this program. Auth portability is deferred to a
+        // future plan, so these four adapter files may import next/*.
+        pathNot: '^packages/infrastructure/src/auth/(auth-factory|clerk-adapter|clerk-session|clerk-shared)\\.ts$',
       },
+      to: { path: 'node_modules/next/' },
     },
     {
       name: 'no-infrastructure-importing-application',

@@ -1,3 +1,9 @@
+// Pin the process timezone to UTC: the tickets.created_at column is a naive
+// `timestamp`, and the pg driver serializes Date params in local wall time.
+// Without this, `created_at >= from` comparisons shift by the machine offset
+// (fails on non-UTC dev machines, passes in UTC CI).
+process.env.TZ = 'UTC';
+
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
