@@ -4,3 +4,4 @@ export * from './app-config';
 export * from './ports';
 export * from './constants';
 export * from './logger';
+export * from './sanitize-text';

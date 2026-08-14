@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dedupeCitations } from './dedupe-citations';
+import { dedupeCitations } from '../dedupe-citations';
 
 describe('dedupeCitations', () => {
   it('removes citations sharing fileName, page and snippet prefix', () => {

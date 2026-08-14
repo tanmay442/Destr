@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { V4_UUID_REGEX } from '@/chat/turn-id';
+import { V4_UUID_REGEX } from './turn-id';
 
 const MAX_TEXT_LENGTH = 50_000;
 const MAX_PARTS = 100;

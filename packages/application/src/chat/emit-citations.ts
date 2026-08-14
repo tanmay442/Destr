@@ -1,4 +1,4 @@
-import type { RetrievedChunk } from '@app/application/rag/search';
+import type { RetrievedChunk } from '../rag/search';
 import { CITATION_SNIPPET_MAX } from '@app/domain';
 
 export interface EmittedCitation {

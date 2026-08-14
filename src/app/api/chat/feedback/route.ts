@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getComposition, assertSameOrigin, respondResult, respond } from '@/composition';
 import { ValidationError } from '@app/domain';
 import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '@app/domain';
-import { V4_UUID_REGEX } from '@/chat/turn-id';
+import { V4_UUID_REGEX } from '@app/application/chat';
 
 const FeedbackRequestSchema = z.object({
   turnId: z.string().regex(V4_UUID_REGEX, 'turnId must be a v4 UUID'),

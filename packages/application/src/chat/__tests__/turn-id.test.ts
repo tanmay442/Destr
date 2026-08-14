@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveTurnId, isV4Uuid } from './turn-id';
+import { resolveTurnId, isV4Uuid } from '../turn-id';
 
 describe('resolveTurnId', () => {
   it('accepts a valid v4-shaped uuid', () => {
