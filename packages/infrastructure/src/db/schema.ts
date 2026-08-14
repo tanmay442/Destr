@@ -80,7 +80,7 @@ export const users = pgTable('users', {
   imageUrl: text('image_url'),
   role: text('role').notNull().default('user'),
   lastSeenAt: timestamp('last_seen_at'),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   check('users_role_check', sql`${table.role} IN ('admin','user')`),
 ]);
