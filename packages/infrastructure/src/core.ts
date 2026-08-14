@@ -19,6 +19,7 @@ import type {
 import { loadEnvConfig, defaultProcessEnv } from './config/env';
 import {
   createDbClient,
+  db,
   createDocumentRepo,
   createChunkRepo,
   createTicketRepo,
@@ -70,7 +71,7 @@ export interface CoreDeps {
 
 function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
   const config = loadEnvConfig(env);
-  const dbClient = createDbClient({ env });
+  const dbClient = env === defaultProcessEnv ? db : createDbClient({ env });
   return {
     config,
     dbClient,

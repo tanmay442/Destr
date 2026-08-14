@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildCoreDeps } from './core';
+import { db } from './db';
 
 describe('buildCoreDeps singleton semantics', () => {
   it('returns the same instances on repeated calls with the default env', () => {
@@ -23,5 +24,9 @@ describe('buildCoreDeps singleton semantics', () => {
     const fresh = buildCoreDeps({ env: { get: () => undefined } });
     expect(fresh).not.toBe(buildCoreDeps());
     expect(fresh.dbClient).not.toBe(buildCoreDeps().dbClient);
+  });
+
+  it('shares the module db singleton for the default env', () => {
+    expect(buildCoreDeps().dbClient).toBe(db);
   });
 });
