@@ -8,9 +8,9 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **126 files** | 122 passed, 4 skipped (live-DB gated) |
-| **Total Test Cases** | **1,106 tests** | 1,049 passed, 57 skipped (live-DB / external network gated) |
-| **Architecture Modules** | **494 modules** | 1,256 dependencies checked with **0 violations** |
+| **Total Test Files** | **127 files** | 123 passed, 4 skipped (live-DB gated) |
+| **Total Test Cases** | **1,113 tests** | 1,055 passed, 58 skipped (live-DB / external network gated) |
+| **Architecture Modules** | **495 modules** | 1,261 dependencies checked with **0 violations** |
 | **Suite Run Duration** | **~45–50s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
@@ -89,8 +89,10 @@ Multi-implementation ports are validated through **shared contract-assertion har
   Query rewriter -> document grader -> hallucination check loop, step budget enforcement, out-of-domain detection.
 - **Admin Document & Ingestion (`packages/application/src/admin/__tests__/`)**:
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.
+- **Ingest Status Poller (`src/app/api/admin/documents/status/route.test.ts`)**:
+  Auth gating and single aggregate pending-count query (`countPendingIngest`), replacing the previous full-table walk.
 - **Ticket Management (`packages/application/src/admin/__tests__/tickets.test.ts`)**:
-  Ticket state machine transitions (`VALID_TRANSITIONS`), notes append, response time calculation, audit trail generation.
+  Ticket state machine transitions (`VALID_TRANSITIONS`), notes append, response time calculation, audit trail generation, and admin-only assignment enforcement (unknown/non-admin assignees rejected server-side).
 - **User Role Management (`packages/application/src/auth/__tests__/users.test.ts`)**:
   Role promotion/demotion, Clerk metadata sync, admin count lock assertions.
 - **Sanitization (`packages/domain/src/sanitize-think.test.ts`, `src/lib/__tests__/sanitize.test.ts`)**:
