@@ -91,6 +91,8 @@ To enable sub-millisecond edge route gating without round-tripping to Clerk Back
 
 ## 4. Admin Console Subsystems
 
+All list tables (documents, users, tickets, audit) use server-side pagination at 30 rows per page with previous/next controls; out-of-range page numbers redirect to the last valid page.
+
 ### Overview (`/admin`)
 - Metric stat cards: total documents, indexed chunks, active tickets, open tickets, registered users.
 - Live stream of the latest 10 audit events.
@@ -105,6 +107,7 @@ To enable sub-millisecond edge route gating without round-tripping to Clerk Back
 - **Fixed Table Layout**: Viewport-bounded columns with compact timestamps to prevent horizontal overflow.
 - **Ticket Drawer Portal**: Deep-linked query param (`?ticket=<id>`) mounts the ticket details, issue description, assignees, notes thread, and status controls.
 - **State Machine Transitions**: Validates transitions (`created` -> `in_progress` -> `resolved` / `closed`). Reopening closed tickets is prohibited (`closed -> created` is rejected).
+- **Admin-Only Assignment**: Assignees must be workspace admins. Enforced in the `updateTicket` use case (rejects unknown or non-admin assignees server-side) and reflected in the assignee dropdowns, which list only `admin`-role users.
 - **Deterministic Identifiers**: Uses collision-resistant UUIDs formatted as `TKT-<8-hex-chars>`.
 
 ### Analytics & Telemetry Engine (`/admin/analytics`)

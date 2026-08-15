@@ -584,9 +584,18 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     list: (opts) => listDocuments(opts, client),
     countChunksForDocuments: (ids) => countChunksForDocuments(ids, client),
     countChunksForAll: () => countChunksForAll(client),
+    countPendingIngest: () => countPendingIngestDocuments(client),
     listStaleQueued: (olderThan) => listStaleQueuedDocuments(olderThan, client),
     failDocument: (id) => failDocumentById(id, client),
   };
+}
+
+async function countPendingIngestDocuments(client: Client): Promise<number> {
+  const [row] = await client
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documents)
+    .where(or(eq(documents.ingestStatus, 'queued'), eq(documents.ingestStatus, 'ingesting')));
+  return row?.count ?? 0;
 }
 
 export function createChunkRepositoryCompat(

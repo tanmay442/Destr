@@ -69,6 +69,7 @@ export interface DocumentRepository {
   }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number }>;
   countChunksForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countChunksForAll(): Promise<number>;
+  countPendingIngest(): Promise<number>;
   listStaleQueued(olderThan: Date): Promise<number[]>;
   failDocument(id: number): Promise<void>;
 }

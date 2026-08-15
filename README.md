@@ -88,9 +88,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-- **126 Test Files**: 122 passed, 4 skipped (live-DB gated).
-- **1,106 Total Tests**: 1,049 passed, 57 skipped.
-- **494 Architecture Modules**: 1,256 dependencies checked with **0 violations** (`pnpm arch`).
+- **127 Test Files**: 123 passed, 4 skipped (live-DB gated).
+- **1,113 Total Tests**: 1,055 passed, 58 skipped.
+- **495 Architecture Modules**: 1,261 dependencies checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 

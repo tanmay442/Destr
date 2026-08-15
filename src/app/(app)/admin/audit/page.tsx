@@ -1,4 +1,5 @@
 import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
+import { redirect } from 'next/navigation';
 import type { AuditKind } from '@app/domain';
 import { Pagination } from '@/components/admin/Pagination';
 import { PAGE_SIZE, ADMIN_KINDS } from '@/components/admin/admin-helpers';
@@ -54,6 +55,21 @@ export default async function AuditPage({
     actorId,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  if (page > totalPages) {
+    const q = new URLSearchParams({ page: String(totalPages) });
+    for (const [k, v] of Object.entries({
+      kind,
+      action,
+      actor,
+      from: params.from,
+      to: params.to,
+      documentId,
+      ticketId: params.ticketId,
+    })) {
+      if (v !== undefined && v !== '') q.set(k, String(v));
+    }
+    redirect(`/admin/audit?${q.toString()}`);
+  }
   return (
     <section className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">

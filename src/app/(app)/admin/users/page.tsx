@@ -1,4 +1,5 @@
 import { getComposition, unwrap, parsePageParam } from '@/composition';
+import { redirect } from 'next/navigation';
 import { UserRowActions } from './user-row-actions';
 import { Pagination } from '@/components/admin/Pagination';
 import { TableShell } from '@/components/admin/TableShell';
@@ -45,6 +46,11 @@ export default async function UsersPage({
     offset,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  if (page > totalPages) {
+    const q = new URLSearchParams({ page: String(totalPages) });
+    if (search) q.set('search', search);
+    redirect(`/admin/users?${q.toString()}`);
+  }
   return (
     <section className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">

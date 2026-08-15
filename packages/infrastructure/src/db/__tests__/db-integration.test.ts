@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { sql, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { VECTOR_DIM } from '../schema-vector';
-import { tickets, auditEvents } from '../schema';
+import { tickets, auditEvents, documents } from '../schema';
 import {
   insertChunks,
   insertDocument,
@@ -11,6 +11,7 @@ import {
   getChunksByDocAndRange,
   getChunksByDocAndRanges,
   ticketRepo,
+  createDocumentRepo,
 } from '../repositories';
 
 async function dbReachable(): Promise<boolean> {
@@ -136,5 +137,38 @@ suite('db-integration (real SQL)', () => {
       sql`SELECT count(*)::int AS n FROM tickets WHERE ticket_id IN (${newTicket}, ${oldTicket})`,
     )) as unknown as { rows: Array<{ n: number }> };
     expect(leftover.rows[0]!.n).toBe(0);
+  });
+
+  it('counts only queued/ingesting documents, then rolls back', async () => {
+    const before = await createDocumentRepo(db).countPendingIngest();
+    try {
+      await db.transaction(async (tx) => {
+        const docA = await insertDocument(
+          { fileName: `pi-${randomUUID()}.pdf`, fileHash: randomUUID(), uploadedBy: 'pi-test' },
+          tx,
+        );
+        const docB = await insertDocument(
+          { fileName: `pi-${randomUUID()}.pdf`, fileHash: randomUUID(), uploadedBy: 'pi-test' },
+          tx,
+        );
+        const docC = await insertDocument(
+          { fileName: `pi-${randomUUID()}.pdf`, fileHash: randomUUID(), uploadedBy: 'pi-test' },
+          tx,
+        );
+        await tx.update(documents).set({ ingestStatus: 'queued' }).where(eq(documents.id, docA.id));
+        await tx.update(documents).set({ ingestStatus: 'ingesting' }).where(eq(documents.id, docB.id));
+        await tx.update(documents).set({ ingestStatus: 'failed' }).where(eq(documents.id, docC.id));
+
+        const repo = createDocumentRepo(tx);
+        expect(await repo.countPendingIngest()).toBe(before + 2);
+
+        await tx.update(documents).set({ ingestStatus: 'done' }).where(eq(documents.id, docA.id));
+        expect(await repo.countPendingIngest()).toBe(before + 1);
+
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
   });
 });

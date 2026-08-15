@@ -246,7 +246,7 @@ function createComposition() {
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
-      bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
+      bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
       bind(createTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
@@ -283,6 +283,7 @@ function createComposition() {
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),
         failDocument: (id) => documentRepo.failDocument(id),
       }).sweep(),
+    countPendingIngest: () => documentRepo.countPendingIngest(),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
