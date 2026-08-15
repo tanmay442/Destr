@@ -35,7 +35,7 @@ const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   concise: 'Direct, minimal, and to the point. One or two sentences is the standard response.',
 };
 
-const DEFAULT_AGENT_NAME = 'Astra';
+const DEFAULT_AGENT_NAME = 'Destr';
 
 function buildPersonaBlock(config: AppConfig): string {
   const agentName = config.agentPersona.name ?? DEFAULT_AGENT_NAME;

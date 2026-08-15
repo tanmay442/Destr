@@ -1,6 +1,6 @@
-# RAG Knowledge Agent — Technical Reference Manual
+# Destr — Technical Reference Manual
 
-This document provides a comprehensive technical reference for the RAG Knowledge Agent architecture, tech stack, authentication model, admin operations, database schema, and operational subsystems.
+This document provides a comprehensive technical reference for the Destr RAG knowledge agent architecture, tech stack, authentication model, admin operations, database schema, and operational subsystems.
 
 ---
 

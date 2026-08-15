@@ -370,8 +370,8 @@ export async function runSetup(repoRoot: string): Promise<void> {
   const CONFIG_PATH = join(repoRoot, 'config', 'app.config.ts');
   const ENV_PATH = join(repoRoot, '.env.local');
 
-  console.log('\n\x1b[1mRAG Knowledge Agent — setup\x1b[0m');
-  console.log('This wizard configures everything needed to run the RAG Knowledge Agent.\n');
+  console.log('\n\x1b[1mDestr — setup\x1b[0m');
+  console.log('This wizard configures everything needed to run the Destr RAG knowledge agent.\n');
 
   if (!promptPrereqs(repoRoot)) {
     console.error('\nFix the issues above and re-run `pnpm configure`.');

@@ -41,7 +41,7 @@ vi.mock('@/lib/config/runtime', () => ({
     retrievalMode: 'agentic',
     agentStepBudget: state.invalidated > 0 ? 5 : 8,
     rerankerProvider: 'cosine',
-    agentPersona: { name: 'Astra', tone: 'friendly' },
+    agentPersona: { name: 'Destr', tone: 'friendly' },
   }),
   invalidateRuntimeConfig: () => {
     state.invalidated += 1;

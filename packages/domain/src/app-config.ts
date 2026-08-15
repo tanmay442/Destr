@@ -18,7 +18,7 @@ export const appConfigSchema = z.object({
       name: z.string().min(1).optional(),
       tone: toneSchema.default('friendly'),
     })
-    .default({ name: 'Astra', tone: 'friendly' }),
+    .default({ name: 'Destr', tone: 'friendly' }),
   customInstructions: z.string().optional(),
   outOfScopeTopics: z
     .array(outOfScopeTopicSchema)
@@ -62,7 +62,7 @@ export const appConfigSchema = z.object({
   adminEmails: z.array(z.email()).default([]),
   branding: z
     .object({
-      title: z.string().min(1).default('RAG Assistant'),
+      title: z.string().min(1).default('Destr'),
       description: z
         .string()
         .min(1)
@@ -71,7 +71,7 @@ export const appConfigSchema = z.object({
         ),
     })
     .default({
-      title: 'RAG Assistant',
+      title: 'Destr',
       description:
         'Grounded AI assistant with tool-use capabilities.',
     }),

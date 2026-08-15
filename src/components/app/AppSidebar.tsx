@@ -100,7 +100,7 @@ export function AppSidebar({
           data-testid="app-mobile-brand"
         >
           <BrandMark size="sm" />
-          <span>RAG Knowledge Agent</span>
+          <span>Destr</span>
         </Link>
 
         <SheetTrigger asChild>
@@ -152,7 +152,7 @@ export function AppSidebar({
             data-testid="app-mobile-brand"
           >
             <BrandMark size="sm" />
-            <span>RAG Knowledge Agent</span>
+            <span>Destr</span>
           </Link>
           <SheetClose asChild>
             <Button
@@ -211,7 +211,7 @@ function SidebarBody({
           data-testid="app-sidebar-brand"
         >
           <BrandMark size="sm" />
-          <span>RAG Knowledge Agent</span>
+          <span>Destr</span>
         </Link>
       </div>
 

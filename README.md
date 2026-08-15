@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/logo.svg" alt="RAG Knowledge Agent" width="96" height="96">
+  <img src="public/logo.svg" alt="Destr — RAG knowledge agent" width="96" height="96">
 </p>
 
-<h1 align="center">RAG Knowledge Agent</h1>
+<h1 align="center">Destr</h1>
 
 <p align="center">
   Modular, production-ready AI knowledge agent built with Clean Architecture on Next.js 16, Vercel AI SDK v6, Drizzle ORM, and Neon Postgres with pgvector.
@@ -22,7 +22,7 @@
 
 ## Overview
 
-**RAG Knowledge Agent** is an enterprise-grade Retrieval-Augmented Generation platform featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback, and real-time administrative telemetry.
+**Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback, and real-time administrative telemetry.
 
 ---
 

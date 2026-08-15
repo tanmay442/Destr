@@ -38,7 +38,7 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     orgName: 'Test Corp',
     audience: 'test customers',
-    agentPersona: { name: 'Astra', tone: 'friendly' },
+    agentPersona: { name: 'Destr', tone: 'friendly' },
     outOfScopeTopics: [],
     customInstructions: undefined,
     retrievalMode: 'normal',

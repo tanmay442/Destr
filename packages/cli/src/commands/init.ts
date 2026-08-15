@@ -312,7 +312,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const defaults = await loadCurrentDefaults(CONFIG_PATH);
   let config: AppConfig = defaults;
 
-  console.log('\n\x1b[1mRAG Knowledge Agent — setup\x1b[0m');
+  console.log('\n\x1b[1mDestr — setup\x1b[0m');
   console.log('Press Enter to keep the current value shown in [brackets].\n');
 
   const absSourceRaw = await runConfigPrompts(rl, config, REPO_ROOT);

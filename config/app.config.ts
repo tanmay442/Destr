@@ -31,7 +31,7 @@ const config: AppConfig = {
   // Persona. `name` is optional; if set, the agent introduces itself
   // by name on the first reply. `tone` controls length and warmth.
   agentPersona: {
-    name: 'Astra',
+    name: 'Destr',
     tone: 'friendly',
   },
 
@@ -90,8 +90,8 @@ const config: AppConfig = {
 
   // Browser tab title + meta description.
   branding: {
-    title: 'RAG Knowledge Agent',
-    description: 'AI knowledge agent, with grounded citations.',
+    title: 'Destr',
+    description: 'RAG knowledge agent with grounded citations.',
   },
 
   // Where the setup CLI drops seed PDFs and where `pnpm seed`

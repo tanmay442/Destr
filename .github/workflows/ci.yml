@@ -88,18 +88,6 @@ jobs:
           CUSTOM_LLM_BASE_URL: ${{ secrets.CUSTOM_LLM_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
 
-      # ---- 3.5 Combined gate (test + typecheck + lint + arch) ----------
-      # Runs the exact `pnpm gate` aggregate (added in phase 00) on top of
-      # the individual fast-feedback steps above, so the single gate command
-      # is CI-verified on every PR to master.
-      - name: Gate (test + typecheck + lint + arch)
-        run: pnpm gate
-        env:
-          AI_STUDIO_KEY: ${{ secrets.AI_STUDIO_KEY }}
-          CUSTOM_LLM_API_KEY: ${{ secrets.CUSTOM_LLM_API_KEY }}
-          CUSTOM_LLM_BASE_URL: ${{ secrets.CUSTOM_LLM_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-
       - name: Build
         run: pnpm exec next build
         env:

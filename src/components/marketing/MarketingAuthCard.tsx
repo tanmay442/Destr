@@ -36,7 +36,10 @@ export function MarketingAuthCard({ floating = false }: MarketingAuthCardProps) 
           />
           <div className="flex flex-col gap-2">
             <h2 className="text-xl font-semibold tracking-tight text-foreground">
-              Get started
+              Get started with{' '}
+              <span className="bg-gradient-to-r from-foreground via-foreground to-muted-foreground bg-clip-text font-bold text-transparent italic">
+                Destr
+              </span>
             </h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
               Open the chat to talk with the assistant, or sign in to save your

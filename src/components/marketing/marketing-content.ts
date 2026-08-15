@@ -1,6 +1,6 @@
 export const HERO = {
-  eyebrow: 'SERVERLESS · GROUNDED · READY',
-  headline: 'Serverless AI knowledge agent.',
+  eyebrow: 'DESTR · SERVERLESS · GROUNDED · READY',
+  headline: 'Meet Destr, your serverless AI knowledge agent.',
   subcopy:
     'A RAG agent that answers with cited docs, clarifies vague prompts, ' +
     'and escalates to a human ticket — built on Next.js 16, Vercel AI SDK v6, ' +

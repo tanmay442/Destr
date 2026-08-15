@@ -1,6 +1,6 @@
-# Contributing to RAG Knowledge Agent
+# Contributing to Destr
 
-Thank you for your interest in contributing to RAG Knowledge Agent! We welcome contributions that align with our architecture, code quality, and testing standards.
+Thank you for your interest in contributing to Destr, a RAG knowledge agent. We welcome contributions that align with our architecture, code quality, and testing standards.
 
 Please take a moment to review these guidelines before submitting code.
 
@@ -36,15 +36,15 @@ packages/
 
 ## 3. Local Verification & CI Quality Gates
 
-Before opening or updating a Pull Request, **you must verify your changes locally**.
+Before opening or updating a Pull Request, use the quick local check command to validate your changes.
 
-Run the complete quality gate:
+Run the quick local check:
 
 ```bash
 # Run tests, TypeScript typecheck, ESLint, and dependency architecture check
 pnpm gate
 
-# Or run gate + build validation:
+# Run the production build when it is relevant to your change
 pnpm gate:build
 ```
 
@@ -53,7 +53,9 @@ pnpm gate:build
 - [ ] `pnpm typecheck` — Zero TypeScript compilation errors (`tsc --noEmit`).
 - [ ] `pnpm lint` — Zero ESLint warnings or errors.
 - [ ] `pnpm arch` — Zero dependency boundary violations (`dependency-cruiser`).
-- [ ] `pnpm build` — Production build succeeds cleanly.
+- [ ] `pnpm build` — Production build succeeds cleanly when applicable.
+
+CI runs the checks independently and performs the production build on every workflow run.
 
 ---
 

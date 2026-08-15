@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 
-export const alt = 'RAG Knowledge Agent';
+export const alt = 'Destr — RAG knowledge agent';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -53,8 +53,19 @@ export default function OpengraphImage() {
             letterSpacing: '-0.02em',
           }}
         >
-          RAG Knowledge Agent
-        </div>
+            Destr
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              fontSize: 32,
+              fontWeight: 400,
+              color: '#a3a3a3',
+              letterSpacing: '0.08em',
+            }}
+          >
+            RAG knowledge agent
+          </div>
       </div>
     ),
     { ...size },
