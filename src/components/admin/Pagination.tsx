@@ -23,6 +23,8 @@ export function Pagination({
   linkClassName = defaultLinkClass,
 }: PaginationProps) {
   const safePage = Math.min(Math.max(page, 1), totalPages);
+  const canPrevious = safePage > 1;
+  const canNext = safePage < totalPages;
   return (
     <nav
       className="flex flex-col-reverse items-stretch gap-2 text-sm sm:flex-row sm:items-center sm:justify-between"
@@ -33,7 +35,7 @@ export function Pagination({
         {total.toLocaleString()} total
       </span>
       <div className="flex items-center gap-2">
-        {safePage > 1 ? (
+        {canPrevious ? (
           <Link
             href={{ pathname, query: { ...query, page: safePage - 1 } }}
             className={cn(linkClassName)}
@@ -42,8 +44,17 @@ export function Pagination({
             <ChevronLeft data-icon="inline-start" />
             Previous
           </Link>
-        ) : null}
-        {safePage < totalPages ? (
+        ) : (
+          <span
+            className={cn(linkClassName, 'pointer-events-none opacity-50')}
+            aria-disabled="true"
+            aria-label="Previous page"
+          >
+            <ChevronLeft data-icon="inline-start" />
+            Previous
+          </span>
+        )}
+        {canNext ? (
           <Link
             href={{ pathname, query: { ...query, page: safePage + 1 } }}
             className={cn(linkClassName)}
@@ -52,7 +63,16 @@ export function Pagination({
             Next
             <ChevronRight data-icon="inline-end" />
           </Link>
-        ) : null}
+        ) : (
+          <span
+            className={cn(linkClassName, 'pointer-events-none opacity-50')}
+            aria-disabled="true"
+            aria-label="Next page"
+          >
+            Next
+            <ChevronRight data-icon="inline-end" />
+          </span>
+        )}
       </div>
     </nav>
   );
