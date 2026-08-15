@@ -20,8 +20,8 @@ export const metadata: Metadata = {
   title: appConfig.branding.title,
   description: appConfig.branding.description,
   icons: {
-    icon: '/icon',
-    apple: '/apple-icon',
+    icon: '/logo.svg',
+    apple: '/logo.svg',
   },
   openGraph: {
     title: appConfig.branding.title,
