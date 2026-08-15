@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getComposition, getAppSession, TICKET_STATUSES, unwrap, parsePageParam } from '@/composition';
+import { redirect } from 'next/navigation';
 import { TicketOverlay, type TicketRow } from './ticket-overlay';
 import { TicketsFilterForm } from './tickets-filter-form';
 import { Pagination } from '@/components/admin/Pagination';
@@ -49,6 +50,13 @@ export default async function TicketsPage({
     comp.listUsers({ limit: 100 }),
   ]).then(([t, u]) => [unwrap(t), unwrap(u)] as const);
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  if (page > totalPages) {
+    const q = new URLSearchParams({ page: String(totalPages) });
+    for (const [k, v] of Object.entries({ status, assignee, q: search })) {
+      if (v !== undefined) q.set(k, v);
+    }
+    redirect(`/admin/tickets?${q.toString()}`);
+  }
   const userByClerkId = new Map<
     string,
     { name: string | null; email: string }
@@ -59,6 +67,7 @@ export default async function TicketsPage({
       email: u.email,
     });
   }
+  const adminUsers = userList.users.filter((u) => u.role === 'admin');
   const isPlaceholderEmail = (e: string) =>
     e === '' || e === 'user@example.com' || e.endsWith('@example.com');
   const rows: TicketRow[] = result.tickets.map((t) => ({
@@ -73,7 +82,7 @@ export default async function TicketsPage({
   }));
   return (
     <section className="flex flex-col gap-5">
-      <TicketOverlay tickets={rows} userOptions={userList.users} />
+      <TicketOverlay tickets={rows} userOptions={adminUsers} />
       <div className="flex flex-col gap-1">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Tickets</h2>
         <p className="text-sm text-muted-foreground">
@@ -82,7 +91,7 @@ export default async function TicketsPage({
       </div>
       <TicketsFilterForm
         statuses={TICKET_STATUSES}
-        users={userList.users}
+        users={adminUsers}
         status={status}
         assignee={assignee}
         search={search}

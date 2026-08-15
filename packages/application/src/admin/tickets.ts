@@ -5,6 +5,7 @@ import {
   ExternalServiceError,
   NotFoundError,
   ConflictError,
+  ForbiddenError,
 } from '@app/domain';
 import type { TicketRepository, AuditLog, TicketRow, UserRepository } from '@app/domain';
 import { randomUUID } from 'node:crypto';
@@ -86,7 +87,7 @@ export interface UpdateTicketInput {
 
 export async function updateTicket(
   input: UpdateTicketInput,
-  deps: { tickets: TicketRepository; audit: AuditLog },
+  deps: { tickets: TicketRepository; audit: AuditLog; users: UserRepository },
 ): Promise<Result<TicketRow>> {
   try {
     const existing = await deps.tickets.findByTicketId(input.ticketId);
@@ -98,6 +99,13 @@ export async function updateTicket(
       !VALID_TRANSITIONS[existing.status].includes(input.status)
     ) {
       return err(new ConflictError('Invalid status transition'));
+    }
+    if (input.assignedTo) {
+      const assignee = await deps.users.findByClerkId(input.assignedTo);
+      if (!assignee) return err(new NotFoundError('Assignee not found'));
+      if (assignee.role !== 'admin') {
+        return err(new ForbiddenError('Only admins can be assigned tickets'));
+      }
     }
     const patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>> = {};
     if (input.status) patch.status = input.status;

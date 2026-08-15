@@ -1,4 +1,5 @@
 import { getComposition, getAppSession, unwrap, parsePageParam } from '@/composition';
+import { redirect } from 'next/navigation';
 import { DocumentRowActions } from './document-row-actions';
 import { RecountAllButton } from './recount-all-button';
 import { UploadDocumentDialog } from './upload-document-dialog';
@@ -58,6 +59,11 @@ export default async function DocumentsPage({
     actorId,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  if (page > totalPages) {
+    const q = new URLSearchParams({ page: String(totalPages) });
+    if (search) q.set('search', search);
+    redirect(`/admin/documents?${q.toString()}`);
+  }
   const hasPendingIngest = result.documents.some(
     (d) => d.ingestStatus === 'queued' || d.ingestStatus === 'ingesting',
   );
