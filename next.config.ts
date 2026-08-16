@@ -25,6 +25,64 @@ function resolveServerActionOrigins(): string[] {
 
 const serverActionOrigins = resolveServerActionOrigins();
 
+// Derive the Clerk proxy origin. When Clerk runs behind a custom proxy domain
+// (CLERK_PROXY_URL / NEXT_PUBLIC_CLERK_PROXY_URL), that origin serves the JS
+// bundle, all frontend API calls, and the sign-in/up iframes, so every CSP
+// directive that lists Clerk hosts must include it.
+//
+// Fallback: when no proxy is registered (local dev, Clerk dev mode, Docker
+// builds — `.dockerignore` keeps `.env*` out of the image — or a free domain
+// without a registered Clerk proxy), the vars are unset and the CSP stays
+// exactly as before, allowing only the default Clerk frontend API domain
+// https://*.clerk.accounts.dev. Same-image deploys switch modes by setting
+// CLERK_PROXY_URL at container runtime; it is read from the server process
+// env, not baked into the bundle.
+function resolveClerkProxyOrigins(): string[] {
+  const origins = new Set<string>();
+  for (const raw of [
+    process.env.CLERK_PROXY_URL,
+    process.env.NEXT_PUBLIC_CLERK_PROXY_URL,
+  ]) {
+    if (raw) {
+      try {
+        origins.add(new URL(raw).origin);
+      } catch {
+        /* ignore malformed URLs */
+      }
+    }
+  }
+  return [...origins];
+}
+
+const clerkProxyOrigins = resolveClerkProxyOrigins();
+const clerkProxySrc = clerkProxyOrigins.join(' ');
+
+// Clerk's account portal on a custom domain lives on `accounts.<host>`
+// (proxy clerk.destr.dpdns.org → accounts.destr.dpdns.org). Only relevant
+// when a proxy domain is registered; in dev/fallback mode the account portal
+// is already covered by https://*.clerk.accounts.dev.
+const clerkAccountsSrc = clerkProxyOrigins
+  .map((origin) => {
+    const url = new URL(origin);
+    if (url.hostname.startsWith('clerk.')) {
+      url.hostname = `accounts.${url.hostname.slice('clerk.'.length)}`;
+      return url.origin;
+    }
+    return null;
+  })
+  .filter((o): o is string => o !== null)
+  .join(' ');
+
+// Append the Clerk proxy origin to any CSP directive that lists Clerk hosts.
+const withClerkProxy = (directive: string) =>
+  clerkProxySrc ? `${directive} ${clerkProxySrc}` : directive;
+
+// frame-src needs both the proxy (sign-in iframes) and the account portal.
+const withClerkFrameSrc = (directive: string) => {
+  const origins = [clerkProxySrc, clerkAccountsSrc].filter(Boolean);
+  return origins.length ? `${directive} ${origins.join(' ')}` : directive;
+};
+
 const nextConfig: NextConfig = {
   // standalone only for Docker; Vercel's standalone breaks dynamic route routing (404s)
   ...(process.env.DOCKER_BUILD === '1' ? { output: 'standalone' as const } : {}),
@@ -57,15 +115,15 @@ const nextConfig: NextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://clerk.destr.dpdns.org https://vercel.live",
-              "style-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://clerk.destr.dpdns.org",
-              "img-src 'self' https://img.clerk.com https://*.clerk.accounts.dev https://clerk.destr.dpdns.org data: blob:",
+              withClerkProxy("script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.accounts.dev https://challenges.cloudflare.com https://vercel.live"),
+              withClerkProxy("style-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev"),
+              withClerkProxy("img-src 'self' https://img.clerk.com https://*.clerk.accounts.dev data: blob:"),
               "font-src 'self' https://fonts.gstatic.com",
-              "connect-src 'self' https://*.clerk.accounts.dev https://clerk.clerk.accounts.dev https://api.clerk.com https://clerk.destr.dpdns.org https://api.openai.com https://generativelanguage.googleapis.com https://vercel.live",
-              "frame-src 'self' https://*.clerk.accounts.dev https://clerk.destr.dpdns.org https://accounts.google.com https://www.google.com https://vercel.live https://*.r2.cloudflarestorage.com",
-              "form-action 'self' https://*.clerk.accounts.dev https://clerk.destr.dpdns.org",
+              withClerkProxy("connect-src 'self' https://*.clerk.services https://*.clerk.accounts.dev https://clerk.clerk.accounts.dev https://api.clerk.com https://challenges.cloudflare.com https://api.openai.com https://generativelanguage.googleapis.com https://vercel.live"),
+              withClerkFrameSrc("frame-src 'self' https://*.clerk.accounts.dev https://accounts.google.com https://www.google.com https://challenges.cloudflare.com https://vercel.live https://*.r2.cloudflarestorage.com"),
+              withClerkProxy("form-action 'self' https://*.clerk.accounts.dev"),
               "worker-src 'self' blob:",
-              "child-src 'self' https://*.clerk.accounts.dev https://clerk.destr.dpdns.org https://accounts.google.com",
+              withClerkProxy("child-src 'self' https://*.clerk.accounts.dev https://accounts.google.com"),
               "object-src 'none'",
               "base-uri 'self'",
             ].join('; '),
