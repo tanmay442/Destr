@@ -174,6 +174,21 @@ const ENV_VARS: EnvVarSpec[] = [
     description: 'Public URL for ingest worker (auto-derived from NEXT_PUBLIC_APP_URL / VERCEL_URL when unset)',
     condition: () => !!process.env.QSTASH_TOKEN,
   },
+  {
+    name: 'CLERK_PROXY_URL',
+    required: false,
+    description: 'Clerk custom-domain proxy origin; drives the CSP allowlist in next.config.ts (docs/REFERENCE.md §8). Unset = default Clerk frontend API domain',
+  },
+  {
+    name: 'NEXT_PUBLIC_CLERK_PROXY_URL',
+    required: false,
+    description: 'Client-side variant of CLERK_PROXY_URL; also read by next.config.ts for the CSP',
+  },
+  {
+    name: 'NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION',
+    required: false,
+    description: 'Google Search Console token; renders the google-site-verification meta tag when set (omitted otherwise)',
+  },
 ];
 
 export interface ValidationResult {

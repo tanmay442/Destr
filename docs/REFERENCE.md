@@ -198,3 +198,31 @@ EVAL_REAL=1 pnpm eval
   - **Faithfulness**: LLM assertion that generated answers are grounded strictly in retrieved context without hallucination.
   - **Answer Relevance**: LLM verification that the answer directly addresses user intent.
   - **Retrieval Precision & Recall**: Context chunk matching against expected document references.
+
+---
+
+## 8. Deployment & Environment
+
+The authoritative list of environment variables is `.env.example` (with per-var comments). This section documents the behavior of the environment-driven deployment features. Env vars are intentionally **not** covered in the README.
+
+### 8.1 Clerk Custom-Domain Proxy & CSP (`CLERK_PROXY_URL` / `NEXT_PUBLIC_CLERK_PROXY_URL`)
+
+When the Clerk instance runs behind a custom proxy domain (e.g. `clerk.example.com`), that origin serves the Clerk JS bundle, all frontend API calls, and the sign-in/account-portal iframes. `next.config.ts` derives the CSP from these variables:
+
+- **Proxy origin** (`CLERK_PROXY_URL` or `NEXT_PUBLIC_CLERK_PROXY_URL`) is appended to every Clerk-related CSP directive (`script-src`, `style-src`, `img-src`, `connect-src`, `frame-src`, `form-action`, `child-src`).
+- **Account portal origin** is auto-derived using Clerk's custom-domain convention: proxy `clerk.example.com` → `accounts.example.com`, added to `frame-src`.
+- **Fallback**: when neither variable is set (local dev, Clerk dev mode, Docker builds — `.dockerignore` excludes `.env*` — or a domain without a registered proxy), the CSP allows only the default Clerk frontend API domain `https://*.clerk.accounts.dev`. See `resolveClerkProxyOrigins()` / `withClerkProxy()` in `next.config.ts`.
+- **Runtime vs build**: `CLERK_PROXY_URL` is read from the server process env at boot, so the same Docker image can serve both modes (set it per-container at runtime). `NEXT_PUBLIC_*` variants are inlined at build time.
+- **Vercel**: set `CLERK_PROXY_URL` for the Production environment (and Preview only if preview uses the same custom-domain instance). The Clerk Dashboard/DNS side (CNAMEs for the proxy and `accounts.` subdomain, prod instance keys `sk_live_`/`pk_live_`) is a Clerk-side prerequisite.
+
+### 8.2 CSP baseline (static directives)
+
+Regardless of the proxy mode, the CSP in `next.config.ts` always allows, in addition to `'self'`:
+- `'unsafe-inline' 'unsafe-eval'` (required by the Clerk JS bundle) in `script-src`
+- `https://challenges.cloudflare.com` in `script-src` / `connect-src` / `frame-src` (Cloudflare Turnstile bot protection)
+- `https://*.clerk.services` in `connect-src`
+- `https://vercel.live`, `https://*.clerk.accounts.dev`, Google OAuth and R2 preview origins in the directives where they were already present
+
+### 8.3 Google Search Console Verification (`NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`)
+
+The root layout (`src/app/layout.tsx`) renders the `google-site-verification` meta tag **only** when `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` is set (build-time inlined). Unset → the tag is omitted entirely, which keeps clones and domain-less deployments clean of the owner's token. Set it for the production environment and verify ownership via Search Console, or verify your domain with another method (DNS TXT, file upload) instead.
