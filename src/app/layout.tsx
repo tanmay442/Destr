@@ -28,6 +28,9 @@ export const metadata: Metadata = {
     description: appConfig.branding.description,
     images: ['/opengraph-image'],
   },
+  verification: {
+    google: 'PFI4tqnwSt9EeUJIWwFqgpA7vMp7iS4VMf3K93ETiOQ',
+  },
 };
 
 export default function RootLayout({
