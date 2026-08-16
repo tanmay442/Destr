@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     images: ['/opengraph-image'],
   },
   verification: {
-    google: 'PFI4tqnwSt9EeUJIWwFqgpA7vMp7iS4VMf3K93ETiOQ',
+    google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION || undefined,
   },
 };
 
