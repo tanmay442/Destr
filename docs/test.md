@@ -10,7 +10,7 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 |---|---|---|
 | **Total Test Files** | **127 files** | 123 passed, 4 skipped (live-DB gated) |
 | **Total Test Cases** | **1,113 tests** | 1,055 passed, 58 skipped (live-DB / external network gated) |
-| **Architecture Modules** | **495 modules** | 1,261 dependencies checked with **0 violations** |
+| **Architecture Modules** | **493 modules** | 1,259 dependencies checked with **0 violations** |
 | **Suite Run Duration** | **~45–50s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
@@ -121,5 +121,5 @@ CI executes the complete test suite and quality gate on every Pull Request to `m
 
 1. **Service Container**: Provisions a `pgvector/pgvector:pg16` Docker container.
 2. **Migrations**: Applies Drizzle database migrations (`pnpm db:migrate`).
-3. **Quality Gate Step**: Runs `pnpm gate` (`Vitest` -> `tsc --noEmit` -> `eslint` -> `dependency-cruiser`).
+3. **Quality Gate Steps**: Runs the `pnpm gate` checks as individual steps — `tsc --noEmit` -> `eslint` -> `dependency-cruiser` -> `pnpm test`.
 4. **Build Verification**: Executes `pnpm build` (`next build`).
