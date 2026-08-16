@@ -369,21 +369,50 @@ export const userRepo = {
     imageUrl?: string | null;
     role: 'admin' | 'user';
   }, client: Client = db): Promise<UserRow> {
-    const [row] = await client
-      .insert(users)
-      .values(input)
-      .onConflictDoUpdate({
-        target: users.clerkUserId,
-        set: {
-          email: input.email,
-          role: input.role,
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
-        },
-      })
-      .returning();
-    if (!row) throw new Error('Failed to upsert user');
-    return row as UserRow;
+    const run = async (tx: Client): Promise<UserRow> => {
+      const [row] = await tx
+        .insert(users)
+        .values(input)
+        .onConflictDoUpdate({
+          target: users.clerkUserId,
+          set: {
+            email: input.email,
+            role: input.role,
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
+          },
+        })
+        .returning();
+      if (!row) throw new Error('Failed to upsert user');
+      return row as UserRow;
+    };
+
+    try {
+      return await run(client);
+    } catch (err) {
+      // The email already exists under a different clerk_user_id (e.g. the
+      // Clerk identity changed across instances/providers, so the current
+      // session's id differs from the row created earlier). Reassign the
+      // existing row to the current identity so its history (documents,
+      // tickets, chats) stays attached, then retry the upsert.
+      // drizzle wraps the pg error in DrizzleQueryError; code/constraint
+      // live on its `cause`.
+      const wrapped = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
+      const pgErr = wrapped.code === '23505' ? wrapped : wrapped.cause;
+      if (pgErr?.code === '23505' && pgErr.constraint === 'users_email_unique') {
+        await client
+          .update(users)
+          .set({
+            clerkUserId: input.clerkUserId,
+            role: input.role,
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
+          })
+          .where(eq(users.email, input.email));
+        return run(client);
+      }
+      throw err;
+    }
   },
   async findByClerkId(clerkUserId: string, client: Client = db): Promise<UserRow | null> {
     const row = await client.query.users.findFirst({ where: eq(users.clerkUserId, clerkUserId) });
