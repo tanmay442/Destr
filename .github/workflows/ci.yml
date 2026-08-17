@@ -99,7 +99,9 @@ jobs:
         if: github.ref == 'refs/heads/master'
         run: pnpm db:migrate
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # DDL-capable role (owner). The app's DATABASE_URL is a
+          # least-privilege role and must never run migrations.
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
 
       # ---- E2E (DISABLED) ----------------------------------------------
       # E2E tests are disabled — Neon branch provisioning is flaky

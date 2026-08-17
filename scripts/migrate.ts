@@ -22,16 +22,16 @@ if (process.env.NEXT_SKIP_MIGRATIONS === '1') {
   process.exit(0);
 }
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!databaseUrl) {
   if (!isLocal) {
     console.error(
-      'DATABASE_URL is not set. Migrations are required in this environment; ' +
+      'MIGRATION_DATABASE_URL (or DATABASE_URL) is not set. Migrations are required in this environment; ' +
         'refusing to continue.',
     );
     process.exit(1);
   }
-  console.warn('DATABASE_URL is not set. Skipping migrations.');
+  console.warn('MIGRATION_DATABASE_URL / DATABASE_URL is not set. Skipping migrations.');
   process.exit(0);
 }
 

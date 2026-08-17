@@ -86,7 +86,7 @@ async function safeQuery(pool, sql, logger) {
 export async function applyMigrations({
   dir = './drizzle',
   poolFactory = () => {
-    const connectionString = process.env.DATABASE_URL ?? '';
+    const connectionString = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL ?? '';
     return new pg.Pool({ connectionString });
   },
   logger = console,

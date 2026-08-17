@@ -193,3 +193,20 @@ Regardless of the proxy mode, the CSP in `next.config.ts` always allows, in addi
 ### 8.3 Google Search Console Verification (`NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`)
 
 The root layout (`src/app/layout.tsx`) renders the `google-site-verification` meta tag **only** when `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` is set (build-time inlined). Unset → the tag is omitted entirely, which keeps clones and domain-less deployments clean of the owner's token. Set it for the production environment and verify ownership via Search Console, or verify your domain with another method (DNS TXT, file upload) instead.
+### 8.4 Database roles, Row-Level Security, and how migrations apply
+
+**Two-role split (since 2026-08-17).** The app and the migration tooling use different Postgres roles:
+
+| Variable | Role | Privileges | Used by |
+|---|---|---|---|
+| `DATABASE_URL` | `rag_app` (least privilege) | `SELECT/INSERT/UPDATE/DELETE` on the 9 app tables, `USAGE, SELECT` on sequences, `USAGE` on schema `public`. **No** DDL, no `TRUNCATE`/`TRIGGER`/`REFERENCES`, no `_migrations` access, no role management, `NOBYPASSRLS` | App runtime (Next.js API routes, CLI, scripts that do DML) |
+| `MIGRATION_DATABASE_URL` | DB owner (e.g. `neondb_owner`) | Full (owner) | `pnpm db:migrate` (`scripts/migrate.ts` → `scripts/apply-migration.mjs`), `drizzle-kit push`/`studio`/`introspect` |
+
+Every tool that runs DDL prefers `MIGRATION_DATABASE_URL ?? DATABASE_URL` (`scripts/migrate.ts`, `scripts/apply-migration.mjs`, `drizzle.config.ts`). The app never holds the owner credential, so a leaked `DATABASE_URL` can no longer drop tables, plant triggers, or create roles.
+
+**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_events`, `chat_feedback`, `chunks`, `documents`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+
+**Migration flow (where DDL runs):**
+1. **Local dev** — `pnpm db:migrate` or `pnpm build` (build runs `tsx scripts/migrate.ts` first); uses `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
+2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates a fresh Neon test branch (the setup script writes an owner-grade `DATABASE_URL` into `.env.test`); the "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
+3. **Vercel production builds** — `vercel.json` `buildCommand` runs `pnpm db:migrate` when `$VERCEL_ENV=production`, so the production environment needs both `MIGRATION_DATABASE_URL` (DDL) and `DATABASE_URL` (runtime app). Preview builds run `next build` only (no migrations) but still need `DATABASE_URL` at runtime.
