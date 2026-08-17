@@ -283,6 +283,18 @@ function createComposition() {
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),
         failDocument: (id) => documentRepo.failDocument(id),
       }).sweep(),
+    ingestDeadLetter: async (input: { documentId: number; payload: unknown; error: string }) => {
+      try {
+        await auditDeps.audit.recordDeadLetter({
+          kind: 'ingest',
+          payload: input.payload,
+          error: input.error,
+        });
+      } catch (e) {
+        logger.warn('[ingest-dlq] failed to persist dead-letter row', { documentId: input.documentId, error: e instanceof Error ? e.message : String(e) });
+      }
+      return documentRepo.failDocument(input.documentId);
+    },
     countPendingIngest: () => documentRepo.countPendingIngest(),
     getAnalyticsSummary: (input: { actorId: string }) =>
       bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps }),
