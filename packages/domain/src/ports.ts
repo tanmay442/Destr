@@ -331,9 +331,9 @@ export interface AuditLog {
     fromRole: 'admin' | 'user';
     toRole: 'admin' | 'user';
   }): Promise<void>;
-  /** Persist an audit event whose primary write failed, for later replay. */
+  /** Persist a dead-letter record whose primary write failed, for later replay. */
   recordDeadLetter(input: {
-    kind: AuditKind;
+    kind: AuditKind | 'ingest' | 'chat_event';
     payload: unknown;
     error: string;
   }): Promise<void>;

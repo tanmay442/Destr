@@ -662,7 +662,11 @@ export function createAuditRepo(client: Client = db): AuditLog {
     logTicketEvent: (input) => auditRepo.logTicketEvent(input, client),
     logUserEvent: (input) => auditRepo.logUserEvent(input, client),
     list: (input) => auditRepo.list(input, client),
-    recordDeadLetter: (input) => auditRepo.recordDeadLetter(input, client),
+    recordDeadLetter: (input) =>
+      auditRepo.recordDeadLetter(
+        { kind: input.kind as AuditKind, payload: input.payload, error: input.error },
+        client,
+      ),
   };
 }
 
