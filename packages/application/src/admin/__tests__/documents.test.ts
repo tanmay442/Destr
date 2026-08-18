@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NotFoundError, ValidationError, GoneError } from '@app/domain';
+import { NotFoundError, ValidationError, GoneError, ConflictError } from '@app/domain';
 import type { DocumentRepository, AuditLog, Clock, TransactionRunner, TransactionContext } from '@app/domain';
 import { restoreDocument, softDeleteDocument, hardDeleteDocument, uploadPdf, replacePdf } from '../documents';
 import { RESTORE_WINDOW_MS } from '@app/domain';
@@ -209,7 +209,7 @@ function makeUploadDeps(opts: {
   chunks: { insertMany: ReturnType<typeof vi.fn>; deleteByDocumentId: ReturnType<typeof vi.fn> };
 } {
   const documents = {
-    findByName: vi.fn().mockResolvedValue(null),
+    findByName: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(baseDocument()),
     findById: vi.fn().mockResolvedValue(null),
     update: vi.fn().mockResolvedValue(baseDocument({ id: 1, fileHash: 'newhash', ingestStatus: 'queued' })),
     insert: vi.fn().mockResolvedValue(baseDocument()),
@@ -303,9 +303,12 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     const oldKey = 'old-orphan.pdf';
     const mocks = makeUploadDeps({
       documents: {
-        findByName: vi.fn().mockResolvedValue({
-          ...baseDocument({ id: 1, fileHash: 'oldhash', storageKey: oldKey, deletedAt: new Date(Date.now() - RESTORE_WINDOW_MS - 1000) }),
-        }),
+        findByName: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ...baseDocument({ id: 1, fileHash: 'oldhash', storageKey: oldKey, deletedAt: new Date(Date.now() - RESTORE_WINDOW_MS - 1000) }),
+          })
+          .mockResolvedValue(baseDocument({ id: 7, fileHash: 'newhash' })),
       },
     });
     const result = await uploadPdf({ fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' }, mocks.deps);
@@ -373,9 +376,12 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
   it('cleans up the new blob and keeps the old one when enqueue fails on a reused row (M4)', async () => {
     const mocks = makeUploadDeps({
       documents: {
-        findByName: vi.fn().mockResolvedValue({
-          ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
-        }),
+        findByName: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
+          })
+          .mockResolvedValue(baseDocument({ id: 1, fileHash: 'newhash', ingestStatus: 'queued' })),
       },
       rejectEnqueue: true,
       asyncIngest: true,
@@ -447,5 +453,46 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       expect(result.value.status).toBe('inserted');
     }
     expect(mocks.ingestQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when a concurrent writer wins the name after the claim (sync)', async () => {
+    const mocks = makeUploadDeps({
+      documents: {
+        findByName: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue(baseDocument({ id: 8, fileHash: 'other-hash' })),
+      },
+    });
+    const result = await uploadPdf({ fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' }, mocks.deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ConflictError);
+      expect(result.error.message).toMatch(/another request/i);
+    }
+    expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
+    expect(mocks.documents.update).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict without enqueueing when a concurrent writer wins the name (async)', async () => {
+    const mocks = makeUploadDeps({
+      documents: {
+        findByName: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue(baseDocument({ id: 8, fileHash: 'other-hash' })),
+      },
+      asyncIngest: true,
+    });
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.alloc(ASYNC_MIN), actorId: 'user_1' },
+      mocks.deps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ConflictError);
+    }
+    expect(mocks.ingestQueue.enqueue).not.toHaveBeenCalled();
+    expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
   });
 });

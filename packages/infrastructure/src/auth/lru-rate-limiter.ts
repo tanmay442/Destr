@@ -15,17 +15,36 @@ export function createLruRateLimiter(): RateLimiter {
       const cutoff = now - opts.windowMs;
       const existing = buckets.get(key);
       if (existing) {
+        // Re-set to keep insertion order (MRU at the end).
         buckets.delete(key);
         existing.timestamps = existing.timestamps.filter((t) => t > cutoff);
         buckets.set(key, existing);
+      } else if (buckets.size >= MAX_KEYS) {
+        // Never evict a live bucket to admit a new key: attacker keys would
+        // wipe every victim's sliding window. Reclaim only expired buckets.
+        let earliestLiveMs = Infinity;
+        for (const [k, bucket] of buckets) {
+          let firstLive = Infinity;
+          for (const t of bucket.timestamps) {
+            if (t > cutoff && t < firstLive) firstLive = t;
+          }
+          if (firstLive < Infinity) {
+            if (firstLive < earliestLiveMs) earliestLiveMs = firstLive;
+          } else {
+            buckets.delete(k);
+          }
+        }
+        if (buckets.size >= MAX_KEYS) {
+          return {
+            ok: false,
+            retryAfterMs: Number.isFinite(earliestLiveMs)
+              ? Math.max(0, earliestLiveMs + opts.windowMs - now)
+              : opts.windowMs,
+          };
+        }
+        buckets.set(key, { timestamps: [] });
       } else {
         buckets.set(key, { timestamps: [] });
-      }
-
-      while (buckets.size > MAX_KEYS) {
-        const oldest = buckets.keys().next().value;
-        if (oldest === undefined) break;
-        buckets.delete(oldest);
       }
 
       const bucket = buckets.get(key)!;

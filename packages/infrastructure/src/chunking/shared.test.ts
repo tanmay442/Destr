@@ -58,6 +58,18 @@ describe('splitSentences', () => {
       expect(s[i]!.start).toBeGreaterThan(s[i - 1]!.start);
     }
   });
+
+  it('caps abbreviation-dense accumulation without dropping text', () => {
+    const input = 'Dr. '.repeat(15_000).trim();
+    const s = splitSentences(input, 100_000);
+    expect(s.length).toBeGreaterThan(3);
+    expect(s.map((x) => x.text).join(' ')).toBe(input);
+    let cursor = 0;
+    for (const part of s) {
+      expect(part.start).toBeGreaterThanOrEqual(cursor);
+      cursor = part.start + part.text.length;
+    }
+  });
 });
 
 describe('cleanTextArtifacts', () => {

@@ -25,6 +25,24 @@ const { currentUserMock } = vi.hoisted(() => ({
   currentUserMock: vi.fn(),
 }));
 
+const { assertSameOriginMock } = vi.hoisted(() => ({
+  assertSameOriginMock: (req: Request) => {
+    const origin = req.headers.get('origin');
+    if (!origin) return null;
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return new Response('Forbidden', { status: 403 });
+    }
+    const site = req.headers.get('sec-fetch-site');
+    if (site && site !== 'same-origin') return new Response('Forbidden', { status: 403 });
+    const reqHost = req.headers.get('host');
+    if (reqHost && originHost !== reqHost) return new Response('Forbidden', { status: 403 });
+    return null;
+  },
+}));
+
 const { appConfigMock } = vi.hoisted(() => ({
   appConfigMock: {
     prefetchFirstTurn: false,
@@ -126,6 +144,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
 vi.mock('@/composition', () => ({
   getComposition: () => compositionMock as unknown as Composition,
   appConfig: appConfigMock,
+  assertSameOrigin: assertSameOriginMock,
   TRACE_ENABLED: false,
 }));
 

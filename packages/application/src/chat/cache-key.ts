@@ -1,6 +1,6 @@
 import type { AppConfig } from '@app/domain/app-config';
 
-export const SYSTEM_PROMPT_VERSION = 2;
+export const SYSTEM_PROMPT_VERSION = 3;
 
 export function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'normal'): string {
   return JSON.stringify({
@@ -11,5 +11,14 @@ export function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'nor
     hybridEnabled: cfg.hybridEnabled,
     rerankerProvider: cfg.rerankerProvider,
     prefetchFirstTurn: cfg.prefetchFirstTurn,
+    agentStepBudget: cfg.agentStepBudget,
+    agenticRetrieveLimit: cfg.agenticRetrieveLimit,
+    agenticMaxRetries: cfg.agenticMaxRetries,
+    gradeModel: cfg.gradeModel,
+    orgName: cfg.orgName,
+    audience: cfg.audience,
+    agentPersona: cfg.agentPersona,
+    customInstructions: cfg.customInstructions,
+    outOfScopeTopics: cfg.outOfScopeTopics,
   });
 }

@@ -4,6 +4,11 @@ import { Db, Storage } from '@app/infrastructure';
 loadDotEnv();
 const { and, isNull, isNotNull } = Db;
 
+const args = process.argv.slice(2);
+const DRY_RUN = !args.includes('--confirm');
+const ALLOW_NON_PROD = args.includes('--allow-non-prod');
+const NODE_ENV = process.env.NODE_ENV;
+
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
@@ -11,6 +16,12 @@ function safeName(name: string): string {
 const BATCH_SIZE = 100;
 
 async function main() {
+  if (!ALLOW_NON_PROD && (!NODE_ENV || NODE_ENV === 'development')) {
+    throw new Error(
+      `NODE_ENV must be set to a non-development value (got ${NODE_ENV ?? '(unset)'}). This script writes production blob storage; pass --allow-non-prod to override.`,
+    );
+  }
+
   const blobStorage = Storage.createBlobStorage();
   const { db, schema, setDocumentStorageKey } = Db;
   const documents = schema.documents;
@@ -42,6 +53,11 @@ async function main() {
         continue;
       }
       const key = `docs/${row.id}/${safeName(row.fileName)}`;
+      if (DRY_RUN) {
+        console.log(`  [dry-run] would put ${key} (${buffer.length} bytes)`);
+        migrated++;
+        continue;
+      }
       try {
         await blobStorage.put(key, buffer, 'application/pdf');
         try {
@@ -64,6 +80,13 @@ async function main() {
       orderBy: (cols, { asc }) => [asc(cols.id)],
       limit: BATCH_SIZE,
     });
+  }
+
+  if (DRY_RUN) {
+    console.log(
+      `backfill: dry-run — ${migrated} document(s) would be migrated; pass --confirm to apply.`,
+    );
+    return;
   }
 
   const remaining = await db.query.documents.findMany({

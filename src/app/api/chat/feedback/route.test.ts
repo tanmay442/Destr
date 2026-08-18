@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok, err, NotFoundError, RateLimitedError } from '@app/domain';
+import { ok, err, NotFoundError, RateLimitedError, CHAT_MAX_BODY_BYTES } from '@app/domain';
 
 const { authMock, submitMock, rateLimitMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
@@ -82,9 +82,13 @@ describe('POST /api/chat/feedback', () => {
     expect(submitMock).not.toHaveBeenCalled();
   });
 
-  it('returns 413 when the declared content-length exceeds the cap', async () => {
+  it('returns 413 when the raw body exceeds the cap (chunked-safe)', async () => {
     const res = await route.POST(
-      post({ turnId: TURN, feedback: 1 }, { 'content-length': '99999999' }),
+      new Request('http://localhost/api/chat/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'x'.repeat(CHAT_MAX_BODY_BYTES + 1),
+      }),
     );
     expect(res.status).toBe(413);
     expect(submitMock).not.toHaveBeenCalled();

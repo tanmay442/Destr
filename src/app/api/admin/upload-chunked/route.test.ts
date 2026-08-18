@@ -70,11 +70,11 @@ describe('POST /api/admin/upload-chunked', () => {
     expect(uploadChunkedMock).not.toHaveBeenCalled();
   });
 
-  it('returns 400 when content-length exceeds the total cap', async () => {
+  it('returns 400 when the raw body exceeds the total cap (chunked-safe)', async () => {
     const req = new Request('http://x/api/admin/upload-chunked', {
       method: 'POST',
-      headers: { 'content-type': 'text/plain', 'content-length': String(50 * 1024 * 1024 + 1) },
-      body: 'dummy',
+      headers: { 'content-type': `multipart/form-data; boundary=${BOUNDARY}` },
+      body: 'a'.repeat(50 * 1024 * 1024 + 1),
     });
     const res = await route.POST(req);
     expect(res.status).toBe(400);

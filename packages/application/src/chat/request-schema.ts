@@ -5,8 +5,7 @@ const MAX_TEXT_LENGTH = 50_000;
 const MAX_PARTS = 100;
 const MAX_TOTAL_TEXT_CHARS = 200_000;
 
-const ALLOWED_PART_TYPE =
-  /^(text|reasoning|file|step-start|dynamic-tool|source-url|source-document|tool-[a-zA-Z0-9_-]+|data-[a-zA-Z0-9_-]+)$/;
+const ALLOWED_PART_TYPE = /^(text|reasoning|file)$/;
 
 const MessagePartSchema = z.union([
   z.object({ type: z.literal('text'), text: z.string().max(MAX_TEXT_LENGTH) }),
@@ -17,7 +16,11 @@ const MessagePartSchema = z.union([
     filename: z.string().max(255).optional(),
     mediaType: z.string().max(255).optional(),
   }),
-  z.object({ type: z.string().regex(ALLOWED_PART_TYPE, 'Unsupported message part type') }).passthrough(),
+  z
+    .object({
+      type: z.string().refine((type) => !ALLOWED_PART_TYPE.test(type)),
+    })
+    .passthrough(),
 ]);
 
 const MessageSchema = z
@@ -27,7 +30,11 @@ const MessageSchema = z
     role: z.enum(['user', 'assistant']),
     parts: z.array(MessagePartSchema).max(MAX_PARTS),
   })
-  .strip();
+  .strip()
+  .transform((message) => ({
+    ...message,
+    parts: message.parts.filter((part) => ALLOWED_PART_TYPE.test(part.type)),
+  }));
 
 export const ChatRequestSchema = z.object({
   turnId: z.string().regex(V4_UUID_REGEX, 'turnId must be a v4 UUID').optional(),

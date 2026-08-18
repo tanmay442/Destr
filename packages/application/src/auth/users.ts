@@ -1,4 +1,4 @@
-import { err, ok, type Result, NotFoundError, ValidationError, ForbiddenError, ExternalServiceError } from '@app/domain';
+import { err, ok, type Result, NotFoundError, ValidationError, ForbiddenError, ExternalServiceError, logger } from '@app/domain';
 import type { UserRepository, TransactionRunner } from '@app/domain';
 import type { AuditLog } from '@app/domain';
 import { MAX_LIST_LIMIT } from '@app/domain';
@@ -62,7 +62,49 @@ export async function setUserRole(
     try {
       await deps.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {
-      await deps.users.setRole(input.clerkUserId, target.role).catch(() => {});
+      let rollbackOk = false;
+      try {
+        await deps.users.setRole(input.clerkUserId, target.role);
+        rollbackOk = true;
+      } catch (rollbackErr) {
+        logger.error('setUserRole: Clerk sync failed and DB rollback also failed', {
+          clerkUserId: input.clerkUserId,
+          requestedRole: input.role,
+          syncError: e,
+          rollbackError: rollbackErr,
+        });
+      }
+      if (rollbackOk) {
+        logger.error('setUserRole: Clerk sync failed; DB role rolled back', {
+          clerkUserId: input.clerkUserId,
+          requestedRole: input.role,
+          error: e,
+        });
+      }
+      const rollbackEvent = rollbackOk
+        ? {
+            clerkUserId: input.clerkUserId,
+            actorId: input.actorId,
+            fromRole: input.role,
+            toRole: target.role,
+          }
+        : {
+            clerkUserId: input.clerkUserId,
+            actorId: input.actorId,
+            fromRole: target.role,
+            toRole: input.role,
+          };
+      void safeAudit(
+        () => logUserRoleChange(rollbackEvent, { audit: deps.audit }).then((r) => {
+          if (!r.ok) throw r.error;
+        }),
+        (payload, error) => deps.audit.recordDeadLetter({ kind: 'user', payload, error }),
+        rollbackEvent,
+        'user',
+      );
+      if (!rollbackOk) {
+        return err(new ExternalServiceError('Failed to sync Clerk role and rollback failed', e));
+      }
       return err(new ExternalServiceError('Failed to sync Clerk role', e));
     }
     const event = { clerkUserId: input.clerkUserId, actorId: input.actorId, fromRole: target.role, toRole: input.role };

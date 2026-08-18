@@ -66,6 +66,8 @@ export interface Graders {
  *    the agentic loop tolerates individual grader drops per chunk.
  *  - The query rewriter is the only fail-open member: echoing the original
  *    query is a safe degradation and keeps retrieval available.
+ *  - Ambiguous/malformed/empty verdicts fail closed: only an explicit
+ *    "yes" counts as a pass.
  *  - Every give-up is logged at error severity and counted (see
  *    `getGraderFailureCounts`) so outages surface in monitoring.
  */
@@ -75,8 +77,10 @@ export function createGraders(
 ): Graders {
   const model = () => modelProvider(gradeModelId || GRADE_MODEL || undefined);
 
-  const gradeVerdict = (text: string): 'yes' | 'no' =>
-    /(^|[^a-z])no([^a-z]|$)/i.test(text) ? 'no' : 'yes';
+  const gradeVerdict = (text: string): 'yes' | 'no' => {
+    const verdict = text.trim().toLowerCase().replace(/^[^a-z]+|[^a-z]+$/g, '');
+    return verdict === 'yes' ? 'yes' : 'no';
+  };
 
   return {
     queryRewriter: {

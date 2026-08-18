@@ -17,7 +17,15 @@ async function openPdf(buffer: Uint8Array): Promise<PdfProxy> {
   try {
     const pdf = await getDocumentProxy(
       new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-      { useSystemFonts: true },
+      {
+        useSystemFonts: true,
+        isEvalSupported: false,
+        disableStream: true,
+        disableAutoFetch: true,
+        // Gate decoded-image budget (total pixels) on the input byte cap:
+        // with a 4 bytes/pixel RGBA decode, pixmap memory stays ~<= input size.
+        maxImageSize: Math.floor(PDF_PARSE_MAX_BYTES / 4),
+      },
     );
     if (pdf.numPages > PDF_PARSE_MAX_PAGES) {
       await pdf.destroy();
@@ -33,10 +41,14 @@ async function openPdf(buffer: Uint8Array): Promise<PdfProxy> {
 async function getPageText(pdf: PdfProxy, pageNumber: number): Promise<string> {
   const page = await pdf.getPage(pageNumber);
   const content = await page.getTextContent();
-  return content.items
+  const text = content.items
     .filter((item): item is Extract<typeof item, { str: string }> => 'str' in item)
     .map((item) => item.str + (item.hasEOL ? '\n' : ''))
     .join('');
+  if (text.length > PDF_PARSE_MAX_CHARS) {
+    throw new ParseError(`PDF page ${pageNumber} extracted text exceeds ${PDF_PARSE_MAX_CHARS} chars`);
+  }
+  return text;
 }
 
 // Re-join spaces unpdf inserts inside dotted tokens (versions, URLs, emails).

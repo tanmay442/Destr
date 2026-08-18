@@ -1,11 +1,17 @@
 import { randomUUID } from 'crypto';
-import { err, ok, type Result, ValidationError, ExternalServiceError } from '@app/domain';
+import { err, ok, type Result, ValidationError, ExternalServiceError, ConflictError } from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, BlobStorage, TransactionRunner, ParsedChunk, MarkdownParser,
   DocSummarizer,
 } from '@app/domain';
-import { writeChunks, type IngestResult, type PreparedChunk } from './ingest';
+import {
+  writeChunks,
+  nameStillClaimed,
+  UPLOAD_CONFLICT_MESSAGE,
+  type IngestResult,
+  type PreparedChunk,
+} from './ingest';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
 const MAX_PRECHUNKED_CHUNKS = 5000;
@@ -63,11 +69,6 @@ export async function ingestPrechunked(
     ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
     : deps.hasher.sha256(markdownSource);
 
-  const existing = await deps.documents.findByName(fileName);
-  if (existing && existing.fileHash === fileHash) {
-    return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
-  }
-
   let header = '';
   let title: string | null = null;
   let summary: string | null = null;
@@ -112,23 +113,45 @@ export async function ingestPrechunked(
     await deps.blobStorage.put(blobKey, pdfBuffer, 'application/pdf');
   }
 
-  let outcome: { documentId: number };
+  const write = async (
+    documents: DocumentRepository,
+    repoChunks: ChunkRepository,
+  ): Promise<Result<IngestResult>> => {
+    const existing = await documents.findByName(fileName, { includeDeleted: true });
+    const live = existing && !existing.deletedAt ? existing : null;
+    if (live && live.fileHash === fileHash) {
+      return ok({ documentId: live.id, chunks: 0, status: 'unchanged' });
+    }
+    const outcome = await writeChunks(
+      documents,
+      repoChunks,
+      { fileName, fileHash, uploadedBy, storageKey: blobKey },
+      rows,
+    );
+    if (!(await nameStillClaimed(fileName, fileHash, documents))) {
+      return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+    }
+    return ok({
+      documentId: outcome.documentId,
+      chunks: chunks.length,
+      status: live ? 'updated' : 'inserted',
+    });
+  };
+
+  let result: Result<IngestResult>;
   try {
-    outcome = deps.runner
-      ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows))
-      : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy, storageKey: blobKey }, rows);
+    result = deps.runner
+      ? await deps.runner.run((ctx) => write(ctx.documents, ctx.chunks))
+      : await write(deps.documents, deps.chunks);
   } catch (cause) {
     if (blobKey) await deps.blobStorage?.delete(blobKey).catch(() => {});
     throw cause;
   }
-
-  return ok({
-    documentId: outcome.documentId,
-    chunks: chunks.length,
-    status: existing ? 'updated' : 'inserted',
-  });
+  if (!result.ok || result.value.status === 'unchanged') {
+    if (blobKey) await deps.blobStorage?.delete(blobKey).catch(() => {});
+  }
+  return result;
 }
-
 export interface UploadPrechunkedMarkdownInput {
   fileName: string;
   /** Raw markdown text to parse. */

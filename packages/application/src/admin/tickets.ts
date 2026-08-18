@@ -6,8 +6,9 @@ import {
   NotFoundError,
   ConflictError,
   ForbiddenError,
+  sanitizeText,
 } from '@app/domain';
-import type { TicketRepository, AuditLog, TicketRow, UserRepository } from '@app/domain';
+import type { TicketRepository, AuditLog, TicketRow, UserRepository, TransactionRunner } from '@app/domain';
 import { randomUUID } from 'node:crypto';
 import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '@app/domain';
 import { requireAdminActor } from './authz';
@@ -27,24 +28,23 @@ export const VALID_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = 
   closed: [],
 };
 
-const NOTE_CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
-
 const MAX_TICKET_ISSUE_LENGTH = 4000;
 const MAX_TICKET_NAME_LENGTH = 100;
 const MAX_TICKET_EMAIL_LENGTH = 254;
+const MAX_TICKET_UPDATE_ATTEMPTS = 3;
 
-function sanitizeTicketNote(input: string): string {
-  return input.replace(NOTE_CONTROL_CHARS, '').replace(/\r\n/g, '\n').trim();
+export function sanitizeTicketNote(input: string): string {
+  return sanitizeText(input);
 }
 
 /** Keep the tail of `value` up to `max` Unicode code points, never splitting surrogate pairs. */
-function tailCodePoints(value: string, max: number): string {
+export function tailCodePoints(value: string, max: number): string {
   const chars = [...value];
   return chars.length > max ? chars.slice(-max).join('') : value;
 }
 
 /** Keep the head of `value` up to `max` Unicode code points. */
-function capCodePoints(value: string, max: number): string {
+export function capCodePoints(value: string, max: number): string {
   const chars = [...value];
   return chars.length > max ? chars.slice(0, max).join('') : value;
 }
@@ -87,10 +87,14 @@ export interface UpdateTicketInput {
 
 export async function updateTicket(
   input: UpdateTicketInput,
-  deps: { tickets: TicketRepository; audit: AuditLog; users: UserRepository },
+  deps: { tickets: TicketRepository; audit: AuditLog; users: UserRepository; runner?: TransactionRunner },
 ): Promise<Result<TicketRow>> {
-  try {
-    const existing = await deps.tickets.findByTicketId(input.ticketId);
+  const run = async (
+    tickets: TicketRepository,
+    audit: AuditLog,
+    attempt: number,
+  ): Promise<Result<TicketRow>> => {
+    const existing = await (tickets.findByTicketIdForUpdate?.(input.ticketId) ?? tickets.findByTicketId(input.ticketId));
     if (!existing) return err(new NotFoundError('Ticket not found'));
     if (
       input.status &&
@@ -100,13 +104,6 @@ export async function updateTicket(
     ) {
       return err(new ConflictError('Invalid status transition'));
     }
-    if (input.assignedTo) {
-      const assignee = await deps.users.findByClerkId(input.assignedTo);
-      if (!assignee) return err(new NotFoundError('Assignee not found'));
-      if (assignee.role !== 'admin') {
-        return err(new ForbiddenError('Only admins can be assigned tickets'));
-      }
-    }
     const patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>> = {};
     if (input.status) patch.status = input.status;
     if (input.assignedTo !== undefined) patch.assignedTo = input.assignedTo;
@@ -115,22 +112,37 @@ export async function updateTicket(
       const appended = existing.notes ? existing.notes + '\n' + note : note;
       patch.notes = tailCodePoints(appended, MAX_TICKET_NOTES_LENGTH);
     }
-    const updated = await deps.tickets.update(input.ticketId, patch);
+    const updated = await tickets.update(input.ticketId, patch);
     if (!updated) return err(new NotFoundError('Ticket not found'));
+    if (patch.notes !== undefined && patch.notes !== null) {
+      const fresh = await tickets.findByTicketId(input.ticketId);
+      if (fresh && !(fresh.notes ?? '').startsWith(patch.notes)) {
+        if (attempt >= MAX_TICKET_UPDATE_ATTEMPTS) {
+          return err(new ConflictError('Ticket was updated concurrently; please retry'));
+        }
+        return run(tickets, audit, attempt + 1);
+      }
+    }
     const auditActions: Array<'assign' | 'status_change' | 'note'> = [];
     if (input.status && input.status !== existing.status) auditActions.push('status_change');
     if (input.assignedTo !== undefined) auditActions.push('assign');
     if (note) auditActions.push('note');
     for (const action of auditActions) {
       const event = { action, ticketId: input.ticketId, actorId: input.actorId };
-      void safeAudit(
-        () => deps.audit.logTicketEvent(event),
-        (payload, error) => deps.audit.recordDeadLetter({ kind: 'ticket', payload, error }),
-        event,
-        'ticket',
-      );
+      await audit.logTicketEvent(event);
     }
     return ok(updated);
+  };
+  try {
+    const assignee =
+      input.assignedTo ? await deps.users.findByClerkId(input.assignedTo) : undefined;
+    if (input.assignedTo && !assignee) return err(new NotFoundError('Assignee not found'));
+    if (assignee && assignee.role !== 'admin') {
+      return err(new ForbiddenError('Only admins can be assigned tickets'));
+    }
+    return deps.runner
+      ? deps.runner.run((ctx) => run(ctx.tickets, ctx.audit, 0))
+      : run(deps.tickets, deps.audit, 0);
   } catch (e) {
     return err(new ExternalServiceError('Failed to update ticket', e));
   }

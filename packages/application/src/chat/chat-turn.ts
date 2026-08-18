@@ -120,6 +120,42 @@ export type ChatTurnResult =
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
 
+async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
+  if (!request.body) return { value: null, tooLarge: false };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > CHAT_MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return { value: null, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { value: null, tooLarge: false };
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { value: JSON.parse(new TextDecoder().decode(bytes)), tooLarge: false };
+  } catch (e) {
+    logger.debug('JSON parse failed', { error: String(e) });
+    return { value: null, tooLarge: false };
+  }
+}
+
 interface TurnMetrics {
   retrieveMs: number;
   hitCount: number | null;
@@ -139,6 +175,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   metrics: TurnMetrics;
 }) {
   const { cfg, effectiveMode, userId, request, capturedCitations, outOfDomainRef, metrics } = opts;
+  let ticketOpenedInTurn = false;
   return {
     searchDocumentation: deps.ai.tool({
       description:
@@ -192,15 +229,18 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         for (const m of matches) {
           if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
-        const capped = matches.map((m) => ({
-          content:
+        const capped = matches.map((m) => {
+          const content =
             m.content.length > TOOL_CONTENT_CAP
               ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
-              : m.content,
-          similarity: m.similarity,
-          documentTitle: m.title ?? undefined,
-          section: m.sectionTitle ?? undefined,
-        }));
+              : m.content;
+          return {
+            content: `<reference source="${m.source}">\n${content}\n</reference>`,
+            similarity: m.similarity,
+            documentTitle: m.title ?? undefined,
+            section: m.sectionTitle ?? undefined,
+          };
+        });
         for (const citation of emitCitations(matches)) {
           capturedCitations.push(citation);
         }
@@ -230,6 +270,28 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           ),
       }),
       execute: async ({ issue }) => {
+        if (ticketOpenedInTurn) {
+          return {
+            ticketId: null,
+            status: 'error',
+            message: 'A knowledge ticket was already created in this turn.',
+          };
+        }
+        ticketOpenedInTurn = true;
+        const ticketLimit = await deps.rateLimit.check(`ticket:${userId}`, { limit: 1, windowMs: 5 * 60_000 });
+        if (!ticketLimit.ok) {
+          const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
+            ? Math.ceil(ticketLimit.retryAfterMs / 1000)
+            : undefined;
+          return {
+            ticketId: null,
+            status: 'error',
+            message:
+              retryAfterSec !== undefined
+                ? `Ticket creation is rate limited for this user; retry in about ${retryAfterSec} second${retryAfterSec === 1 ? '' : 's'}.`
+                : 'Ticket creation is rate limited for this user.',
+          };
+        }
         const userProfile = await deps.userResolver(request);
         const realName = userProfile.name ?? 'User';
         const realEmail = userProfile.email ?? `${userId}@clerk.user`;
@@ -265,13 +327,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     };
   }
 
-  const raw = await request.json().catch((e) => {
-    logger.debug('JSON parse failed', { error: String(e) });
-    return null;
-  });
-  if (raw !== null && JSON.stringify(raw).length > CHAT_MAX_BODY_BYTES) {
+  const body = await readBoundedJson(request);
+  if (body.tooLarge) {
     return { kind: 'payload-too-large' };
   }
+  const raw = body.value;
   const parsed = ChatRequestSchema.safeParse(raw);
   if (!parsed.success) {
     return { kind: 'invalid-request', issues: parsed.error.issues };
@@ -372,7 +432,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch),
-    messages: await deps.ai.convertToModelMessages(messages),
+    messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: request.signal,
     tools: buildChatTools(deps, {
@@ -455,7 +515,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
-          controller.error(err);
+          controller.error(new Error('Chat stream interrupted'));
           return;
         }
         controller.close();

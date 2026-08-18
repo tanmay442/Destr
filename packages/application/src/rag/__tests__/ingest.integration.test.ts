@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ingestFile } from '../ingest';
-import { ParseError } from '@app/domain';
+import { ParseError, ConflictError } from '@app/domain';
 import type { IngestDeps } from '../ingest';
 
 function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
@@ -8,7 +8,7 @@ function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
   const embedBatch = vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]);
   return {
     documents: {
-      findByName: vi.fn().mockResolvedValue(null),
+      findByName: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc123', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
       findById: vi.fn(),
       setStorageKey: vi.fn(),
       updateIngestStatus: vi.fn(),
@@ -86,7 +86,7 @@ describe('ingestFile', () => {
     const insert = vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'newhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null });
     const deps = makeDeps({
       documents: {
-        findByName: vi.fn().mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'oldhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
+        findByName: vi.fn().mockResolvedValueOnce({ id: 1, fileName: 'test.pdf', fileHash: 'oldhash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }).mockResolvedValue({ id: 1, fileName: 'test.pdf', fileHash: 'abc123', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
         findById: vi.fn(),
         setStorageKey: vi.fn(),
         updateIngestStatus: vi.fn(),
@@ -255,5 +255,25 @@ describe('ingestFile', () => {
         contentHash: null,
       },
     ]);
+  });
+
+  it('returns a conflict when a concurrent writer wins the name after the claim', async () => {
+    const deps = makeDeps({
+      documents: {
+        ...makeDeps().documents,
+        findByName: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue({ id: 2, fileName: 'test.pdf', fileHash: 'other-hash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
+      },
+    });
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user' },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ConflictError);
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, createUIMessageStream, type InferUIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { getComposition, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
+import { getComposition, assertSameOrigin, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import {
@@ -19,8 +19,79 @@ import { NextResponse, after } from 'next/server';
 import type { ChatEventInput } from '@app/domain';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
+import { readBoundedText } from '@/lib/http';
 import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
+
+const CHAT_MAX_CONCURRENT = 2;
+const chatSlotCounts = new Map<string, number>();
+const chatSlotOwners = new WeakMap<Request, string>();
+
+function acquireChatSlot(userId: string): boolean {
+  const current = chatSlotCounts.get(userId) ?? 0;
+  if (current >= CHAT_MAX_CONCURRENT) return false;
+  chatSlotCounts.set(userId, current + 1);
+  return true;
+}
+
+function releaseChatSlot(userId: string): void {
+  const current = chatSlotCounts.get(userId) ?? 1;
+  if (current <= 1) chatSlotCounts.delete(userId);
+  else chatSlotCounts.set(userId, current - 1);
+}
+
+function releaseOwnedChatSlot(req: Request, userId: string): void {
+  if (chatSlotOwners.get(req) !== userId) return;
+  chatSlotOwners.delete(req);
+  releaseChatSlot(userId);
+}
+
+function releaseSlotWhenStreamEnds<T extends Response>(res: T, release: () => void): T {
+  const body = res.body;
+  if (!body) {
+    release();
+    return res;
+  }
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    release();
+  };
+  const tracked = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const reader = body.getReader();
+      void (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            try {
+              controller.enqueue(value);
+            } catch {
+              finish();
+              await reader.cancel().catch(() => undefined);
+              return;
+            }
+          }
+          finish();
+          controller.close();
+        } catch {
+          finish();
+          try {
+            controller.error(new Error('Chat stream interrupted'));
+          } catch {
+            // already closed or cancelled
+          }
+        }
+      })();
+    },
+    cancel() {
+      finish();
+    },
+  });
+  return new Response(tracked, { status: res.status, statusText: res.statusText, headers: res.headers }) as T;
+}
 interface CachedAnswerPayload {
   text: string;
   citations: EmittedCitation[];
@@ -66,11 +137,13 @@ function buildChatTools(deps: {
   agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
   capturedCitations: EmittedCitation[];
   createTicket: Composition['createTicket'];
+  rateLimit: (key: string, opts: { limit: number; windowMs: number }) => ReturnType<Composition['rateLimit']>;
   userId: string;
   outOfDomainRef: { value: boolean };
   metrics: TurnMetrics;
 }) {
-  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, userId: uid, outOfDomainRef, metrics } = deps;
+  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, rateLimit: rateLimitFn, userId: uid, outOfDomainRef, metrics } = deps;
+  let ticketOpenedInTurn = false;
   return {
     searchDocumentation: tool({
       description:
@@ -120,15 +193,18 @@ function buildChatTools(deps: {
         for (const m of matches) {
           if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
-        const capped = matches.map((m) => ({
-          content:
+        const capped = matches.map((m) => {
+          const content =
             m.content.length > TOOL_CONTENT_CAP
               ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
-              : m.content,
-          similarity: m.similarity,
-          documentTitle: m.title ?? undefined,
-          section: m.sectionTitle ?? undefined,
-        }));
+              : m.content;
+          return {
+            content: `<reference source="${m.source}">\n${content}\n</reference>`,
+            similarity: m.similarity,
+            documentTitle: m.title ?? undefined,
+            section: m.sectionTitle ?? undefined,
+          };
+        });
         for (const citation of emitCitations(matches)) {
           citationTarget.push(citation);
         }
@@ -158,6 +234,28 @@ function buildChatTools(deps: {
           ),
       }),
       execute: async ({ issue }) => {
+        if (ticketOpenedInTurn) {
+          return {
+            ticketId: null,
+            status: 'error',
+            message: 'A knowledge ticket was already created in this turn.',
+          };
+        }
+        ticketOpenedInTurn = true;
+        const ticketLimit = await rateLimitFn(`ticket:${uid}`, { limit: 1, windowMs: 5 * 60_000 });
+        if (!ticketLimit.ok) {
+          const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
+            ? Math.ceil(ticketLimit.retryAfterMs / 1000)
+            : undefined;
+          return {
+            ticketId: null,
+            status: 'error',
+            message:
+              retryAfterSec !== undefined
+                ? `Ticket creation is rate limited for this user; retry in about ${retryAfterSec} second${retryAfterSec === 1 ? '' : 's'}.`
+                : 'Ticket creation is rate limited for this user.',
+          };
+        }
         const clerkUser = await currentUser();
         let realName: string;
         let realEmail: string;
@@ -244,18 +342,33 @@ async function streamChatResponse(req: Request): Promise<Response> {
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
   }
+  if (!acquireChatSlot(userId)) {
+    return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+  }
+  chatSlotOwners.set(req, userId);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseOwnedChatSlot(req, userId);
+  };
   const contentType = req.headers.get('content-type');
   if (!contentType?.includes('application/json')) {
+    release();
     return new Response('Content-Type must be application/json', { status: 415 });
   }
-  const contentLength = Number(req.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength > CHAT_MAX_BODY_BYTES) {
-    return new Response('Payload too large', { status: 413 });
+  const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
+  if (!bounded.ok) {
+    release();
+    return bounded.reason === 'too-large'
+      ? new Response('Payload too large', { status: 413 })
+      : new Response('Bad Request', { status: 400 });
   }
   const comp = getComposition();
   const cfg = await getRuntimeConfig();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
   if (!limit.ok) {
+    release();
     const retryAfter = Number.isFinite(limit.retryAfterMs)
       ? String(Math.ceil(limit.retryAfterMs / 1000))
       : undefined;
@@ -265,15 +378,19 @@ async function streamChatResponse(req: Request): Promise<Response> {
     });
   }
 
-  const raw = await req.json().catch((e) => {
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(bounded.text);
+  } catch (e) {
     logger.debug('JSON parse failed', { error: String(e) });
-    return null;
-  });
+  }
   if (raw !== null && JSON.stringify(raw).length > CHAT_MAX_BODY_BYTES) {
+    release();
     return new Response('Payload too large', { status: 413 });
   }
   const parsed = ChatRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    release();
     return NextResponse.json({ error: 'invalid_request', issues: parsed.error.issues }, { status: 400 });
   }
   const messages = parsed.data.messages as unknown as MyUIMessage[];
@@ -345,7 +462,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           : {}),
       });
       scheduleFlush(comp);
-      return createUIMessageStreamResponse({ stream });
+      return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream }), release);
     }
     if (TRACE_ENABLED) logger.info('rag.cache.miss', { key: cacheKey });
   }
@@ -369,7 +486,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const result = streamText({
     model: comp.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch),
-    messages: await convertToModelMessages(messages),
+    messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: req.signal,
     tools: buildChatTools({
@@ -378,6 +495,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       agenticSearch: (query) => comp.agenticSearch(cfg, query),
       capturedCitations,
       createTicket: comp.createTicket,
+      rateLimit: (key, opts) => comp.rateLimit(key, opts),
       userId,
       outOfDomainRef,
       metrics,
@@ -451,7 +569,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
-          controller.error(err);
+          controller.error(new Error('Chat stream interrupted'));
           return;
         }
         controller.close();
@@ -460,7 +578,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
   });
 
   scheduleFlush(comp);
-  return createUIMessageStreamResponse({ stream: citationStream });
+  return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream: citationStream }), release);
 }
 
 async function streamChatResponseUseCase(req: Request): Promise<Response> {
@@ -469,17 +587,37 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
   }
+  if (!acquireChatSlot(userId)) {
+    return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+  }
+  chatSlotOwners.set(req, userId);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseOwnedChatSlot(req, userId);
+  };
   const contentType = req.headers.get('content-type');
   if (!contentType?.includes('application/json')) {
+    release();
     return new Response('Content-Type must be application/json', { status: 415 });
   }
-  const contentLength = Number(req.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength > CHAT_MAX_BODY_BYTES) {
-    return new Response('Payload too large', { status: 413 });
+  const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
+  if (!bounded.ok) {
+    release();
+    return bounded.reason === 'too-large'
+      ? new Response('Payload too large', { status: 413 })
+      : new Response('Bad Request', { status: 400 });
   }
+  const boundedReq = new Request(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: bounded.text,
+    signal: req.signal,
+  });
   const comp = getComposition();
   const result = await chatTurn(
-    { request: req, userId, startedAt: turnStart },
+    { request: boundedReq, userId, startedAt: turnStart },
     {
       ai: { streamText, tool, stepCountIs, convertToModelMessages, createUIMessageStream },
       getChatModel: () => comp.getChatModel(),
@@ -516,23 +654,35 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
   );
   switch (result.kind) {
     case 'rate-limited':
+      release();
       return new Response('Too Many Requests', {
         status: 429,
         ...(result.retryAfterSec ? { headers: { 'Retry-After': result.retryAfterSec } } : {}),
       });
     case 'payload-too-large':
+      release();
       return new Response('Payload too large', { status: 413 });
     case 'invalid-request':
+      release();
       return NextResponse.json({ error: 'invalid_request', issues: result.issues }, { status: 400 });
     case 'stream':
       scheduleFlush(comp);
-      return createUIMessageStreamResponse({ stream: result.stream });
+      return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream: result.stream }), release);
   }
 }
 
 export async function POST(req: Request) {
-  if (process.env.CHAT_TURN_USE_CASE === '1') {
-    return streamChatResponseUseCase(req);
+  try {
+    const csrf = assertSameOrigin(req);
+    if (csrf) return csrf;
+    if (process.env.CHAT_TURN_USE_CASE === '1') {
+      return streamChatResponseUseCase(req);
+    }
+    return streamChatResponse(req);
+  } catch (error) {
+    const userId = chatSlotOwners.get(req);
+    if (userId) releaseOwnedChatSlot(req, userId);
+    logger.error('Chat request failed', { error: String(error) });
+    throw error;
   }
-  return streamChatResponse(req);
 }

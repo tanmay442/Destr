@@ -44,7 +44,7 @@ async function gradeBounded(
       try {
         grades[i] = await deps.documentGrader.grade(query, rows[i]!.content);
       } catch {
-        grades[i] = 'yes';
+        grades[i] = 'no';
       }
     }
   };

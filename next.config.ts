@@ -115,7 +115,7 @@ const nextConfig: NextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              withClerkProxy("script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.accounts.dev https://challenges.cloudflare.com https://vercel.live"),
+              withClerkProxy("script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://challenges.cloudflare.com https://vercel.live"),
               withClerkProxy("style-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev"),
               withClerkProxy("img-src 'self' https://img.clerk.com https://*.clerk.accounts.dev data: blob:"),
               "font-src 'self' https://fonts.gstatic.com",

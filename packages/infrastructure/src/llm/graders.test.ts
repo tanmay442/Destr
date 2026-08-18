@@ -133,6 +133,40 @@ describe('hallucinationGrader', () => {
   });
 });
 
+describe('gradeVerdict fail-closed parsing', () => {
+  it.each([
+    ['yes', 'yes'],
+    ['Yes', 'yes'],
+    ['YES', 'yes'],
+    ['  yes  ', 'yes'],
+    ['yes.', 'yes'],
+    ['Yes!', 'yes'],
+    ['no', 'no'],
+    ['No.', 'no'],
+    ['NO', 'no'],
+  ])('maps explicit verdict %j to %j', async (text, expected) => {
+    generateTextMock.mockResolvedValue({ text });
+    expect(await documentGrader.grade('q', 'doc')).toBe(expected);
+  });
+
+  it.each([
+    ['uncertain', 'no'],
+    ['cannot determine', 'no'],
+    ['maybe', 'no'],
+    ['not sure', 'no'],
+    ['garbage text here', 'no'],
+    ['', 'no'],
+    ['yess', 'no'],
+    ['yes no', 'no'],
+    ['123', 'no'],
+    ['n o', 'no'],
+  ])('fails closed for ambiguous output %j -> %j', async (text, expected) => {
+    generateTextMock.mockResolvedValue({ text });
+    expect(await documentGrader.grade('q', 'doc')).toBe(expected);
+    expect(await hallucinationGrader.grade('docs', 'answer')).toBe(expected);
+  });
+});
+
 describe('getGraders selector', () => {
   it('returns undefined graders when AGENTIC_ENABLED=false', async () => {
     const prev = process.env.AGENTIC_ENABLED;

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getComposition, assertSameOrigin, respondResult, respond } from '@/composition';
 import { ValidationError } from '@app/domain';
 import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES } from '@app/domain';
+import { readBoundedText } from '@/lib/http';
 import { V4_UUID_REGEX } from '@app/application/chat';
 
 const FeedbackRequestSchema = z.object({
@@ -19,9 +20,11 @@ export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return new Response('Unauthorized', { status: 401 });
 
-  const contentLength = Number(req.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength > CHAT_MAX_BODY_BYTES) {
-    return new Response('Payload too large', { status: 413 });
+  const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
+  if (!bounded.ok) {
+    return bounded.reason === 'too-large'
+      ? new Response('Payload too large', { status: 413 })
+      : new Response('Bad Request', { status: 400 });
   }
 
   const comp = getComposition();
@@ -33,7 +36,12 @@ export async function POST(req: Request) {
     return new Response('Content-Type must be application/json', { status: 415 });
   }
 
-  const raw = await req.json().catch(() => null);
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(bounded.text);
+  } catch {
+    raw = null;
+  }
   if (raw !== null && JSON.stringify(raw).length > CHAT_MAX_BODY_BYTES) {
     return new Response('Payload too large', { status: 413 });
   }

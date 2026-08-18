@@ -25,9 +25,9 @@ function hasValidCronSecret(req: Request): boolean {
 }
 
 export async function GET(req: Request) {
-  if (hasValidCronSecret(req)) return sweep();
-  const auth = await requireAdminRoute(req);
-  if (!auth.ok) return auth.response;
+  if (!hasValidCronSecret(req)) {
+    return new Response('Method Not Allowed', { status: 405 });
+  }
   return sweep();
 }
 

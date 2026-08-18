@@ -53,6 +53,25 @@ describe('getChatAnalytics', () => {
     expect(value.estimatedCostUsd).toBeCloseTo(0.15 + 0.3, 5);
     expect(value.cacheBusterQueries).toEqual([{ query: 'reset key', misses: 4 }]);
   });
+
+  it('clamps usageDays into the supported range before querying', async () => {
+    const requested: number[] = [];
+    const repo = {
+      getMetrics: async () => metrics,
+      getUsageOverTime: async (days: number) => {
+        requested.push(days);
+        return [];
+      },
+      getModeComparison: async () => [],
+      getCacheBusterQueries: async () => [],
+    } as unknown as ChatEventsRepo;
+
+    await getChatAnalytics({ actorId: 'admin', usageDays: 5000 }, { users: adminUsers, chatEvents: repo });
+    await getChatAnalytics({ actorId: 'admin', usageDays: -3 }, { users: adminUsers, chatEvents: repo });
+    await getChatAnalytics({ actorId: 'admin', usageDays: 30 }, { users: adminUsers, chatEvents: repo });
+    await getChatAnalytics({ actorId: 'admin' }, { users: adminUsers, chatEvents: repo });
+    expect(requested).toEqual([1095, 1, 30, 7]);
+  });
 });
 
 describe('getDocumentAnalytics', () => {
@@ -179,6 +198,21 @@ describe('getAnalyticsTrends', () => {
     expect(requestedDays).toBe(84);
     expect(res.days).toBe(84);
     expect(res.points).toEqual([]);
+  });
+
+  it('clamps trend days into the supported range', async () => {
+    const requested: number[] = [];
+    const repo = {
+      getDailyTrends: async (days: number) => {
+        requested.push(days);
+        return [];
+      },
+    } as unknown as ChatEventsRepo;
+
+    await getAnalyticsTrends({ actorId: 'admin', days: 10_000 }, { users: adminUsers, chatEvents: repo });
+    await getAnalyticsTrends({ actorId: 'admin', days: 0 }, { users: adminUsers, chatEvents: repo });
+    await getAnalyticsTrends({ actorId: 'admin', days: 5 }, { users: adminUsers, chatEvents: repo });
+    expect(requested).toEqual([1095, 84, 5]);
   });
 
   it('computes rates with division-by-zero safety', async () => {

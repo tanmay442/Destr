@@ -59,7 +59,7 @@ const core = buildCoreDeps({
 
 configureLogger(core.config.LOG_LEVEL as LogLevel);
 
-const asyncIngest = Boolean(core.config.QSTASH_TOKEN);
+const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
 const systemClock = { now: () => new Date() };
 const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
@@ -246,7 +246,7 @@ function createComposition() {
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
-      bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps }),
+      bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
       bind(createTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),

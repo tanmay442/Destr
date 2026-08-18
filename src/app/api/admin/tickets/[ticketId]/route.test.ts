@@ -141,6 +141,41 @@ describe('PATCH /api/admin/tickets/[ticketId]', () => {
     );
   });
 
+  it('sanitizes the note (control chars, unicode spaces, zero-width) before updateTicket', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    updateTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-1001', status: 'created', notes: 'clean' }) as never);
+    const res = await route.PATCH(
+      makeReq({ note: 'a\u200Bb\u00A0c\u0000d\u200Ee' }),
+      makeParams('TKT-1001'),
+    );
+    expect(res.status).toBe(200);
+    expect(updateTicketMock).toHaveBeenCalledWith(
+      expect.objectContaining({ note: 'ab cde' }),
+    );
+  });
+
+  it('caps the note to MAX_TICKET_NOTES_LENGTH code points before updateTicket', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    updateTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-1001', status: 'created', notes: '' }) as never);
+    await route.PATCH(
+      makeReq({ note: 'abc' + 'x'.repeat(20_000) }),
+      makeParams('TKT-1001'),
+    );
+    expect(updateTicketMock).toHaveBeenCalledWith(
+      expect.objectContaining({ note: 'abc' + 'x'.repeat(9_997) }),
+    );
+  });
+
+  it('rejects a note that is empty after sanitization', async () => {
+    requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
+    const res = await route.PATCH(
+      makeReq({ note: '\u0000\u200B' }),
+      makeParams('TKT-1001'),
+    );
+    expect(res.status).toBe(400);
+    expect(updateTicketMock).not.toHaveBeenCalled();
+  });
+
   it('returns 200 with ticket when patch is valid', async () => {
     requireAdminMock.mockResolvedValue({ user: { id: 'admin_1', email: 'a@x.com', name: 'A', role: 'admin' } });
     updateTicketMock.mockResolvedValue(ok({

@@ -1,10 +1,11 @@
-import { err, ok, type Result, ValidationError, ExternalServiceError, ParseError } from '@app/domain';
+import { err, ok, type Result, ValidationError, ExternalServiceError, ParseError, ConflictError } from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, PdfParser, TextSplitter, TransactionRunner,
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
+  IngestStatus,
 } from '@app/domain';
-import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
+import { CCH_ENABLED, CCH_CONTEXT_CHARS, RESTORE_WINDOW_MS } from '@app/domain';
 
 interface IngestFileInput {
   fileName: string;
@@ -16,6 +17,62 @@ export interface IngestResult {
   documentId: number;
   chunks: number;
   status: 'inserted' | 'updated' | 'unchanged' | 'queued';
+}
+
+export const UPLOAD_CONFLICT_MESSAGE =
+  'A document with this file name was uploaded by another request; retry the upload';
+
+function isDocumentNameConflict(error: unknown): boolean {
+  const wrapped = error as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
+  const pgError = wrapped.code ? wrapped : wrapped.cause;
+  return pgError?.code === '23505' && pgError.constraint === 'documents_file_name_unique';
+}
+
+export interface RowPrevious {
+  fileHash: string | null;
+  status: IngestStatus | null;
+  storageKey: string | null;
+}
+
+export type DocumentNameClaim =
+  | { kind: 'unchanged'; documentId: number; restore: boolean }
+  | { kind: 'replace'; documentId: number; previous: RowPrevious }
+  | { kind: 'resurrect'; documentId: number; previous: RowPrevious }
+  | { kind: 'insert'; oldStorageKey: string | null };
+
+export async function claimDocumentByName(
+  fileName: string,
+  fileHash: string,
+  documents: DocumentRepository,
+): Promise<DocumentNameClaim> {
+  const row = await (documents.findByNameForUpdate?.(fileName, { includeDeleted: true }) ?? documents.findByName(fileName, { includeDeleted: true }));
+  if (!row) return { kind: 'insert', oldStorageKey: null };
+  if (!row.deletedAt) {
+    if (row.fileHash === fileHash) return { kind: 'unchanged', documentId: row.id, restore: false };
+    return {
+      kind: 'replace',
+      documentId: row.id,
+      previous: { fileHash: row.fileHash, status: row.ingestStatus, storageKey: row.storageKey },
+    };
+  }
+  if (Date.now() - row.deletedAt.getTime() <= RESTORE_WINDOW_MS) {
+    if (row.fileHash === fileHash) return { kind: 'unchanged', documentId: row.id, restore: true };
+    return {
+      kind: 'resurrect',
+      documentId: row.id,
+      previous: { fileHash: row.fileHash, status: row.ingestStatus, storageKey: row.storageKey },
+    };
+  }
+  return { kind: 'insert', oldStorageKey: row.storageKey };
+}
+
+export async function nameStillClaimed(
+  fileName: string,
+  fileHash: string,
+  documents: DocumentRepository,
+): Promise<boolean> {
+  const row = await documents.findByName(fileName, { includeDeleted: true });
+  return row !== null && row.fileHash === fileHash;
 }
 
 export interface IngestDeps {
@@ -220,24 +277,42 @@ export async function ingestFile(
   const { fileName, buffer, uploadedBy } = input;
   const fileHash = deps.hasher.sha256(buffer);
 
-  const existing = await deps.documents.findByName(fileName);
-  if (existing && existing.fileHash === fileHash) {
-    return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
-  }
-
   const parsed = await parseAndEmbed({ fileName, buffer }, deps);
   if (!parsed.ok) return parsed;
 
-  // Upsert by file_name: reuse existing id to avoid FK violations on audit inserts.
-  const outcome = deps.runner
-    ? await deps.runner.run((ctx) => writeChunks(ctx.documents, ctx.chunks, { fileName, fileHash, uploadedBy }, parsed.value.rows))
-    : await writeChunks(deps.documents, deps.chunks, { fileName, fileHash, uploadedBy }, parsed.value.rows);
+  const write = async (
+    documents: DocumentRepository,
+    chunks: ChunkRepository,
+  ): Promise<Result<IngestResult>> => {
+    const existing = await (documents.findByNameForUpdate?.(fileName, { includeDeleted: true }) ?? documents.findByName(fileName, { includeDeleted: true }));
+    const live = existing && !existing.deletedAt ? existing : null;
+    if (live && live.fileHash === fileHash) {
+      return ok({ documentId: live.id, chunks: 0, status: 'unchanged' });
+    }
+    const outcome = await writeChunks(
+      documents,
+      chunks,
+      { fileName, fileHash, uploadedBy },
+      parsed.value.rows,
+    );
+    if (!(await nameStillClaimed(fileName, fileHash, documents))) {
+      return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+    }
+    return ok({
+      documentId: outcome.documentId,
+      chunks: parsed.value.chunks,
+      status: live ? 'updated' : 'inserted',
+    });
+  };
 
-  return ok({
-    documentId: outcome.documentId,
-    chunks: parsed.value.chunks,
-    status: existing ? 'updated' : 'inserted',
-  });
+  try {
+    return deps.runner
+      ? await deps.runner.run((ctx) => write(ctx.documents, ctx.chunks))
+      : await write(deps.documents, deps.chunks);
+  } catch (error) {
+    if (isDocumentNameConflict(error)) return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+    throw error;
+  }
 }
 
 /** Parse/split/embed for an existing `queued` row; caller inserts chunks + flips status atomically. */

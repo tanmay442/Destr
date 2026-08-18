@@ -87,6 +87,41 @@ describe('docSummarizer (Contextual Chunk Headers)', () => {
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 
+  it('caps overly long titles and summaries before returning them', async () => {
+    generateText.mockResolvedValue({
+      text: JSON.stringify({ title: 'T'.repeat(1000), summary: 'S'.repeat(5000) }),
+    });
+    const res = await docSummarizer.generateDocContext('doc');
+    expect(res.title.length).toBeLessThanOrEqual(200);
+    expect(res.summary.length).toBeLessThanOrEqual(1000);
+  });
+
+  it('strips control characters from title and summary', async () => {
+    generateText.mockResolvedValue({
+      text: JSON.stringify({ title: 'A\u0000B\u001fC\nD', summary: 'S\u0007um.\u0000' }),
+    });
+    const res = await docSummarizer.generateDocContext('doc');
+    expect(res.title).toBe('A B C D');
+    expect(res.summary).toBe('S um.');
+    expect(res.title).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(res.summary).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it('falls back to document text when the model returns empty title and summary', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"","summary":""}' });
+    const res = await docSummarizer.generateDocContext('Intro line of doc\nbody text here');
+    expect(res.title).toBe('Intro line of doc');
+    expect(res.summary).toContain('Intro line of doc');
+    expect(res.summary).toContain('body text here');
+  });
+
+  it('falls back per-field when only one of title or summary is missing', async () => {
+    generateText.mockResolvedValue({ text: '{"title":"","summary":"Good summary."}' });
+    const res = await docSummarizer.generateDocContext('First line\nrest');
+    expect(res.title).toBe('First line');
+    expect(res.summary).toBe('Good summary.');
+  });
+
   it('keys the cache on the full text, not just the shared excerpt prefix', async () => {
     generateText.mockResolvedValue({ text: '{"title":"T","summary":"S."}' });
     const prefix = 'x'.repeat(CCH_CONTEXT_CHARS);

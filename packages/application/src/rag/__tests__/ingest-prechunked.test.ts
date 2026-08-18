@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ingestPrechunked, type PrechunkedIngestDeps } from '../ingest-prechunked';
+import { ConflictError } from '@app/domain';
 import type { ParsedChunk } from '@app/domain';
 
 function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDeps {
@@ -13,7 +14,7 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
   };
   return {
     documents: {
-      findByName: vi.fn().mockResolvedValue(null),
+      findByName: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ id: 1, fileName: 'doc.md', fileHash: 'hash-123', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
       findById: vi.fn(),
       setStorageKey: vi.fn().mockResolvedValue(undefined),
       updateIngestStatus: vi.fn(),
@@ -207,6 +208,14 @@ describe('ingestPrechunked', () => {
     const pdf = Buffer.from('%PDF-1.4-same-pdf');
 
     const depsA = makeDeps({ hasher: makeHashing() });
+    const resultAHash = Buffer.concat([
+      Buffer.from(CHUNKS.map((c) => c.content).join('\n')),
+      pdf,
+    ]).toString('hex');
+    depsA.documents.findByName = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({
+      id: 1, fileName: 'doc.md', fileHash: resultAHash, uploadedBy: 'user',
+      uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
+    });
     const resultA = await ingestPrechunked(
       { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user', pdfBuffer: pdf, pdfFileName: 'doc.pdf' },
       depsA,
@@ -216,8 +225,15 @@ describe('ingestPrechunked', () => {
     const CHUNKS_CHANGED: typeof CHUNKS = [{ content: 'Completely different body.', page: 1 }];
     const depsB = makeDeps({ hasher: makeHashing() });
     depsB.embeddings = { embed: vi.fn(), embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]) };
-    depsB.documents.findByName = vi.fn().mockResolvedValue({
+    const expectedHash = Buffer.concat([
+      Buffer.from('Completely different body.'),
+      pdf,
+    ]).toString('hex');
+    depsB.documents.findByName = vi.fn().mockResolvedValueOnce({
       id: 1, fileName: 'doc.md', fileHash: 'stored-hash-from-previous-upload', uploadedBy: 'user',
+      uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
+    }).mockResolvedValue({
+      id: 1, fileName: 'doc.md', fileHash: expectedHash, uploadedBy: 'user',
       uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
     });
     const resultB = await ingestPrechunked(
@@ -229,5 +245,24 @@ describe('ingestPrechunked', () => {
       expect(resultB.value.status).not.toBe('unchanged');
       expect(depsB.chunks.insertMany).toHaveBeenCalled();
     }
+  });
+
+  it('returns a conflict and deletes the blob when a concurrent writer wins the name', async () => {
+    const pdf = Buffer.from('%PDF-1.4-conflict');
+    const deps = makeDeps({
+      documents: {
+        ...makeDeps().documents,
+        findByName: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ id: 2, fileName: 'doc.md', fileHash: 'other-hash', uploadedBy: 'user', uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null }),
+      },
+    });
+    const result = await ingestPrechunked(
+      { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user', pdfBuffer: pdf, pdfFileName: 'doc.pdf' },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ConflictError);
+    }
+    expect(deps.blobStorage!.delete).toHaveBeenCalledWith(expect.stringContaining('doc.pdf'));
   });
 });

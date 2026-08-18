@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
-import { ValidationError } from '@app/domain';
+import { ValidationError, logger } from '@app/domain';
 import {
   insertDocument,
+  listDocuments,
   getChunksByIds,
   getChunksByDocAndRange,
   getChunksByDocAndRanges,
@@ -11,8 +12,10 @@ import {
   searchChunksByLexical,
   auditRepo,
   createUserRepo,
+  ticketRepo,
+  userRepo,
 } from '../repositories';
-import { isNeonUrl } from '../pool';
+import { isNeonUrl, redactDatabaseUrl } from '../pool';
 import { VECTOR_DIM } from '../schema-vector';
 
 const dialect = new PgDialect();
@@ -348,5 +351,284 @@ describe('isNeonUrl', () => {
 
   it('throws a descriptive error for a malformed URL', () => {
     expect(() => isNeonUrl('not a url')).toThrow(/Invalid DATABASE_URL/);
+  });
+});
+
+describe('redactDatabaseUrl', () => {
+  it('strips the password from a valid URL via the URL parser', () => {
+    expect(redactDatabaseUrl('postgres://user:secret@host:5432/db')).toBe('postgres://user@host:5432/db');
+  });
+
+  it('redacts credentials from an unparseable URL without touching host or db', () => {
+    expect(redactDatabaseUrl('postgres user:secret@host:5432/db')).toBe('postgres user:****@host:5432/db');
+  });
+
+  it('keeps URLs without credentials unchanged', () => {
+    expect(redactDatabaseUrl('postgres://host:5432/db')).toBe('postgres://host:5432/db');
+    expect(redactDatabaseUrl('not a url')).toBe('not a url');
+  });
+
+  it('never leaks the password through the Invalid DATABASE_URL error', () => {
+    const err = (() => {
+      try {
+        isNeonUrl('postgres user:secret@host:5432/db');
+        return null;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    expect(err?.message).toMatch(/Invalid DATABASE_URL: "postgres user:\*\*\*\*@host:5432\/db"/);
+    expect(err?.message).not.toContain('secret');
+  });
+});
+
+describe('ILIKE search escaping', () => {
+  function makeWhereCaptureClient() {
+    const wheres: Array<SQL | undefined> = [];
+    type Chain = {
+      from: () => Chain;
+      leftJoin: () => Chain;
+      where: (where?: SQL) => Chain;
+      orderBy: () => Chain;
+      limit: () => Chain;
+      offset: () => Promise<unknown[]>;
+      [Symbol.iterator]: () => Iterator<never>;
+    };
+    const chain: Chain = {
+      from: () => chain,
+      leftJoin: () => chain,
+      where: (where?: SQL) => {
+        wheres.push(where);
+        return chain;
+      },
+      orderBy: () => chain,
+      limit: () => chain,
+      offset: async () => [],
+      [Symbol.iterator]: () => [][Symbol.iterator](),
+    };
+    const client = { select: () => chain };
+    return { client: client as never, lastWhere: () => wheres[wheres.length - 1]! };
+  }
+
+  it('escapes backslash, % and _ in document searches so they match literally', async () => {
+    const { client, lastWhere } = makeWhereCaptureClient();
+    await listDocuments({ search: String.raw`a\b%_c`, limit: 10, offset: 0 }, client);
+    const q = dialect.sqlToQuery(lastWhere());
+    expect(q.params).toContain(String.raw`%a\\b\%\_c%`);
+    expect(q.params).not.toContain(String.raw`%a\b%_c%`);
+    expect(q.sql).toContain('ilike');
+    expect(q.sql).not.toContain('\\');
+  });
+
+  it('escapes backslash, % and _ in ticket searches so they match literally', async () => {
+    const { client, lastWhere } = makeWhereCaptureClient();
+    await ticketRepo.list({ search: String.raw`50%\off`, limit: 10, offset: 0 }, client);
+    const q = dialect.sqlToQuery(lastWhere());
+    expect(q.params).toContain(String.raw`%50\%\\off%`);
+    expect(q.params).not.toContain(String.raw`%50%\off%`);
+    expect(q.sql).toContain('ilike');
+    expect(q.sql).not.toContain('\\');
+  });
+
+  it('escapes backslash, % and _ in user searches so they match literally', async () => {
+    const { client, lastWhere } = makeWhereCaptureClient();
+    await userRepo.list({ search: String.raw`\_\%`, limit: 10, offset: 0 }, client);
+    const q = dialect.sqlToQuery(lastWhere());
+    expect(q.params).toContain(String.raw`%\\\_\\\%%`);
+    expect(q.params).not.toContain(String.raw`%\_\%%`);
+    expect(q.sql).toContain('ilike');
+    expect(q.sql).not.toContain('\\');
+  });
+});
+
+describe('userRepo.upsertFromClerk email-conflict handling', () => {
+  type UserRowLike = {
+    clerkUserId: string;
+    email: string;
+    name: string | null;
+    imageUrl: string | null;
+    role: 'admin' | 'user';
+    lastSeenAt: Date | null;
+    createdAt: Date;
+  };
+
+  const VICTIM: UserRowLike = {
+    clerkUserId: 'user_victim',
+    email: 'shared@x.com',
+    name: 'Victim',
+    imageUrl: null,
+    role: 'admin',
+    lastSeenAt: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+  };
+
+  const EMPTY_HISTORY = {
+    documents: false,
+    tickets: false,
+    chatEvents: false,
+    auditEvents: false,
+    appSettings: false,
+  } as const;
+
+  function makeClerkClient(state: {
+    existingUser: UserRowLike | null;
+    conflictOnce?: boolean;
+    wrappedConflict?: boolean;
+    history: Record<keyof typeof EMPTY_HISTORY, boolean>;
+    insertResult?: UserRowLike;
+    rebindResult?: UserRowLike;
+  }) {
+    let updatePatch: Record<string, unknown> | null = null;
+    let updateCalls = 0;
+    const client = {
+      query: {
+        users: { findFirst: async () => state.existingUser },
+        documents: { findFirst: async () => (state.history.documents ? {} : null) },
+        tickets: { findFirst: async () => (state.history.tickets ? {} : null) },
+        chatEvents: { findFirst: async () => (state.history.chatEvents ? {} : null) },
+        auditEvents: { findFirst: async () => (state.history.auditEvents ? {} : null) },
+        appSettings: { findFirst: async () => (state.history.appSettings ? {} : null) },
+      },
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: () => ({
+            returning: async () => {
+              if (state.conflictOnce) {
+                state.conflictOnce = false;
+                const pgErr = Object.assign(new Error('duplicate key value violates unique constraint "users_email_unique"'), {
+                  code: '23505',
+                  constraint: 'users_email_unique',
+                });
+                if (state.wrappedConflict) throw { cause: pgErr };
+                throw pgErr;
+              }
+              return [state.insertResult ?? VICTIM];
+            },
+          }),
+        }),
+      }),
+      update: () => ({
+        set: (patch: Record<string, unknown>) => ({
+          where: () => {
+            updateCalls++;
+            updatePatch = patch;
+            return { returning: async () => [state.rebindResult ?? { ...VICTIM, clerkUserId: 'user_attacker' }] };
+          },
+        }),
+      }),
+    };
+    return {
+      client: client as never,
+      updatePatch: () => updatePatch,
+      updateCalls: () => updateCalls,
+    };
+  }
+
+  it('upserts by clerkUserId on the normal path without touching the rebind logic', async () => {
+    const { client, updateCalls } = makeClerkClient({
+      existingUser: null,
+      history: EMPTY_HISTORY,
+      insertResult: { ...VICTIM, clerkUserId: 'user_fresh', email: 'fresh@x.com', role: 'user' },
+    });
+    const row = await userRepo.upsertFromClerk(
+      { clerkUserId: 'user_fresh', email: 'fresh@x.com', role: 'user' },
+      client,
+    );
+    expect(row.clerkUserId).toBe('user_fresh');
+    expect(updateCalls()).toBe(0);
+  });
+
+  it.each(Object.keys(EMPTY_HISTORY) as Array<keyof typeof EMPTY_HISTORY>)(
+    'fails closed on an email conflict when the existing row owns %s history',
+    async (table) => {
+      const errorSpy = vi.spyOn(logger, 'error');
+      const { client, updateCalls } = makeClerkClient({
+        existingUser: VICTIM,
+        conflictOnce: true,
+        history: { ...EMPTY_HISTORY, [table]: true },
+      });
+      const err = await userRepo
+        .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user', emailVerified: true }, client)
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/owns data; refusing/);
+      expect(updateCalls()).toBe(0);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[userRepo]'),
+        expect.objectContaining({ email: 'shared@x.com', existingClerkUserId: 'user_victim' }),
+      );
+      errorSpy.mockRestore();
+    },
+  );
+
+  it('refuses to rebind an unverified email even when the account is history-free', async () => {
+    const { client, updateCalls } = makeClerkClient({
+      existingUser: VICTIM,
+      conflictOnce: true,
+      wrappedConflict: true,
+      history: EMPTY_HISTORY,
+    });
+    const err = await userRepo
+      .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user' }, client)
+      .catch((e) => e);
+    expect((err as Error).message).toMatch(/verification is not confirmed; refusing/);
+    expect(updateCalls()).toBe(0);
+  });
+
+  it('rebinds only a verified, history-free account and preserves its role', async () => {
+    const { client, updatePatch, updateCalls } = makeClerkClient({
+      existingUser: VICTIM,
+      conflictOnce: true,
+      history: EMPTY_HISTORY,
+      rebindResult: { ...VICTIM, clerkUserId: 'user_attacker', name: 'New', imageUrl: 'https://x/y.png' },
+    });
+    const row = await userRepo.upsertFromClerk(
+      {
+        clerkUserId: 'user_attacker',
+        email: 'shared@x.com',
+        name: 'New',
+        imageUrl: 'https://x/y.png',
+        role: 'user',
+        emailVerified: true,
+      },
+      client,
+    );
+    expect(updateCalls()).toBe(1);
+    expect(updatePatch()).toMatchObject({
+      clerkUserId: 'user_attacker',
+      email: 'shared@x.com',
+      name: 'New',
+      imageUrl: 'https://x/y.png',
+    });
+    expect(updatePatch()).not.toHaveProperty('role');
+    expect(row.clerkUserId).toBe('user_attacker');
+    expect(row.role).toBe('admin');
+  });
+
+  it('fails closed when the conflicting email row disappears mid-sync', async () => {
+    const { client, updateCalls } = makeClerkClient({
+      existingUser: null,
+      conflictOnce: true,
+      history: EMPTY_HISTORY,
+    });
+    const err = await userRepo
+      .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user', emailVerified: true }, client)
+      .catch((e) => e);
+    expect((err as Error).message).toMatch(/refusing to reassign/);
+    expect(updateCalls()).toBe(0);
+  });
+
+  it('returns the existing row unchanged when it already belongs to the caller', async () => {
+    const { client, updateCalls } = makeClerkClient({
+      existingUser: VICTIM,
+      conflictOnce: true,
+      history: EMPTY_HISTORY,
+    });
+    const row = await userRepo.upsertFromClerk(
+      { clerkUserId: 'user_victim', email: 'shared@x.com', role: 'user', emailVerified: true },
+      client,
+    );
+    expect(row.clerkUserId).toBe('user_victim');
+    expect(updateCalls()).toBe(0);
   });
 });
