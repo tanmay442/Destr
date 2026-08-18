@@ -99,7 +99,7 @@ Multi-implementation ports are validated through **shared contract-assertion har
   Ticket state machine transitions (`VALID_TRANSITIONS`), notes append, response time calculation, audit trail generation, and admin-only assignment enforcement (unknown/non-admin assignees rejected server-side).
 - **User Role Management (`packages/application/src/auth/__tests__/users.test.ts`)**:
   Role promotion/demotion, Clerk metadata sync, admin count lock assertions.
-- **Sanitization (`packages/domain/src/sanitize-think.test.ts`, `src/lib/__tests__/sanitize.test.ts`)**:
+- **Sanitization (`packages/domain/src/sanitize-text.test.ts`, `src/lib/__tests__/sanitize.test.ts`)**:
   Reasoning trace stripping (`<think>`, `<thought>`, `<antThinking>`), control character removal.
 - **Middleware & Auth Gating (`src/proxy.test.ts`)**:
   Clerk middleware route protection (public, signed-in, admin-only routes, cron secret bypass).
