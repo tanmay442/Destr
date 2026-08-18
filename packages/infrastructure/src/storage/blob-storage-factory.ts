@@ -9,9 +9,10 @@ import { createS3BlobStorage } from './blob-storage-s3';
 
 export function createBlobStorage(): BlobStorage {
   const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  const isNextBuild = process.env.NEXT_PHASE === 'phase-production-build';
   const provider = process.env.BLOB_STORAGE_PROVIDER;
   if (!provider) {
-    if (isProduction) {
+    if (isProduction && !isNextBuild) {
       throw new Error(
         'BLOB_STORAGE_PROVIDER is not set. Production requires an explicit provider (r2 or s3); the filesystem backend stores uploads on ephemeral local disk.',
       );
