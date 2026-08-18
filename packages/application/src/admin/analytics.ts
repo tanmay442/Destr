@@ -18,6 +18,12 @@ const TOKEN_COST_PER_MILLION = { input: 0.15, output: 0.6 } as const;
 const DEFAULT_TREND_DAYS = 84;
 const CACHE_BUSTER_LIMIT = 5;
 
+const MAX_ANALYTICS_DAYS = 1095;
+
+function clampDays(value: number): number {
+  return Math.min(Math.max(Math.floor(value), 1), MAX_ANALYTICS_DAYS);
+}
+
 export interface ChatAnalytics extends ChatEventMetrics {
   usageOverTime: ChatEventDailyUsage[];
   estimatedCostUsd: number;
@@ -35,7 +41,7 @@ export async function getChatAnalytics(
     const [metrics, usageOverTime, modeComparison, cacheBusterQueries] =
       await Promise.all([
         deps.chatEvents.getMetrics(input.range),
-        deps.chatEvents.getUsageOverTime(input.usageDays ?? 7),
+        deps.chatEvents.getUsageOverTime(clampDays(input.usageDays ?? 7)),
         deps.chatEvents.getModeComparison(input.range),
         deps.chatEvents.getCacheBusterQueries(CACHE_BUSTER_LIMIT, input.range),
       ]);
@@ -85,7 +91,7 @@ export async function getAnalyticsTrends(
 ): Promise<Result<AnalyticsTrends>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
-  const days = input.days && input.days > 0 ? Math.floor(input.days) : DEFAULT_TREND_DAYS;
+  const days = clampDays(input.days && input.days > 0 ? Math.floor(input.days) : DEFAULT_TREND_DAYS);
   try {
     const rows = await deps.chatEvents.getDailyTrends(days);
     const rate = (n: number, d: number) => (d > 0 ? n / d : 0);

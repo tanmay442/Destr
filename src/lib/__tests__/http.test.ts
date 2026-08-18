@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { respond, respondResult, toSafeError, isActionError, toActionResult } from '../http';
+import { respond, respondResult, toSafeError, isActionError, toActionResult, readBoundedBytes, readBoundedText } from '../http';
 import {
   ValidationError,
   NotFoundError,
@@ -194,5 +194,95 @@ describe('toActionResult', () => {
     const result = err(new NotFoundError('missing'));
     const body = toActionResult(result);
     expect(body).toEqual({ error: 'The requested resource was not found', code: 'not_found' });
+  });
+});
+
+describe('readBoundedBytes', () => {
+  it('returns empty bytes for a request with no body', async () => {
+    const res = await readBoundedBytes(new Request('http://x'), 1000);
+    expect(res).toEqual({ ok: true, bytes: new Uint8Array(0) });
+  });
+
+  it('reads a body under the cap byte-for-byte, merging chunks', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('hel'));
+        controller.enqueue(new TextEncoder().encode('lo '));
+        controller.enqueue(new TextEncoder().encode('world'));
+        controller.close();
+      },
+    });
+    const req = new Request('http://x', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    const res = await readBoundedBytes(req, 1000);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(new TextDecoder().decode(res.bytes)).toBe('hello world');
+    expect(res.bytes.byteLength).toBe(11);
+  });
+
+  it('is byte-exact for multi-byte UTF-8 content', async () => {
+    const text = 'héllo wörld — 中文';
+    const req = new Request('http://x', { method: 'POST', body: text });
+    const res = await readBoundedBytes(req, 1000);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.bytes.byteLength).toBe(new TextEncoder().encode(text).byteLength);
+  });
+
+  it('aborts and reports too-large when a chunk pushes the size past the cap', async () => {
+    const req = new Request('http://x', { method: 'POST', body: 'a'.repeat(5001) });
+    const res = await readBoundedBytes(req, 5000);
+    expect(res).toEqual({ ok: false, reason: 'too-large' });
+  });
+
+  it('reports too-large across many small streamed chunks', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 100; i += 1) controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      },
+    });
+    const req = new Request('http://x', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    const res = await readBoundedBytes(req, 50);
+    expect(res).toEqual({ ok: false, reason: 'too-large' });
+  });
+
+  it('reports error when the underlying stream errors', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('partial'));
+        controller.error(new Error('network failure'));
+      },
+    });
+    const req = new Request('http://x', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    const res = await readBoundedBytes(req, 1000);
+    expect(res).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it('accepts a body exactly at the cap', async () => {
+    const req = new Request('http://x', { method: 'POST', body: 'x'.repeat(5000) });
+    const res = await readBoundedBytes(req, 5000);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.bytes.byteLength).toBe(5000);
+  });
+});
+
+describe('readBoundedText', () => {
+  it('decodes a small body as UTF-8 text', async () => {
+    const req = new Request('http://x', { method: 'POST', body: JSON.stringify({ a: 1 }) });
+    const res = await readBoundedText(req, 1000);
+    expect(res).toEqual({ ok: true, text: '{"a":1}' });
+  });
+
+  it('reports too-large past the cap', async () => {
+    const req = new Request('http://x', { method: 'POST', body: 'y'.repeat(101) });
+    const res = await readBoundedText(req, 100);
+    expect(res).toEqual({ ok: false, reason: 'too-large' });
+  });
+
+  it('returns empty text for a request with no body', async () => {
+    const res = await readBoundedText(new Request('http://x'), 1000);
+    expect(res).toEqual({ ok: true, text: '' });
   });
 });

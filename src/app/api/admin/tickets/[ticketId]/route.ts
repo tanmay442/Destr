@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { requireAdminRoute, TICKET_STATUSES, respond } from '@/composition';
-import { ValidationError } from '@app/domain';
+import { ValidationError, MAX_TICKET_NOTES_LENGTH } from '@app/domain';
+import { capCodePoints } from '@app/application';
+import { sanitizeText } from '@/lib/sanitize';
 
 const PatchSchema = z.object({
   status: z.enum(TICKET_STATUSES).optional(),
   assignedTo: z.string().min(1).max(255).nullable().optional(),
-  note: z.string().min(1).max(10_000).optional(),
+  note: z.string().min(1).optional(),
 });
 
 export async function PATCH(
@@ -31,11 +33,16 @@ export async function PATCH(
       return respond(new ValidationError('Unknown assignee'));
     }
   }
+  let note: string | undefined;
+  if (parsed.data.note !== undefined) {
+    note = capCodePoints(sanitizeText(parsed.data.note), MAX_TICKET_NOTES_LENGTH);
+    if (!note) return respond(new ValidationError('Note must contain text'));
+  }
   const result = await comp.updateTicket({
     ticketId,
     status: parsed.data.status,
     assignedTo: parsed.data.assignedTo,
-    note: parsed.data.note,
+    note,
     actorId: session.user.id,
   });
   if (!result.ok) return respond(result.error);

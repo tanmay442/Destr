@@ -28,13 +28,24 @@ afterEach(() => {
 const envPath = () => join(process.cwd(), '.env.test');
 
 describe('teardown-test-db', () => {
-  it('removes .env.test even when Neon credentials are absent', async () => {
+  it('removes .env.test even when Neon credentials are absent (--use-existing)', async () => {
     writeFileSync(envPath(), 'DATABASE_URL="postgres://stale"\n');
+    process.argv.push('--use-existing');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await runTeardown();
+    try {
+      await runTeardown();
+    } finally {
+      process.argv.pop();
+      warnSpy.mockRestore();
+    }
     expect(existsSync(envPath())).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
+  });
+
+  it('hard-fails when Neon credentials are missing without --use-existing', async () => {
+    writeFileSync(envPath(), 'DATABASE_URL="postgres://stale"\n');
+    await expect(runTeardown()).rejects.toThrow(/NEON_PROJECT_ID/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('deletes the test branch and removes .env.test', async () => {

@@ -69,4 +69,27 @@ describe('unpdfParser limits', () => {
     await expect(unpdfParser.extractPages(Buffer.alloc(1_000_001))).rejects.toThrow(/bytes/);
     expect(mocks.getDocumentProxy).not.toHaveBeenCalled();
   });
+
+  it('rejects a single page whose extracted text exceeds the per-page cap', async () => {
+    const { unpdfParser } = await loadParser();
+    const proxy = makeProxy(1, ['z'.repeat(500)]);
+    mocks.getDocumentProxy.mockResolvedValue(proxy as never);
+    await expect(unpdfParser.extractText(Buffer.from('fake'))).rejects.toThrow(/exceeds/);
+    expect(proxy.getPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes hardened pdf.js options to getDocumentProxy', async () => {
+    const { unpdfParser } = await loadParser();
+    const proxy = makeProxy(1, ['ok']);
+    mocks.getDocumentProxy.mockResolvedValue(proxy as never);
+    await unpdfParser.extractPages(Buffer.from('fake'));
+    const options = mocks.getDocumentProxy.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(options).toMatchObject({
+      useSystemFonts: true,
+      isEvalSupported: false,
+      disableStream: true,
+      disableAutoFetch: true,
+    });
+    expect(options.maxImageSize).toBe(250_000);
+  });
 });

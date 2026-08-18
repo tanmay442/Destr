@@ -6,6 +6,7 @@ import {
   UPLOAD_CHUNKED_MAX_PDF_BYTES,
 } from '@/composition';
 import { ValidationError } from '@app/domain';
+import { readBoundedBytes } from '@/lib/http';
 
 export const runtime = 'nodejs';
 
@@ -56,14 +57,22 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Rate limited' }, { status: 429, headers: { 'Retry-After': retryAfter } });
   }
 
-  const rawLength = Number(req.headers.get('content-length'));
-  if (Number.isFinite(rawLength) && rawLength > UPLOAD_CHUNKED_MAX_TOTAL_BYTES) {
-    return respond(new ValidationError('Upload exceeds maximum size'));
+  const bounded = await readBoundedBytes(req, UPLOAD_CHUNKED_MAX_TOTAL_BYTES);
+  if (!bounded.ok) {
+    return bounded.reason === 'too-large'
+      ? respond(new ValidationError('Upload exceeds maximum size'))
+      : respond(new ValidationError('Failed to read upload body'));
   }
+
+  const formReq = new Request(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: Buffer.from(bounded.bytes),
+  });
 
   let form: FormData;
   try {
-    form = await req.formData();
+    form = await formReq.formData();
   } catch {
     return respond(new ValidationError('Expected multipart/form-data'));
   }

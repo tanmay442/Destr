@@ -23,8 +23,13 @@ export async function main() {
   const TTL_MS =
     Number(process.env.NEON_TEST_BRANCH_TTL_HOURS ?? 24) * 3_600_000;
   if (!PROJECT_ID || !API_KEY) {
+    if (!process.argv.includes('--use-existing')) {
+      throw new Error(
+        'NEON_PROJECT_ID and NEON_API_KEY are not set. Refusing to run against an ambient DATABASE_URL; pass --use-existing to opt in explicitly.',
+      );
+    }
     console.warn(
-      '[setup-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping branch creation.',
+      '[setup-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping branch creation (--use-existing).',
     );
     return;
   }

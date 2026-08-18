@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PayloadTooLargeError } from '@app/domain';
+import { NotFoundError, PayloadTooLargeError } from '@app/domain';
 import { createFilesystemBlobStorage } from './blob-storage-fs';
 import { byteaBlob } from './bytea-blob';
 import { pgTable } from 'drizzle-orm/pg-core';
@@ -84,6 +84,71 @@ describe('filesystem blob storage', () => {
     expect(line).toContain('delete failed');
     expect(line).toContain('does-not-exist');
     warn.mockRestore();
+  });
+
+  it('fails closed on key-not-found for get and stream', async () => {
+    const store = createFilesystemBlobStorage();
+    await expect(store.get('missing-key')).rejects.toBeInstanceOf(NotFoundError);
+    await expect(store.stream('missing-key')).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('fails closed on empty/stale blobs for get and stream', async () => {
+    const store = createFilesystemBlobStorage();
+    await store.put('empty', Buffer.alloc(0), 'application/octet-stream');
+    await expect(store.get('empty')).rejects.toBeInstanceOf(NotFoundError);
+    await expect(store.stream('empty')).rejects.toBeInstanceOf(NotFoundError);
+    expect(await fs.readFile(join(dir, 'empty'))).toHaveLength(0);
+  });
+});
+
+describe('blob storage factory fail-closed (M3)', () => {
+  const originalEnv = process.env;
+  let dir: string;
+
+  beforeEach(async () => {
+    process.env = { ...originalEnv };
+    delete process.env.VERCEL_ENV;
+    delete process.env.BLOB_FS_DIR;
+    dir = await fs.mkdtemp(join(tmpdir(), 'blob-factory-'));
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('defaults to filesystem outside production', async () => {
+    (process.env as Record<string, string | undefined>).NODE_ENV = 'test';
+    delete process.env.BLOB_STORAGE_PROVIDER;
+    const { createBlobStorage } = await import('./blob-storage-factory');
+    const store = createBlobStorage();
+    expect(typeof store.put).toBe('function');
+    expect(typeof store.get).toBe('function');
+  });
+
+  it('throws in production when no explicit provider is set', async () => {
+    (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
+    delete process.env.BLOB_STORAGE_PROVIDER;
+    const { createBlobStorage } = await import('./blob-storage-factory');
+    expect(() => createBlobStorage()).toThrow(/BLOB_STORAGE_PROVIDER is not set/);
+  });
+
+  it('treats VERCEL_ENV=production the same as NODE_ENV=production', async () => {
+    process.env.VERCEL_ENV = 'production';
+    delete process.env.BLOB_STORAGE_PROVIDER;
+    const { createBlobStorage } = await import('./blob-storage-factory');
+    expect(() => createBlobStorage()).toThrow(/BLOB_STORAGE_PROVIDER is not set/);
+  });
+
+  it('refuses filesystem in production unless BLOB_FS_DIR is explicitly configured', async () => {
+    (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
+    process.env.BLOB_STORAGE_PROVIDER = 'filesystem';
+    const { createBlobStorage } = await import('./blob-storage-factory');
+    expect(() => createBlobStorage()).toThrow(/BLOB_FS_DIR/);
+    process.env.BLOB_FS_DIR = dir;
+    const store = createBlobStorage();
+    expect(typeof store.put).toBe('function');
+    await store.put('ok', Buffer.from('x'), 'application/octet-stream');
   });
 });
 

@@ -41,21 +41,60 @@ describe('createLruRateLimiter', () => {
     expect(next.ok).toBe(true);
   });
 
-  it('evicts the least-recently-used bucket, keeping hot buckets', async () => {
+  it("never evicts a live bucket: capacity pressure cannot reset someone's window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
     const limiter = createLruRateLimiter();
     for (let i = 1; i <= 5_000; i++) {
       for (let j = 0; j < 5; j++) {
         await limiter.check(String(i), { limit: 5, windowMs: 60_000 });
       }
     }
+    const victim = await limiter.check('5000', { limit: 5, windowMs: 60_000 });
+    expect(victim.ok).toBe(false);
+    if (victim.ok) return;
+    expect(victim.retryAfterMs).toBeGreaterThan(0);
+    for (let i = 0; i < 100; i++) {
+      const newKey = await limiter.check(`attacker:${i}`, { limit: 5, windowMs: 60_000 });
+      expect(newKey.ok).toBe(false);
+      if (newKey.ok) return;
+      expect(newKey.retryAfterMs).toBeGreaterThan(0);
+    }
+    const stillBlocked = await limiter.check('5000', { limit: 5, windowMs: 60_000 });
+    expect(stillBlocked.ok).toBe(false);
+    if (stillBlocked.ok) return;
+    expect(stillBlocked.retryAfterMs).toBeGreaterThan(0);
+    vi.useRealTimers();
+  });
+
+  it('rejects new keys once capacity is exhausted, without admitting them', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const limiter = createLruRateLimiter();
+    for (let i = 1; i <= 5_000; i++) {
+      await limiter.check(String(i), { limit: 5, windowMs: 60_000 });
+    }
+    const rejected = await limiter.check('new-key', { limit: 5, windowMs: 60_000 });
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    expect(rejected.retryAfterMs).toBeGreaterThan(0);
+    const again = await limiter.check('new-key', { limit: 5, windowMs: 60_000 });
+    expect(again.ok).toBe(false);
+  });
+
+  it('evicts expired buckets so they no longer count toward capacity', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const limiter = createLruRateLimiter();
+    for (let i = 1; i <= 5_000; i++) {
+      await limiter.check(String(i), { limit: 5, windowMs: 60_000 });
+    }
+    vi.setSystemTime(10_000 + 61_000);
+    const admitted = await limiter.check('new-key', { limit: 5, windowMs: 60_000 });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) return;
+    expect(admitted.remaining).toBe(4);
     const refreshed = await limiter.check('1', { limit: 5, windowMs: 60_000 });
-    expect(refreshed.ok).toBe(false);
-    await limiter.check('5001', { limit: 5, windowMs: 60_000 });
-    const hot = await limiter.check('1', { limit: 5, windowMs: 60_000 });
-    expect(hot.ok).toBe(false);
-    const evicted = await limiter.check('2', { limit: 5, windowMs: 60_000 });
-    expect(evicted.ok).toBe(true);
-    if (!evicted.ok) return;
-    expect(evicted.remaining).toBe(4);
+    expect(refreshed.ok).toBe(true);
   });
 });

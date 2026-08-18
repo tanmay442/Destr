@@ -25,17 +25,36 @@ beforeEach(() => {
 });
 
 describe('setup-test-db', () => {
-  it('skips cleanly when NEON_API_KEY is not set', async () => {
+  it('skips when Neon credentials are missing and --use-existing is passed', async () => {
     const origApiKey = process.env.NEON_API_KEY;
     const origProject = process.env.NEON_PROJECT_ID;
     delete process.env.NEON_API_KEY;
     delete process.env.NEON_PROJECT_ID;
+    process.argv.push('--use-existing');
     try {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await runSetup();
       expect(warnSpy).toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
       warnSpy.mockRestore();
+    } finally {
+      process.argv.pop();
+      if (origApiKey) process.env.NEON_API_KEY = origApiKey;
+      if (origProject) process.env.NEON_PROJECT_ID = origProject;
+    }
+  });
+
+  it('hard-fails when Neon credentials are missing without --use-existing', async () => {
+    const origApiKey = process.env.NEON_API_KEY;
+    const origProject = process.env.NEON_PROJECT_ID;
+    delete process.env.NEON_API_KEY;
+    delete process.env.NEON_PROJECT_ID;
+    while (process.argv.includes('--use-existing')) {
+      process.argv.splice(process.argv.indexOf('--use-existing'), 1);
+    }
+    try {
+      await expect(runSetup()).rejects.toThrow(/NEON_PROJECT_ID/);
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       if (origApiKey) process.env.NEON_API_KEY = origApiKey;
       if (origProject) process.env.NEON_PROJECT_ID = origProject;

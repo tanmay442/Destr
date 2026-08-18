@@ -51,8 +51,11 @@ export const cohereReranker: Reranker = {
         });
 
         if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          throw Object.assign(new Error(`Cohere rerank failed (${res.status}): ${detail}`), {
+          const body = (await res.text().catch(() => ''))
+            .replace(/[\u0000-\u001f\u007f]/g, '')
+            .trim()
+            .slice(0, 200);
+          throw Object.assign(new Error(`Cohere rerank failed (${res.status}): ${body}`), {
             statusCode: res.status,
           });
         }

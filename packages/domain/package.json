@@ -10,7 +10,6 @@
     "./result": "./src/result.ts",
     "./errors": "./src/errors.ts",
     "./app-config": "./src/app-config.ts",
-    "./sanitize-think": "./src/sanitize-think.ts",
     "./sanitize-text": "./src/sanitize-text.ts"
   },
   "dependencies": {

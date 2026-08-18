@@ -7,6 +7,16 @@ const POOL_OPTS = {
   connectionTimeoutMillis: 10_000,
 } as const;
 
+export function redactDatabaseUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    return url.replace(/:[^@]*@/, ':****@');
+  }
+}
+
 // Neon's serverless driver can't reach plain TCP Postgres; route Neon URLs to it, everything else via `pg`.
 export function isNeonUrl(url: string): boolean {
   if (!url) return false;
@@ -14,7 +24,7 @@ export function isNeonUrl(url: string): boolean {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`Invalid DATABASE_URL: "${url}". Expected a valid postgres connection string.`);
+    throw new Error(`Invalid DATABASE_URL: "${redactDatabaseUrl(url)}". Expected a valid postgres connection string.`);
   }
   const host = parsed.hostname;
   return host.endsWith('.neon.tech') || host.endsWith('.neon.app');

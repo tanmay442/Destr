@@ -73,7 +73,18 @@ function makeDeps(overrides: DepsOverrides = {}) {
   const answerCacheKey = vi.fn((query: string, ctx: { userId?: string; fingerprint?: string }) =>
     `rag:answer:${query}-${ctx.userId ?? ''}-${ctx.fingerprint ?? ''}`,
   );
-  const rateLimit = { check: vi.fn(async () => ({ ok: true as const, remaining: 29, resetMs: 60_000 })) };
+  const rateLimit = {
+    check: vi.fn(
+      async (_key: string, _opts: { limit: number; windowMs: number }): Promise<
+        | { ok: true; remaining: number; resetMs: number }
+        | { ok: false; retryAfterMs: number }
+      > => {
+        void _key;
+        void _opts;
+        return { ok: true, remaining: 29, resetMs: 60_000 };
+      },
+    ),
+  };
   const createTicket = vi.fn(async () => ok({ ticketId: 'TKT-abcdef12', status: 'created' as const }));
   const userResolver = vi.fn(async () => ({
     userId: 'user_test',
@@ -319,7 +330,7 @@ describe('chatTurn', () => {
     expect(ctx.chatModel).toBe('gpt-4o-mini');
     expect(ctx.fingerprint).toContain('"mode":"agentic"');
     expect(ctx.fingerprint).toContain('"retrievalMode":"agentic"');
-    expect(ctx.fingerprint).toContain('"promptVersion":2');
+    expect(ctx.fingerprint).toContain('"promptVersion":3');
   });
 
   it('does not cache an out-of-domain answer', async () => {
@@ -416,7 +427,7 @@ describe('chatTurn', () => {
     expect(citations).toHaveLength(1);
   });
 
-  it('caps tool content at 800 chars with an ellipsis', async () => {
+  it('caps tool content at 800 chars with an ellipsis, wrapped in untrusted reference framing', async () => {
     const { deps, fakes } = makeDeps();
     fakes.searchChunks.mockResolvedValueOnce(ok([{ ...CHUNK, content: 'x'.repeat(2000) }]) as never);
     const { captured } = captureTools();
@@ -426,8 +437,9 @@ describe('chatTurn', () => {
     const out = (await captured.current?.searchDocumentation?.execute({ query: 'q' })) as Array<{
       content: string;
     }>;
-    expect(out[0]?.content.length).toBe(801);
-    expect(out[0]?.content.endsWith('\u2026')).toBe(true);
+    expect(out[0]?.content).toBe(
+      `<reference source="${CHUNK.source}">\n${'x'.repeat(800)}\u2026\n</reference>`,
+    );
   });
 
   it('uses the agentic retrieval path with a rewritten query flag when effective mode is agentic', async () => {
@@ -545,6 +557,54 @@ describe('chatTurn', () => {
     closeLlm();
     await readParts(result.stream);
     expect(out).toEqual({ ticketId: null, status: 'error' });
+  });
+
+  it('blocks a second ticket creation in the same turn', async () => {
+    const { deps, fakes } = makeDeps();
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const first = await captured.current?.createKnowledgeTicket?.execute({
+      name: 'A',
+      email: 'a@a.com',
+      issue: 'first ticket',
+    });
+    const second = await captured.current?.createKnowledgeTicket?.execute({
+      name: 'B',
+      email: 'b@b.com',
+      issue: 'second ticket',
+    });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.createTicket).toHaveBeenCalledTimes(1);
+    expect(first).toMatchObject({ ticketId: 'TKT-abcdef12', status: 'created' });
+    expect(second).toMatchObject({ ticketId: null, status: 'error' });
+    expect((second as { message?: string }).message).toContain('already created');
+  });
+
+  it('rate limits ticket creation to one per user per 5 minutes', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.rateLimit.check.mockImplementation(async (key: string) =>
+      key.startsWith('ticket:')
+        ? { ok: false, retryAfterMs: 120_000 }
+        : { ok: true, remaining: 29, resetMs: 60_000 },
+    );
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const out = await captured.current?.createKnowledgeTicket?.execute({
+      name: 'A',
+      email: 'a@a.com',
+      issue: 'blocked by rate limit',
+    });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.createTicket).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ ticketId: null, status: 'error' });
+    expect((out as { message?: string }).message).toContain('rate limited');
+    expect(fakes.rateLimit.check).toHaveBeenCalledWith('ticket:user_test', { limit: 1, windowMs: 300_000 });
   });
 
   it('falls back to Unknown / synthetic email when the resolver has no profile', async () => {

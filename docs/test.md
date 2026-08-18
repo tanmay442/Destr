@@ -35,6 +35,10 @@ pnpm test:ui
 
 # Run CI-style test suite (provisions and teardowns test DB):
 pnpm test:ci
+
+# Run against an explicitly supplied existing DATABASE_URL when Neon branch
+# credentials are unavailable (intentional opt-in):
+pnpm setup-test-db --use-existing
 ```
 
 ---
@@ -112,6 +116,11 @@ vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
 ```
 
 When writing new tests that assert "absent credential" errors, always stub the variable explicitly rather than relying on ambient shell environment state.
+
+`setup-test-db` refuses to use an ambient `DATABASE_URL` when
+`NEON_PROJECT_ID`/`NEON_API_KEY` are missing unless `--use-existing` is passed.
+The blob backfill is also guarded: it defaults to a dry run and requires
+`--confirm`; use `--allow-non-prod` only for an intentional non-production run.
 
 ---
 

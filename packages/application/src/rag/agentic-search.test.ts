@@ -176,13 +176,13 @@ describe('agenticSearch', () => {
     expect(unwrap(res).outOfDomain).toBe(true);
   });
 
-  it('keeps a chunk when its grader call throws instead of aborting the search', async () => {
+  it('drops a chunk whose grader call throws (fail closed)', async () => {
     searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.8)]));
     graderMock.mockRejectedValue(new Error('model down'));
     const res = await agenticSearch('q', makeDeps());
     expect(res.ok).toBe(true);
-    expect(unwrap(res).chunks).toHaveLength(1);
-    expect(unwrap(res).chunks[0]!.content).toBe('doc');
+    expect(unwrap(res).chunks).toHaveLength(0);
+    expect(unwrap(res).outOfDomain).toBe(false);
   });
 
   it('flags out-of-domain against a runtime outOfDomainThreshold', async () => {

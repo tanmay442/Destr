@@ -41,6 +41,7 @@ export interface UserRow {
 
 export interface DocumentRepository {
   findByName(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
+  findByNameForUpdate?(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   findById(id: number, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   setStorageKey(id: number, key: string): Promise<void>;
   updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
@@ -216,6 +217,7 @@ export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore
 
 export interface TicketRepository {
   findByTicketId(ticketId: string): Promise<TicketRow | null>;
+  findByTicketIdForUpdate?(ticketId: string): Promise<TicketRow | null>;
   list(
     opts: {
       status?: 'created' | 'in_progress' | 'closed' | undefined;

@@ -20,11 +20,14 @@ import * as route from './route';
 
 const ORIGINAL_ENV = { ...process.env };
 
-function signedToken(iatSec = Math.floor(Date.now() / 1000)): string {
+function signedToken(iatSec?: number): string {
+  const iat = iatSec ?? Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString('base64url');
-  const payload = Buffer.from(JSON.stringify({ iat: iatSec })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ iat, test: nonce++ })).toString('base64url');
   return `${header}.${payload}.sig`;
 }
+
+let nonce = 0;
 
 function signedPost(body: string, signature = signedToken()): Request {
   return new Request('http://x/api/admin/ingest-worker', {
@@ -145,5 +148,26 @@ describe('POST /api/admin/ingest-worker', () => {
     ingestQueuedDocumentMock.mockResolvedValue(err(new ExternalServiceError('embed down')));
     const res = await route.POST(signedPost(JSON.stringify({ documentId: 5 })));
     expect(res.status).toBe(500);
+  });
+
+  it('returns 200 already-processed for a replayed successful signature without re-ingesting', async () => {
+    verifyMock.mockResolvedValue(true);
+    ingestQueuedDocumentMock.mockResolvedValue(ok({ status: 'done', chunks: 7 }));
+    const signature = signedToken();
+    const first = await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signature));
+    expect(first.status).toBe(200);
+    const second = await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signature));
+    expect(second.status).toBe(200);
+    const json = await second.json();
+    expect(json).toMatchObject({ ok: true, status: 'already-processed', chunks: 0 });
+    expect(ingestQueuedDocumentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dedupe across different signatures', async () => {
+    verifyMock.mockResolvedValue(true);
+    ingestQueuedDocumentMock.mockResolvedValue(ok({ status: 'done', chunks: 7 }));
+    await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signedToken()));
+    await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signedToken()));
+    expect(ingestQueuedDocumentMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { ForbiddenError, ExternalServiceError } from '@app/domain';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { ForbiddenError, ExternalServiceError, logger } from '@app/domain';
 import type { TransactionContext } from '@app/domain';
 import { setUserRole } from '../users';
 import type { UserRepository, AuditLog } from '@app/domain';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function makeDeps(overrides?: {
   users?: Partial<UserRepository>;
@@ -159,5 +163,79 @@ describe('setUserRole', () => {
     expect(result.ok).toBe(true);
     expect(countAdminsForUpdate).toHaveBeenCalled();
     expect(setRole).toHaveBeenCalledWith('admin_1', 'user');
+  });
+
+  it('audits the rollback and logs when Clerk sync fails', async () => {
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const logUserEvent = vi.fn().mockResolvedValue(undefined);
+    const setRole = vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'admin' });
+    const syncClerkRole = vi.fn().mockRejectedValue(new Error('Clerk down'));
+    const deps = makeDeps({
+      users: {
+        setRole,
+        findByClerkId: vi.fn((id: string) =>
+          Promise.resolve({ clerkUserId: id, role: id === 'user_1' ? 'user' : 'admin' } as never),
+        ),
+      },
+      syncClerkRole,
+      audit: { logUserEvent },
+    });
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ExternalServiceError);
+      expect(result.error.message).toMatch(/Failed to sync Clerk role/);
+    }
+    expect(setRole).toHaveBeenLastCalledWith('user_1', 'user');
+    expect(logUserEvent).toHaveBeenCalledWith({
+      targetUserId: 'user_1',
+      actorId: 'actor_1',
+      fromRole: 'admin',
+      toRole: 'user',
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toMatch(/rolled back/i);
+  });
+
+  it('logs and audits the committed change when the DB rollback also fails', async () => {
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const logUserEvent = vi.fn().mockResolvedValue(undefined);
+    const setRole = vi
+      .fn()
+      .mockResolvedValueOnce({ clerkUserId: 'user_1', role: 'admin' })
+      .mockRejectedValueOnce(new Error('rollback DB down'));
+    const syncClerkRole = vi.fn().mockRejectedValue(new Error('Clerk down'));
+    const deps = makeDeps({
+      users: {
+        setRole,
+        findByClerkId: vi.fn((id: string) =>
+          Promise.resolve({ clerkUserId: id, role: id === 'user_1' ? 'user' : 'admin' } as never),
+        ),
+      },
+      syncClerkRole,
+      audit: { logUserEvent },
+    });
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'admin', actorId: 'actor_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/rollback failed/i);
+    }
+    expect(logUserEvent).toHaveBeenCalledWith({
+      targetUserId: 'user_1',
+      actorId: 'actor_1',
+      fromRole: 'user',
+      toRole: 'admin',
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toMatch(/rollback also failed/i);
+    expect(errorSpy.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ requestedRole: 'admin' }),
+    );
   });
 });

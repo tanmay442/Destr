@@ -124,8 +124,18 @@ export function splitSentences(
   let lastEnd = 0;
   let buf = '';
   let bufStart = 0;
+  // Cap the abbreviation-accumulation buffer: text like "Dr. Dr. Dr. …" would
+  // otherwise make every iteration re-trim a growing string (O(n²)). When the
+  // cap is exceeded, emit what has accumulated plainly and keep abbreviation
+  // detection on the remainder. hardSplit already bounds output at maxLen.
+  const MAX_BUF = 10_000;
   while ((m = re.exec(masked)) !== null) {
     const piece = m[0].split(MASK).join(".");
+    if (buf.length > 0 && buf.length + piece.length > MAX_BUF) {
+      out.push({ text: buf.trim(), start: bufStart });
+      buf = '';
+      bufStart = m.index;
+    }
     const start = buf.length === 0 ? m.index : bufStart;
     buf += piece;
     if (!ABBREVIATIONS.test(buf.trim())) {

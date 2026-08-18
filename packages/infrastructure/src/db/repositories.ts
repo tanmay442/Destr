@@ -7,10 +7,12 @@ import {
   users,
   auditEvents,
   auditDeadLetter,
+  chatEvents,
+  appSettings,
   type Document,
 } from './schema';
 import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
-import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
+import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, logger } from '@app/domain';
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
 import { createVectorSearch } from './vector-search';
 import { createLexicalSearch } from './lexical-search';
@@ -37,6 +39,10 @@ function whereAnd(parts: ReturnType<typeof eq>[]) {
   return and(...parts);
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
 export async function findDocumentByName(
   name: string,
   client: Client = db,
@@ -45,6 +51,20 @@ export async function findDocumentByName(
   const parts = [eq(documents.fileName, name)];
   if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
   const row = await client.query.documents.findFirst({ where: whereAnd(parts) });
+  return (row as Document | undefined) ?? null;
+}
+
+export async function findDocumentByNameForUpdate(
+  name: string,
+  client: Client = db,
+  opts?: { includeDeleted?: boolean | undefined },
+): Promise<Document | null> {
+  const [row] = await client
+    .select()
+    .from(documents)
+    .where(and(eq(documents.fileName, name), ...(opts?.includeDeleted ? [] : [isNull(documents.deletedAt)])))
+    .limit(1)
+    .for('update');
   return (row as Document | undefined) ?? null;
 }
 
@@ -193,7 +213,7 @@ export async function listDocuments(
 ): Promise<{ documents: Array<Document & { hasBlob: boolean }>; total: number }> {
   const whereParts = [] as ReturnType<typeof eq>[];
   if (!opts.includeDeleted) whereParts.push(isNull(documents.deletedAt));
-  if (opts.search) whereParts.push(ilike(documents.fileName, `%${opts.search.replace(/[%_]/g, '\\$&')}%`));
+  if (opts.search) whereParts.push(ilike(documents.fileName, `%${escapeLikePattern(opts.search)}%`));
   const where = whereAnd(whereParts);
   const limit = Math.min(Math.max(opts.limit, 1), 500);
   const offset = Math.max(opts.offset, 0);
@@ -226,6 +246,10 @@ export const ticketRepo = {
     const row = await client.query.tickets.findFirst({ where: eq(tickets.ticketId, ticketId) });
     return (row as TicketRow | undefined) ?? null;
   },
+  async findByTicketIdForUpdate(ticketId: string, client: Client = db): Promise<TicketRow | null> {
+    const [row] = await client.select().from(tickets).where(eq(tickets.ticketId, ticketId)).for('update');
+    return (row as TicketRow | undefined) ?? null;
+  },
   async list(opts: {
     status?: 'created' | 'in_progress' | 'closed' | undefined;
     assignee?: string | null | undefined;
@@ -240,7 +264,7 @@ export const ticketRepo = {
     if (opts.assignee !== undefined && opts.assignee !== null) {
       whereParts.push(eq(tickets.assignedTo, opts.assignee));
     }
-    if (opts.search) whereParts.push(ilike(tickets.issue, `%${opts.search.replace(/[%_]/g, '\\$&')}%`));
+    if (opts.search) whereParts.push(ilike(tickets.issue, `%${escapeLikePattern(opts.search)}%`));
     const where = whereAnd(whereParts);
     const rows = await client
       .select({
@@ -361,6 +385,74 @@ function median(values: number[]): number {
   return Math.round(value);
 }
 
+// Rebinding an email to a new clerk id reassigns every record owned by the old
+// identity (documents, tickets, chats, audit trail, settings). Only adopt a row
+// when the email is verified AND the row is provably fresh; otherwise fail
+// closed so recycled emails can never inherit another account's data or role.
+async function rebindEmailIdentity(
+  client: Client,
+  input: { clerkUserId: string; email: string; name?: string | null; imageUrl?: string | null; emailVerified?: boolean | undefined },
+): Promise<UserRow> {
+  const existing = await client.query.users.findFirst({ where: eq(users.email, input.email) });
+  if (!existing) {
+    logger.error('[userRepo] email-conflict rebind refused: conflicting row no longer exists', {
+      email: input.email,
+      clerkUserId: input.clerkUserId,
+    });
+    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to another account; refusing to reassign it.`);
+  }
+  if (existing.clerkUserId === input.clerkUserId) return existing as UserRow;
+  if (input.emailVerified !== true) {
+    logger.error('[userRepo] email-conflict rebind refused: email not verified', {
+      email: input.email,
+      clerkUserId: input.clerkUserId,
+      existingClerkUserId: existing.clerkUserId,
+    });
+    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} and email verification is not confirmed; refusing to reassign the account.`);
+  }
+  if (await userHasOwnedHistory(client, existing.clerkUserId)) {
+    logger.error('[userRepo] email-conflict rebind refused: existing account owns data', {
+      email: input.email,
+      clerkUserId: input.clerkUserId,
+      existingClerkUserId: existing.clerkUserId,
+    });
+    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} which owns data; refusing to reassign its history.`);
+  }
+  const [row] = await client
+    .update(users)
+    .set({
+      clerkUserId: input.clerkUserId,
+      email: input.email,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
+    })
+    .where(eq(users.email, input.email))
+    .returning();
+  if (!row) {
+    logger.error('[userRepo] email-conflict rebind failed: conflicting row vanished before update', {
+      email: input.email,
+      clerkUserId: input.clerkUserId,
+    });
+    throw new Error(`Failed to reassign email ${input.email} to Clerk user ${input.clerkUserId}.`);
+  }
+  return row as UserRow;
+}
+
+async function userHasOwnedHistory(client: Client, clerkUserId: string): Promise<boolean> {
+  if (await client.query.documents.findFirst({ where: eq(documents.uploadedBy, clerkUserId) })) return true;
+  if (await client.query.tickets.findFirst({ where: eq(tickets.userId, clerkUserId) })) return true;
+  if (await client.query.chatEvents.findFirst({ where: eq(chatEvents.userId, clerkUserId) })) return true;
+  if (
+    await client.query.auditEvents.findFirst({
+      where: or(
+        eq(auditEvents.actorId, clerkUserId),
+        and(eq(auditEvents.targetType, 'user'), eq(auditEvents.targetId, clerkUserId)),
+      ),
+    })
+  ) return true;
+  return (await client.query.appSettings.findFirst({ where: eq(appSettings.updatedBy, clerkUserId) })) != null;
+}
+
 export const userRepo = {
   async upsertFromClerk(input: {
     clerkUserId: string;
@@ -368,11 +460,18 @@ export const userRepo = {
     name?: string | null;
     imageUrl?: string | null;
     role: 'admin' | 'user';
+    emailVerified?: boolean | undefined;
   }, client: Client = db): Promise<UserRow> {
     const run = async (tx: Client): Promise<UserRow> => {
       const [row] = await tx
         .insert(users)
-        .values(input)
+        .values({
+          clerkUserId: input.clerkUserId,
+          email: input.email,
+          name: input.name,
+          imageUrl: input.imageUrl,
+          role: input.role,
+        })
         .onConflictDoUpdate({
           target: users.clerkUserId,
           set: {
@@ -390,26 +489,10 @@ export const userRepo = {
     try {
       return await run(client);
     } catch (err) {
-      // The email already exists under a different clerk_user_id (e.g. the
-      // Clerk identity changed across instances/providers, so the current
-      // session's id differs from the row created earlier). Reassign the
-      // existing row to the current identity so its history (documents,
-      // tickets, chats) stays attached, then retry the upsert.
-      // drizzle wraps the pg error in DrizzleQueryError; code/constraint
-      // live on its `cause`.
       const wrapped = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
       const pgErr = wrapped.code === '23505' ? wrapped : wrapped.cause;
       if (pgErr?.code === '23505' && pgErr.constraint === 'users_email_unique') {
-        await client
-          .update(users)
-          .set({
-            clerkUserId: input.clerkUserId,
-            role: input.role,
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
-          })
-          .where(eq(users.email, input.email));
-        return run(client);
+        return rebindEmailIdentity(client, input);
       }
       throw err;
     }
@@ -436,8 +519,8 @@ export const userRepo = {
     const search = opts.search?.trim();
     const where = search
       ? or(
-          ilike(users.email, `%${search.replace(/[%_]/g, '\\$&')}%`),
-          ilike(users.name, `%${search.replace(/[%_]/g, '\\$&')}%`),
+          ilike(users.email, `%${escapeLikePattern(search)}%`),
+          ilike(users.name, `%${escapeLikePattern(search)}%`),
         )
       : undefined;
     const limit = Math.min(Math.max(opts.limit, 1), MAX_LIST_LIMIT);
@@ -601,6 +684,7 @@ import type { TransactionRunner, TransactionContext, DocumentRepository, ChunkRe
 export function createDocumentRepo(client: Client): DocumentRepository {
   return {
     findByName: (name, opts) => findDocumentByName(name, client, opts),
+    findByNameForUpdate: (name, opts) => findDocumentByNameForUpdate(name, client, opts),
     findById: (id, opts) => findDocumentById(id, client, opts),
     setStorageKey: (id, key) => setDocumentStorageKey(id, key, client),
     updateIngestStatus: (id, status) => updateDocumentIngestStatus(id, status, client),
@@ -673,6 +757,7 @@ export function createAuditRepo(client: Client = db): AuditLog {
 export function createTicketRepo(client: Client = db): TicketRepository {
   return {
     findByTicketId: (ticketId) => ticketRepo.findByTicketId(ticketId, client),
+    findByTicketIdForUpdate: (ticketId) => ticketRepo.findByTicketIdForUpdate(ticketId, client),
     list: (opts) => ticketRepo.list(opts, client),
     latest: () => ticketRepo.latest(client),
     insert: (input) => ticketRepo.insert(input, client),

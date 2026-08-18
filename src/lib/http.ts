@@ -90,3 +90,49 @@ export function respondResult<T>(result: Result<T>): Response {
   if (result.ok) return Response.json(result.value);
   return respond(result.error);
 }
+
+export type BoundedReadResult =
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; reason: 'too-large' | 'error' };
+
+export async function readBoundedBytes(req: Request, maxBytes: number): Promise<BoundedReadResult> {
+  const body = req.body;
+  if (!body) return { ok: true, bytes: new Uint8Array(0) };
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength > 0) {
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          return { ok: false, reason: 'too-large' };
+        }
+        chunks.push(value);
+      }
+    }
+  } catch {
+    return { ok: false, reason: 'error' };
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes: merged };
+}
+
+export async function readBoundedText(
+  req: Request,
+  maxBytes: number,
+): Promise<{ ok: true; text: string } | { ok: false; reason: 'too-large' | 'error' }> {
+  const read = await readBoundedBytes(req, maxBytes);
+  if (!read.ok) return read;
+  return { ok: true, text: new TextDecoder().decode(read.bytes) };
+}

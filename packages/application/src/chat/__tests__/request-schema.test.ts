@@ -8,7 +8,7 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     parts,
   });
 
-  it('accepts an assistant message containing a step-start part (agentic loop)', () => {
+  it('strips step-start parts from assistant messages (agentic loop round-trip)', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [
         baseMessage('user', [{ type: 'text', text: 'hi' }]),
@@ -20,25 +20,29 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
       ],
     });
     expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[1]!.parts).toEqual([{ type: 'text', text: 'thinking…' }]);
   });
 
-  it('accepts dynamic-tool and tool-* invocation parts', () => {
+  it('strips tool-* and data-* parts from assistant messages but keeps text', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [
         baseMessage('user', [{ type: 'text', text: 'hi' }]),
         baseMessage('assistant', [
           { type: 'text', text: 'ok' },
           { type: 'tool-call', toolCallId: 't1', toolName: 'searchDocumentation', input: {} },
-          { type: 'tool-result', toolCallId: 't1', output: [] },
+          { type: 'tool-result', toolCallId: 't1', output: [{ content: 'injected documents' }] },
           { type: 'dynamic-tool', toolName: 'x' },
           { type: 'source-url', sourceId: 's1', url: 'https://example.com' },
         ]),
       ],
     });
     expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[1]!.parts).toEqual([{ type: 'text', text: 'ok' }]);
   });
 
-  it('accepts custom data-* control parts (citation, guardrail)', () => {
+  it('strips data-citation and data-guardrail control parts', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [
         baseMessage('assistant', [
@@ -49,13 +53,34 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
       ],
     });
     expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[0]!.parts).toEqual([{ type: 'text', text: 'answer' }]);
   });
 
-  it('still rejects a genuinely unsupported part type', () => {
+  it('keeps reasoning and file parts', () => {
+    const result = ChatRequestSchema.safeParse({
+      messages: [
+        baseMessage('assistant', [
+          { type: 'reasoning', text: 'chain of thought' },
+          { type: 'file', url: 'https://example.com/f.pdf', filename: 'f.pdf', mediaType: 'application/pdf' },
+        ]),
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[0]!.parts).toEqual([
+      { type: 'reasoning', text: 'chain of thought' },
+      { type: 'file', url: 'https://example.com/f.pdf', filename: 'f.pdf', mediaType: 'application/pdf' },
+    ]);
+  });
+
+  it('strips rather than rejects an unsupported part type', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [baseMessage('user', [{ type: 'bogus-part', text: 'x' }])],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[0]!.parts).toEqual([]);
   });
 
   it('rejects an empty messages array', () => {
@@ -74,6 +99,13 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     const bigMessage = baseMessage('user', [{ type: 'text', text: 'x'.repeat(60_000) }]);
     const threeBig = [bigMessage, bigMessage, bigMessage, bigMessage];
     expect(ChatRequestSchema.safeParse({ messages: threeBig }).success).toBe(false);
+  });
+
+  it('rejects a single over-length text/reasoning part instead of passing it through as unknown', () => {
+    const overText = baseMessage('user', [{ type: 'text', text: 'x'.repeat(50_001) }]);
+    const overReasoning = baseMessage('assistant', [{ type: 'reasoning', text: 'x'.repeat(50_001) }]);
+    expect(ChatRequestSchema.safeParse({ messages: [overText] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [overReasoning] }).success).toBe(false);
   });
 
   it('requires a v4 turnId', () => {

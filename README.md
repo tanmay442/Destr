@@ -115,12 +115,22 @@ pnpm chunks:preview path/to/document.pdf
 | Script | Purpose |
 |---|---|
 | `pnpm dev` | Start Next.js development server |
-| `pnpm build` | Run database migrations & production build |
+| `pnpm build` | Run local database migrations, then the production build |
 | `pnpm gate` | Run full quality gate (`test` + `typecheck` + `lint` + `arch`) |
 | `pnpm gate:build` | Run quality gate and production build validation |
 | `pnpm db:push` | Push schema changes directly to local database |
 | `pnpm db:migrate` | Execute pending Drizzle SQL migrations |
 | `pnpm eval` | Run RAG evaluation harness over golden dataset |
+
+Production migrations are not run by Vercel or the Docker build. The gated
+`deploy` job in `.github/workflows/ci.yml` runs them with
+`MIGRATION_DATABASE_URL`; keep the runtime `DATABASE_URL` on the least-
+privilege app role. For Docker builds, pass the public client values explicitly:
+`--build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=... --build-arg NEXT_PUBLIC_APP_URL=...`.
+
+For multi-instance deployments, configure Upstash Redis for shared rate limits
+and answer-cache state. The chat endpoint allows two in-flight streams per
+process, so this is not a distributed concurrency limit.
 
 ---
 

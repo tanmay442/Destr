@@ -6,6 +6,7 @@ import {
   NotFoundError,
   ValidationError,
   GoneError,
+  ConflictError,
 } from '@app/domain';
 import type {
   DocumentRepository,
@@ -17,14 +18,25 @@ import type {
   BlobStorage,
   IngestQueue,
   IngestStatus,
-  Hasher,
-  DocumentRow,
 } from '@app/domain';
-import { ingestFile, parseAndEmbed } from '../rag/ingest';
+import {
+  parseAndEmbed,
+  writeChunks,
+  claimDocumentByName,
+  nameStillClaimed,
+  UPLOAD_CONFLICT_MESSAGE,
+  type RowPrevious,
+} from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '@app/domain';
 import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
 import { requireAdminActor } from './authz';
+
+function isDocumentNameConflict(error: unknown): boolean {
+  const wrapped = error as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
+  const pgError = wrapped.code ? wrapped : wrapped.cause;
+  return pgError?.code === '23505' && pgError.constraint === 'documents_file_name_unique';
+}
 
 function newBlobKey(fileName: string): string {
   const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
@@ -107,53 +119,9 @@ export async function listDocuments(
 /** ≥4 MB uses the async QStash path (when async ingest is enabled). */
 const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
 
-interface PreparedReplacement {
-  fileHash: string;
-  key: string;
-  oldStorageKey: string | null;
-}
-
-async function prepareReplacementBlob(
-  input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: { hasher: Hasher; blobStorage: BlobStorage; documents: DocumentRepository },
-  existing: { id: number; fileHash: string; storageKey: string | null } | null,
-): Promise<Result<{ unchanged: true; documentId: number } | ({ unchanged: false } & PreparedReplacement)>> {
-  const fileHash = deps.hasher.sha256(input.buffer);
-  if (existing && existing.fileHash === fileHash) {
-    return ok({ unchanged: true, documentId: existing.id });
-  }
-  const key = newBlobKey(input.fileName);
-  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
-  return ok({ unchanged: false, fileHash, key, oldStorageKey: existing?.storageKey ?? null });
-}
-
-async function resolveUploadTarget(
-  fileName: string,
-  deps: { documents: DocumentRepository },
-): Promise<{ doc: DocumentRow | null; supersededKey: string | null }> {
-  const found = await deps.documents.findByName(fileName, { includeDeleted: true });
-  if (!found) return { doc: null, supersededKey: null };
-  if (found.deletedAt && Date.now() - found.deletedAt.getTime() > RESTORE_WINDOW_MS) {
-    return { doc: null, supersededKey: found.storageKey };
-  }
-  return { doc: found, supersededKey: found.storageKey };
-}
-
-async function restoreForReupload(
-  row: DocumentRow | null,
-  actorId: string,
-  deps: { documents: DocumentRepository; audit: AuditLog; runner: TransactionRunner },
-): Promise<void> {
-  if (!row?.deletedAt) return;
-  await deps.runner.run(async (tx) => {
-    await tx.documents.restore(row.id);
-    await tx.audit.logDocumentEvent({ action: 'restore', documentId: row.id, actorId });
-  });
-}
-
 async function rollbackEnqueueFailure(
   row: { id: number; storageKey: string | null },
-  previous: { fileHash: string | null; status: IngestStatus | null; storageKey: string | null },
+  previous: RowPrevious,
   deps: { documents: DocumentRepository; blobStorage: BlobStorage },
 ): Promise<void> {
   if (previous.fileHash) {
@@ -199,39 +167,51 @@ async function uploadPdfSync(
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
   const fileHash = deps.hasher.sha256(input.buffer);
-  const target = await resolveUploadTarget(input.fileName, deps);
-  const existing = target.doc;
-  if (existing && existing.fileHash === fileHash) {
-    await restoreForReupload(existing, input.actorId, deps);
-    return ok({ documentId: existing.id, chunks: 0, status: 'unchanged' });
-  }
-  const oldStorageKey = existing?.storageKey ?? target.supersededKey;
-  // Upload blob BEFORE the DB tx so a rollback never orphans a committed row's blob.
   const key = newBlobKey(input.fileName);
   await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+  let oldStorageKey: string | null = null;
   let result: Result<IngestResult>;
   try {
     result = await deps.runner.run(async (tx) => {
-      const res = await ingestFile(
-        { fileName: input.fileName, buffer: input.buffer, uploadedBy: input.actorId },
-        {
-          ...deps,
-          documents: tx.documents,
-          chunks: tx.chunks,
-          runner: { run: (fn) => fn(tx) },
-        },
+      const claim = await claimDocumentByName(input.fileName, fileHash, tx.documents);
+      if (claim.kind === 'unchanged') {
+        if (claim.restore) {
+          await tx.documents.restore(claim.documentId);
+          await tx.audit.logDocumentEvent({ action: 'restore', documentId: claim.documentId, actorId: input.actorId });
+        }
+        return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
+      }
+      if (claim.kind === 'replace' || claim.kind === 'resurrect') {
+        oldStorageKey = claim.previous.storageKey;
+      } else {
+        oldStorageKey = claim.oldStorageKey;
+      }
+      const parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer }, deps);
+      if (!parsed.ok) return parsed;
+      const outcome = await writeChunks(
+        tx.documents,
+        tx.chunks,
+        { fileName: input.fileName, fileHash, uploadedBy: input.actorId },
+        parsed.value.rows,
       );
-      if (!res.ok) return res;
-      await tx.documents.setStorageKey(res.value.documentId, key);
+      if (!(await nameStillClaimed(input.fileName, fileHash, tx.documents))) {
+        return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+      }
+      await tx.documents.setStorageKey(outcome.documentId, key);
       await tx.audit.logDocumentEvent({
-        action: res.value.status === 'inserted' ? 'upload' : 'replace',
-        documentId: res.value.documentId,
+        action: claim.kind === 'replace' ? 'replace' : 'upload',
+        documentId: outcome.documentId,
         actorId: input.actorId,
       });
-      return res;
+      return ok({
+        documentId: outcome.documentId,
+        chunks: parsed.value.chunks,
+        status: claim.kind === 'replace' ? 'updated' : 'inserted',
+      });
     });
   } catch (e) {
     await cleanupUncommittedBlob(key, deps);
+    if (isDocumentNameConflict(e)) return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
     throw e;
   }
   if (!result.ok) {
@@ -250,47 +230,62 @@ async function queuePdfForIngest(
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
   auditFor: (newDocumentId: number) => { action: 'upload' | 'replace'; documentId: number },
 ): Promise<Result<IngestResult>> {
-  const target = await resolveUploadTarget(input.fileName, deps);
-  const existing = target.doc;
-  const prepared = await prepareReplacementBlob(input, deps, existing);
-  if (!prepared.ok) return prepared;
-  if (prepared.value.unchanged) {
-    await restoreForReupload(existing, input.actorId, deps);
-    return ok({ documentId: prepared.value.documentId, chunks: 0, status: 'unchanged' });
-  }
-  const { fileHash, key } = prepared.value;
-  const oldStorageKey = prepared.value.oldStorageKey ?? target.supersededKey;
-  const previous = {
-    fileHash: existing?.fileHash ?? null,
-    status: existing?.ingestStatus ?? null,
-    storageKey: existing?.storageKey ?? null,
-  };
-  let row: DocumentRow;
+  const fileHash = deps.hasher.sha256(input.buffer);
+  const key = newBlobKey(input.fileName);
+  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+  let previous: RowPrevious = { fileHash: null, status: null, storageKey: null };
+  let oldStorageKey: string | null = null;
+  let result: Result<IngestResult>;
   try {
-    row = await deps.runner.run(async (tx) => {
-      const doc = existing
-        ? await tx.documents.update(existing.id, { fileName: input.fileName, fileHash, uploadedBy: input.actorId })
-        : await tx.documents.insert({ fileName: input.fileName, fileHash, uploadedBy: input.actorId });
+    result = await deps.runner.run(async (tx) => {
+      const claim = await claimDocumentByName(input.fileName, fileHash, tx.documents);
+      if (claim.kind === 'unchanged') {
+        if (claim.restore) {
+          await tx.documents.restore(claim.documentId);
+          await tx.audit.logDocumentEvent({ action: 'restore', documentId: claim.documentId, actorId: input.actorId });
+        }
+        return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
+      }
+      if (claim.kind === 'replace' || claim.kind === 'resurrect') {
+        previous = claim.previous;
+        oldStorageKey = claim.previous.storageKey;
+      } else {
+        oldStorageKey = claim.oldStorageKey;
+      }
+      const doc =
+        claim.kind === 'insert'
+          ? await tx.documents.insert({ fileName: input.fileName, fileHash, uploadedBy: input.actorId })
+          : await tx.documents.update(claim.documentId, { fileName: input.fileName, fileHash, uploadedBy: input.actorId });
+      if (!(await nameStillClaimed(input.fileName, fileHash, tx.documents))) {
+        return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+      }
       await tx.documents.setStorageKey(doc.id, key);
       await tx.documents.updateIngestStatus(doc.id, 'queued');
       const a = auditFor(doc.id);
       await tx.audit.logDocumentEvent({ action: a.action, documentId: a.documentId, actorId: input.actorId });
-      return doc;
+      return ok({ documentId: doc.id, chunks: 0, status: 'queued' });
     });
   } catch (e) {
     await cleanupUncommittedBlob(key, deps);
+    if (isDocumentNameConflict(e)) return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
     throw e;
   }
-  try {
-    await deps.ingestQueue.enqueue({ documentId: row.id });
-  } catch (e) {
-    await rollbackEnqueueFailure({ id: row.id, storageKey: key }, previous, deps);
-    throw e;
+  if (!result.ok) {
+    await cleanupUncommittedBlob(key, deps);
+    return result;
+  }
+  if (result.value.status === 'queued') {
+    try {
+      await deps.ingestQueue.enqueue({ documentId: result.value.documentId });
+    } catch (e) {
+      await rollbackEnqueueFailure({ id: result.value.documentId, storageKey: key }, previous, deps);
+      throw e;
+    }
   }
   if (oldStorageKey) {
     await deps.blobStorage.delete(oldStorageKey).catch(() => {});
   }
-  return ok({ documentId: row.id, chunks: 0, status: 'queued' });
+  return result;
 }
 
 export async function softDeleteDocument(
@@ -317,12 +312,10 @@ export async function softDeleteDocument(
 export async function restoreDocument(
   documentId: number,
   actorId: string,
-  deps: { documents: DocumentRepository; audit: AuditLog; clock: Clock; runner: TransactionRunner; users?: UserRepository },
+  deps: { documents: DocumentRepository; audit: AuditLog; clock: Clock; runner: TransactionRunner; users: UserRepository },
 ): Promise<Result<void>> {
-  if (deps.users) {
-    const authz = await requireAdminActor(actorId, { users: deps.users });
-    if (!authz.ok) return authz;
-  }
+  const authz = await requireAdminActor(actorId, { users: deps.users });
+  if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     const doc = await deps.documents.findById(documentId, { includeDeleted: true });
     if (!doc) return err(new NotFoundError('Document not found'));

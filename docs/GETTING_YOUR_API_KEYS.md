@@ -79,6 +79,10 @@ local LM Studio, etc.).
 
 ## Cloudflare R2 (prod blob storage)
 
+Production must set `BLOB_STORAGE_PROVIDER=r2` (or use the S3-compatible
+provider below). Do not rely on the local filesystem backend in a serverless
+deployment; it is ephemeral.
+
 1. Go to https://dash.cloudflare.com → **R2 Object Storage** (sign up
    if needed; requires a Cloudflare account + payment method on file
    even for the free tier).
@@ -151,3 +155,7 @@ locally. `pnpm eval` runs a mock harness with zero external deps; set
    production URL.
 4. Without `QSTASH_TOKEN`, all uploads go through the synchronous path
    (≤4 MB, blocks until ingest completes). Fine for small docs.
+
+`QSTASH_TOKEN` is read directly from the process environment. Keep it in the
+deployment secret store and do not serialize it as part of application runtime
+configuration.

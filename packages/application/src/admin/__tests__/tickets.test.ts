@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotFoundError, ConflictError, ForbiddenError } from '@app/domain';
-import type { TicketRepository, AuditLog, UserRepository } from '@app/domain';
+import type { TicketRepository, AuditLog, UserRepository, TicketRow } from '@app/domain';
 import { updateTicket, createTicket, VALID_TRANSITIONS, isTicketStatus } from '../tickets';
+
+function ticketRow(over: { ticketId: string; status: 'created' | 'in_progress' | 'closed'; notes?: string | null; assignedTo?: string | null }): TicketRow {
+  return {
+    id: 1,
+    ticketId: over.ticketId,
+    userId: 'user_1',
+    name: 'Test',
+    email: 't@x.com',
+    issue: 'help',
+    status: over.status,
+    createdAt: new Date(),
+    assignedTo: over.assignedTo ?? null,
+    notes: over.notes ?? null,
+  };
+}
 
 function makeMockRepos(overrides: { tickets?: Partial<TicketRepository>; audit?: Partial<AuditLog>; users?: Partial<UserRepository> } = {}) {
   const tickets = {
@@ -89,16 +104,15 @@ describe('updateTicket', () => {
   });
 
   it('updates notes without status change', async () => {
-    const existing = {
-      ticketId: 'TKT-1001',
-      status: 'created' as const,
-      notes: 'old note',
-    };
-    const updated = { ...existing, notes: 'new note' };
+    const existing = ticketRow({ ticketId: 'TKT-1001', status: 'created', notes: 'old note' });
+    let state = { ...existing };
     const deps = makeMockRepos({
       tickets: {
-        findByTicketId: vi.fn().mockResolvedValue(existing),
-        update: vi.fn().mockResolvedValue(updated),
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch };
+          return Promise.resolve(state);
+        }),
       },
     });
     const result = await updateTicket(
@@ -107,8 +121,9 @@ describe('updateTicket', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual(updated);
+      expect(result.value).toEqual({ ...existing, notes: 'old note\nnew note' });
     }
+    expect(deps.tickets.update).toHaveBeenCalledTimes(1);
   });
 
   it('allows valid transition: created → in_progress', async () => {
@@ -167,11 +182,14 @@ describe('updateTicket', () => {
   });
 
   it('sanitizes the note in the shared use-case', async () => {
-    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    let state = ticketRow({ ticketId: 'TKT-1001', status: 'created' });
     const deps = makeMockRepos({
       tickets: {
-        findByTicketId: vi.fn().mockResolvedValue(existing),
-        update: vi.fn().mockResolvedValue({ ...existing, notes: 'clean' }),
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch };
+          return Promise.resolve(state);
+        }),
       },
     });
     await updateTicket(
@@ -185,12 +203,15 @@ describe('updateTicket', () => {
   });
 
   it('truncates a long first note to MAX_TICKET_NOTES_LENGTH', async () => {
-    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    let state = ticketRow({ ticketId: 'TKT-1001', status: 'created' });
     const longNote = 'x'.repeat(20_000);
     const deps = makeMockRepos({
       tickets: {
-        findByTicketId: vi.fn().mockResolvedValue(existing),
-        update: vi.fn().mockResolvedValue({ ...existing, notes: 'x'.repeat(10_000) }),
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch };
+          return Promise.resolve(state);
+        }),
       },
     });
     await updateTicket(
@@ -202,12 +223,15 @@ describe('updateTicket', () => {
   });
 
   it('truncates notes at code-point boundaries without splitting surrogate pairs', async () => {
-    const existing = { ticketId: 'TKT-1001', status: 'created' as const, notes: null };
+    let state = ticketRow({ ticketId: 'TKT-1001', status: 'created' });
     const longNote = '😀'.repeat(5000) + 'x'.repeat(5001);
     const deps = makeMockRepos({
       tickets: {
-        findByTicketId: vi.fn().mockResolvedValue(existing),
-        update: vi.fn().mockResolvedValue({ ...existing, notes: '' }),
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch };
+          return Promise.resolve(state);
+        }),
       },
     });
     await updateTicket(
@@ -331,6 +355,53 @@ describe('updateTicket', () => {
     );
     expect(result.ok).toBe(true);
     expect(deps.users.findByClerkId).not.toHaveBeenCalled();
+  });
+
+  it('does not lose a concurrently-appended note (read-append-write retry)', async () => {
+    let state = ticketRow({ ticketId: 'TKT-1001', status: 'created', notes: 'existing' });
+    let firstWrite = true;
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch };
+          if (firstWrite) {
+            firstWrite = false;
+            state = { ...state, notes: 'theirs' };
+          }
+          return Promise.resolve(state);
+        }),
+      },
+    });
+    const result = await updateTicket(
+      { ticketId: 'TKT-1001', note: 'mine', actorId: 'user_1' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(deps.tickets.update).toHaveBeenCalledTimes(2);
+    expect(state.notes).toBe('theirs\nmine');
+  });
+
+  it('returns ConflictError when concurrent writes keep winning past the retry budget', async () => {
+    let state = ticketRow({ ticketId: 'TKT-1001', status: 'created', notes: 'existing' });
+    const deps = makeMockRepos({
+      tickets: {
+        findByTicketId: vi.fn(() => Promise.resolve(state)),
+        update: vi.fn((_id: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>) => {
+          state = { ...state, ...patch, notes: 'theirs' };
+          return Promise.resolve(state);
+        }),
+      },
+    });
+    const result = await updateTicket(
+      { ticketId: 'TKT-1001', note: 'mine', actorId: 'user_1' },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(ConflictError);
+      expect(result.error.message).toMatch(/updated concurrently/i);
+    }
   });
 });
 

@@ -29,8 +29,13 @@ export async function main() {
   }
 
   if (!PROJECT_ID || !API_KEY) {
+    if (!process.argv.includes('--use-existing')) {
+      throw new Error(
+        'NEON_PROJECT_ID and NEON_API_KEY are not set. Refusing to run against an ambient DATABASE_URL; pass --use-existing to opt in explicitly.',
+      );
+    }
     console.warn(
-      '[teardown-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping.',
+      '[teardown-test-db] NEON_PROJECT_ID and NEON_API_KEY are not set; skipping branch cleanup (--use-existing).',
     );
     return;
   }

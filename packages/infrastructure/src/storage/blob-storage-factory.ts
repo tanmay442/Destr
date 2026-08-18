@@ -8,7 +8,21 @@ import { createR2BlobStorage } from './blob-storage-r2';
 import { createS3BlobStorage } from './blob-storage-s3';
 
 export function createBlobStorage(): BlobStorage {
-  const provider = process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem';
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  const provider = process.env.BLOB_STORAGE_PROVIDER;
+  if (!provider) {
+    if (isProduction) {
+      throw new Error(
+        'BLOB_STORAGE_PROVIDER is not set. Production requires an explicit provider (r2 or s3); the filesystem backend stores uploads on ephemeral local disk.',
+      );
+    }
+    return createFilesystemBlobStorage();
+  }
+  if (isProduction && provider === 'filesystem' && !process.env.BLOB_FS_DIR) {
+    throw new Error(
+      'BLOB_STORAGE_PROVIDER=filesystem is refused in production unless BLOB_FS_DIR points to a persistent volume.',
+    );
+  }
   const factory = blobStorageRegistry.get(provider);
   if (!factory) throw new Error(`Unknown BLOB_STORAGE_PROVIDER: ${provider}`);
   return factory();

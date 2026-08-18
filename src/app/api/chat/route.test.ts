@@ -21,6 +21,24 @@ const { currentUserMock } = vi.hoisted(() => ({
   currentUserMock: vi.fn(),
 }));
 
+const { assertSameOriginMock } = vi.hoisted(() => ({
+  assertSameOriginMock: (req: Request) => {
+    const origin = req.headers.get('origin');
+    if (!origin) return null;
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return new Response('Forbidden', { status: 403 });
+    }
+    const site = req.headers.get('sec-fetch-site');
+    if (site && site !== 'same-origin') return new Response('Forbidden', { status: 403 });
+    const reqHost = req.headers.get('host');
+    if (reqHost && originHost !== reqHost) return new Response('Forbidden', { status: 403 });
+    return null;
+  },
+}));
+
 const { appConfigMock } = vi.hoisted(() => ({
   appConfigMock: {
     prefetchFirstTurn: false,
@@ -112,6 +130,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
 vi.mock('@/composition', () => ({
   getComposition: () => compositionMock as unknown as Composition,
   appConfig: appConfigMock,
+  assertSameOrigin: assertSameOriginMock,
   TRACE_ENABLED: false,
 }));
 
@@ -130,6 +149,14 @@ function makeUIMessageStream(): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) { controller.close(); },
   });
+}
+
+async function drainResponse(res: Response): Promise<void> {
+  const reader = res.body!.getReader();
+  while (true) {
+    const { done } = await reader.read();
+    if (done) break;
+  }
 }
 
 async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
@@ -208,6 +235,81 @@ describe('/api/chat', () => {
       }),
     );
     expect(res.status).toBe(429);
+  });
+
+  it('rejects a cross-site request with 403 before any work happens', async () => {
+    authMock.mockResolvedValue({ userId: 'user_test' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          origin: 'http://evil.test',
+          'sec-fetch-site': 'cross-site',
+        },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(streamTextImpl).not.toHaveBeenCalled();
+  });
+
+  it('returns 413 for a body larger than the cap via streaming read', async () => {
+    authMock.mockResolvedValue({ userId: 'user_big' });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'x'.repeat(2_000_000) }] }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(streamTextImpl).not.toHaveBeenCalled();
+  });
+
+  it('caps concurrent streams per user at 2, freeing the slot when a stream ends', async () => {
+    authMock.mockResolvedValue({ userId: 'user_conc' });
+    let blocked = true;
+    const blockedControllers: Array<ReadableStreamDefaultController<unknown> | null> = [null, null];
+    streamTextImpl.mockImplementation(() => ({
+      toUIMessageStream: () =>
+        new ReadableStream<unknown>({
+          start(controller) {
+            if (blocked) {
+              const idx = blockedControllers[0] === null ? 0 : 1;
+              blockedControllers[idx] = controller as ReadableStreamDefaultController<unknown>;
+            } else {
+              controller.close();
+            }
+          },
+        }),
+    }));
+    const body = JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] });
+    const makePost = () =>
+      appHandler.POST(
+        new Request('http://localhost/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        }),
+      );
+    const r1 = await makePost();
+    const r2 = await makePost();
+    const r3 = await makePost();
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r3.status).toBe(429);
+    expect(r3.headers.get('retry-after')).toBe('1');
+    blockedControllers[0]!.close();
+    blockedControllers[1]!.close();
+    await drainResponse(r1);
+    await drainResponse(r2);
+    blocked = false;
+    const r4 = await makePost();
+    expect(r4.status).toBe(200);
+    await drainResponse(r4);
   });
 
   it('passes a createKnowledgeTicket tool to streamText', () => {
@@ -309,17 +411,20 @@ describe('/api/chat searchDocumentation tool', () => {
     return { tools: tools ?? null };
   }
 
-  it('returns up to 800 chars per chunk and a 250-char snippet per citation', async () => {
+  it('returns up to 800 chars per chunk wrapped in untrusted reference framing', async () => {
     const longContent = 'x'.repeat(2000);
     const searchChunksSpy = vi
       .spyOn(compositionMock, 'searchChunks')
-      .mockResolvedValueOnce(ok([{ content: longContent, similarity: 0.8 }]) as never);
+      .mockResolvedValueOnce(
+        ok([{ content: longContent, similarity: 0.8, source: 'https://docs.example.com/a.md' }]) as never,
+      );
     const { tools } = await captureTools();
     const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
       content: string;
     }>;
-    expect(result?.[0]?.content.length).toBe(800 + 1);
-    expect(result?.[0]?.content.endsWith('\u2026')).toBe(true);
+    expect(result?.[0]?.content.startsWith('<reference source="https://docs.example.com/a.md">\n')).toBe(true);
+    expect(result?.[0]?.content.endsWith('\n</reference>')).toBe(true);
+    expect(result?.[0]?.content).toContain('x'.repeat(800) + '\u2026');
     searchChunksSpy.mockRestore();
   });
 
@@ -537,7 +642,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
     const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
     expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague');
     expect(result).toHaveLength(1);
-    expect(result[0]!.content).toBe('keep this');
+    expect(result[0]!.content).toBe('<reference source="null">\nkeep this\n</reference>');
   });
 
   it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {

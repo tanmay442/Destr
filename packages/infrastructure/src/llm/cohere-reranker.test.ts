@@ -81,4 +81,21 @@ describe('cohereReranker', () => {
     await expect(cohereReranker.rank('q', ['doc'])).rejects.toThrow('Cohere rerank failed (400)');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('truncates and sanitizes the API error body before propagating it', async () => {
+    const leaked = 'SECRET-CHUNK-CONTENT '.repeat(100);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => `\u0000${leaked}\n\u001f${leaked}`,
+    });
+
+    const err = (await cohereReranker.rank('q', ['doc']).catch((e) => e)) as Error;
+    expect((err as { statusCode?: number }).statusCode).toBe(400);
+    expect(err.message).toMatch(/^Cohere rerank failed \(400\): SECRET-CHUNK-CONTENT/);
+    expect(err.message.length).toBeLessThan(250);
+    expect(err.message).not.toContain(leaked);
+    expect(err.message).not.toContain('\u0000');
+    expect(err.message).not.toContain('\u001f');
+  });
 });
