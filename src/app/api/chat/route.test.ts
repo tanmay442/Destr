@@ -903,9 +903,9 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(event?.citationCount).toBe(1);
   });
 
-  it('writes a freshly-generated first-turn answer to the cache on miss', async () => {
+  it('does not cache a freshly-generated first-turn answer with no citations', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_miss' });
+    authMock.mockResolvedValue({ userId: 'user_nocache' });
     const res = await appHandler.POST(
       new Request('http://localhost/api/chat', {
         method: 'POST',
@@ -916,13 +916,52 @@ describe('/api/chat answer cache (Session 10)', () => {
     expect(res.status).toBe(200);
     expect(streamTextImpl).toHaveBeenCalled();
     await readBody(res);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('writes a freshly-generated grounded first-turn answer to the cache on miss', async () => {
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    authMock.mockResolvedValue({ userId: 'user_miss' });
+    type Ctl = ReadableStreamDefaultController<unknown>;
+    let streamController: Ctl | null = null;
+    const llmStream = new ReadableStream<unknown>({
+      start(controller) {
+        streamController = controller;
+      },
+    });
+    let capturedTools:
+      | { searchDocumentation: { execute: (args: { query: string }) => Promise<unknown> } }
+      | undefined;
+    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
+      capturedTools = opts?.tools as typeof capturedTools;
+      return {
+        toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
+        text: Promise.resolve('freshly generated answer'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      };
+    });
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(streamTextImpl).toHaveBeenCalled();
+    await capturedTools?.searchDocumentation.execute({ query: 'dental coverage' });
+    streamController!.close();
+    await readBody(res);
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
     const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
-    const payload = JSON.parse(value as string) as { v: number; text: string; citations: unknown[] };
+    const payload = JSON.parse(value as string) as { v: number; text: string; citations: Array<{ snippet: string }> };
     expect(payload.v).toBe(1);
     expect(payload.text).toBe('freshly generated answer');
-    expect(payload.citations).toEqual([]);
+    expect(payload.citations.map((c) => c.snippet)).toEqual([
+      'The dental plan covers two cleanings per year.',
+      'Submit claims via the HR portal.',
+    ]);
     expect(ttl).toBe(3600);
   });
 

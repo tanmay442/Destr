@@ -1,9 +1,9 @@
 /** Env-independent defaults. Re-exported at runtime by `@app/infrastructure/config`; keep both in sync. */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
-export const BLOB_GET_MAX_BYTES = 50_000_000;
 export const UPLOAD_CHUNKED_MAX_MD_BYTES = 25_000_000;
 export const UPLOAD_CHUNKED_MAX_PDF_BYTES = 100_000_000;
+export const BLOB_GET_MAX_BYTES = UPLOAD_CHUNKED_MAX_PDF_BYTES;
 export const PDF_PARSE_MAX_BYTES = 100_000_000;
 export const PDF_PARSE_MAX_PAGES = 5000;
 export const PDF_PARSE_MAX_CHARS = 50_000_000;

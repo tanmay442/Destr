@@ -472,7 +472,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             hallucinationGrader: deps.hallucinationGrader(cfg),
             outOfDomain: outOfDomainRef.value,
           });
-          if (cacheKey && !hallucinationBlocked && !outOfDomainRef.value && !metrics.ticketCreated) {
+          if (
+            cacheKey &&
+            finalCitations.length > 0 &&
+            !hallucinationBlocked &&
+            !outOfDomainRef.value &&
+            !metrics.ticketCreated
+          ) {
             try {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {

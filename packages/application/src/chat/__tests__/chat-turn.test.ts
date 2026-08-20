@@ -281,8 +281,8 @@ describe('chatTurn', () => {
     expect(event?.mode).toBe('vector');
   });
 
-  it('writes a freshly generated first-turn answer to the cache on miss', async () => {
-    const { deps, fakes } = makeDeps();
+  it('writes a freshly generated grounded first-turn answer to the cache on miss', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
     streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'freshly generated answer' }));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
@@ -291,12 +291,25 @@ describe('chatTurn', () => {
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
     const [key, value, ttl] = fakes.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:/);
-    expect(JSON.parse(value)).toEqual({ v: 1, text: 'freshly generated answer', citations: [] });
+    const payload = JSON.parse(value) as { v: number; text: string; citations: Array<{ id: number; snippet: string }> };
+    expect(payload.v).toBe(1);
+    expect(payload.text).toBe('freshly generated answer');
+    expect(payload.citations.map((c) => c.id)).toEqual([1, 2]);
     expect(ttl).toBe(3600);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.tokensIn).toBe(10);
     expect(event?.tokensOut).toBe(5);
     expect(event?.cacheHit).toBeFalsy();
+  });
+
+  it('does not cache a first-turn answer that has no citations (ungrounded)', async () => {
+    const { deps, fakes } = makeDeps();
+    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'ungrounded answer' }));
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    expect(fakes.answerCache.set).not.toHaveBeenCalled();
   });
 
   it('never consults the cache on a follow-up turn', async () => {

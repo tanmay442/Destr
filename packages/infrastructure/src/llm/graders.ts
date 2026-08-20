@@ -7,7 +7,7 @@ import {
 } from '@app/domain';
 import { getChatModel } from './index';
 import { GRADE_MODEL } from '@app/infrastructure/config';
-import { retryOnTransient } from './retry';
+import { GRADE_REQUEST_TIMEOUT_MS, retryOnTransient } from './retry';
 import type { ChatModelProvider } from './registries';
 
 const GRADE_RETRY_ATTEMPTS = 3;
@@ -93,6 +93,7 @@ export function createGraders(
                 system: REWRITE_SYSTEM,
                 prompt: query,
                 maxOutputTokens: 200,
+                abortSignal: AbortSignal.timeout(GRADE_REQUEST_TIMEOUT_MS),
               }),
             'query rewriter',
             GRADE_RETRY_ATTEMPTS,
@@ -122,6 +123,7 @@ export function createGraders(
                   `QUESTION:\n${question}\n\nBEGIN DOCUMENT\n${document}\nEND DOCUMENT\n\n` +
                   'Respond with a single word: "yes" or "no".',
                 maxOutputTokens: 10,
+                abortSignal: AbortSignal.timeout(GRADE_REQUEST_TIMEOUT_MS),
               }),
             'document grader',
             GRADE_RETRY_ATTEMPTS,
@@ -150,6 +152,7 @@ export function createGraders(
                   `BEGIN DOCUMENTS\n${documents}\nEND DOCUMENTS\n\nGENERATED ANSWER:\n${generation}\n\n` +
                   'Respond with a single word: "yes" or "no".',
                 maxOutputTokens: 10,
+                abortSignal: AbortSignal.timeout(GRADE_REQUEST_TIMEOUT_MS),
               }),
             'hallucination grader',
             GRADE_RETRY_ATTEMPTS,

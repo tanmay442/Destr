@@ -9,6 +9,8 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 
 let configuredLevel: LogLevel = 'info';
 
+const MAX_CAUSE_DEPTH = 10;
+
 export function configureLogger(level: LogLevel): void {
   configuredLevel = level;
 }
@@ -30,7 +32,7 @@ export function scrubSecrets(input: string): string {
   return out;
 }
 
-function serializeError(value: Error): Record<string, unknown> {
+function serializeError(value: Error, depth = 0): Record<string, unknown> {
   const out: Record<string, unknown> = {
     name: value.name,
     message: value.message,
@@ -40,7 +42,9 @@ function serializeError(value: Error): Record<string, unknown> {
   const code = (value as { code?: unknown }).code;
   if (code !== undefined) out.code = code;
   const cause = (value as { cause?: unknown }).cause;
-  if (cause instanceof Error) out.cause = serializeError(cause);
+  if (cause instanceof Error) {
+    out.cause = depth >= MAX_CAUSE_DEPTH ? '[cause too deep]' : serializeError(cause, depth + 1);
+  }
   else if (cause !== undefined) out.cause = String(cause);
   return out;
 }
@@ -61,7 +65,14 @@ function log(level: LogLevel, message: string, meta?: Record<string, unknown>): 
     msg: message,
     ...(meta ? serializeMeta(meta) : {}),
   };
-  const line = scrubSecrets(JSON.stringify(entry));
+  let line: string;
+  try {
+    line = scrubSecrets(JSON.stringify(entry));
+  } catch {
+    line = scrubSecrets(
+      JSON.stringify({ level, time: entry.time, msg: message, meta: '[unserializable]' }),
+    );
+  }
   if (level === 'error') console.error(line);
   else if (level === 'warn') console.warn(line);
   else if (level === 'debug') console.debug(line);

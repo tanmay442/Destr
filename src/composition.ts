@@ -83,6 +83,9 @@ if (process.env.NODE_ENV === 'production' && !process.env.UPSTASH_REDIS_REST_URL
 
 const reingestQueue: IngestQueue =
   process.env.QSTASH_TOKEN ? ingestQueue : Queue.createIngestQueue();
+
+class StaleIngestError extends Error {}
+
 async function ingestQueuedDocumentStandalone(
   documentId: number,
 ): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
@@ -107,9 +110,11 @@ async function ingestQueuedDocumentStandalone(
     return err(new ExternalServiceError('Blob read failed', e));
   }
 
+  const expectedHash = systemHasher.sha256(buffer);
+
   // Skip the work if the row was replaced or deleted after we claimed it.
   const current = await documentRepo.findById(documentId);
-  if (!current || current.fileHash !== systemHasher.sha256(buffer)) {
+  if (!current || current.fileHash !== expectedHash) {
     await requeue();
     return ok({ status: 'busy', chunks: 0 });
   }
@@ -122,12 +127,17 @@ async function ingestQueuedDocumentStandalone(
 
   try {
     await Db.transactionRunner.run(async (tx) => {
+      // Re-verify the row inside the transaction: a replace-upload landing
+      // during parse/embed must not be overwritten by these stale chunks.
+      const fresh = await tx.documents.findById(documentId);
+      if (!fresh || fresh.fileHash !== expectedHash) throw new StaleIngestError();
       await tx.chunks.deleteByDocumentId(documentId);
       await tx.chunks.insertMany(prepared.value.rows);
       await tx.documents.updateIngestStatus(documentId, 'done');
     });
   } catch (e) {
     await requeue();
+    if (e instanceof StaleIngestError) return ok({ status: 'busy', chunks: 0 });
     return err(new ExternalServiceError('Chunk insert failed', e));
   }
   return ok({ status: 'done', chunks: prepared.value.chunks });

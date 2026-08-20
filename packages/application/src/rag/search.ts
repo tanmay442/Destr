@@ -166,8 +166,14 @@ async function resolveWindow(
   return resolved;
 }
 
-function filterByThreshold(rows: RetrievedChunkRow[], threshold: number): RetrievedChunkRow[] {
-  return rows.filter((r) => r.similarity >= threshold);
+function filterByThreshold(
+  rows: RetrievedChunkRow[],
+  threshold: number,
+  vectorIds: Set<number>,
+): RetrievedChunkRow[] {
+  // The cosine threshold only applies to vector-retrieved rows; lexical-only
+  // rows carry ts_rank scores, which are not comparable to cosine similarity.
+  return rows.filter((r) => !vectorIds.has(r.id) || r.similarity >= threshold);
 }
 
 async function rerankRows(
@@ -176,6 +182,7 @@ async function rerankRows(
   topN: number,
   reranker: Reranker,
   threshold: number,
+  vectorIds: Set<number>,
 ): Promise<RetrievedChunkRow[]> {
   try {
     const ranked = await reranker.rank(query, rows.map((r) => r.content));
@@ -183,9 +190,9 @@ async function rerankRows(
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .map((r) => rows[r.index])
       .filter((r): r is RetrievedChunkRow => r != null);
-    return filterByThreshold(ordered.length > 0 ? ordered : sortByRelevance(rows), threshold).slice(0, topN);
+    return filterByThreshold(ordered.length > 0 ? ordered : sortByRelevance(rows), threshold, vectorIds).slice(0, topN);
   } catch {
-    return filterByThreshold(sortByRelevance(rows), threshold).slice(0, topN);
+    return filterByThreshold(sortByRelevance(rows), threshold, vectorIds).slice(0, topN);
   }
 }
 
@@ -256,6 +263,7 @@ export async function searchChunks(
   } catch (cause) {
     vectorError = cause;
   }
+  const vectorIds = new Set(vectorRows.map((r) => r.id));
 
   const lexicalResult = await lexicalPromise;
   if (vectorError !== undefined) {
@@ -263,14 +271,14 @@ export async function searchChunks(
       return err(new ExternalServiceError('Vector search failed', vectorError));
     }
     logger.warn('Vector search failed; falling back to lexical-only', { error: String(vectorError) });
-    return capAndResolve(lexicalResult.rows, query, topN, opts, deps);
+    return capAndResolve(lexicalResult.rows, query, topN, opts, deps, vectorIds);
   }
   if (lexicalResult === null) {
-    return capAndResolve(vectorRows, query, topN, opts, deps);
+    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
   }
   if (!lexicalResult.ok) {
     logger.warn('Lexical search failed; falling back to vector-only', { error: String(lexicalResult.cause) });
-    return capAndResolve(vectorRows, query, topN, opts, deps);
+    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
   }
   const lexicalRows = lexicalResult.rows;
 
@@ -278,14 +286,14 @@ export async function searchChunks(
     return ok([]);
   }
   if (vectorRows.length === 0) {
-    return capAndResolve(lexicalRows, query, topN, opts, deps);
+    return capAndResolve(lexicalRows, query, topN, opts, deps, vectorIds);
   }
   if (lexicalRows.length === 0) {
-    return capAndResolve(vectorRows, query, topN, opts, deps);
+    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
   }
 
   const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, opts.rrfK ?? RRF_K, opts.lexicalWeight ?? LEXICAL_WEIGHT);
-  return capAndResolve(fused, query, topN, opts, deps);
+  return capAndResolve(fused, query, topN, opts, deps, vectorIds);
 }
 
 async function capAndResolve(
@@ -294,10 +302,11 @@ async function capAndResolve(
   topN: number,
   opts: SearchOpts,
   deps: SearchDeps,
+  vectorIds: Set<number>,
 ): Promise<Result<RetrievedChunk[]>> {
   const threshold = opts.threshold ?? SIMILARITY_THRESHOLD;
   const capped = deps.reranker
-    ? await rerankRows(query, rows, topN, deps.reranker, threshold)
+    ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds)
     : sortByRelevance(rows).slice(0, topN);
 
   const resolved =
