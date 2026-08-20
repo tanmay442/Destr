@@ -427,16 +427,30 @@ export function ChatInterface() {
 
   const isStreaming = status === 'submitted' || status === 'streaming';
 
-  let lastUserText = '';
+  let lastUserMessage: MyUIMessage | undefined;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
     if (!m || m.role !== 'user') continue;
-    lastUserText = m.parts
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { text: string }).text)
-      .join('\n');
+    lastUserMessage = m;
     break;
   }
+  const lastUserText = lastUserMessage
+    ? lastUserMessage.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => (p as { text: string }).text)
+        .join('\n')
+    : '';
+
+  // Resend the existing user message instead of appending a duplicate.
+  const retryLastMessage = () => {
+    const target = lastUserMessage;
+    if (!target || isStreaming) return;
+    const turnId = uuidv4();
+    pendingTurnIdRef.current.set(target.id, turnId);
+    sendMessage(undefined, { body: { turnId } }).catch(() => {
+      toast.error('Could not send your message. Please try again.');
+    });
+  };
 
   useEffect(() => {
     if (status === 'ready' || status === 'error') {
@@ -579,7 +593,7 @@ export function ChatInterface() {
                     variant="outline"
                     size="sm"
                     disabled={isStreaming}
-                    onClick={() => void submit(lastUserText)}
+                    onClick={retryLastMessage}
                     data-testid="chat-retry"
                     className="w-fit"
                   >

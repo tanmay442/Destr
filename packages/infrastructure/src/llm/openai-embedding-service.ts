@@ -1,6 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
-import { embed } from 'ai';
 import type { EmbeddingService } from '@app/domain';
 import { embedBatchWithModel } from './embedding-batch-helper';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
@@ -29,12 +28,12 @@ function getOpenAIEmbeddingOptions() {
 
 export const openAIEmbeddingService: EmbeddingService = {
   async embed(value: string): Promise<number[]> {
-    const { embedding } = await embed({
-      model: getOpenAIEmbeddingModel(),
-      value,
-      providerOptions: getOpenAIEmbeddingOptions(),
-    });
-    return embedding;
+    const embeddings = await embedBatchWithModel(
+      [value],
+      getOpenAIEmbeddingModel(),
+      getOpenAIEmbeddingOptions(),
+    );
+    return embeddings[0] ?? [];
   },
 
   async embedBatch(values: string[]): Promise<number[][]> {

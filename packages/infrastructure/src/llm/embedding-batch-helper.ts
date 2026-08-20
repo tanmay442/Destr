@@ -1,7 +1,7 @@
 import { embedMany } from 'ai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '@app/domain';
-import { isRetryableError, retryDelay, sleep } from './retry';
+import { EMBED_REQUEST_TIMEOUT_MS, isRetryableError, retryDelay, sleep } from './retry';
 
 const EMBED_RETRY_ATTEMPTS = 5;
 
@@ -20,6 +20,7 @@ async function embedManyWithRetry(
         model,
         values: batch,
         ...(providerOptions ? { providerOptions } : {}),
+        abortSignal: AbortSignal.timeout(EMBED_REQUEST_TIMEOUT_MS),
       });
       return embeddings;
     } catch (err) {

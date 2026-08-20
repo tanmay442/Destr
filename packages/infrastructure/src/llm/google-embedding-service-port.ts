@@ -1,4 +1,3 @@
-import { embed } from 'ai';
 import { getEmbeddingModel, EMBEDDING_OPTIONS } from './google-embedding-service';
 import type { EmbeddingService } from '@app/domain';
 import { embedBatchWithModel } from './embedding-batch-helper';
@@ -6,12 +5,10 @@ import { registerEmbeddingProvider } from './registries';
 
 export const googleEmbeddingService: EmbeddingService = {
   async embed(value: string): Promise<number[]> {
-    const { embedding } = await embed({
-      model: getEmbeddingModel(),
-      value,
-      providerOptions: { google: EMBEDDING_OPTIONS },
+    const embeddings = await embedBatchWithModel([value], getEmbeddingModel(), {
+      google: EMBEDDING_OPTIONS,
     });
-    return embedding;
+    return embeddings[0] ?? [];
   },
 
   async embedBatch(values: string[]): Promise<number[][]> {

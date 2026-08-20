@@ -19,7 +19,7 @@ import { NextResponse, after } from 'next/server';
 import type { ChatEventInput } from '@app/domain';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
-import { readBoundedText } from '@/lib/http';
+import { readBoundedText, respond } from '@/lib/http';
 import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 
@@ -528,7 +528,13 @@ async function streamChatResponse(req: Request): Promise<Response> {
             hallucinationGrader: comp.getHallucinationGrader(cfg),
             outOfDomain: outOfDomainRef.value,
           });
-          if (cacheKey && !hallucinationBlocked && !outOfDomainRef.value && !metrics.ticketCreated) {
+          if (
+            cacheKey &&
+            finalCitations.length > 0 &&
+            !hallucinationBlocked &&
+            !outOfDomainRef.value &&
+            !metrics.ticketCreated
+          ) {
             try {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
@@ -683,6 +689,6 @@ export async function POST(req: Request) {
     const userId = chatSlotOwners.get(req);
     if (userId) releaseOwnedChatSlot(req, userId);
     logger.error('Chat request failed', { error: String(error) });
-    throw error;
+    return respond(error);
   }
 }

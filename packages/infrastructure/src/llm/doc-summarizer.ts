@@ -5,6 +5,7 @@ import { getChatModel } from './index';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 import { CCH_MODEL } from '@app/infrastructure/config';
 import type { ChatModelProvider } from './registries';
+import { GRADE_REQUEST_TIMEOUT_MS } from './retry';
 
 /** Cap on the model's output. A title + 1-3 sentence summary is short. */
 const MAX_OUTPUT_TOKENS = 300;
@@ -133,6 +134,7 @@ async function generateDocContext(
       system: SYSTEM_PROMPT,
       prompt: USER_PROMPT(excerpt),
       maxOutputTokens: MAX_OUTPUT_TOKENS,
+      abortSignal: AbortSignal.timeout(GRADE_REQUEST_TIMEOUT_MS),
     });
     return sanitizeDocContext(parseDocContext(raw), excerpt);
   } catch (err) {

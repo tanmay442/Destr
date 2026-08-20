@@ -443,11 +443,14 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
   });
 
   it('writes the identical cache entry on a grounded first turn', async () => {
-    scriptStream({ text: 'freshly generated answer' });
+    scriptStream({
+      text: 'freshly generated answer',
+      toolTrace: { toolCallId: 'search-cache', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
+      drive: (tools) => tools?.searchDocumentation?.execute({ query: 'dental coverage' }),
+    });
     const legacy = await post(false);
     const useCase = await post(true);
-    scripted[0]!.controller!.close();
-    scripted[1]!.controller!.close();
+    await finishScriptedStreams();
     await Promise.all([drain(legacy), drain(useCase)]);
     const setCalls = compositionMock.answerCache.set.mock.calls;
     expect(setCalls).toHaveLength(2);
