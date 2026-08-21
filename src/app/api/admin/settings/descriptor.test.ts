@@ -17,4 +17,9 @@ describe('fieldConfig coverage', () => {
       expect(fieldConfig[key]).toBeUndefined();
     }
   });
+
+  it('introspects a union of literals as an enum with its values', () => {
+    const field = flattenSchema().get('chatHistoryRetentionDays');
+    expect(field).toEqual({ type: 'enum', options: ['0', '30', '120', '365'] });
+  });
 });

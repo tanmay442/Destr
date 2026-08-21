@@ -22,7 +22,7 @@
 
 ## Overview
 
-**Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback, and real-time administrative telemetry.
+**Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback, and real-time administrative telemetry. Chats persist per signed-in account across sessions and devices, with automatic expiry on an admin-configured retention window.
 
 ---
 
