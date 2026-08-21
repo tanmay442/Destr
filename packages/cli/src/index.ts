@@ -4,6 +4,7 @@ import { runSetup } from './commands/setup';
 import { runSeed, parseSeedArgs } from './commands/seed';
 import { runUpload, parseUploadArgs } from './commands/upload';
 import { runPurgeChatEvents, parsePurgeArgs } from './commands/purge-chat-events';
+import { runPurgeChatHistory, parsePurgeHistoryArgs } from './commands/purge-chat-history';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { askYesNo, makeRl } from './prompts/index';
@@ -20,6 +21,7 @@ Commands:
   seed [--dir=...]   Ingest every PDF in the given dir.
   upload --md=FILE   Upload pre-chunked Markdown (see --help in the upload module).
   purge-chat-events [--days=90] [--yes] [--dry-run]  Delete chat_events older than the retention window.
+  purge-chat-history [--days=N] [--yes] [--dry-run]  Delete saved chats inactive past the configured window (Off requires --days).
   db-migrate [args]  Run drizzle-kit push (or other migration command).
 `);
 }
@@ -60,6 +62,13 @@ async function main(): Promise<void> {
     }
     case 'purge-chat-events': {
       const res = await runPurgeChatEvents(parsePurgeArgs(rest));
+      if (res.cancelled) {
+        process.exit(0);
+      }
+      return;
+    }
+    case 'purge-chat-history': {
+      const res = await runPurgeChatHistory(parsePurgeHistoryArgs(rest));
       if (res.cancelled) {
         process.exit(0);
       }
