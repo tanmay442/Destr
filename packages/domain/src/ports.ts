@@ -531,6 +531,52 @@ export interface ChatFeedbackRepo {
 }
 
 
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface StoredChatMessage {
+  id: number;
+  turnId: string | null;
+  role: 'user' | 'assistant';
+  content: unknown;
+  createdAt: Date;
+}
+
+export interface AppendChatTurnInput {
+  /** Null creates the conversation inside the same transaction. */
+  conversationId: string | null;
+  userId: string;
+  turnId: string;
+  /** Only read when creating the conversation. */
+  title?: string | undefined;
+  userMessage: unknown;
+  assistantMessage: unknown;
+}
+
+/** Persisted saved chats. Ownership is baked in: every method takes the owning `userId` first. */
+export interface ChatHistoryRepo {
+  appendTurn(input: AppendChatTurnInput): Promise<{ conversationId: string }>;
+  listConversations(
+    userId: string,
+    opts: { limit: number; offset: number },
+  ): Promise<ConversationSummary[]>;
+  getConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<{ conversation: ConversationSummary; messages: StoredChatMessage[] } | null>;
+  renameConversation(userId: string, conversationId: string, title: string): Promise<boolean>;
+  deleteConversation(userId: string, conversationId: string): Promise<boolean>;
+  countConversations(userId: string): Promise<number>;
+  purgeOlderThan(cutoff: Date): Promise<{ deletedConversations: number; deletedMessages: number }>;
+  purgeUserData(userId: string): Promise<{ deletedConversations: number; deletedMessages: number }>;
+}
+
+
 export interface RateLimiter {
   check(
     key: string,
