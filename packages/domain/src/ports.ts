@@ -554,6 +554,8 @@ export interface AppendChatTurnInput {
   turnId: string;
   /** Only read when creating the conversation. */
   title?: string | undefined;
+  /** Client message id whose stored pair this turn replaces (regenerate). */
+  retryOfMessageId?: string | undefined;
   userMessage: unknown;
   assistantMessage: unknown;
 }
