@@ -63,7 +63,7 @@ packages/
 ├── domain/         # Pure types, Zod schemas, Result<T,E>, port interfaces (no external deps)
 ├── application/    # Pure use-cases (chat turns, RAG ingest, tickets) returning Result<T, DomainError>
 ├── infrastructure/ # Drizzle ORM repos, AI SDK adapters, PDF parsers, port implementations
-└── cli/            # `rag-agent` CLI management utilities (init, setup, seed, db-migrate)
+└── cli/            # `rag-agent` CLI management utilities (init, setup, seed, upload, purge-chat-events, purge-chat-history, db-migrate)
 src/                # Next.js App Router shell, UI components, and single composition root
 ```
 
@@ -80,7 +80,7 @@ src/                # Next.js App Router shell, UI components, and single compos
 Every commit and pull request is validated through automated quality gates:
 
 ```bash
-# Run full quality gate: Vitest (1,100+ tests) + Typecheck + ESLint + Architecture Rules
+# Run full quality gate: Vitest (1,200+ tests) + Typecheck + ESLint + Architecture Rules
 pnpm gate
 
 # Run quality gate + Next.js production build:
@@ -88,9 +88,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-- **127 Test Files**: 123 passed, 4 skipped (live-DB gated).
-- **1,113 Total Tests**: 1,055 passed, 58 skipped.
-- **495 Architecture Modules**: 1,261 dependencies checked with **0 violations** (`pnpm arch`).
+- **136 Test Files**: 131 passed, 5 skipped (live-DB gated).
+- **1,293 Total Tests**: 1,229 passed, 64 skipped.
+- **514 Architecture Modules**: 1,329 dependencies checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 

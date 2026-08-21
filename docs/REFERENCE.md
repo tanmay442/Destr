@@ -103,7 +103,7 @@ Four tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend wi
 4. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
 
 ### Comprehensive Audit Log (`/admin/audit`)
-- Consolidated over `audit_events`; filterable by `kind` (`document`/`ticket`/`user`/`settings`), `action`, `actor`, `documentId`/`ticketId`, and date range.
+- Consolidated over `audit_events`; filterable by `kind` (`document`/`ticket`/`user`/`settings`; `chat` entries from conversation deletions and history purges — see §5.1 — appear under *All kinds* but are not yet a quick-filter option), `action`, `actor`, `documentId`/`ticketId`, and date range.
 - **Settings Diffs & One-Click Revert**: settings updates record `details.changes = [{key, old, new}]`; Revert re-PUTs through the same audited route.
 - **Dead-Letter (`audit_dead_letter`)**: audit writes are non-blocking; transient failures persist payload + error for manual inspection (no replay UI exists).
 
@@ -140,7 +140,7 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 ### 5.1 Chat history retention & purge CLI
 
 - **Retention**: saved chats (`chat_conversations` / `chat_messages`) auto-expire based on last activity (`updated_at`) after an admin-configured window (`chatHistoryRetentionDays`, editable in `/admin/settings`: Off / 30 / 120 / 365 days, default 120). **Off** (`0`) disables purging entirely.
-- **`purge-chat-history [--days=N]`** (`rag-agent` CLI, modeled on `purge-chat-events`): deletes conversations whose last activity predates the cutoff (messages cascade). Supports `--dry-run` and asks for confirmation before deleting; windows under one day are refused without `--allow-sub-day`; while the admin window is Off, an explicit `--days` is mandatory for a one-off run. Each run writes an audit event (`kind='chat'`, `action='history_purged'`) with the deleted counts.
+- **`purge-chat-history [--days=N]`** (`rag-agent` CLI, modeled on `purge-chat-events`): deletes conversations whose last activity predates the cutoff (messages cascade). Supports `--dry-run`, and asks for confirmation unless `--yes` is passed; windows under one day are refused without `--allow-sub-day` (or `--force`); while the admin window is Off, an explicit `--days` is mandatory for a one-off run. Each run writes an audit event (`kind='chat'`, `action='history_purged'`, actor `cli`) with the deleted counts.
 
 ---
 
