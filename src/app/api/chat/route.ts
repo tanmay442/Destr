@@ -13,6 +13,8 @@ import {
   citationDocumentIds,
   resolveTurnId,
   buildEventMeta,
+  persistHistory,
+  buildAssistantMessageLike,
   type EmittedCitation,
 } from '@app/application/chat';
 import { NextResponse, after } from 'next/server';
@@ -402,6 +404,14 @@ async function streamChatResponse(req: Request): Promise<Response> {
         .join('\n')
     : '';
 
+  const historySink = {
+    appendTurn: async (input: Parameters<typeof comp.appendChatTurn>[0]) => {
+      const result = await comp.appendChatTurn(input);
+      if (!result.ok) throw result.error;
+      return result.value;
+    },
+  };
+
   const capturedCitations: EmittedCitation[] = [];
 
   const turnId = resolveTurnId(parsed.data.turnId);
@@ -460,6 +470,19 @@ async function streamChatResponse(req: Request): Promise<Response> {
               meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
             }
           : {}),
+      });
+      persistHistory(historySink, cfg, userId, {
+        conversationId: parsed.data.conversationId ?? null,
+        turnId,
+        retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+        title: lastUserText,
+        userMessage: lastUserMessage,
+        assistantMessage: buildAssistantMessageLike({
+          turnId,
+          text: cachedAnswer.text,
+          citations: dedupeCitations(cachedAnswer.citations),
+          guardrail: null,
+        }),
       });
       scheduleFlush(comp);
       return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream }), release);
@@ -573,6 +596,21 @@ async function streamChatResponse(req: Request): Promise<Response> {
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
             }),
           });
+          persistHistory(historySink, cfg, userId, {
+            conversationId: parsed.data.conversationId ?? null,
+            turnId,
+            retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+            title: lastUserText,
+            userMessage: lastUserMessage,
+            assistantMessage: buildAssistantMessageLike({
+              turnId,
+              text: await Promise.resolve(result.text).catch(() => ''),
+              citations: finalCitations,
+              guardrail: hallucinationBlocked
+                ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
+                : null,
+            }),
+          });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(new Error('Chat stream interrupted'));
@@ -654,6 +692,15 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       eventSink: {
         record: (event) => comp.chatEventBatcher.record(event),
         flush: () => comp.chatEventBatcher.flush(),
+      },
+      historySink: {
+        appendTurn: async (input) => {
+          const { turnId } = input;
+          if (turnId === null) return null;
+          const result = await comp.appendChatTurn({ ...input, turnId });
+          if (!result.ok) throw result.error;
+          return result.value;
+        },
       },
       traceEnabled: TRACE_ENABLED,
     },

@@ -17,6 +17,7 @@ import type { AuditLog, ChatHistoryRepo, ConversationSummary, StoredChatMessage 
 import { capCodePoints } from '../text';
 import { safeAudit } from '../audit-reliability';
 import { sanitizePagination } from '../service-result';
+import type { EmittedCitation } from './emit-citations';
 
 export interface HistoryDeps {
   repo: ChatHistoryRepo;
@@ -35,7 +36,7 @@ export interface MessageLike {
   id?: string;
   role?: string;
   parts?: MessagePartLike[] | undefined;
-  metadata?: Record<string, unknown> | undefined;
+  metadata?: unknown;
 }
 
 export interface StoredMessage {
@@ -147,6 +148,26 @@ export function enforceStoredBytes(message: StoredMessage): StoredMessage {
   return clone;
 }
 
+export function buildAssistantMessageLike(input: {
+  turnId: string | null;
+  text: string;
+  citations: ReadonlyArray<EmittedCitation>;
+  guardrail: { outOfDomain: boolean; offerTicket: boolean } | null;
+}): MessageLike {
+  const parts: MessagePartLike[] = [{ type: 'text', text: input.text }];
+  for (const citation of input.citations) {
+    parts.push({ type: 'data-citation', data: citation });
+  }
+  if (input.guardrail) {
+    parts.push({ type: 'data-guardrail', data: input.guardrail });
+  }
+  return {
+    id: `assistant-${input.turnId ?? 'unknown'}`,
+    role: 'assistant',
+    parts,
+  };
+}
+
 export async function listConversations(
   input: { userId: string; limit?: number; offset?: number },
   deps: HistoryDeps,
@@ -221,8 +242,8 @@ export interface AppendChatTurnInputUseCase {
   retryOfMessageId?: string | undefined;
   /** Auto-title used only when this call creates the conversation. */
   title?: string | undefined;
-  userMessage: MessageLike;
-  assistantMessage: MessageLike;
+  userMessage: unknown;
+  assistantMessage: unknown;
   /** Known message count for the target conversation, when the caller has one. */
   messageCount?: number | undefined;
 }
@@ -251,8 +272,8 @@ export async function appendChatTurn(
       turnId: input.turnId,
       retryOfMessageId: input.retryOfMessageId,
       title,
-      userMessage: enforceStoredBytes(toStoredMessage(input.userMessage)),
-      assistantMessage: enforceStoredBytes(toStoredMessage(input.assistantMessage)),
+      userMessage: enforceStoredBytes(toStoredMessage(input.userMessage as MessageLike)),
+      assistantMessage: enforceStoredBytes(toStoredMessage(input.assistantMessage as MessageLike)),
     });
     return ok(result);
   } catch (e) {

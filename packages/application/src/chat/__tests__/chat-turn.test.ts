@@ -93,6 +93,10 @@ function makeDeps(overrides: DepsOverrides = {}) {
   })) as unknown as Mock & ChatTurnDeps['userResolver'];
   const record = vi.fn();
   const flush = vi.fn(async () => undefined);
+  const appendTurn = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return { conversationId: 'conv-1' };
+  });
   const deps: ChatTurnDeps = {
     ai: {
       streamText: streamTextMock,
@@ -114,6 +118,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
     createTicket: overrides.createTicket ?? createTicket,
     userResolver: overrides.userResolver ?? userResolver,
     eventSink: overrides.eventSink ?? { record, flush },
+    historySink: overrides.historySink ?? { appendTurn },
     traceEnabled: overrides.traceEnabled ?? false,
   };
   return {
@@ -129,6 +134,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
       userResolver,
       record,
       flush,
+      appendTurn,
     },
   };
 }
@@ -689,5 +695,93 @@ describe('chatTurn', () => {
     await readParts(result.stream);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.query).toBeNull();
+  });
+});
+
+describe('chat history persistence', () => {
+  const HISTORY_BODY = {
+    ...BASIC_BODY,
+    conversationId: 'a0000000-0000-4000-8000-000000000001',
+  };
+
+  it('persists a completed turn through the history sink', async () => {
+    const { deps, fakes } = makeDeps();
+    const scripted = captureTools({ text: 'grounded answer' });
+    const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await scripted.captured.current!.searchDocumentation!.execute({ query: 'reset password' });
+    scripted.closeLlm();
+    await readParts(result.stream);
+    expect(fakes.appendTurn).toHaveBeenCalledTimes(1);
+    const call = fakes.appendTurn.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.userId).toBe('user_test');
+    expect(call.conversationId).toBe('a0000000-0000-4000-8000-000000000001');
+    expect(call.title).toBe('How do I reset my password?');
+    expect((call.userMessage as { id: string }).id).toBe('m1');
+    const assistant = call.assistantMessage as { parts: Array<{ type: string; text?: string; data?: unknown }> };
+    expect(assistant.parts[0]).toEqual({ type: 'text', text: 'grounded answer' });
+    const citationParts = assistant.parts.filter((p) => p.type === 'data-citation');
+    expect(citationParts.length).toBeGreaterThan(0);
+  });
+
+  it('persists cached-answer turns through the same sink shape', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.answerCache.get.mockResolvedValueOnce('cached answer');
+    const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream);
+    expect(fakes.appendTurn).toHaveBeenCalledTimes(1);
+    const call = fakes.appendTurn.mock.calls[0]![0] as Record<string, unknown>;
+    const assistant = call.assistantMessage as { parts: Array<{ type: string; text?: string }> };
+    expect(assistant.parts[0]).toEqual({ type: 'text', text: 'cached answer' });
+  });
+
+  it('skips persistence when captureQueryText is off', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ captureQueryText: false }) });
+    const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream);
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not persist when the stream errors before completion', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.record.mockImplementation(() => {
+      throw new Error('analytics exploded');
+    });
+    const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream).catch(() => undefined);
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
+  });
+
+  it('swallows sink failures without breaking the stream', async () => {
+    const { deps } = makeDeps({
+      historySink: { appendTurn: vi.fn(async () => { throw new Error('db down'); }) },
+    });
+    const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    const parts = await readParts(result.stream);
+    expect(parts.length).toBeGreaterThan(0);
+  });
+
+  it('forwards retryOfMessageId when the retry flag is set', async () => {
+    const { deps, fakes } = makeDeps();
+    const retryBody = { ...HISTORY_BODY, messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] }], retry: true };
+    const result = await run({ request: makeRequest(retryBody), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream);
+    const call = fakes.appendTurn.mock.calls[0]![0] as Record<string, unknown>;
+    expect(call.retryOfMessageId).toBe('m1');
+  });
+
+  it('does not persist without a valid turn id', async () => {
+    const { deps, fakes } = makeDeps();
+    const body = { ...HISTORY_BODY };
+    delete (body as Record<string, unknown>).turnId;
+    const result = await run({ request: makeRequest(body), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream);
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
   });
 });

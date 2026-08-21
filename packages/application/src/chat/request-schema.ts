@@ -38,6 +38,8 @@ const MessageSchema = z
 
 export const ChatRequestSchema = z.object({
   turnId: z.string().regex(V4_UUID_REGEX, 'turnId must be a v4 UUID').optional(),
+  conversationId: z.string().regex(V4_UUID_REGEX, 'conversationId must be a v4 UUID').optional(),
+  retry: z.boolean().optional(),
   messages: z
     .array(MessageSchema)
     .min(1)
