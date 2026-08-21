@@ -14,6 +14,7 @@ import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '@app/domain';
 import { requireAdminActor } from './authz';
 import { safeAudit } from '../audit-reliability';
 import { sanitizePagination } from '../service-result';
+import { capCodePoints } from '../text';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -41,12 +42,6 @@ export function sanitizeTicketNote(input: string): string {
 export function tailCodePoints(value: string, max: number): string {
   const chars = [...value];
   return chars.length > max ? chars.slice(-max).join('') : value;
-}
-
-/** Keep the head of `value` up to `max` Unicode code points. */
-export function capCodePoints(value: string, max: number): string {
-  const chars = [...value];
-  return chars.length > max ? chars.slice(0, max).join('') : value;
 }
 
 export async function listTickets(

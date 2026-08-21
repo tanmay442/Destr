@@ -96,6 +96,8 @@ function kindBadgeClass(kind: AuditEventRecord['kind']): string {
       return 'border-accent-info/40 text-accent-info';
     case 'settings':
       return 'border-border text-muted-foreground';
+    case 'chat':
+      return 'border-border text-muted-foreground';
   }
 }
 

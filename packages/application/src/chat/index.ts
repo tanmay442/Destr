@@ -6,3 +6,4 @@ export * from './emit-citations';
 export * from './turn-id';
 export * from './build-event-meta';
 export * from './request-schema';
+export * from './history';

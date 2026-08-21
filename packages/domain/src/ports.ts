@@ -278,7 +278,7 @@ type TicketAuditAction =
   | 'impersonation'
   | 'role_change';
 
-export type AuditKind = 'document' | 'ticket' | 'user' | 'settings';
+export type AuditKind = 'document' | 'ticket' | 'user' | 'settings' | 'chat';
 
 export interface AuditEventInput {
   kind: AuditKind;
