@@ -301,6 +301,7 @@ describe('ChatInterface', () => {
             turnId: expect.stringMatching(
               /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
             ),
+            conversationId: 'default-conversation',
           },
         },
       ),
@@ -586,5 +587,71 @@ describe('ChatInterface', () => {
     expect(cls).toContain('flex-1');
     expect(cls).toContain('min-h-0');
     expect(cls).toContain('overflow-y-auto');
+  });
+});
+
+describe('ChatInterface history integration', () => {
+  it('sends the conversation id with every message', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface conversationId="conv-abc" />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const body = (sendMessage.mock.calls[0]![1] as { body: { conversationId: string } }).body;
+    expect(body.conversationId).toBe('conv-abc');
+  });
+
+  it('renders resumed initial messages with rebuilt citation parts and feedback wiring', () => {
+    setupChat(
+      [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'question' }] },
+        {
+          id: 'a1',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'answer' },
+            {
+              type: 'data-citation',
+              data: { id: 3, documentId: 1, similarity: 0.9, snippet: 'snap', fileName: 'f.pdf' },
+            },
+          ],
+        },
+      ],
+      {},
+    );
+    render(<ChatInterface initialTurnIds={{ a1: 'turn-9' }} />);
+    expect(screen.getByTestId('chat-message-user')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-citation')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-feedback-up')).toBeInTheDocument();
+  });
+
+  it('disables the composer when the message cap is reached', () => {
+    setupChat([], {});
+    render(<ChatInterface initialMessageCount={500} />);
+    expect(screen.getByTestId('chat-cap-message')).toBeInTheDocument();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  it('retry sends a fresh turn id with retry and the conversation id', async () => {
+    const sendMessage = vi.fn(async () => {});
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+        { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'oops' }] },
+      ],
+      sendMessage,
+      status: 'error',
+      error: new Error('stream failed'),
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-retry" />);
+    fireEvent.click(screen.getByTestId('chat-retry'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const call = sendMessage.mock.calls[0]!;
+    expect(call[0]).toBeUndefined();
+    const body = (call[1] as { body: Record<string, unknown> }).body;
+    expect(body.retry).toBe(true);
+    expect(body.conversationId).toBe('conv-retry');
   });
 });

@@ -19,6 +19,7 @@ import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
+import { MAX_MESSAGES_PER_CONVERSATION } from '@app/domain';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from '@/components/ui/sonner';
@@ -314,18 +315,35 @@ function precedingUserMessageId(
   return undefined;
 }
 
-export function ChatInterface() {
+export function ChatInterface({
+  conversationId = 'default-conversation',
+  initialMessages = [],
+  initialTurnIds = {},
+  initialMessageCount,
+  onConversationUsed,
+}: {
+  conversationId?: string;
+  initialMessages?: MyUIMessage[];
+  initialTurnIds?: Record<string, string>;
+  initialMessageCount?: number;
+  onConversationUsed?: () => void;
+} = {}) {
   const [input, setInput] = useState('');
-  const [turnIds, setTurnIds] = useState<Record<string, string>>({});
+  const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
+  const [messageCount, setMessageCount] = useState(
+    initialMessageCount ?? initialMessages.length,
+  );
   // Pending turns keyed by the id of the user message that started them, so a
   // late/failed stream can never steal the turn of a newer message.
   const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
   const messagesRef = useRef<MyUIMessage[]>([]);
   const submittingRef = useRef(false);
+  const notifiedConversationRef = useRef(false);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
     transport,
+    ...(initialMessages.length > 0 ? { id: conversationId, initialMessages } : {}),
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
       if (isAbort || isDisconnect || isError) return;
       if (message.role !== 'assistant') return;
@@ -335,6 +353,11 @@ export function ChatInterface() {
       if (!turnId) return;
       pendingTurnIdRef.current.delete(userMessageId);
       setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
+      setMessageCount((prev) => prev + 2);
+      if (!notifiedConversationRef.current) {
+        notifiedConversationRef.current = true;
+        onConversationUsed?.();
+      }
     },
   });
   useEffect(() => {
@@ -345,6 +368,10 @@ export function ChatInterface() {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (submittingRef.current) return;
+    if (messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
+      toast.error('This chat is full — start a new one.');
+      return;
+    }
     submittingRef.current = true;
     let userMessageId: string | undefined;
     try {
@@ -353,14 +380,22 @@ export function ChatInterface() {
       pendingTurnIdRef.current.set(userMessageId, turnId);
       await sendMessage(
         { parts: [{ type: 'text', text: trimmed }], id: userMessageId, role: 'user' },
-        { body: { turnId } },
+        { body: { turnId, conversationId } },
       );
       setInput('');
-    } catch {
+    } catch (err) {
       if (userMessageId) {
         pendingTurnIdRef.current.delete(userMessageId);
       }
-      toast.error('Could not send your message. Please try again.');
+      const status = (err as { status?: number })?.status;
+      if (
+        status === 409 ||
+        (err instanceof Error && err.message.includes('512'))
+      ) {
+        toast.error("You've reached the maximum of 512 chats — delete older ones to start a new one.");
+      } else {
+        toast.error('Could not send your message. Please try again.');
+      }
     } finally {
       submittingRef.current = false;
     }
@@ -447,7 +482,7 @@ export function ChatInterface() {
     if (!target || isStreaming) return;
     const turnId = uuidv4();
     pendingTurnIdRef.current.set(target.id, turnId);
-    sendMessage(undefined, { body: { turnId } }).catch(() => {
+    sendMessage(undefined, { body: { turnId, conversationId, retry: true } }).catch(() => {
       toast.error('Could not send your message. Please try again.');
     });
   };
@@ -607,6 +642,14 @@ export function ChatInterface() {
       </div>
 
       <div className="shrink-0 px-4 pt-2 pb-4 sm:px-6 sm:pb-6">
+        {messageCount >= MAX_MESSAGES_PER_CONVERSATION ? (
+          <p
+            className="mx-auto mb-2 max-w-3xl rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-center text-xs text-warning"
+            data-testid="chat-cap-message"
+          >
+            This chat is full ({MAX_MESSAGES_PER_CONVERSATION} messages) — start a new one to keep chatting.
+          </p>
+        ) : null}
         <form
           onSubmit={onSubmit}
           className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-xl focus-within:shadow-primary/5"
@@ -617,7 +660,7 @@ export function ChatInterface() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={isStreaming}
+            disabled={isStreaming || messageCount >= MAX_MESSAGES_PER_CONVERSATION}
             placeholder="Message the knowledge assistant…"
             rows={1}
             className={cn(
