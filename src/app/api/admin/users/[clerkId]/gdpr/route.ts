@@ -37,6 +37,11 @@ export async function POST(
       action === 'purge'
         ? await comp.chatEventBatcher.purgeUserData(clerkId)
         : await comp.chatEventBatcher.anonymizeUserData(clerkId);
+    const chatPurged = await comp.chatHistoryRepo.purgeUserData(clerkId);
+    if (action === 'purge') {
+      (result as { deletedChatConversations?: number }).deletedChatConversations =
+        chatPurged.deletedConversations;
+    }
   } catch (e) {
     return respond(new ExternalServiceError('GDPR action failed', e));
   }

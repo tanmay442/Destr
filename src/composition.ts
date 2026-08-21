@@ -9,6 +9,7 @@ import {
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends,
   getDocumentAnalytics, submitChatFeedback,
+  listConversations, getConversation, renameConversation, deleteConversation, appendChatTurn,
   getTicketIntelligence,
   listAudit, logSettingsChange,
   prepareIngest,
@@ -69,7 +70,7 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = core.rateLimiter;
 
@@ -318,6 +319,16 @@ function createComposition() {
       bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: core.ticketRepo }),
     submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
       bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
+    listConversations: (input: Parameters<typeof listConversations>[0]) =>
+      bind(listConversations, input, { repo: chatHistoryRepo }),
+    getConversation: (input: Parameters<typeof getConversation>[0]) =>
+      bind(getConversation, input, { repo: chatHistoryRepo }),
+    renameConversation: (input: Parameters<typeof renameConversation>[0]) =>
+      bind(renameConversation, input, { repo: chatHistoryRepo }),
+    deleteConversation: (input: Parameters<typeof deleteConversation>[0]) =>
+      bind(deleteConversation, input, { repo: chatHistoryRepo, ...auditDeps }),
+    appendChatTurn: (input: Parameters<typeof appendChatTurn>[0]) =>
+      bind(appendChatTurn, input, { repo: chatHistoryRepo }),
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: core.dbClient,
     schema: Db.schema,
@@ -329,6 +340,7 @@ function createComposition() {
     answerCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
+    chatHistoryRepo,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),
