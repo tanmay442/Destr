@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
 import { MAX_MESSAGES_PER_CONVERSATION } from '@app/domain';
+import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from '@/components/ui/sonner';
@@ -320,13 +321,11 @@ export function ChatInterface({
   initialMessages = [],
   initialTurnIds = {},
   initialMessageCount,
-  onConversationUsed,
 }: {
   conversationId?: string;
   initialMessages?: MyUIMessage[];
   initialTurnIds?: Record<string, string>;
   initialMessageCount?: number;
-  onConversationUsed?: () => void;
 } = {}) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
@@ -356,7 +355,7 @@ export function ChatInterface({
       setMessageCount((prev) => prev + 2);
       if (!notifiedConversationRef.current) {
         notifiedConversationRef.current = true;
-        onConversationUsed?.();
+        notifyConversationsChanged();
       }
     },
   });
