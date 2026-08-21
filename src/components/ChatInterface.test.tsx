@@ -634,7 +634,9 @@ describe('ChatInterface history integration', () => {
   });
 
   it('retry sends a fresh turn id with retry and the conversation id', async () => {
-    const sendMessage = vi.fn(async () => {});
+    const sendMessage = vi.fn(async (...args: unknown[]) => {
+      void args;
+    });
     useChatMock.mockReturnValue({
       messages: [
         { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
