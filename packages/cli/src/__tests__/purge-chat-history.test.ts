@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parsePurgeHistoryArgs, runPurgeChatHistory } from '../commands/purge-chat-history';
 
-const purgeOlderThan = vi.fn().mockResolvedValue({ deletedConversations: 3, deletedMessages: 6 });
-const getOverrides = vi.fn().mockResolvedValue({ overrides: {}, version: 0 });
-const logEvent = vi.fn().mockResolvedValue(undefined);
+const { purgeOlderThan, getOverrides, logEvent } = vi.hoisted(() => ({
+  purgeOlderThan: vi.fn().mockResolvedValue({ deletedConversations: 3, deletedMessages: 6 }),
+  getOverrides: vi.fn().mockResolvedValue({ overrides: {}, version: 0 }),
+  logEvent: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@app/infrastructure/db', () => ({
   db: {

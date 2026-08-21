@@ -891,8 +891,8 @@ function FieldControl({
 
       {field.inputType === 'select' ? (
         <Select
-          value={(value as string) ?? ''}
-          onValueChange={onChange}
+          value={value === undefined || value === null ? '' : String(value)}
+          onValueChange={(v) => onChange(typeof field.default === 'number' ? Number(v) : v)}
           disabled={disabled}
         >
           <SelectTrigger id={id} className="w-full">
