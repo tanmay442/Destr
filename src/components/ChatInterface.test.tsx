@@ -602,25 +602,32 @@ describe('ChatInterface history integration', () => {
     expect(body.conversationId).toBe('conv-abc');
   });
 
-  it('renders resumed initial messages with rebuilt citation parts and feedback wiring', () => {
-    setupChat(
-      [
-        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'question' }] },
-        {
-          id: 'a1',
-          role: 'assistant',
-          parts: [
-            { type: 'text', text: 'answer' },
-            {
-              type: 'data-citation',
-              data: { id: 3, documentId: 1, similarity: 0.9, snippet: 'snap', fileName: 'f.pdf' },
-            },
-          ],
-        },
-      ],
-      {},
+  it('seeds the chat hook with the conversation id and resumed messages', () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'question' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'answer' },
+          {
+            type: 'data-citation',
+            data: { id: 3, documentId: 1, similarity: 0.9, snippet: 'snap', fileName: 'f.pdf' },
+          },
+        ],
+      },
+    ];
+    setupChat(initialMessages, {});
+    render(
+      <ChatInterface
+        conversationId="conv-resumed"
+        initialMessages={initialMessages}
+        initialTurnIds={{ a1: 'turn-9' }}
+      />,
     );
-    render(<ChatInterface initialTurnIds={{ a1: 'turn-9' }} />);
+    const options = useChatMock.mock.calls[0]![0] as { id?: string; messages?: Msg[] };
+    expect(options.id).toBe('conv-resumed');
+    expect(options.messages).toEqual(initialMessages);
     expect(screen.getByTestId('chat-message-user')).toBeInTheDocument();
     expect(screen.getByTestId('chat-citation')).toBeInTheDocument();
     expect(screen.getByTestId('chat-feedback-up')).toBeInTheDocument();

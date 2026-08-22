@@ -341,8 +341,9 @@ export function ChatInterface({
   const notifiedConversationRef = useRef(false);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
+    id: conversationId,
     transport,
-    ...(initialMessages.length > 0 ? { id: conversationId, initialMessages } : {}),
+    messages: initialMessages,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
       if (isAbort || isDisconnect || isError) return;
       if (message.role !== 'assistant') return;
