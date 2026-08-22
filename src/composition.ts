@@ -244,8 +244,15 @@ function createComposition() {
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logSettingsChange: (input: Parameters<typeof logSettingsChange>[0]) => logSettingsChange(input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    logUserAudit: (input: { action: string; actorId: string; targetId: string }) =>
-      auditDeps.audit.logEvent({ kind: 'user', action: input.action, actorId: input.actorId, targetType: 'user', targetId: input.targetId }),
+    logUserAudit: (input: { action: string; actorId: string; targetId: string; details?: Record<string, unknown> }) =>
+      auditDeps.audit.logEvent({
+        kind: 'user',
+        action: input.action,
+        actorId: input.actorId,
+        targetType: 'user',
+        targetId: input.targetId,
+        ...(input.details !== undefined ? { details: input.details } : {}),
+      }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),

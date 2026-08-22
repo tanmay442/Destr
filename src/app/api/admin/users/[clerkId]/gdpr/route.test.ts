@@ -143,5 +143,34 @@ describe('POST /api/admin/users/[clerkId]/gdpr', () => {
     purgeUserDataMock.mockRejectedValue(new Error('db down'));
     const res = await route.POST(makeReq('purge'), makeParams('user_2'));
     expect(res.status).toBe(502);
+    expect(logUserAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('still audits when the history purge fails after chat events were already erased', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    purgeUserDataMock.mockResolvedValue({ deletedCount: 3 });
+    chatPurgeUserDataMock.mockRejectedValue(new Error('history db down'));
+    const res = await route.POST(makeReq('purge'), makeParams('user_2'));
+    expect(res.status).toBe(502);
+    expect(logUserAuditMock).toHaveBeenCalledWith({
+      action: 'gdpr_purge',
+      actorId: 'admin-1',
+      targetId: 'user_2',
+      details: { partial: true, chatEvents: { deletedCount: 3 }, chatHistory: 'failed' },
+    });
+  });
+
+  it('still audits when the history purge fails after anonymize', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    anonymizeUserDataMock.mockResolvedValue({ updatedCount: 2 });
+    chatPurgeUserDataMock.mockRejectedValue(new Error('history db down'));
+    const res = await route.POST(makeReq('anonymize'), makeParams('user_2'));
+    expect(res.status).toBe(502);
+    expect(logUserAuditMock).toHaveBeenCalledWith({
+      action: 'gdpr_anonymize',
+      actorId: 'admin-1',
+      targetId: 'user_2',
+      details: { partial: true, chatEvents: { updatedCount: 2 }, chatHistory: 'failed' },
+    });
   });
 });
