@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { ChatInterface } from '@/components/ChatInterface';
 import { toResumedConversation, type StoredMessagePayload } from '@/chat/resume';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { MyUIMessage } from '@/composition';
 
 function uuidv4(): string {
@@ -24,16 +25,37 @@ interface ResumeState {
   messageCount: number;
 }
 
+function ResumeSkeleton() {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-6 px-4 py-8 sm:px-6"
+      aria-busy="true"
+      aria-label="Loading conversation"
+      data-testid="chat-resume-skeleton"
+    >
+      <div className="flex justify-end">
+        <Skeleton className="h-10 w-2/5 rounded-2xl" />
+      </div>
+      <div className="flex flex-col items-start gap-3">
+        <Skeleton className="size-8 rounded-full" />
+        <Skeleton className="h-16 w-3/5 rounded-2xl" />
+        <Skeleton className="h-4 w-24 rounded-md" />
+      </div>
+      <div className="flex flex-col items-start gap-3">
+        <Skeleton className="size-8 rounded-full" />
+        <Skeleton className="h-12 w-1/2 rounded-2xl" />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Route-driven chat session: `/chat` starts a fresh conversation (id is minted
  * client-side and synced into the URL after the first send), `/chat/[id]`
- * resumes a stored one. The sidebar list refreshes via chat events.
+ * resumes a stored one behind a skeleton while the network round-trip runs.
  */
-export function ChatConversationLoader() {
-  const params = useParams<{ id?: string }>();
+export function ChatConversationLoader({ routeId }: { routeId: string | null }) {
   const router = useRouter();
-  const routeId = typeof params?.id === 'string' && params.id ? params.id : null;
-
   const [conversationId] = useState<string>(() => routeId ?? uuidv4());
   const [resume, setResume] = useState<ResumeState | null>(null);
   const [loaded, setLoaded] = useState(routeId === null);
@@ -78,13 +100,7 @@ export function ChatConversationLoader() {
     }
   }, [routeId, loaded, conversationId]);
 
-  if (!loaded) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <div className="size-6 animate-spin rounded-full border-2 border-border-subtle border-t-foreground/70" />
-      </div>
-    );
-  }
+  if (!loaded) return <ResumeSkeleton />;
 
   return (
     <ChatInterface

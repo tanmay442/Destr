@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   LogOut,
+  PanelLeft,
   SquarePen,
   MoreHorizontal,
   Pencil,
@@ -98,9 +99,13 @@ function parseConversationId(pathname: string | null): string | null {
 export function AppSidebar({
   user,
   role,
+  open = true,
+  onToggle,
 }: {
   user: AppSidebarUser | null;
   role: AppRole;
+  open?: boolean;
+  onToggle?: () => void;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -172,7 +177,7 @@ export function AppSidebar({
     }
   };
 
-  const sidebarBody = (closeDrawer: () => void) => (
+  const sidebarBody = (closeDrawer: () => void, onSidebarToggle?: () => void) => (
     <SidebarBody
       user={user}
       role={role}
@@ -190,16 +195,21 @@ export function AppSidebar({
       onRenameCancel={() => setRenamingId(null)}
       onDeleteAsk={setDeletingId}
       onNavigate={closeDrawer}
+      {...(onSidebarToggle ? { onSidebarToggle } : {})}
     />
   );
 
   return (
     <>
       <aside
-        className="fixed inset-y-0 left-0 z-30 hidden w-72 flex-col border-r border-border-subtle bg-card/60 backdrop-blur-md md:flex"
+        className={cn(
+          'fixed inset-y-0 left-0 z-30 hidden flex-col overflow-hidden border-r border-border-subtle bg-card/60 backdrop-blur-md transition-[width] duration-200 md:flex',
+          open ? 'w-72' : 'w-0 border-r-0',
+        )}
         data-testid="app-sidebar"
+        data-open={open}
       >
-        {sidebarBody(() => undefined)}
+        <div className="flex h-full w-72 flex-col">{sidebarBody(() => undefined, onToggle)}</div>
       </aside>
 
       {/* Mobile drawer */}
@@ -251,18 +261,9 @@ function MobileSidebar({
   return (
     <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
       <header
-        className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border-subtle bg-background/85 px-4 backdrop-blur-md md:hidden"
+        className="sticky top-0 z-40 flex h-14 items-center gap-3 border-b border-border-subtle bg-background/85 px-4 backdrop-blur-md md:hidden"
         data-testid="app-mobile-topbar"
       >
-        <Link
-          href="/chat"
-          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
-          data-testid="app-mobile-brand"
-        >
-          <BrandMark size="sm" />
-          <span>Destr</span>
-        </Link>
-
         <SheetTrigger asChild>
           <Button
             type="button"
@@ -275,6 +276,14 @@ function MobileSidebar({
             <Menu aria-hidden />
           </Button>
         </SheetTrigger>
+        <Link
+          href="/chat"
+          className="inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-foreground"
+          data-testid="app-mobile-brand"
+        >
+          <BrandMark size="sm" />
+          <span>Destr</span>
+        </Link>
       </header>
 
       <SheetOverlay className="bg-black/60 backdrop-blur-sm md:hidden" />
@@ -329,6 +338,7 @@ function SidebarBody({
   onRenameCancel,
   onDeleteAsk,
   onNavigate,
+  onSidebarToggle,
 }: {
   user: AppSidebarUser | null;
   role: AppRole;
@@ -343,6 +353,7 @@ function SidebarBody({
   onRenameCancel: () => void;
   onDeleteAsk: (id: string) => void;
   onNavigate: () => void;
+  onSidebarToggle?: () => void;
 }) {
   const { signOut } = useClerk();
 
@@ -357,6 +368,19 @@ function SidebarBody({
           <BrandMark size="sm" />
           <span>Destr</span>
         </Link>
+        {onSidebarToggle ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onSidebarToggle}
+            aria-label="Close sidebar"
+            className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
+            data-testid="app-sidebar-collapse"
+          >
+            <PanelLeft aria-hidden />
+          </Button>
+        ) : null}
       </div>
 
       <div className="shrink-0 px-3 pt-3">
