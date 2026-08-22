@@ -73,7 +73,7 @@ type OnFinish = (options: {
 async function renderWithBoundTurn(assistant: Msg) {
   const sendMessage = vi.fn();
   setupChat([], { send: sendMessage });
-  const view = render(<ChatInterface />);
+  const view = render(<ChatInterface conversationId="conv-test" />);
   fireEvent.change(screen.getByTestId('chat-input'), {
     target: { value: 'Question?' },
   });
@@ -86,7 +86,7 @@ async function renderWithBoundTurn(assistant: Msg) {
     [{ id, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
     { send: sendMessage },
   );
-  view.rerender(<ChatInterface />);
+  view.rerender(<ChatInterface conversationId="conv-test" />);
   const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
   act(() =>
     chatOptions.onFinish({
@@ -119,7 +119,7 @@ const ASSISTANT_WITH_CITATIONS: Msg = {
 describe('ChatInterface', () => {
   it('renders a welcome intro when there are no messages', () => {
     setupChat();
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByText(/Answers grounded in your docs/i)).toBeInTheDocument();
     expect(
       screen.getByText(/answer from the official documentation/i),
@@ -137,7 +137,7 @@ describe('ChatInterface', () => {
       error: undefined,
       stop: vi.fn(),
     });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByTestId('chat-thinking')).toBeInTheDocument();
     expect(screen.getByText('Searching from the sources')).toBeInTheDocument();
   });
@@ -156,7 +156,7 @@ describe('ChatInterface', () => {
         ],
       },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const citation = screen.getByTestId('chat-citation');
     expect(citation).toBeInTheDocument();
     expect(within(citation).getByText(/92% match/i)).toBeInTheDocument();
@@ -185,7 +185,7 @@ describe('ChatInterface', () => {
         ],
       },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const citation = screen.getByTestId('chat-citation');
     expect(within(citation).getByTestId('chat-citation-file')).toHaveTextContent(
       'employee-benefits.pdf — p.5',
@@ -215,7 +215,7 @@ describe('ChatInterface', () => {
         ],
       },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const citation = screen.getByTestId('chat-citation');
     expect(within(citation).getByTestId('chat-citation-file')).toHaveTextContent(
       /^handbook\.md$/,
@@ -243,7 +243,7 @@ describe('ChatInterface', () => {
         ],
       },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     expect(
       screen.queryByTestId('chat-citation-section'),
     ).not.toBeInTheDocument();
@@ -262,7 +262,7 @@ describe('ChatInterface', () => {
         ],
       },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const citation = screen.getByTestId('chat-citation');
     expect(
       within(citation).queryByTestId('chat-citation-file'),
@@ -277,7 +277,7 @@ describe('ChatInterface', () => {
       { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Hello!' }] },
       { id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'Hi there.' }] },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByText('Hello!')).toBeInTheDocument();
     expect(screen.getByText('Hi there.')).toBeInTheDocument();
   });
@@ -285,7 +285,7 @@ describe('ChatInterface', () => {
   it('sends a message when the form is submitted', async () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'What is the dental plan?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
@@ -301,6 +301,7 @@ describe('ChatInterface', () => {
             turnId: expect.stringMatching(
               /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
             ),
+            conversationId: 'conv-test',
           },
         },
       ),
@@ -312,7 +313,7 @@ describe('ChatInterface', () => {
   it('sends a message when Enter is pressed in the composer', async () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Enter question?' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -326,7 +327,7 @@ describe('ChatInterface', () => {
   it('sends a quick prompt when clicked', async () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     fireEvent.click(screen.getAllByTestId('chat-quick-prompt')[0]!);
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     const call = sendMessage.mock.calls[0]![0] as {
@@ -341,7 +342,7 @@ describe('ChatInterface', () => {
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValueOnce(undefined);
     setupChat([], { send: sendMessage });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'First attempt?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
@@ -357,7 +358,7 @@ describe('ChatInterface', () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });
     vi.stubGlobal('crypto', {});
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Insecure question?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
@@ -377,7 +378,7 @@ describe('ChatInterface', () => {
       error: undefined,
       stop,
     });
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'q' } });
     expect(input).toBeDisabled();
@@ -392,7 +393,7 @@ describe('ChatInterface', () => {
     setupChat([
       { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi.' }] },
     ]);
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     expect(screen.queryByTestId('chat-feedback')).not.toBeInTheDocument();
   });
 
@@ -510,7 +511,7 @@ describe('ChatInterface', () => {
     vi.stubGlobal('fetch', fetchMock);
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });
-    const view = render(<ChatInterface />);
+    const view = render(<ChatInterface conversationId="conv-test" />);
 
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'A?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
@@ -524,7 +525,7 @@ describe('ChatInterface', () => {
       [{ id: msgA, role: 'user', parts: [{ type: 'text', text: 'A?' }] }],
       { send: sendMessage, status: 'error' },
     );
-    view.rerender(<ChatInterface />);
+    view.rerender(<ChatInterface conversationId="conv-test" />);
 
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'B?' } });
     fireEvent.click(screen.getByTestId('chat-send'));
@@ -546,7 +547,7 @@ describe('ChatInterface', () => {
       ],
       { send: sendMessage },
     );
-    view.rerender(<ChatInterface />);
+    view.rerender(<ChatInterface conversationId="conv-test" />);
     const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
 
     // B finishes first; A's error onFinish arrives afterwards. B must keep turnB.
@@ -580,11 +581,182 @@ describe('ChatInterface', () => {
 
   it('renders the messages container as the vertically scrollable region of the chat frame', () => {
     setupChat();
-    render(<ChatInterface />);
+    render(<ChatInterface conversationId="conv-test" />);
     const container = screen.getByTestId('chat-scroll');
     const cls = container.className;
     expect(cls).toContain('flex-1');
     expect(cls).toContain('min-h-0');
     expect(cls).toContain('overflow-y-auto');
+  });
+});
+
+describe('ChatInterface history integration', () => {
+  it('sends the conversation id with every message', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface conversationId="conv-abc" />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const body = (sendMessage.mock.calls[0]![1] as { body: { conversationId: string } }).body;
+    expect(body.conversationId).toBe('conv-abc');
+  });
+
+  it('seeds the chat hook with the conversation id and resumed messages', () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'question' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'answer' },
+          {
+            type: 'data-citation',
+            data: { id: 3, documentId: 1, similarity: 0.9, snippet: 'snap', fileName: 'f.pdf' },
+          },
+        ],
+      },
+    ];
+    setupChat(initialMessages, {});
+    render(
+      <ChatInterface
+        conversationId="conv-resumed"
+        initialMessages={initialMessages}
+        initialTurnIds={{ a1: 'turn-9' }}
+      />,
+    );
+    const options = useChatMock.mock.calls[0]![0] as { id?: string; messages?: Msg[] };
+    expect(options.id).toBe('conv-resumed');
+    expect(options.messages).toEqual(initialMessages);
+    expect(screen.getByTestId('chat-message-user')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-citation')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-feedback-up')).toBeInTheDocument();
+  });
+
+  it('shows a truncation notice only when the resumed chat is truncated', () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'a' }] },
+    ];
+    setupChat(initialMessages, {});
+    const view = render(
+      <ChatInterface conversationId="conv-trunc" initialMessages={initialMessages} truncated />,
+    );
+    expect(screen.getByTestId('chat-truncated-notice')).toHaveTextContent(
+      'Showing the last 200 messages of this chat',
+    );
+    view.rerender(
+      <ChatInterface conversationId="conv-trunc" initialMessages={initialMessages} />,
+    );
+    expect(screen.queryByTestId('chat-truncated-notice')).not.toBeInTheDocument();
+  });
+
+  it('disables the composer when the message cap is reached', () => {
+    setupChat([], {});
+    render(<ChatInterface conversationId="conv-test" initialMessageCount={500} />);
+    expect(screen.getByTestId('chat-cap-message')).toBeInTheDocument();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  it('blocks submits with the cap message when the conversation limit is reached', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface conversationId="conv-limited" conversationLimitReached />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "You've reached the maximum of 512 chats — delete older ones to start a new one.",
+      ),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('retry sends a fresh turn id with retry and the conversation id', async () => {
+    const sendMessage = vi.fn(async (...args: unknown[]) => {
+      void args;
+    });
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+        { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'oops' }] },
+      ],
+      sendMessage,
+      status: 'error',
+      error: new Error('stream failed'),
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-retry" />);
+    fireEvent.click(screen.getByTestId('chat-retry'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const call = sendMessage.mock.calls[0]!;
+    expect(call[0]).toBeUndefined();
+    const body = (call[1] as { body: Record<string, unknown> }).body;
+    expect(body.retry).toBe(true);
+    expect(body.conversationId).toBe('conv-retry');
+  });
+
+  it('keeps the message count stable when a retried turn finishes', async () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'a' }] },
+    ];
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    useChatMock.mockReturnValue({
+      messages: initialMessages,
+      sendMessage,
+      status: 'error',
+      error: new Error('stream failed'),
+      stop: vi.fn(),
+    });
+    const view = render(
+      <ChatInterface conversationId="conv-count" initialMessages={initialMessages} initialMessageCount={498} />,
+    );
+    fireEvent.click(screen.getByTestId('chat-retry'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+    const retried: Msg = { id: 'a2', role: 'assistant', parts: [{ type: 'text', text: 'retry answer' }] };
+    setupChat([...initialMessages, retried], { send: sendMessage });
+    view.rerender(
+      <ChatInterface conversationId="conv-count" initialMessages={initialMessages} initialMessageCount={498} />,
+    );
+    act(() =>
+      chatOptions.onFinish({
+        message: retried,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    expect(screen.queryByTestId('chat-cap-message')).not.toBeInTheDocument();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it('still increments the message count by two on a normal finish', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    const view = render(<ChatInterface conversationId="conv-count" initialMessageCount={498} />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'Question?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    const { id } = sendMessage.mock.calls[0]![0] as { id: string };
+    const assistant: Msg = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'answer' }] };
+    setupChat(
+      [{ id, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
+      { send: sendMessage },
+    );
+    view.rerender(<ChatInterface conversationId="conv-count" initialMessageCount={498} />);
+    const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+    act(() =>
+      chatOptions.onFinish({
+        message: assistant,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    expect(screen.getByTestId('chat-cap-message')).toBeInTheDocument();
   });
 });

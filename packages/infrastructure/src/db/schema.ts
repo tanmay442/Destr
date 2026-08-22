@@ -1,11 +1,16 @@
 import {
-  pgTable, serial, text, timestamp, integer, real, jsonb, boolean,
+  pgTable, serial, bigserial, text, timestamp, integer, real, jsonb, boolean,
   index, check, foreignKey, uniqueIndex, uuid, smallint,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { vector, tsvector } from './schema-vector';
 import { byteaBlob } from '../storage/bytea-blob';
-import type { IngestStatus, AppConfig } from '@app/domain';
+import {
+  MAX_CONVERSATION_TITLE_LENGTH,
+  MAX_STORED_MESSAGE_BYTES,
+  type IngestStatus,
+  type AppConfig,
+} from '@app/domain';
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
@@ -97,7 +102,7 @@ export const auditEvents = pgTable('audit_events', {
   at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
   sourceRef: text('source_ref'),
 }, (table) => [
-  check('audit_events_kind_check', sql`${table.kind} IN ('document','ticket','user','settings')`),
+  check('audit_events_kind_check', sql`${table.kind} IN ('document','ticket','user','settings','chat')`),
   index('audit_events_kind_idx').on(table.kind),
   index('audit_events_at_idx').on(table.at.desc()),
   index('audit_events_actor_id_idx').on(table.actorId),
@@ -159,6 +164,38 @@ export const chatFeedback = pgTable('chat_feedback', {
   check('chat_feedback_value_check', sql`${table.feedback} IN (1, -1)`),
   index('chat_feedback_created_at_idx').on(table.createdAt),
 ]);
+
+export const chatConversations = pgTable('chat_conversations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => users.clerkUserId, { onDelete: 'cascade' }),
+  title: text('title').notNull().default(''),
+  messageCount: integer('message_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('chat_conversations_title_len_check', sql`char_length(${table.title}) <= ${MAX_CONVERSATION_TITLE_LENGTH}`),
+  index('idx_chat_conversations_user_updated').on(table.userId, table.updatedAt.desc()),
+  index('chat_conversations_updated_at_idx').on(table.updatedAt),
+]);
+
+export const chatMessages = pgTable('chat_messages', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  conversationId: uuid('conversation_id').notNull().references(() => chatConversations.id, { onDelete: 'cascade' }),
+  turnId: uuid('turn_id'),
+  role: text('role').notNull(),
+  content: jsonb('content').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('chat_messages_role_check', sql`${table.role} IN ('user','assistant')`),
+  check('chat_messages_content_bytes_check', sql`octet_length(${table.content}::text) <= ${MAX_STORED_MESSAGE_BYTES}`),
+  index('idx_chat_messages_conversation_id').on(table.conversationId, table.id),
+  uniqueIndex('chat_messages_turn_unique').on(table.conversationId, table.turnId, table.role),
+]);
+
+export type ChatConversation = typeof chatConversations.$inferSelect;
+export type NewChatConversation = typeof chatConversations.$inferInsert;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+export type NewChatMessage = typeof chatMessages.$inferInsert;
 
 export type ChatEvent = typeof chatEvents.$inferSelect;
 export type NewChatEvent = typeof chatEvents.$inferInsert;

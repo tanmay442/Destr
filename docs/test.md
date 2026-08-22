@@ -8,27 +8,30 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **127 files** | 123 passed, 4 skipped (live-DB gated) |
-| **Total Test Cases** | **1,113 tests** | 1,055 passed, 58 skipped (live-DB / external network gated) |
-| **Architecture Modules** | **493 modules** | 1,259 dependencies checked with **0 violations** |
-| **Suite Run Duration** | **~45–50s** | Full suite execution including transform, setup, import, and runner |
+| **Total Test Files** | **136 files** | 131 passed, 5 skipped (live-DB gated) |
+| **Total Test Cases** | **1,293 tests** | 1,229 passed, 64 skipped (live-DB / external network gated) |
+| **Architecture Modules** | **514 modules** | 1,329 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~45s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
 
 ## Quality Gate Commands
 
-All pull requests and local changes are verified via single-command quality gates:
+All pull requests and local changes are verified via the same four gates — Vitest, TypeScript (`tsc --noEmit`), ESLint, and dependency-cruiser architecture rules — individually or via single-command wrappers:
 
 ```bash
+# Run the test suite only (equivalent to `pnpm vitest run`):
+pnpm test
+
+# The four gates individually:
+pnpm typecheck && pnpm lint && pnpm arch && pnpm vitest run
+
 # Run full quality gate: Vitest + TypeScript + ESLint + Dependency Architecture
 pnpm gate
 
 # Run full gate + Next.js production build verification:
 pnpm gate:build
-
-# Run Vitest tests only:
-pnpm test
 
 # Run interactive Vitest UI:
 pnpm test:ui
@@ -50,7 +53,7 @@ test-distribution/
 ├── packages/domain/         # Pure schema, error hierarchy, sanitization tests
 ├── packages/application/    # Pure use-case tests (chat-turn, ingest, search, tickets, analytics)
 ├── packages/infrastructure/ # Database repos, LLM services, and shared contract suites
-├── packages/cli/            # CLI command tests (init, setup, seed, db-migrate)
+├── packages/cli/            # CLI command tests (init, setup, seed, upload, purge-chat-events, purge-chat-history, db-migrate)
 └── src/                     # API route handlers, UI components, parity suites, middleware gating
 ```
 
@@ -78,7 +81,7 @@ Multi-implementation ports are validated through **shared contract-assertion har
   Validates `buildCoreDeps()` singleton semantics, default environment memoization, and custom environment isolation.
 
 - **Chat Turn Use-Case Parity (`src/app/api/chat/chat-turn.parity.test.ts`)**:
-  Validates 100% side-by-side behavioral parity between legacy inline chat routing and the decoupled `@app/application/chat` turn use-case.
+  Validates 100% side-by-side behavioral parity between legacy inline chat routing and the decoupled `@app/application/chat` turn use-case, including a persistence case asserting both paths save identical chat history.
 
 - **Answer Cache Golden Key (`src/app/api/chat/cache-key.golden.test.ts`)**:
   Pins cache key generation stability across text normalization, model changes, and configuration fingerprints.
@@ -103,6 +106,14 @@ Multi-implementation ports are validated through **shared contract-assertion har
   Reasoning trace stripping (`<think>`, `<thought>`, `<antThinking>`), control character removal.
 - **Middleware & Auth Gating (`src/proxy.test.ts`)**:
   Clerk middleware route protection (public, signed-in, admin-only routes, cron secret bypass).
+- **Chat History Persistence** (feature suites):
+  - **Use cases (`packages/application/src/chat/__tests__/history.test.ts`)**: ownership passthrough and pagination defaults/caps, conversation/message cap conflicts, title sanitization + auto-title, stored-message whitelisting (`toStoredMessage`), byte-cap truncation, and audit emission on delete.
+  - **Repository (`packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`)**: transactional turn append with lazy conversation upsert, idempotent re-fire with correct `message_count` delta, retry replacement, retention purge, and whole-user purge. Live-DB gated — skips unless `DATABASE_URL` is set and reachable.
+  - **Conversations API (`src/app/api/chat/conversations/route.test.ts`, `conversations/[id]/route.test.ts`)**: auth gating, same-origin enforcement on mutations, ownership 404s, validation 400s for list/resume/rename/delete.
+  - **CLI (`packages/cli/src/__tests__/purge-chat-history.test.ts`)**: `--days`/`--dry-run`/`--yes`/`--allow-sub-day` parsing, mandatory `--days` while the admin window is Off, dry-run counts.
+  - **Retention config (`packages/domain/src/app-config.test.ts`)**: `chatHistoryRetentionDays` default 120; only 0 (Off) / 30 / 120 / 365 accepted.
+  - **GDPR erasure (`.../users/[clerkId]/gdpr/route.test.ts`)**: saved chats purged in both `purge` and `anonymize` modes.
+  - **Components (`src/components/app/AppSidebar.test.tsx`, `src/components/ChatConversationLoader.test.tsx`, `src/components/ChatInterface.test.tsx`)**: sidebar list fetch/active highlight/delete-confirm flows, conversation id sent with every message, resume rebuilds citation parts from stored metadata, composer blocks at the per-conversation message cap, retry mints a fresh turn id.
 
 ---
 
@@ -116,6 +127,19 @@ vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
 ```
 
 When writing new tests that assert "absent credential" errors, always stub the variable explicitly rather than relying on ambient shell environment state.
+
+### Database-Backed Tests (local setup)
+
+DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`, the db integration/repositories tests) probe `DATABASE_URL` with a `SELECT 1` and **skip** when it is unset or unreachable — they never fail on a machine without a database. To run them locally:
+
+```bash
+pnpm dev:db                 # docker compose up -d db (pgvector on 127.0.0.1:5432)
+export DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent
+MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate   # apply drizzle/ migrations
+pnpm vitest run             # DB-gated suites now execute instead of skipping
+```
+
+Vitest itself does not load `.env.local`, so `DATABASE_URL` must be present in the shell environment (the password matches `.env.example` / `docker-compose.yml`). Migration tooling prefers `MIGRATION_DATABASE_URL` and falls back to `DATABASE_URL`; against a fresh local volume either works, since the compose user owns the database.
 
 `setup-test-db` refuses to use an ambient `DATABASE_URL` when
 `NEON_PROJECT_ID`/`NEON_API_KEY` are missing unless `--use-existing` is passed.

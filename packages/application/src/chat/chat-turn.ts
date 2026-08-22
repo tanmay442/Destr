@@ -26,6 +26,7 @@ import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
 import { buildEventMeta } from './build-event-meta';
+import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
 import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit-citations';
 import { ChatRequestSchema } from './request-schema';
@@ -101,6 +102,17 @@ export interface ChatTurnDeps {
     record(event: ChatEventInput): void;
     flush(): Promise<void>;
   };
+  historySink?: {
+    appendTurn(input: {
+      userId: string;
+      conversationId: string;
+      turnId: string;
+      retryOfMessageId?: string | undefined;
+      title?: string | undefined;
+      userMessage: unknown;
+      assistantMessage: unknown;
+    }): Promise<unknown>;
+  };
   traceEnabled: boolean;
 }
 
@@ -119,6 +131,43 @@ export type ChatTurnResult =
   | { kind: 'rate-limited'; retryAfterSec: string | undefined }
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
+
+/** Best-effort history persistence; never blocks or fails the chat stream. */
+export function persistHistory(
+  sink: ChatTurnDeps['historySink'],
+  cfg: AppConfig,
+  userId: string,
+  input: {
+    conversationId: string | undefined;
+    turnId: string | null;
+    retryOfMessageId?: string | undefined;
+    title: string;
+    userMessage: MessageLike | undefined;
+    assistantMessage: MessageLike;
+  },
+): void {
+  if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return;
+  if (!input.conversationId) {
+    logger.debug('chat.history.persist_skipped', { turnId: input.turnId });
+    return;
+  }
+  void sink
+    .appendTurn({
+      userId,
+      conversationId: input.conversationId,
+      turnId: input.turnId,
+      retryOfMessageId: input.retryOfMessageId,
+      title: input.title,
+      userMessage: input.userMessage,
+      assistantMessage: input.assistantMessage,
+    })
+    .catch(() =>
+      logger.warn('chat.history.persist_failed', {
+        conversationId: input.conversationId,
+        turnId: input.turnId,
+      }),
+    );
+}
 
 async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
   if (!request.body) return { value: null, tooLarge: false };
@@ -404,6 +453,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }
           : {}),
       });
+      persistHistory(deps.historySink, cfg, userId, {
+        conversationId: parsed.data.conversationId,
+        turnId,
+        retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+        title: lastUserText,
+        userMessage: lastUserMessage,
+        assistantMessage: buildAssistantMessageLike({
+          turnId,
+          text: cachedAnswer.text,
+          citations: dedupeCitations(cachedAnswer.citations),
+          guardrail: null,
+        }),
+      });
       return {
         kind: 'stream',
         stream,
@@ -517,6 +579,21 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+            }),
+          });
+          persistHistory(deps.historySink, cfg, userId, {
+            conversationId: parsed.data.conversationId,
+            turnId,
+            retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+            title: lastUserText,
+            userMessage: lastUserMessage,
+            assistantMessage: buildAssistantMessageLike({
+              turnId,
+              text: await Promise.resolve(result.text).catch(() => ''),
+              citations: finalCitations,
+              guardrail: hallucinationBlocked
+                ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
+                : null,
             }),
           });
         } catch (err) {

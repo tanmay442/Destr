@@ -128,6 +128,7 @@ const config: AppConfig = {
   answerCacheEnabled: ANSWER_CACHE_ENABLED,
   answerCacheTtlSec: ANSWER_CACHE_TTL_SEC,
   captureQueryText: true,
+  chatHistoryRetentionDays: 120,
   retrievalModeRolloutPercent: 100,
 };
 

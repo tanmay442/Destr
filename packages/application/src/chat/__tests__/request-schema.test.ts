@@ -95,6 +95,14 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     expect(ChatRequestSchema.safeParse({ messages: [at] }).success).toBe(true);
   });
 
+  it('caps the messages array at 1000', () => {
+    const message = baseMessage('user', [{ type: 'text', text: 'hi' }]);
+    const at = Array.from({ length: 1000 }, () => message);
+    const over = Array.from({ length: 1001 }, () => message);
+    expect(ChatRequestSchema.safeParse({ messages: at }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ messages: over }).success).toBe(false);
+  });
+
   it('enforces a per-request total text character budget', () => {
     const bigMessage = baseMessage('user', [{ type: 'text', text: 'x'.repeat(60_000) }]);
     const threeBig = [bigMessage, bigMessage, bigMessage, bigMessage];
@@ -115,5 +123,21 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     expect(ChatRequestSchema.safeParse(body).success).toBe(true);
     expect(ChatRequestSchema.safeParse({ ...body, turnId: v1 }).success).toBe(false);
     expect(ChatRequestSchema.safeParse({ ...body, turnId: 'nope' }).success).toBe(false);
+  });
+
+  it('accepts an optional conversationId but rejects a malformed one (T1)', () => {
+    const valid = 'a0000000-0000-4000-8000-000000000001';
+    const v1 = 'a0000000-0000-1000-8000-000000000001';
+    const body = { messages: [baseMessage('user', [{ type: 'text', text: 'hi' }])] };
+    expect(ChatRequestSchema.safeParse(body).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: valid }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: v1 }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: 'not-a-uuid' }).success).toBe(false);
+  });
+
+  it('requires retry to be a strict boolean', () => {
+    const body = { messages: [baseMessage('user', [{ type: 'text', text: 'hi' }])] };
+    expect(ChatRequestSchema.safeParse({ ...body, retry: true }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, retry: 'true' }).success).toBe(false);
   });
 });

@@ -31,19 +31,36 @@ export async function POST(
     return respond(new ValidationError('invalid_action', { issues: parsed.error.issues }));
   }
   const action = parsed.data.action;
-  let result: { deletedCount: number } | { updatedCount: number };
+  const auditAction = action === 'purge' ? 'gdpr_purge' : 'gdpr_anonymize';
+  let eventsResult: { deletedCount: number } | { updatedCount: number };
   try {
-    result =
+    eventsResult =
       action === 'purge'
         ? await comp.chatEventBatcher.purgeUserData(clerkId)
         : await comp.chatEventBatcher.anonymizeUserData(clerkId);
   } catch (e) {
     return respond(new ExternalServiceError('GDPR action failed', e));
   }
+  let chatPurged: { deletedConversations: number; deletedMessages: number };
+  try {
+    chatPurged = await comp.chatHistoryRepo.purgeUserData(clerkId);
+  } catch (e) {
+    await comp.logUserAudit({
+      action: auditAction,
+      actorId: session.user.id,
+      targetId: clerkId,
+      details: { partial: true, chatEvents: eventsResult, chatHistory: 'failed' },
+    });
+    return respond(new ExternalServiceError('GDPR action failed', e));
+  }
   await comp.logUserAudit({
-    action: action === 'purge' ? 'gdpr_purge' : 'gdpr_anonymize',
+    action: auditAction,
     actorId: session.user.id,
     targetId: clerkId,
   });
-  return Response.json(result);
+  if (action === 'purge') {
+    (eventsResult as { deletedChatConversations?: number }).deletedChatConversations =
+      chatPurged.deletedConversations;
+  }
+  return Response.json(eventsResult);
 }

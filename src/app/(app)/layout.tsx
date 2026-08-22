@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getAppSession } from '@/composition';
-import { AppSidebar, type AppRole } from '@/components/app/AppSidebar';
+import { AppShellClient } from '@/components/app/AppShellClient';
+import type { AppRole } from '@/components/app/AppSidebar';
 
 export default async function AppLayout({
   children,
@@ -14,21 +15,15 @@ export default async function AppLayout({
   const role: AppRole = (session.user.role as AppRole | undefined) ?? 'user';
 
   return (
-    <>
-      <AppSidebar
-        user={{
-          name: session.user.name,
-          imageUrl: session.user.imageUrl,
-          email: session.user.email,
-        }}
-        role={role}
-      />
-      <main
-        className="flex min-h-0 flex-1 flex-col pt-14 md:pt-0 md:pl-64"
-        data-testid="app-main"
-      >
-        {children}
-      </main>
-    </>
+    <AppShellClient
+      user={{
+        name: session.user.name,
+        imageUrl: session.user.imageUrl,
+        email: session.user.email,
+      }}
+      role={role}
+    >
+      {children}
+    </AppShellClient>
   );
 }

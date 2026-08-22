@@ -28,7 +28,7 @@ rag_agent/
 │   ├── domain/         # @app/domain — Pure types, Zod schemas, Result<T,E>, port interfaces
 │   ├── application/    # @app/application — Use-cases returning Result<T, DomainError>
 │   ├── infrastructure/ # @app/infrastructure — Drizzle repos, AI SDK adapters, PDF parsers
-│   └── cli/            # @app/cli — `rag-agent` CLI (init, setup, seed, upload, purge-chat-events, db-migrate)
+│   └── cli/            # @app/cli — `rag-agent` CLI (init, setup, seed, upload, purge-chat-events, purge-chat-history, db-migrate)
 └── src/                # Next.js App Router shell, UI components, and composition root
 ```
 
@@ -103,7 +103,7 @@ Four tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend wi
 4. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
 
 ### Comprehensive Audit Log (`/admin/audit`)
-- Consolidated over `audit_events`; filterable by `kind` (`document`/`ticket`/`user`/`settings`), `action`, `actor`, `documentId`/`ticketId`, and date range.
+- Consolidated over `audit_events`; filterable by `kind` (`document`/`ticket`/`user`/`settings`; `chat` entries from conversation deletions and history purges — see §5.1 — appear under *All kinds* but are not yet a quick-filter option), `action`, `actor`, `documentId`/`ticketId`, and date range.
 - **Settings Diffs & One-Click Revert**: settings updates record `details.changes = [{key, old, new}]`; Revert re-PUTs through the same audited route.
 - **Dead-Letter (`audit_dead_letter`)**: audit writes are non-blocking; transient failures persist payload + error for manual inspection (no replay UI exists).
 
@@ -131,9 +131,16 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 | `audit_dead_letter` | Fallback store for failed audit writes | `id`, `kind`, `payload` (JSONB), `error`, `attempted_at`, `replayed` |
 | `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB) |
 | `chat_feedback` | Sentiment votes | `turn_id` (PK, FK→`chat_events`), `feedback` (±1), `document_ids`, `chunk_ids`, `created_at` |
+| `chat_conversations` | Persisted user chats (one row per conversation) | `id` (uuid PK), `user_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `title`, `message_count`, `created_at`, `updated_at` (last activity; retention key) |
+| `chat_messages` | Stored transcript messages per conversation | `id` (bigserial PK), `conversation_id` (FK→`chat_conversations`, ON DELETE CASCADE), `turn_id` (semantic link to `chat_events`, no FK), `role` (`user`/`assistant`), `content` (JSONB snapshot ≤256 KB), `created_at` |
 | `chat_daily_stats` | Materialized view of daily aggregates (refreshed by the telemetry job) | `day`, `mode`, `total`, `p50_ms`, `p95_ms`, `hallucination_count`, `ood_count`, `tickets_created`, `self_serve_count`, `avg_max_similarity`, `unique_users`, `tokens_in/out` |
 
 Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chunks excluded) and GIN `tsvector` on `chunks.tsv`.
+
+### 5.1 Chat history retention & purge CLI
+
+- **Retention**: saved chats (`chat_conversations` / `chat_messages`) auto-expire based on last activity (`updated_at`) after an admin-configured window (`chatHistoryRetentionDays`, editable in `/admin/settings`: Off / 30 / 120 / 365 days, default 120). **Off** (`0`) disables purging entirely.
+- **`purge-chat-history [--days=N]`** (`rag-agent` CLI, modeled on `purge-chat-events`): deletes conversations whose last activity predates the cutoff (messages cascade). Supports `--dry-run`, and asks for confirmation unless `--yes` is passed; windows under one day are refused without `--allow-sub-day` (or `--force`); while the admin window is Off, an explicit `--days` is mandatory for a one-off run. Each run writes an audit event (`kind='chat'`, `action='history_purged'`, actor `cli`) with the deleted counts.
 
 ---
 
@@ -199,12 +206,25 @@ The root layout (`src/app/layout.tsx`) renders the `google-site-verification` me
 
 | Variable | Role | Privileges | Used by |
 |---|---|---|---|
-| `DATABASE_URL` | `rag_app` (least privilege) | `SELECT/INSERT/UPDATE/DELETE` on the 9 app tables, `USAGE, SELECT` on sequences, `USAGE` on schema `public`. **No** DDL, no `TRUNCATE`/`TRIGGER`/`REFERENCES`, no `_migrations` access, no role management, `NOBYPASSRLS` | App runtime (Next.js API routes, CLI, scripts that do DML) |
+| `DATABASE_URL` | `rag_app` (least privilege) | `SELECT/INSERT/UPDATE/DELETE` on the 11 app tables, `USAGE, SELECT` on sequences, `USAGE` on schema `public`. **No** DDL, no `TRUNCATE`/`TRIGGER`/`REFERENCES`, no `_migrations` access, no role management, `NOBYPASSRLS` | App runtime (Next.js API routes, CLI, scripts that do DML) |
 | `MIGRATION_DATABASE_URL` | DB owner (e.g. `neondb_owner`) | Full (owner) | `pnpm db:migrate` (`scripts/migrate.ts` → `scripts/apply-migration.mjs`), `drizzle-kit push`/`studio`/`introspect` |
 
 Every tool that runs DDL prefers `MIGRATION_DATABASE_URL ?? DATABASE_URL` (`scripts/migrate.ts`, `scripts/apply-migration.mjs`, `drizzle.config.ts`). The app never holds the owner credential, so a leaked `DATABASE_URL` can no longer drop tables, plant triggers, or create roles.
 
-**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_events`, `chat_feedback`, `chunks`, `documents`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_conversations`, `chat_events`, `chat_feedback`, `chat_messages`, `chunks`, `documents`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+
+**Manual runbook step for the chat history tables.** Migrations apply the DDL but not the live GRANT/RLS state — after applying `0018_chat_history.sql`, run the following as the DDL-capable owner (same pattern as the original rollout):
+
+```sql
+ALTER TABLE chat_conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages      ENABLE ROW LEVEL SECURITY;
+CREATE POLICY rag_app_full_access ON chat_conversations FOR ALL TO rag_app USING (true) WITH CHECK (true);
+CREATE POLICY rag_app_full_access ON chat_messages      FOR ALL TO rag_app USING (true) WITH CHECK (true);
+GRANT SELECT, INSERT, UPDATE, DELETE ON chat_conversations, chat_messages TO rag_app;
+GRANT USAGE, SELECT ON SEQUENCE chat_messages_id_seq TO rag_app;
+```
+
+**Skipping this step makes the app see zero rows silently** — RLS is default-deny, so without a policy (and grants) for `rag_app` every history query returns nothing. Verify afterwards that `rag_app` reads and writes normally while a role without a policy sees zero rows.
 
 **Migration flow (where DDL runs):**
 1. **Local dev** — `pnpm db:migrate` or `pnpm build` (build runs `tsx scripts/migrate.ts` first); uses `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.

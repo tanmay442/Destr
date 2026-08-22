@@ -19,6 +19,8 @@ import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
+import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
+import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { toast } from '@/components/ui/sonner';
@@ -314,18 +316,39 @@ function precedingUserMessageId(
   return undefined;
 }
 
-export function ChatInterface() {
+export function ChatInterface({
+  conversationId,
+  initialMessages = [],
+  initialTurnIds = {},
+  initialMessageCount,
+  conversationLimitReached = false,
+  truncated = false,
+}: {
+  conversationId: string;
+  initialMessages?: MyUIMessage[];
+  initialTurnIds?: Record<string, string>;
+  initialMessageCount?: number;
+  conversationLimitReached?: boolean;
+  truncated?: boolean;
+}) {
   const [input, setInput] = useState('');
-  const [turnIds, setTurnIds] = useState<Record<string, string>>({});
+  const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
+  const [messageCount, setMessageCount] = useState(
+    initialMessageCount ?? initialMessages.length,
+  );
   // Pending turns keyed by the id of the user message that started them, so a
   // late/failed stream can never steal the turn of a newer message.
   const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
+  const retriedMessageIdRef = useRef<string | null>(null);
   const messagesRef = useRef<MyUIMessage[]>([]);
   const submittingRef = useRef(false);
+  const notifiedConversationRef = useRef(false);
   const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
   const { messages, sendMessage, status, error, stop } = useChat<MyUIMessage>({
+    id: conversationId,
     transport,
+    messages: initialMessages,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
       if (isAbort || isDisconnect || isError) return;
       if (message.role !== 'assistant') return;
@@ -334,7 +357,14 @@ export function ChatInterface() {
       const turnId = pendingTurnIdRef.current.get(userMessageId);
       if (!turnId) return;
       pendingTurnIdRef.current.delete(userMessageId);
+      const isRetry = retriedMessageIdRef.current === userMessageId;
+      if (isRetry) retriedMessageIdRef.current = null;
       setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
+      if (!isRetry) setMessageCount((prev) => prev + 2);
+      if (!notifiedConversationRef.current) {
+        notifiedConversationRef.current = true;
+        notifyConversationsChanged(conversationId);
+      }
     },
   });
   useEffect(() => {
@@ -345,6 +375,16 @@ export function ChatInterface() {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (submittingRef.current) return;
+    if (conversationLimitReached) {
+      toast.error(
+        `You've reached the maximum of ${MAX_CONVERSATIONS_PER_USER} chats — delete older ones to start a new one.`,
+      );
+      return;
+    }
+    if (messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
+      toast.error('This chat is full — start a new one.');
+      return;
+    }
     submittingRef.current = true;
     let userMessageId: string | undefined;
     try {
@@ -353,7 +393,7 @@ export function ChatInterface() {
       pendingTurnIdRef.current.set(userMessageId, turnId);
       await sendMessage(
         { parts: [{ type: 'text', text: trimmed }], id: userMessageId, role: 'user' },
-        { body: { turnId } },
+        { body: { turnId, conversationId } },
       );
       setInput('');
     } catch {
@@ -446,8 +486,9 @@ export function ChatInterface() {
     const target = lastUserMessage;
     if (!target || isStreaming) return;
     const turnId = uuidv4();
+    retriedMessageIdRef.current = target.id;
     pendingTurnIdRef.current.set(target.id, turnId);
-    sendMessage(undefined, { body: { turnId } }).catch(() => {
+    sendMessage(undefined, { body: { turnId, conversationId, retry: true } }).catch(() => {
       toast.error('Could not send your message. Please try again.');
     });
   };
@@ -494,6 +535,14 @@ export function ChatInterface() {
         aria-atomic="false"
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
+          {truncated && messages.length > 0 ? (
+            <p
+              className="text-center text-xs text-muted-foreground"
+              data-testid="chat-truncated-notice"
+            >
+              Showing the last {MAX_RESUME_MESSAGES} messages of this chat
+            </p>
+          ) : null}
           {messages.length === 0 ? (
             <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center duration-500 fade-in-0 slide-in-from-bottom-2">
               <div className="flex flex-col items-center gap-4">
@@ -607,6 +656,14 @@ export function ChatInterface() {
       </div>
 
       <div className="shrink-0 px-4 pt-2 pb-4 sm:px-6 sm:pb-6">
+        {messageCount >= MAX_MESSAGES_PER_CONVERSATION ? (
+          <p
+            className="mx-auto mb-2 max-w-3xl rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-center text-xs text-warning"
+            data-testid="chat-cap-message"
+          >
+            This chat is full ({MAX_MESSAGES_PER_CONVERSATION} messages) — start a new one to keep chatting.
+          </p>
+        ) : null}
         <form
           onSubmit={onSubmit}
           className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-border-subtle bg-card/80 p-2 shadow-lg shadow-black/20 backdrop-blur-md transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-xl focus-within:shadow-primary/5"
@@ -617,7 +674,7 @@ export function ChatInterface() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={isStreaming}
+            disabled={isStreaming || messageCount >= MAX_MESSAGES_PER_CONVERSATION}
             placeholder="Message the knowledge assistant…"
             rows={1}
             className={cn(

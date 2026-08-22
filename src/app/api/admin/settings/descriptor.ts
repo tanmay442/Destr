@@ -68,6 +68,15 @@ export function flattenSchema(): Map<string, FieldIntrospection> {
       }
       return;
     }
+    if (def.type === 'union') {
+      const opts = ((base as { _def?: { options?: z.ZodTypeAny[] } })._def?.options ??
+        []) as Array<{ _def?: { value?: unknown; values?: unknown[] } } | undefined>;
+      const literals = opts.map((o) => o?._def?.value ?? o?._def?.values?.[0]);
+      if (literals.length > 0 && literals.every((v) => v !== undefined)) {
+        out.set(prefix, { type: 'enum', options: literals.map(String) });
+        return;
+      }
+    }
     const type = mapType(def.type);
     const options = def.type === 'enum' && def.entries ? Object.values(def.entries) : undefined;
     out.set(prefix, { type, options });

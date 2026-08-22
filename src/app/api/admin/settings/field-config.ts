@@ -40,4 +40,6 @@ export const fieldConfig: Record<string, FieldMeta> = {
   'childChunkSize':       { group: 'Chunking', label: 'Child Chunk Size', inputType: 'number', min: 100, max: 5000 },
   'parentChildMode':      { group: 'Chunking', label: 'Parent/Child Resolve', inputType: 'select' },
   'parentChildWindow':    { group: 'Chunking', label: 'Parent/Child Window', inputType: 'number', min: 0, max: 10 },
+  'chatHistoryRetentionDays': { group: 'Chat History', label: 'Auto-Delete Window', inputType: 'select',
+                            helpText: 'Saved chats auto-delete this many days after their last activity; Off disables purging. Turning off Capture Query Text also stops chat history — history never stores more than analytics does.' },
 };

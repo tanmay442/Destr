@@ -127,6 +127,20 @@
       "when": 1786458310828,
       "tag": "0017_tickets_created_at_tz",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787316931789,
+      "tag": "0018_chat_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787407548059,
+      "tag": "0019_chat_conversations_updated_at_idx",
+      "breakpoints": true
     }
   ]
 }

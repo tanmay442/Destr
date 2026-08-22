@@ -9,6 +9,7 @@ import {
   recountChunksForDocument, recountChunksForAllDocuments,
   getAnalyticsSummary, getChatAnalytics, getAnalyticsTrends,
   getDocumentAnalytics, submitChatFeedback,
+  listConversations, getConversation, renameConversation, deleteConversation, appendChatTurn,
   getTicketIntelligence,
   listAudit, logSettingsChange,
   prepareIngest,
@@ -69,7 +70,7 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = core.rateLimiter;
 
@@ -243,8 +244,15 @@ function createComposition() {
     logDocumentEvent: (input: Parameters<typeof logDocumentEvent>[0]) => bind(logDocumentEvent, input, auditDeps),
     logSettingsChange: (input: Parameters<typeof logSettingsChange>[0]) => logSettingsChange(input, auditDeps),
     logTicketEvent: (input: Parameters<typeof logTicketEvent>[0]) => bind(logTicketEvent, input, auditDeps),
-    logUserAudit: (input: { action: string; actorId: string; targetId: string }) =>
-      auditDeps.audit.logEvent({ kind: 'user', action: input.action, actorId: input.actorId, targetType: 'user', targetId: input.targetId }),
+    logUserAudit: (input: { action: string; actorId: string; targetId: string; details?: Record<string, unknown> }) =>
+      auditDeps.audit.logEvent({
+        kind: 'user',
+        action: input.action,
+        actorId: input.actorId,
+        targetType: 'user',
+        targetId: input.targetId,
+        ...(input.details !== undefined ? { details: input.details } : {}),
+      }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
       bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
@@ -318,6 +326,21 @@ function createComposition() {
       bind(getTicketIntelligence, input, { ...userDeps, chatEvents: chatEventBatcher, tickets: core.ticketRepo }),
     submitChatFeedback: (input: Parameters<typeof submitChatFeedback>[0]) =>
       bind(submitChatFeedback, input, { feedback: chatFeedbackRepo }),
+    listConversations: (input: Parameters<typeof listConversations>[0]) =>
+      bind(listConversations, input, { repo: chatHistoryRepo }),
+    getConversation: (input: Parameters<typeof getConversation>[0]) =>
+      bind(getConversation, input, { repo: chatHistoryRepo }),
+    renameConversation: (input: Parameters<typeof renameConversation>[0]) =>
+      bind(renameConversation, input, { repo: chatHistoryRepo }),
+    deleteConversation: (input: Parameters<typeof deleteConversation>[0]) =>
+      bind(deleteConversation, input, { repo: chatHistoryRepo, ...auditDeps }),
+    appendChatTurn: async (input: Parameters<typeof appendChatTurn>[0]) => {
+      const runtime = await getRuntimeConfig();
+      return appendChatTurn(input, {
+        repo: chatHistoryRepo,
+        captureQueryText: runtime.captureQueryText,
+      });
+    },
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: core.dbClient,
     schema: Db.schema,
@@ -329,6 +352,7 @@ function createComposition() {
     answerCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
+    chatHistoryRepo,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),

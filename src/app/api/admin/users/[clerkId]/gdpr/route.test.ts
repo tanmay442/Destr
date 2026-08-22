@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUserDataMock, anonymizeUserDataMock, logUserAuditMock } = vi.hoisted(() => {
+const { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUserDataMock, anonymizeUserDataMock, logUserAuditMock, chatPurgeUserDataMock } = vi.hoisted(() => {
   const requireAdminMock = vi.fn();
   const getUserByClerkIdMock = vi.fn();
   const purgeUserDataMock = vi.fn();
   const anonymizeUserDataMock = vi.fn();
   const logUserAuditMock = vi.fn();
+  const chatPurgeUserDataMock = vi.fn();
   const requireAdminRouteMock = vi.fn(async () => {
     try {
       const session = await requireAdminMock();
@@ -15,6 +16,7 @@ const { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUser
         comp: {
           getUserByClerkId: getUserByClerkIdMock,
           chatEventBatcher: { purgeUserData: purgeUserDataMock, anonymizeUserData: anonymizeUserDataMock },
+          chatHistoryRepo: { purgeUserData: chatPurgeUserDataMock },
           logUserAudit: logUserAuditMock,
         },
       };
@@ -25,7 +27,7 @@ const { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUser
       throw err;
     }
   });
-  return { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUserDataMock, anonymizeUserDataMock, logUserAuditMock };
+  return { requireAdminMock, requireAdminRouteMock, getUserByClerkIdMock, purgeUserDataMock, anonymizeUserDataMock, logUserAuditMock, chatPurgeUserDataMock };
 });
 
 vi.mock('@/composition', async () => {
@@ -52,6 +54,7 @@ beforeEach(() => {
   purgeUserDataMock.mockReset();
   anonymizeUserDataMock.mockReset();
   logUserAuditMock.mockReset();
+  chatPurgeUserDataMock.mockReset().mockResolvedValue({ deletedConversations: 1, deletedMessages: 2 });
   getUserByClerkIdMock.mockResolvedValue({ ok: true, value: { user: { clerkUserId: 'user_2', email: 'x@x.com', name: null, role: 'user' } } });
 });
 
@@ -108,6 +111,24 @@ describe('POST /api/admin/users/[clerkId]/gdpr', () => {
     expect(logUserAuditMock).toHaveBeenCalledWith({ action: 'gdpr_purge', actorId: 'admin-1', targetId: 'user_2' });
   });
 
+  it('purges saved chats in purge mode', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    purgeUserDataMock.mockResolvedValue({ deletedCount: 3 });
+    const res = await route.POST(makeReq('purge'), makeParams('user_2'));
+    expect(res.status).toBe(200);
+    expect(chatPurgeUserDataMock).toHaveBeenCalledWith('user_2');
+    const body = (await res.json()) as { deletedChatConversations?: number };
+    expect(body.deletedChatConversations).toBe(1);
+  });
+
+  it('purges saved chats in anonymize mode too (no anonymous transcripts)', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    anonymizeUserDataMock.mockResolvedValue({ updatedCount: 2 });
+    const res = await route.POST(makeReq('anonymize'), makeParams('user_2'));
+    expect(res.status).toBe(200);
+    expect(chatPurgeUserDataMock).toHaveBeenCalledWith('user_2');
+  });
+
   it('anonymizes data and audits the action', async () => {
     requireAdminMock.mockResolvedValue(adminSession);
     anonymizeUserDataMock.mockResolvedValue({ updatedCount: 2 });
@@ -122,5 +143,34 @@ describe('POST /api/admin/users/[clerkId]/gdpr', () => {
     purgeUserDataMock.mockRejectedValue(new Error('db down'));
     const res = await route.POST(makeReq('purge'), makeParams('user_2'));
     expect(res.status).toBe(502);
+    expect(logUserAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('still audits when the history purge fails after chat events were already erased', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    purgeUserDataMock.mockResolvedValue({ deletedCount: 3 });
+    chatPurgeUserDataMock.mockRejectedValue(new Error('history db down'));
+    const res = await route.POST(makeReq('purge'), makeParams('user_2'));
+    expect(res.status).toBe(502);
+    expect(logUserAuditMock).toHaveBeenCalledWith({
+      action: 'gdpr_purge',
+      actorId: 'admin-1',
+      targetId: 'user_2',
+      details: { partial: true, chatEvents: { deletedCount: 3 }, chatHistory: 'failed' },
+    });
+  });
+
+  it('still audits when the history purge fails after anonymize', async () => {
+    requireAdminMock.mockResolvedValue(adminSession);
+    anonymizeUserDataMock.mockResolvedValue({ updatedCount: 2 });
+    chatPurgeUserDataMock.mockRejectedValue(new Error('history db down'));
+    const res = await route.POST(makeReq('anonymize'), makeParams('user_2'));
+    expect(res.status).toBe(502);
+    expect(logUserAuditMock).toHaveBeenCalledWith({
+      action: 'gdpr_anonymize',
+      actorId: 'admin-1',
+      targetId: 'user_2',
+      details: { partial: true, chatEvents: { updatedCount: 2 }, chatHistory: 'failed' },
+    });
   });
 });
