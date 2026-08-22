@@ -27,6 +27,8 @@ export function parsePurgeHistoryArgs(argv: string[]): PurgeHistoryParseResult {
       dryRun = true;
     } else if (a === '--allow-sub-day' || a === '--force') {
       allowSubDay = true;
+    } else {
+      throw new Error(`Unknown option: ${a}`);
     }
   }
 
@@ -68,8 +70,8 @@ export async function runPurgeChatHistory({
     resolvedDays = cfg.chatHistoryRetentionDays;
   }
 
-  if (!Number.isFinite(resolvedDays)) {
-    throw new Error(`Invalid --days value.`);
+  if (!Number.isFinite(resolvedDays) || resolvedDays <= 0) {
+    throw new Error(`Invalid --days value: must be a number greater than 0 (got ${resolvedDays}).`);
   }
   if (resolvedDays < 1 && !allowSubDay) {
     throw new Error(`Purge retention window must be >= 1 day (got ${resolvedDays}). Pass --allow-sub-day or --force to override.`);
@@ -123,22 +125,31 @@ export async function runPurgeChatHistory({
   }
 
   const result = await repo.purgeOlderThan(cutoff);
+  const audit = createAuditRepo(db);
+  const auditEvent = {
+    kind: 'chat' as const,
+    action: 'history_purged',
+    actorId,
+    targetType: 'chat_history',
+    details: {
+      days: resolvedDays,
+      cutoff: cutoff.toISOString(),
+      deletedConversations: result.deletedConversations,
+      deletedMessages: result.deletedMessages,
+    },
+  };
   try {
-    const audit = createAuditRepo(db);
-    await audit.logEvent({
-      kind: 'chat',
-      action: 'history_purged',
-      actorId,
-      targetType: 'chat_history',
-      details: {
-        days: resolvedDays,
-        cutoff: cutoff.toISOString(),
-        deletedConversations: result.deletedConversations,
-        deletedMessages: result.deletedMessages,
-      },
-    });
-  } catch (e) {
-    console.error('[audit] failed to record history_purged event:', e instanceof Error ? e.message : e);
+    await audit.logEvent(auditEvent);
+  } catch (auditError) {
+    const message = auditError instanceof Error ? auditError.message : String(auditError);
+    try {
+      await audit.recordDeadLetter({ kind: 'chat', payload: auditEvent, error: message });
+      console.warn(`[audit] failed to record history_purged event; saved a dead-letter entry instead (${message}).`);
+    } catch {
+      throw new Error(
+        'Chat history was purged but no durable audit record could be written (logEvent and dead-letter both failed).',
+      );
+    }
   }
 
   console.log(
