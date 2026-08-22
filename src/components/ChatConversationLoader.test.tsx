@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
@@ -76,13 +76,17 @@ describe('ChatConversationLoader', () => {
     expect(screen.queryByTestId('chat-resume-skeleton')).not.toBeInTheDocument();
   });
 
-  it('redirects to /chat when the conversation is gone', async () => {
+  it('shows an explicit not-found state when the conversation is gone', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 404 }) as Response),
     );
     render(<ChatConversationLoader routeId="b0000000-0000-4000-8000-000000000009" />);
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('/chat'));
+    const panel = await screen.findByTestId('chat-resume-error');
+    expect(panel).toHaveTextContent('Conversation not found');
+    expect(replaceMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start new chat' }));
+    expect(pushMock).toHaveBeenCalledWith('/chat');
   });
 
   it('mints a new chat for /chat and syncs the id into the URL without navigation', async () => {
@@ -99,13 +103,47 @@ describe('ChatConversationLoader', () => {
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the UI usable when the resume fetch fails', async () => {
+  it('shows an error state with retry when the resume fetch fails', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({ ok: false, status: 500 }) as Response),
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => conversationPayload(),
+        } as Response),
     );
     render(<ChatConversationLoader routeId="b0000000-0000-4000-8000-000000000003" />);
+    const panel = await screen.findByTestId('chat-resume-error');
+    expect(panel).toHaveTextContent('status 500');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     const stub = await screen.findByTestId('chat-interface-stub');
-    expect(stub).toHaveAttribute('data-messages', '0');
+    expect(stub).toHaveAttribute('data-messages', '2');
+  });
+
+  it('surfaces a timeout error when the resume request hangs', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((_url: string, init?: RequestInit) => {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new Error('The operation was aborted.'));
+            });
+          });
+        }),
+      );
+      render(<ChatConversationLoader routeId="b0000000-0000-4000-8000-000000000004" />);
+      expect(screen.getByTestId('chat-resume-skeleton')).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(10_000);
+      vi.useRealTimers();
+      const panel = await screen.findByTestId('chat-resume-error');
+      expect(panel).toHaveTextContent('timed out');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
