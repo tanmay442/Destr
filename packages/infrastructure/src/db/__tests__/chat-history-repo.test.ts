@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { ChatHistoryRepository } from '../chat-history-repo';
 import { users, chatConversations, chatMessages } from '../schema';
 import { db } from '../client';
@@ -122,6 +122,103 @@ suite('ChatHistoryRepository.appendTurn', () => {
       expect(storedUser.id).toBe('m1');
       expect(storedAssistant.id).toBe('assistant-m1');
     });
+  });
+
+  it('deletes exactly the adjacent pair on a tail retry (H4)', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner7@test.local' });
+      const repo = new ChatHistoryRepository(tx);
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m2') });
+      await repo.appendTurn({
+        conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), retryOfMessageId: 'm2',
+        ...turn('m2'),
+      });
+      const msgs = await tx.select().from(chatMessages).orderBy(chatMessages.id);
+      expect(msgs).toHaveLength(4);
+      const ids = msgs.map((m) => (m.content as { id: string }).id);
+      expect(ids).toEqual(['m1', 'assistant-m1', 'm2', 'assistant-m2']);
+      const conv = (await tx.select().from(chatConversations))[0];
+      expect(conv?.messageCount).toBe(4);
+    });
+  });
+
+  it('appends without deleting anything for a non-tail retry (H4)', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner8@test.local' });
+      const repo = new ChatHistoryRepository(tx);
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m2') });
+      await repo.appendTurn({
+        conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), retryOfMessageId: 'm1',
+        ...turn('m1'),
+      });
+      const msgs = await tx.select().from(chatMessages).orderBy(chatMessages.id);
+      expect(msgs).toHaveLength(6);
+      const conv = (await tx.select().from(chatConversations))[0];
+      expect(conv?.messageCount).toBe(6);
+    });
+  });
+
+  it('ignores a retry whose target message id matches nothing (T7)', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner9@test.local' });
+      const repo = new ChatHistoryRepository(tx);
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      await repo.appendTurn({
+        conversationId: CONV_A, userId: OWNER, turnId: crypto.randomUUID(), retryOfMessageId: 'missing-id',
+        ...turn('m2'),
+      });
+      const msgs = await tx.select().from(chatMessages).orderBy(chatMessages.id);
+      expect(msgs).toHaveLength(4);
+      const conv = (await tx.select().from(chatConversations))[0];
+      expect(conv?.messageCount).toBe(4);
+    });
+  });
+
+  it('keeps message_count stable when a retry reuses an existing turn id (H4)', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner10@test.local' });
+      const repo = new ChatHistoryRepository(tx);
+      const reusedTurnId = crypto.randomUUID();
+      await repo.appendTurn({ conversationId: CONV_A, userId: OWNER, turnId: reusedTurnId, title: 'T', ...turn('m1') });
+      await repo.appendTurn({
+        conversationId: CONV_A, userId: OWNER, turnId: reusedTurnId, retryOfMessageId: 'm1',
+        ...turn('m1'),
+      });
+      const msgs = await tx.select().from(chatMessages).orderBy(chatMessages.id);
+      expect(msgs).toHaveLength(2);
+      const conv = (await tx.select().from(chatConversations))[0];
+      expect(conv?.messageCount).toBe(2);
+    });
+  });
+});
+
+suite('ChatHistoryRepository concurrent replaces (XM1)', () => {
+  const CONV_C = 'c0000000-0000-4000-8000-000000000003';
+  const CONC_OWNER = 'hist-conc';
+
+  it('serializes two simultaneous retries without losing rows or drifting counts', async () => {
+    await db.insert(users).values({ clerkUserId: CONC_OWNER, email: 'hist-conc@test.local' });
+    try {
+      const repo = new ChatHistoryRepository(db);
+      await repo.appendTurn({ conversationId: CONV_C, userId: CONC_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      await Promise.all([
+        repo.appendTurn({ conversationId: CONV_C, userId: CONC_OWNER, turnId: crypto.randomUUID(), retryOfMessageId: 'm1', ...turn('m1') }),
+        repo.appendTurn({ conversationId: CONV_C, userId: CONC_OWNER, turnId: crypto.randomUUID(), retryOfMessageId: 'm1', ...turn('m1') }),
+      ]);
+      const msgs = await db.select().from(chatMessages).where(eq(chatMessages.conversationId, CONV_C));
+      expect(msgs).toHaveLength(2);
+      const [conv] = await db
+        .select()
+        .from(chatConversations)
+        .where(and(eq(chatConversations.id, CONV_C), eq(chatConversations.userId, CONC_OWNER)));
+      expect(conv?.messageCount).toBe(2);
+    } finally {
+      await db.delete(chatMessages).where(eq(chatMessages.conversationId, CONV_C));
+      await db.delete(chatConversations).where(eq(chatConversations.id, CONV_C));
+      await db.delete(users).where(eq(users.clerkUserId, CONC_OWNER));
+    }
   });
 });
 

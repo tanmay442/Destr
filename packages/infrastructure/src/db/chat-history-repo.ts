@@ -43,6 +43,19 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
 
       let removedByReplace = 0;
       if (input.retryOfMessageId !== undefined) {
+        await tx
+          .select({ id: chatConversations.id })
+          .from(chatConversations)
+          .where(eq(chatConversations.id, conversationId))
+          .for('update');
+
+        const [existingTurn] = await tx
+          .select({ id: chatMessages.id })
+          .from(chatMessages)
+          .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.turnId, input.turnId)))
+          .limit(1);
+        if (existingTurn) return { conversationId };
+
         const [prevUser] = await tx
           .select({ id: chatMessages.id })
           .from(chatMessages)
@@ -55,26 +68,49 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
           )
           .orderBy(desc(chatMessages.id))
           .limit(1);
+
+        let tail = true;
         if (prevUser) {
-          const droppedAssistant = await tx.execute(sql`
-            delete from ${chatMessages}
-            where ${chatMessages.conversationId} = ${conversationId}
-              and ${chatMessages.role} = 'assistant'
-              and ${chatMessages.id} > ${prevUser.id}
-              and ${chatMessages.id} = (
-                select max(id) from ${chatMessages}
-                where ${chatMessages.conversationId} = ${conversationId}
-                  and ${chatMessages.role} = 'assistant'
-                  and ${chatMessages.id} > ${prevUser.id}
-              )
-            returning id
-          `);
-          const droppedUser = await tx.delete(chatMessages).where(eq(chatMessages.id, prevUser.id)).returning({
-            id: chatMessages.id,
-          });
-          const droppedAssistantCount =
-            (droppedAssistant as unknown as { rows: unknown[] }).rows?.length ?? 0;
-          removedByReplace = droppedAssistantCount + droppedUser.length;
+          const [laterUser] = await tx
+            .select({ id: chatMessages.id })
+            .from(chatMessages)
+            .where(
+              and(
+                eq(chatMessages.conversationId, conversationId),
+                eq(chatMessages.role, 'user'),
+                sql`${chatMessages.id} > ${prevUser.id}`,
+              ),
+            )
+            .limit(1);
+          tail = !laterUser;
+        }
+
+        if (prevUser && tail) {
+          const [nextAssistant] = await tx
+            .select({ id: chatMessages.id })
+            .from(chatMessages)
+            .where(
+              and(
+                eq(chatMessages.conversationId, conversationId),
+                eq(chatMessages.role, 'assistant'),
+                sql`${chatMessages.id} > ${prevUser.id}`,
+              ),
+            )
+            .orderBy(chatMessages.id)
+            .limit(1);
+
+          const droppedUser = await tx
+            .delete(chatMessages)
+            .where(eq(chatMessages.id, prevUser.id))
+            .returning({ id: chatMessages.id });
+          removedByReplace += droppedUser.length;
+          if (nextAssistant) {
+            const droppedAssistant = await tx
+              .delete(chatMessages)
+              .where(eq(chatMessages.id, nextAssistant.id))
+              .returning({ id: chatMessages.id });
+            removedByReplace += droppedAssistant.length;
+          }
         }
       }
 
