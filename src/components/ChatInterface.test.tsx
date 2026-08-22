@@ -695,4 +695,68 @@ describe('ChatInterface history integration', () => {
     expect(body.retry).toBe(true);
     expect(body.conversationId).toBe('conv-retry');
   });
+
+  it('keeps the message count stable when a retried turn finishes', async () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'a' }] },
+    ];
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    useChatMock.mockReturnValue({
+      messages: initialMessages,
+      sendMessage,
+      status: 'error',
+      error: new Error('stream failed'),
+      stop: vi.fn(),
+    });
+    const view = render(
+      <ChatInterface conversationId="conv-count" initialMessages={initialMessages} initialMessageCount={498} />,
+    );
+    fireEvent.click(screen.getByTestId('chat-retry'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+    const retried: Msg = { id: 'a2', role: 'assistant', parts: [{ type: 'text', text: 'retry answer' }] };
+    setupChat([...initialMessages, retried], { send: sendMessage });
+    view.rerender(
+      <ChatInterface conversationId="conv-count" initialMessages={initialMessages} initialMessageCount={498} />,
+    );
+    act(() =>
+      chatOptions.onFinish({
+        message: retried,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    expect(screen.queryByTestId('chat-cap-message')).not.toBeInTheDocument();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it('still increments the message count by two on a normal finish', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    const view = render(<ChatInterface conversationId="conv-count" initialMessageCount={498} />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'Question?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    const { id } = sendMessage.mock.calls[0]![0] as { id: string };
+    const assistant: Msg = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'answer' }] };
+    setupChat(
+      [{ id, role: 'user', parts: [{ type: 'text', text: 'Question?' }] }, assistant],
+      { send: sendMessage },
+    );
+    view.rerender(<ChatInterface conversationId="conv-count" initialMessageCount={498} />);
+    const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+    act(() =>
+      chatOptions.onFinish({
+        message: assistant,
+        messages: [],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    expect(screen.getByTestId('chat-cap-message')).toBeInTheDocument();
+  });
 });

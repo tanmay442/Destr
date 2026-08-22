@@ -340,6 +340,7 @@ export function ChatInterface({
   // Pending turns keyed by the id of the user message that started them, so a
   // late/failed stream can never steal the turn of a newer message.
   const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
+  const retriedMessageIdRef = useRef<string | null>(null);
   const messagesRef = useRef<MyUIMessage[]>([]);
   const submittingRef = useRef(false);
   const notifiedConversationRef = useRef(false);
@@ -356,8 +357,10 @@ export function ChatInterface({
       const turnId = pendingTurnIdRef.current.get(userMessageId);
       if (!turnId) return;
       pendingTurnIdRef.current.delete(userMessageId);
+      const isRetry = retriedMessageIdRef.current === userMessageId;
+      if (isRetry) retriedMessageIdRef.current = null;
       setTurnIds((prev) => ({ ...prev, [message.id]: turnId }));
-      setMessageCount((prev) => prev + 2);
+      if (!isRetry) setMessageCount((prev) => prev + 2);
       if (!notifiedConversationRef.current) {
         notifiedConversationRef.current = true;
         notifyConversationsChanged(conversationId);
@@ -483,6 +486,7 @@ export function ChatInterface({
     const target = lastUserMessage;
     if (!target || isStreaming) return;
     const turnId = uuidv4();
+    retriedMessageIdRef.current = target.id;
     pendingTurnIdRef.current.set(target.id, turnId);
     sendMessage(undefined, { body: { turnId, conversationId, retry: true } }).catch(() => {
       toast.error('Could not send your message. Please try again.');
