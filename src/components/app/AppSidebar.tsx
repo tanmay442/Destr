@@ -52,7 +52,7 @@ import {
   SheetClose,
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
-import { onConversationsChanged } from '@/chat/events';
+import { onConversationsChanged, requestNewChat } from '@/chat/events';
 import { MAX_LIST_LIMIT } from '@app/domain';
 
 const ADMIN_LINKS = [
@@ -112,7 +112,9 @@ export function AppSidebar({
   const router = useRouter();
 
   const onAdmin = pathname?.startsWith('/admin') ?? false;
-  const activeConversationId = parseConversationId(pathname);
+  const [freshActiveId, setFreshActiveId] = useState<string | null>(null);
+  const activeConversationId =
+    parseConversationId(pathname) ?? (pathname === '/chat' ? freshActiveId : null);
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [totalConversations, setTotalConversations] = useState(0);
@@ -158,7 +160,10 @@ export function AppSidebar({
   // but a manual refresh keeps this robust without extra subscriptions).
   useEffect(() => {
     if (!onAdmin) refreshConversations();
-    return onConversationsChanged(refreshConversations);
+    return onConversationsChanged((activeId) => {
+      setFreshActiveId(activeId ?? null);
+      refreshConversations();
+    });
   }, [onAdmin, refreshConversations]);
 
   const commitRename = async (id: string) => {
@@ -179,6 +184,11 @@ export function AppSidebar({
       // Leave the previous title in place; the next refresh reconciles.
     }
   };
+
+  const handleNewChat = useCallback(() => {
+    setFreshActiveId(null);
+    requestNewChat();
+  }, []);
 
   const confirmDelete = async () => {
     const id = deletingId;
@@ -202,6 +212,7 @@ export function AppSidebar({
       conversations={conversations}
       hasMore={conversations.length < totalConversations}
       onShowMore={() => setPages((count) => count + 1)}
+      onNewChat={handleNewChat}
       activeConversationId={activeConversationId}
       renamingId={renamingId}
       renameValue={renameValue}
@@ -350,6 +361,7 @@ function SidebarBody({
   conversations,
   hasMore,
   onShowMore,
+  onNewChat,
   activeConversationId,
   renamingId,
   renameValue,
@@ -367,6 +379,7 @@ function SidebarBody({
   conversations: ConversationItem[];
   hasMore: boolean;
   onShowMore: () => void;
+  onNewChat: () => void;
   activeConversationId: string | null;
   renamingId: string | null;
   renameValue: string;
@@ -414,7 +427,13 @@ function SidebarBody({
           className="w-full justify-start gap-2.5 rounded-lg px-3 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
           data-testid="app-sidebar-new-chat"
         >
-          <Link href="/chat" onClick={onNavigate}>
+          <Link
+            href="/chat"
+            onClick={() => {
+              onNewChat();
+              onNavigate();
+            }}
+          >
             <SquarePen className="shrink-0" aria-hidden />
             New chat
           </Link>

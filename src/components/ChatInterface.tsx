@@ -360,7 +360,7 @@ export function ChatInterface({
       setMessageCount((prev) => prev + 2);
       if (!notifiedConversationRef.current) {
         notifiedConversationRef.current = true;
-        notifyConversationsChanged();
+        notifyConversationsChanged(conversationId);
       }
     },
   });

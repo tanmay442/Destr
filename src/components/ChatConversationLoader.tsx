@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChatInterface } from '@/components/ChatInterface';
 import { toResumedConversation, type StoredMessagePayload } from '@/chat/resume';
-import { onConversationsChanged } from '@/chat/events';
+import { notifyConversationsChanged, onConversationsChanged, onNewChatRequested } from '@/chat/events';
 import { MAX_CONVERSATIONS_PER_USER } from '@app/domain';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -95,7 +95,7 @@ function ResumeErrorPanel({
  */
 export function ChatConversationLoader({ routeId }: { routeId: string | null }) {
   const router = useRouter();
-  const [conversationId] = useState<string>(() => routeId ?? uuidv4());
+  const [conversationId, setConversationId] = useState<string>(() => routeId ?? uuidv4());
   const [resume, setResume] = useState<ResumeState | null>(null);
   const [loaded, setLoaded] = useState(routeId === null);
   const [error, setError] = useState<ResumeError | null>(null);
@@ -153,15 +153,15 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       .catch((cause) => {
         if (cancelled) return;
         const status = Number(cause instanceof Error ? cause.message : NaN);
+        if (status === 404) {
+          notifyConversationsChanged();
+          router.replace('/chat');
+          return;
+        }
         if (timedOut) {
           setError({
             title: 'Loading timed out',
             detail: 'The conversation took too long to load. Try again.',
-          });
-        } else if (status === 404) {
-          setError({
-            title: 'Conversation not found',
-            detail: 'It may have been deleted or belongs to a different account.',
           });
         } else {
           setError({
@@ -182,12 +182,24 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
     };
   }, [routeId, attempt]);
 
-  // Sync freshly-minted ids into the URL without triggering a remount.
+  // Sync freshly-minted ids into the URL without triggering a remount,
+  // preserving Next's router history state on the entry.
   useEffect(() => {
     if (routeId === null && loaded) {
-      window.history.replaceState(null, '', `/chat/${conversationId}`);
+      window.history.replaceState(window.history.state ?? {}, '', `/chat/${conversationId}`);
     }
   }, [routeId, loaded, conversationId]);
+
+  useEffect(() => {
+    if (routeId !== null) return;
+    return onNewChatRequested(() => {
+      setConversationId(uuidv4());
+      setResume(null);
+      setError(null);
+      setLoaded(true);
+      setAttempt(0);
+    });
+  }, [routeId]);
 
   if (error) {
     return (

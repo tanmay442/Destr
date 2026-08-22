@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 const pushMock = vi.fn();
 
@@ -48,6 +48,7 @@ function mockFetch() {
 }
 
 import { AppSidebar } from './AppSidebar';
+import { onNewChatRequested } from '@/chat/events';
 
 const user = { name: 'Tester', imageUrl: null, email: 't@x.com' };
 
@@ -159,6 +160,34 @@ describe('AppSidebar conversation nav', () => {
     fireEvent.click(screen.getByTestId('conversation-show-more'));
     await waitFor(() => expect(screen.getAllByTestId('conversation-item')).toHaveLength(105));
     expect(screen.queryByTestId('conversation-show-more')).not.toBeInTheDocument();
+  });
+
+  it('emits a new-chat request when New chat is clicked', async () => {
+    activePath = '/chat';
+    const newChatListener = vi.fn();
+    const off = onNewChatRequested(newChatListener);
+    render(<AppSidebar user={user} role="user" />);
+    await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('app-sidebar-new-chat'));
+    expect(newChatListener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it('highlights the freshly minted chat on /chat from the conversations event', async () => {
+    activePath = '/chat';
+    render(<AppSidebar user={user} role="user" />);
+    await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
+    expect(screen.getByTestId('conversation-item').closest('[data-active="true"]')).toBeNull();
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('destr:conversations-changed', {
+          detail: 'a0000000-0000-4000-8000-000000000001',
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('conversation-item').closest('[data-active="true"]')).not.toBeNull(),
+    );
   });
 
   it('shows admin nav on admin routes with the pinned admin panel link', () => {

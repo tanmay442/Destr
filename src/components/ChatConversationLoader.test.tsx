@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
@@ -28,6 +28,7 @@ vi.mock('@/components/ChatInterface', () => ({
 }));
 
 import { ChatConversationLoader } from './ChatConversationLoader';
+import { requestNewChat } from '@/chat/events';
 
 function conversationPayload(messageCount = 2) {
   return {
@@ -95,17 +96,14 @@ describe('ChatConversationLoader', () => {
     expect(stub).toHaveAttribute('data-truncated', 'true');
   });
 
-  it('shows an explicit not-found state when the conversation is gone', async () => {
+  it('falls back to a fresh draft instead of an error panel when the conversation is gone', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 404 }) as Response),
     );
     render(<ChatConversationLoader routeId="b0000000-0000-4000-8000-000000000009" />);
-    const panel = await screen.findByTestId('chat-resume-error');
-    expect(panel).toHaveTextContent('Conversation not found');
-    expect(replaceMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Start new chat' }));
-    expect(pushMock).toHaveBeenCalledWith('/chat');
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('/chat'));
+    expect(screen.queryByTestId('chat-resume-error')).not.toBeInTheDocument();
   });
 
   it('mints a new chat for /chat and syncs the id into the URL without navigation', async () => {
@@ -121,9 +119,47 @@ describe('ChatConversationLoader', () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
     await waitFor(() =>
-      expect(replaceState).toHaveBeenCalledWith(null, '', `/chat/${stub.getAttribute('data-conversation')}`),
+      expect(replaceState).toHaveBeenCalledWith({}, '', `/chat/${stub.getAttribute('data-conversation')}`),
     );
+    expect(replaceState.mock.calls.every((call) => call[0] !== null)).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves existing Next router history state when syncing the URL', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
+    );
+    const replaceState = vi.fn();
+    const routerState = { __NA: true, __PRIVATE_TREE: [1, 2] };
+    vi.stubGlobal('history', { replaceState, state: routerState });
+    render(<ChatConversationLoader routeId={null} />);
+    const stub = await screen.findByTestId('chat-interface-stub');
+    await waitFor(() =>
+      expect(replaceState).toHaveBeenCalledWith(
+        routerState,
+        '',
+        `/chat/${stub.getAttribute('data-conversation')}`,
+      ),
+    );
+  });
+
+  it('resets its own state when a new-chat request arrives while already on /chat', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
+    );
+    const replaceState = vi.fn();
+    vi.stubGlobal('history', { replaceState });
+    render(<ChatConversationLoader routeId={null} />);
+    const stub = await screen.findByTestId('chat-interface-stub');
+    const firstId = stub.getAttribute('data-conversation');
+    act(() => requestNewChat());
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-interface-stub').getAttribute('data-conversation')).not.toBe(firstId),
+    );
+    const newId = screen.getByTestId('chat-interface-stub').getAttribute('data-conversation');
+    await waitFor(() => expect(replaceState).toHaveBeenCalledWith({}, '', `/chat/${newId}`));
   });
 
   it('shows an error state with retry when the resume fetch fails', async () => {
