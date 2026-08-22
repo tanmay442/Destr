@@ -60,10 +60,12 @@ beforeEach(() => {
 
 describe('AppSidebar conversation nav', () => {
   it('renders grouped conversations with the active one highlighted', async () => {
-    render(<AppSidebar user={user} role="user" />);
+    render(<AppSidebar user={user} role="admin" />);
     await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
-    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(screen.getByText('Recent')).toBeInTheDocument();
+    expect(screen.queryByText('All chats')).not.toBeInTheDocument();
     expect(screen.getByTestId('conversation-item').closest('[data-active="true"]')).not.toBeNull();
+    expect(screen.getByTestId('app-sidebar-admin-panel')).toHaveTextContent('Admin panel');
   });
 
   it('renames inline through the options menu', async () => {
@@ -128,7 +130,7 @@ describe('AppSidebar conversation nav', () => {
     render(<AppSidebar user={user} role="admin" />);
     expect(screen.getByTestId('app-sidebar-admin-list')).toBeInTheDocument();
     expect(screen.queryByTestId('conversation-list')).not.toBeInTheDocument();
-    expect(screen.getByTestId('app-sidebar-admin-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar-admin-panel')).toHaveTextContent('Chat');
     expect(screen.getByTestId('app-sidebar-sign-out')).toBeInTheDocument();
   });
 });

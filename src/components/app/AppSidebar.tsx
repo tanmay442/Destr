@@ -16,7 +16,7 @@ import {
   Menu,
   X,
   LogOut,
-  Plus,
+  SquarePen,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -77,33 +77,16 @@ interface ConversationItem {
   updatedAt: string;
 }
 
-const DAY_MS = 86_400_000;
+const RECENT_COUNT = 3;
 
-function bucketFor(updatedAt: string): string {
-  const ts = new Date(updatedAt).getTime();
-  if (Number.isNaN(ts)) return 'Older';
-  const startOfToday = new Date().setHours(0, 0, 0, 0);
-  if (ts >= startOfToday) return 'Today';
-  if (ts >= startOfToday - DAY_MS) return 'Yesterday';
-  if (ts >= startOfToday - 7 * DAY_MS) return 'Previous 7 days';
-  if (ts >= startOfToday - 30 * DAY_MS) return 'Previous 30 days';
-  return 'Older';
-}
-
-const BUCKET_ORDER = ['Today', 'Yesterday', 'Previous 7 days', 'Previous 30 days', 'Older'];
-
-function groupConversations(items: ConversationItem[]): Array<{ label: string; items: ConversationItem[] }> {
-  const groups = new Map<string, ConversationItem[]>();
-  for (const item of items) {
-    const label = bucketFor(item.updatedAt);
-    const list = groups.get(label) ?? [];
-    list.push(item);
-    groups.set(label, list);
-  }
-  return BUCKET_ORDER.filter((label) => groups.has(label)).map((label) => ({
-    label,
-    items: groups.get(label)!,
-  }));
+/** UI-only split: the three most recently active chats, then everything else. */
+function sectionConversations(items: ConversationItem[]): Array<{ label: string; items: ConversationItem[] }> {
+  const sections: Array<{ label: string; items: ConversationItem[] }> = [];
+  const recent = items.slice(0, RECENT_COUNT);
+  const rest = items.slice(RECENT_COUNT);
+  if (recent.length > 0) sections.push({ label: 'Recent', items: recent });
+  if (rest.length > 0) sections.push({ label: 'All chats', items: rest });
+  return sections;
 }
 
 function parseConversationId(pathname: string | null): string | null {
@@ -377,22 +360,18 @@ function SidebarBody({
       </div>
 
       <div className="shrink-0 px-3 pt-3">
-        {section === 'chat' ? (
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="w-full justify-start gap-2 rounded-lg border-border-subtle bg-card text-foreground shadow-none hover:bg-surface-elevated"
-            data-testid="app-sidebar-new-chat"
-          >
-            <Link href="/chat" onClick={onNavigate}>
-              <Plus className="shrink-0" aria-hidden />
-              New chat
-            </Link>
-          </Button>
-        ) : (
-          <NavItem href="/chat" label="Back to chat" icon={MessageSquare} testId="app-sidebar-chat" onNavigate={onNavigate} />
-        )}
+        <Button
+          asChild
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2.5 rounded-lg px-3 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          data-testid="app-sidebar-new-chat"
+        >
+          <Link href="/chat" onClick={onNavigate}>
+            <SquarePen className="shrink-0" aria-hidden />
+            New chat
+          </Link>
+        </Button>
       </div>
 
       <nav
@@ -434,14 +413,18 @@ function SidebarBody({
             className={cn(
               'w-full justify-start gap-2.5 rounded-lg px-3',
               section === 'admin'
-                ? 'bg-secondary text-foreground hover:bg-secondary hover:text-foreground'
+                ? 'text-muted-foreground hover:bg-card hover:text-foreground'
                 : 'text-muted-foreground hover:bg-card hover:text-foreground',
             )}
             data-testid="app-sidebar-admin-panel"
           >
-            <Link href="/admin" onClick={onNavigate}>
-              <LayoutDashboard className="shrink-0" aria-hidden />
-              <span>Admin panel</span>
+            <Link href={section === 'admin' ? '/chat' : '/admin'} onClick={onNavigate}>
+              {section === 'admin' ? (
+                <MessageSquare className="shrink-0" aria-hidden />
+              ) : (
+                <LayoutDashboard className="shrink-0" aria-hidden />
+              )}
+              <span>{section === 'admin' ? 'Chat' : 'Admin panel'}</span>
             </Link>
           </Button>
         ) : null}
@@ -540,7 +523,7 @@ function ConversationNav({
 
   return (
     <div className="flex flex-col gap-4" data-testid="conversation-list">
-      {groupConversations(conversations).map((group) => (
+      {sectionConversations(conversations).map((group) => (
         <div key={group.label} className="flex flex-col gap-0.5">
           <p className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
             {group.label}
@@ -650,31 +633,3 @@ function ConversationRow({
   );
 }
 
-function NavItem({
-  href,
-  label,
-  icon: Icon,
-  testId,
-  onNavigate,
-}: {
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
-  testId?: string;
-  onNavigate?: () => void;
-}) {
-  return (
-    <Button
-      asChild
-      variant="outline"
-      size="sm"
-      className="w-full justify-start gap-2 rounded-lg border-border-subtle bg-card text-foreground shadow-none hover:bg-surface-elevated"
-      data-testid={testId}
-    >
-      <Link href={href} {...(onNavigate ? { onClick: onNavigate } : {})}>
-        <Icon className="shrink-0" aria-hidden />
-        <span>{label}</span>
-      </Link>
-    </Button>
-  );
-}
