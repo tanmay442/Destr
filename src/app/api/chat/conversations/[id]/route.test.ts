@@ -146,6 +146,8 @@ describe('/api/chat/conversations/[id]', () => {
   it('maps unknown or foreign conversations to 404', async () => {
     getMock.mockResolvedValue(err(new NotFoundError('Conversation not found')));
     expect((await route.GET(req('GET'), ctx())).status).toBe(404);
+    renameMock.mockResolvedValue(err(new NotFoundError('Conversation not found')));
+    expect((await route.PATCH(req('PATCH', { title: 'x' }), ctx())).status).toBe(404);
     deleteMock.mockResolvedValue(err(new NotFoundError('Conversation not found')));
     expect((await route.DELETE(req('DELETE'), ctx())).status).toBe(404);
   });
