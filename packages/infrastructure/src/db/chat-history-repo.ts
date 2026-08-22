@@ -7,7 +7,12 @@ import type {
   ConversationSummary,
   StoredChatMessage,
 } from '@app/domain';
-import { MAX_RESUME_MESSAGES } from '@app/domain';
+import {
+  ConflictError,
+  MAX_CONVERSATIONS_PER_USER,
+  MAX_MESSAGES_PER_CONVERSATION,
+  MAX_RESUME_MESSAGES,
+} from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -25,13 +30,20 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
           .returning({ id: chatConversations.id });
         if (!created[0]) throw new Error('chat history: conversation insert returned no row');
         conversationId = created[0].id;
+        if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
+          throw new ConflictError('Conversation limit reached');
+        }
       } else {
         const inserted = await tx
           .insert(chatConversations)
           .values({ id: conversationId, userId: input.userId, title: input.title ?? '' })
           .onConflictDoNothing({ target: chatConversations.id })
           .returning({ id: chatConversations.id });
-        if (inserted.length === 0) {
+        if (inserted.length > 0) {
+          if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
+            throw new ConflictError('Conversation limit reached');
+          }
+        } else {
           const [owner] = await tx
             .select({ userId: chatConversations.userId })
             .from(chatConversations)
@@ -112,6 +124,14 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
             removedByReplace += droppedAssistant.length;
           }
         }
+      }
+
+      const [messageCountRow] = await tx
+        .select({ total: sql<number>`count(*)::int` })
+        .from(chatMessages)
+        .where(eq(chatMessages.conversationId, conversationId));
+      if (Number(messageCountRow?.total ?? 0) >= MAX_MESSAGES_PER_CONVERSATION) {
+        throw new ConflictError('This chat is full — start a new one');
       }
 
       const insertedRows = await tx
@@ -227,6 +247,14 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
       .returning({ id: chatConversations.id });
     return { deletedConversations: deleted.length, deletedMessages: Number(countRow?.total ?? 0) };
   }
+}
+
+async function countOwnerConversations(client: Client, userId: string): Promise<number> {
+  const [row] = await client
+    .select({ total: sql<number>`count(*)::int` })
+    .from(chatConversations)
+    .where(eq(chatConversations.userId, userId));
+  return Number(row?.total ?? 0);
 }
 
 type ConversationRow = typeof chatConversations.$inferSelect;

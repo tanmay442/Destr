@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
+import { ConflictError } from '@app/domain';
 import { ChatHistoryRepository } from '../chat-history-repo';
 import { users, chatConversations, chatMessages } from '../schema';
 import { db } from '../client';
@@ -190,6 +191,58 @@ suite('ChatHistoryRepository.appendTurn', () => {
       expect(msgs).toHaveLength(2);
       const conv = (await tx.select().from(chatConversations))[0];
       expect(conv?.messageCount).toBe(2);
+    });
+  });
+});
+
+suite('ChatHistoryRepository storage caps (H1/M3)', () => {
+  const CAP_OWNER = 'hist-cap';
+  const CONV_D = 'd0000000-0000-4000-8000-00000000000e';
+  const CONV_E = 'e0000000-0000-4000-8000-00000000000e';
+
+  function seedConversationValues(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `f${String(i).padStart(7, '0')}-0000-4000-8000-000000000000`,
+      userId: CAP_OWNER,
+      title: `c${i}`,
+    }));
+  }
+
+  it('allows the 512th conversation and blocks the 513th on the client-keyed path', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: CAP_OWNER, email: 'hist-cap@test.local' });
+      await tx.insert(chatConversations).values(seedConversationValues(511));
+      const repo = new ChatHistoryRepository(tx);
+      await repo.appendTurn({ conversationId: CONV_D, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      expect(await repo.countConversations(CAP_OWNER)).toBe(512);
+      await expect(
+        repo.appendTurn({ conversationId: CONV_E, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m2') }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      expect(await repo.countConversations(CAP_OWNER)).toBe(512);
+    });
+  });
+
+  it('blocks appends at 500 stored messages and allows 499 to grow', async () => {
+    await withRollback(async (tx) => {
+      await tx.insert(users).values({ clerkUserId: CAP_OWNER, email: 'hist-cap2@test.local' });
+      await tx
+        .insert(chatConversations)
+        .values({ id: CONV_A, userId: CAP_OWNER, title: 'full' });
+      await tx.insert(chatMessages).values(
+        Array.from({ length: 499 }, (_, i) => ({
+          conversationId: CONV_A,
+          turnId: null,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: { id: `seed-${i}`, role: 'user', parts: [{ type: 'text', text: 'q' }] },
+        })),
+      );
+      const repo = new ChatHistoryRepository(tx);
+      await repo.appendTurn({ conversationId: CONV_A, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
+      const rows = await tx.select().from(chatMessages).where(eq(chatMessages.conversationId, CONV_A));
+      expect(rows).toHaveLength(501);
+      await expect(
+        repo.appendTurn({ conversationId: CONV_A, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m2') }),
+      ).rejects.toBeInstanceOf(ConflictError);
     });
   });
 });

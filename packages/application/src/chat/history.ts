@@ -7,7 +7,6 @@ import {
   NotFoundError,
   sanitizeText,
   logger,
-  MAX_CONVERSATIONS_PER_USER,
   MAX_MESSAGES_PER_CONVERSATION,
   MAX_STORED_MESSAGE_BYTES,
   MAX_CONVERSATION_TITLE_LENGTH,
@@ -256,12 +255,6 @@ export async function appendChatTurn(
     if (input.messageCount !== undefined && input.messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
       return err(new ConflictError('This chat is full — start a new one'));
     }
-    if (input.conversationId === null) {
-      const total = await deps.repo.countConversations(input.userId);
-      if (total >= MAX_CONVERSATIONS_PER_USER) {
-        return err(new ConflictError('Conversation limit reached'));
-      }
-    }
     const title =
       input.title !== undefined
         ? capCodePoints(sanitizeText(input.title), MAX_CONVERSATION_TITLE_LENGTH)
@@ -277,6 +270,7 @@ export async function appendChatTurn(
     });
     return ok(result);
   } catch (e) {
+    if (e instanceof ConflictError) return err(e);
     return err(new ExternalServiceError('Failed to save chat history', e));
   }
 }

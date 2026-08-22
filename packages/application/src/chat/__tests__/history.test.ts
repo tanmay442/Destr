@@ -155,17 +155,22 @@ describe('appendChatTurn caps', () => {
     expect(forwarded.retryOfMessageId).toBe('m0');
   });
 
-  it('conflicts at the conversation cap only when creating', async () => {
-    const fullRepo = fakeRepo({ countConversations: async () => 512 });
-    const creating = await appendChatTurn(
-      { ...turnInput, conversationId: null }, 
-      { repo: fullRepo },
+  it('re-emits repo ConflictError unmapped (caps enforced in the append transaction)', async () => {
+    const conversationCap = new ConflictError('Conversation limit reached');
+    const res = await appendChatTurn(
+      { ...turnInput },
+      { repo: fakeRepo({ appendTurn: async () => { throw conversationCap; } }) },
     );
-    if (!creating.ok) expect(creating.error).toBeInstanceOf(ConflictError);
+    if (!res.ok) expect(res.error).toBe(conversationCap);
     else throw new Error('expected conflict');
 
-    const existing = await appendChatTurn({ ...turnInput }, { repo: fullRepo });
-    expect(existing.ok).toBe(true);
+    const fullChat = new ConflictError('This chat is full — start a new one');
+    const res2 = await appendChatTurn(
+      { ...turnInput },
+      { repo: fakeRepo({ appendTurn: async () => { throw fullChat; } }) },
+    );
+    if (!res2.ok) expect(res2.error).toBe(fullChat);
+    else throw new Error('expected conflict');
   });
 
   it('sanitizes and caps an auto-title', async () => {
