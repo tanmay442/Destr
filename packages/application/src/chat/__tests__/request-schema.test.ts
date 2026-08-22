@@ -116,4 +116,20 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     expect(ChatRequestSchema.safeParse({ ...body, turnId: v1 }).success).toBe(false);
     expect(ChatRequestSchema.safeParse({ ...body, turnId: 'nope' }).success).toBe(false);
   });
+
+  it('accepts an optional conversationId but rejects a malformed one (T1)', () => {
+    const valid = 'a0000000-0000-4000-8000-000000000001';
+    const v1 = 'a0000000-0000-1000-8000-000000000001';
+    const body = { messages: [baseMessage('user', [{ type: 'text', text: 'hi' }])] };
+    expect(ChatRequestSchema.safeParse(body).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: valid }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: v1 }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ ...body, conversationId: 'not-a-uuid' }).success).toBe(false);
+  });
+
+  it('requires retry to be a strict boolean', () => {
+    const body = { messages: [baseMessage('user', [{ type: 'text', text: 'hi' }])] };
+    expect(ChatRequestSchema.safeParse({ ...body, retry: true }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ ...body, retry: 'true' }).success).toBe(false);
+  });
 });

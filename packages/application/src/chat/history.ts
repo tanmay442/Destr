@@ -239,7 +239,7 @@ export async function deleteConversation(
 
 export interface AppendChatTurnInputUseCase {
   userId: string;
-  conversationId: string | null;
+  conversationId: string;
   turnId: string;
   retryOfMessageId?: string | undefined;
   /** Auto-title used only when this call creates the conversation. */

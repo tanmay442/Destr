@@ -548,8 +548,7 @@ export interface StoredChatMessage {
 }
 
 export interface AppendChatTurnInput {
-  /** Null creates the conversation inside the same transaction. */
-  conversationId: string | null;
+  conversationId: string;
   userId: string;
   turnId: string;
   /** Only read when creating the conversation. */

@@ -775,6 +775,17 @@ describe('chat history persistence', () => {
     expect(call.retryOfMessageId).toBe('m1');
   });
 
+  it('still answers but does not persist when the request has no conversationId', async () => {
+    const { deps, fakes } = makeDeps();
+    const body = { ...HISTORY_BODY };
+    delete (body as Record<string, unknown>).conversationId;
+    const result = await run({ request: makeRequest(body), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    const parts = await readParts(result.stream);
+    expect(parts.length).toBeGreaterThan(0);
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
+  });
+
   it('does not persist without a valid turn id', async () => {
     const { deps, fakes } = makeDeps();
     const body = { ...HISTORY_BODY };

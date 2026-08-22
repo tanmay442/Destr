@@ -105,8 +105,8 @@ export interface ChatTurnDeps {
   historySink?: {
     appendTurn(input: {
       userId: string;
-      conversationId: string | null;
-      turnId: string | null;
+      conversationId: string;
+      turnId: string;
       retryOfMessageId?: string | undefined;
       title?: string | undefined;
       userMessage: unknown;
@@ -138,7 +138,7 @@ export function persistHistory(
   cfg: AppConfig,
   userId: string,
   input: {
-    conversationId: string | null;
+    conversationId: string | undefined;
     turnId: string | null;
     retryOfMessageId?: string | undefined;
     title: string;
@@ -147,6 +147,10 @@ export function persistHistory(
   },
 ): void {
   if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return;
+  if (!input.conversationId) {
+    logger.debug('chat.history.persist_skipped', { turnId: input.turnId });
+    return;
+  }
   void sink
     .appendTurn({
       userId,
@@ -444,7 +448,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           : {}),
       });
       persistHistory(deps.historySink, cfg, userId, {
-        conversationId: parsed.data.conversationId ?? null,
+        conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
         title: lastUserText,
@@ -572,7 +576,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }),
           });
           persistHistory(deps.historySink, cfg, userId, {
-            conversationId: parsed.data.conversationId ?? null,
+            conversationId: parsed.data.conversationId,
             turnId,
             retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
             title: lastUserText,

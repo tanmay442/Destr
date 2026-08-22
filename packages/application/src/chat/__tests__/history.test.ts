@@ -16,7 +16,7 @@ function fakeRepo(overrides: Partial<ChatHistoryRepo> = {}): ChatHistoryRepo & {
   const base: ChatHistoryRepo = {
     appendTurn: async (input) => {
       calls.push(input);
-      return { conversationId: input.conversationId ?? 'created-1' };
+      return { conversationId: input.conversationId };
     },
     listConversations: async () => [],
     getConversation: async () => null,
@@ -176,9 +176,9 @@ describe('appendChatTurn caps', () => {
     else throw new Error('expected conflict');
   });
 
-  it('sanitizes and caps an auto-title', async () => {
+  it('sanitizes and caps the title before delegating', async () => {
     const repo = fakeRepo();
-    await appendChatTurn({ ...turnInput, conversationId: null, title: '  A\x07B  ' }, { repo });
+    await appendChatTurn({ ...turnInput, title: '  A\x07B  ' }, { repo });
     const forwarded = repo.calls[0] as { title: string };
     expect(forwarded.title).toBe('AB');
   });

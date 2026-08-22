@@ -419,10 +419,11 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
     expect(secondArgs).toEqual(firstArgs);
   });
 
-  it('persists identical chat history on both paths', async () => {
+  it('persists identical chat history on both paths (including retry)', async () => {
     const historyBody = JSON.stringify({
       turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
       conversationId: 'a0000000-0000-4000-8000-000000000001',
+      retry: true,
       messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
     });
     scriptStream({
@@ -441,6 +442,26 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
     const persisted = calls[0]![0] as Record<string, unknown>;
     expect(persisted.conversationId).toBe('a0000000-0000-4000-8000-000000000001');
     expect(persisted.turnId).toBe('3f2504e0-4f89-41d3-9a0c-0305e82c3301');
+    expect(persisted.retryOfMessageId).toBe('m1');
+  });
+
+  it('answers without persisting when conversationId is absent on both paths', async () => {
+    const historyBody = JSON.stringify({
+      turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3302',
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+    });
+    scriptStream({
+      toolTrace: { toolCallId: 'search-noid', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
+      drive: (tools) => {
+        return tools?.searchDocumentation?.execute({ query: 'dental coverage' });
+      },
+    });
+    const legacy = await post(false, historyBody);
+    const useCase = await post(true, historyBody);
+    await finishScriptedStreams();
+    const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
+    expect(useCaseText).toBe(legacyText);
+    expect(compositionMock.appendChatTurn).not.toHaveBeenCalled();
   });
 
   it('records identical chat events (excluding timing fields)', async () => {    scriptStream({

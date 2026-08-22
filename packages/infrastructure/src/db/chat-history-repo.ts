@@ -21,36 +21,24 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
 
   async appendTurn(input: AppendChatTurnInput): Promise<{ conversationId: string }> {
     return this.client.transaction(async (tx) => {
-      let conversationId = input.conversationId;
+      const conversationId = input.conversationId;
 
-      if (conversationId === null) {
-        const created = await tx
-          .insert(chatConversations)
-          .values({ userId: input.userId, title: input.title ?? '' })
-          .returning({ id: chatConversations.id });
-        if (!created[0]) throw new Error('chat history: conversation insert returned no row');
-        conversationId = created[0].id;
+      const inserted = await tx
+        .insert(chatConversations)
+        .values({ id: conversationId, userId: input.userId, title: input.title ?? '' })
+        .onConflictDoNothing({ target: chatConversations.id })
+        .returning({ id: chatConversations.id });
+      if (inserted.length > 0) {
         if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
           throw new ConflictError('Conversation limit reached');
         }
       } else {
-        const inserted = await tx
-          .insert(chatConversations)
-          .values({ id: conversationId, userId: input.userId, title: input.title ?? '' })
-          .onConflictDoNothing({ target: chatConversations.id })
-          .returning({ id: chatConversations.id });
-        if (inserted.length > 0) {
-          if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
-            throw new ConflictError('Conversation limit reached');
-          }
-        } else {
-          const [owner] = await tx
-            .select({ userId: chatConversations.userId })
-            .from(chatConversations)
-            .where(eq(chatConversations.id, conversationId))
-            .limit(1);
-          if (!owner || owner.userId !== input.userId) return { conversationId };
-        }
+        const [owner] = await tx
+          .select({ userId: chatConversations.userId })
+          .from(chatConversations)
+          .where(eq(chatConversations.id, conversationId))
+          .limit(1);
+        if (!owner || owner.userId !== input.userId) return { conversationId };
       }
 
       let removedByReplace = 0;

@@ -49,25 +49,6 @@ async function withRollback(fn: (tx: Parameters<Parameters<typeof db.transaction
 const OWNER = 'hist-owner';
 
 suite('ChatHistoryRepository.appendTurn', () => {
-  it('creates the conversation lazily on a null id and auto-fills the title', async () => {
-    await withRollback(async (tx) => {
-      await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner@test.local' });
-      const repo = new ChatHistoryRepository(tx);
-      const { conversationId } = await repo.appendTurn({
-        conversationId: null,
-        userId: OWNER,
-        turnId: crypto.randomUUID(),
-        title: 'First question',
-        ...turn('m1'),
-      });
-      expect(conversationId).toMatch(/^[0-9a-f-]{36}$/);
-      const row = (await tx.select().from(chatConversations))[0];
-      expect(row?.title).toBe('First question');
-      expect(row?.messageCount).toBe(2);
-      expect(row?.userId).toBe(OWNER);
-    });
-  });
-
   it('upserts keyed by the client-supplied id and keeps message_count exact on double-fire', async () => {
     await withRollback(async (tx) => {
       await tx.insert(users).values({ clerkUserId: OWNER, email: 'hist-owner2@test.local' });

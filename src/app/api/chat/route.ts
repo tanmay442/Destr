@@ -472,7 +472,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           : {}),
       });
       persistHistory(historySink, cfg, userId, {
-        conversationId: parsed.data.conversationId ?? null,
+        conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
         title: lastUserText,
@@ -597,7 +597,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             }),
           });
           persistHistory(historySink, cfg, userId, {
-            conversationId: parsed.data.conversationId ?? null,
+            conversationId: parsed.data.conversationId,
             turnId,
             retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
             title: lastUserText,
@@ -695,9 +695,7 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       },
       historySink: {
         appendTurn: async (input) => {
-          const { turnId } = input;
-          if (turnId === null) return null;
-          const result = await comp.appendChatTurn({ ...input, turnId });
+          const result = await comp.appendChatTurn(input);
           if (!result.ok) throw result.error;
           return result.value;
         },
