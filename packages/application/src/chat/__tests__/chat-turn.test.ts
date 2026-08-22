@@ -755,6 +755,30 @@ describe('chat history persistence', () => {
     expect(fakes.appendTurn).not.toHaveBeenCalled();
   });
 
+  it('does not persist when the turn is aborted mid-stream', async () => {
+    const { deps, fakes } = makeDeps();
+    const abortController = new AbortController();
+    abortController.abort();
+    streamTextMock.mockImplementation(() => ({
+      toUIMessageStream: () =>
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-start', id: 'a' });
+            controller.error(new Error('This operation was aborted'));
+          },
+        }) as unknown as never,
+      text: Promise.resolve('partial answer'),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+    }));
+    const result = await run(
+      { request: makeRequest(HISTORY_BODY, { signal: abortController.signal }), userId: 'user_test' },
+      deps,
+    );
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await readParts(result.stream).catch(() => undefined);
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
+  });
+
   it('swallows sink failures without breaking the stream', async () => {
     const { deps } = makeDeps({
       historySink: { appendTurn: vi.fn(async () => { throw new Error('db down'); }) },
