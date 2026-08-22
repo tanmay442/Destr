@@ -141,7 +141,7 @@ describe('appendChatTurn caps', () => {
   it('conflicts when the known message count is at the per-conversation cap', async () => {
     const res = await appendChatTurn(
       { ...turnInput, messageCount: 500 },
-      { repo: fakeRepo() },
+      { repo: fakeRepo(), captureQueryText: true },
     );
     if (!res.ok) expect(res.error).toBeInstanceOf(ConflictError);
     else throw new Error('expected conflict');
@@ -151,7 +151,7 @@ describe('appendChatTurn caps', () => {
     const repo = fakeRepo();
     const res = await appendChatTurn(
       { ...turnInput, messageCount: 499, retryOfMessageId: 'm0' },
-      { repo },
+      { repo, captureQueryText: true },
     );
     expect(res.ok).toBe(true);
     const forwarded = repo.calls[0] as { retryOfMessageId?: string };
@@ -162,7 +162,7 @@ describe('appendChatTurn caps', () => {
     const conversationCap = new ConflictError('Conversation limit reached');
     const res = await appendChatTurn(
       { ...turnInput },
-      { repo: fakeRepo({ appendTurn: async () => { throw conversationCap; } }) },
+      { repo: fakeRepo({ appendTurn: async () => { throw conversationCap; } }), captureQueryText: true },
     );
     if (!res.ok) expect(res.error).toBe(conversationCap);
     else throw new Error('expected conflict');
@@ -170,7 +170,7 @@ describe('appendChatTurn caps', () => {
     const fullChat = new ConflictError('This chat is full — start a new one');
     const res2 = await appendChatTurn(
       { ...turnInput },
-      { repo: fakeRepo({ appendTurn: async () => { throw fullChat; } }) },
+      { repo: fakeRepo({ appendTurn: async () => { throw fullChat; } }), captureQueryText: true },
     );
     if (!res2.ok) expect(res2.error).toBe(fullChat);
     else throw new Error('expected conflict');
@@ -178,9 +178,16 @@ describe('appendChatTurn caps', () => {
 
   it('sanitizes and caps the title before delegating', async () => {
     const repo = fakeRepo();
-    await appendChatTurn({ ...turnInput, title: '  A\x07B  ' }, { repo });
+    await appendChatTurn({ ...turnInput, title: '  A\x07B  ' }, { repo, captureQueryText: true });
     const forwarded = repo.calls[0] as { title: string };
     expect(forwarded.title).toBe('AB');
+  });
+
+  it('skips persistence entirely when captureQueryText is off', async () => {
+    const repo = fakeRepo();
+    const res = await appendChatTurn({ ...turnInput }, { repo, captureQueryText: false });
+    expect(res.ok).toBe(true);
+    expect(repo.calls).toHaveLength(0);
   });
 });
 

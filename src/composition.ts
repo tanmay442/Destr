@@ -334,8 +334,13 @@ function createComposition() {
       bind(renameConversation, input, { repo: chatHistoryRepo }),
     deleteConversation: (input: Parameters<typeof deleteConversation>[0]) =>
       bind(deleteConversation, input, { repo: chatHistoryRepo, ...auditDeps }),
-    appendChatTurn: (input: Parameters<typeof appendChatTurn>[0]) =>
-      bind(appendChatTurn, input, { repo: chatHistoryRepo }),
+    appendChatTurn: async (input: Parameters<typeof appendChatTurn>[0]) => {
+      const runtime = await getRuntimeConfig();
+      return appendChatTurn(input, {
+        repo: chatHistoryRepo,
+        captureQueryText: runtime.captureQueryText,
+      });
+    },
     listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
     db: core.dbClient,
     schema: Db.schema,

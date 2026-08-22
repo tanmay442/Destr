@@ -175,6 +175,7 @@ export const chatConversations = pgTable('chat_conversations', {
 }, (table) => [
   check('chat_conversations_title_len_check', sql`char_length(${table.title}) <= ${MAX_CONVERSATION_TITLE_LENGTH}`),
   index('idx_chat_conversations_user_updated').on(table.userId, table.updatedAt.desc()),
+  index('chat_conversations_updated_at_idx').on(table.updatedAt),
 ]);
 
 export const chatMessages = pgTable('chat_messages', {

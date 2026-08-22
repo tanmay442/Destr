@@ -49,6 +49,8 @@ describe('toResumedConversation', () => {
             id: 'u9',
             parts: [
               { type: 'file', url: 'https://x/y.png', filename: 'y.png', mediaType: 'image/png' },
+              { type: 'file', url: 'javascript:alert(1)', filename: 'evil.png' },
+              { type: 'file', url: 'data:text/html,<script>1</script>', filename: 'data.png' },
               { type: 'tool-call', state: 'output-available' },
             ],
           },
@@ -56,7 +58,9 @@ describe('toResumedConversation', () => {
       ],
     });
     const parts = res.messages[0]!.parts;
-    expect(parts.some((p) => p.type === 'file')).toBe(true);
+    const files = parts.filter((p) => p.type === 'file') as Array<{ url: string }>;
+    expect(files).toHaveLength(1);
+    expect(files[0]?.url).toBe('https://x/y.png');
     expect(parts.some((p) => p.type === 'tool-call')).toBe(false);
   });
 

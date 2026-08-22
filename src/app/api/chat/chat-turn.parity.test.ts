@@ -464,7 +464,8 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
     expect(compositionMock.appendChatTurn).not.toHaveBeenCalled();
   });
 
-  it('records identical chat events (excluding timing fields)', async () => {    scriptStream({
+  it('records identical chat events (excluding timing fields)', async () => {
+    scriptStream({
       toolTrace: { toolCallId: 'search-2', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
       drive: (tools) => {
         return tools?.searchDocumentation?.execute({ query: 'dental coverage' });

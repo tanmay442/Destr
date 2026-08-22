@@ -161,10 +161,16 @@ export function persistHistory(
       userMessage: input.userMessage,
       assistantMessage: input.assistantMessage,
     })
-    .catch((err) => logger.warn('chat.history.persist_failed', { error: err }));
+    .catch(() =>
+      logger.warn('chat.history.persist_failed', {
+        conversationId: input.conversationId,
+        turnId: input.turnId,
+      }),
+    );
 }
 
-async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {  if (!request.body) return { value: null, tooLarge: false };
+async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
+  if (!request.body) return { value: null, tooLarge: false };
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;

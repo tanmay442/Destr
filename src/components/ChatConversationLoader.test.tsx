@@ -3,9 +3,10 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
+const routerStub = { push: pushMock, replace: replaceMock };
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: pushMock, replace: replaceMock }),
+  useRouter: () => routerStub,
 }));
 
 vi.mock('@/components/ChatInterface', () => ({
@@ -180,6 +181,16 @@ describe('ChatConversationLoader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     const stub = await screen.findByTestId('chat-interface-stub');
     expect(stub).toHaveAttribute('data-messages', '2');
+  });
+
+  it('labels a 400 resume response as an invalid conversation link', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 400 }) as Response),
+    );
+    render(<ChatConversationLoader routeId="not-a-uuid" />);
+    const panel = await screen.findByTestId('chat-resume-error');
+    expect(panel).toHaveTextContent('Invalid conversation link');
   });
 
   it('flags the composer when the conversation cap is already reached on mount', async () => {

@@ -113,7 +113,7 @@ Multi-implementation ports are validated through **shared contract-assertion har
   - **CLI (`packages/cli/src/__tests__/purge-chat-history.test.ts`)**: `--days`/`--dry-run`/`--yes`/`--allow-sub-day` parsing, mandatory `--days` while the admin window is Off, dry-run counts.
   - **Retention config (`packages/domain/src/app-config.test.ts`)**: `chatHistoryRetentionDays` default 120; only 0 (Off) / 30 / 120 / 365 accepted.
   - **GDPR erasure (`.../users/[clerkId]/gdpr/route.test.ts`)**: saved chats purged in both `purge` and `anonymize` modes.
-  - **Components (`src/components/ConversationList.test.tsx`, `ChatInterface.test.tsx`)**: list fetch/active highlight/delete-confirm flows, conversation id sent with every message, resume rebuilds citation parts from stored metadata, composer blocks at the per-conversation message cap, retry mints a fresh turn id.
+  - **Components (`src/components/app/AppSidebar.test.tsx`, `src/components/ChatConversationLoader.test.tsx`, `src/components/ChatInterface.test.tsx`)**: sidebar list fetch/active highlight/delete-confirm flows, conversation id sent with every message, resume rebuilds citation parts from stored metadata, composer blocks at the per-conversation message cap, retry mints a fresh turn id.
 
 ---
 

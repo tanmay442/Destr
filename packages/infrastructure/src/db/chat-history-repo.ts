@@ -154,7 +154,7 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
       .select()
       .from(chatConversations)
       .where(eq(chatConversations.userId, userId))
-      .orderBy(desc(chatConversations.updatedAt))
+      .orderBy(desc(chatConversations.updatedAt), desc(chatConversations.id))
       .limit(opts.limit)
       .offset(opts.offset);
     return rows.map(toSummary);

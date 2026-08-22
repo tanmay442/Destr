@@ -163,6 +163,11 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
             title: 'Loading timed out',
             detail: 'The conversation took too long to load. Try again.',
           });
+        } else if (status === 400) {
+          setError({
+            title: 'Invalid conversation link',
+            detail: 'This conversation URL is not valid. Check the link and try again.',
+          });
         } else {
           setError({
             title: 'Could not load conversation',
@@ -180,7 +185,7 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       clearTimeout(timer);
       controller.abort();
     };
-  }, [routeId, attempt]);
+  }, [routeId, attempt, router]);
 
   // Sync freshly-minted ids into the URL without triggering a remount,
   // preserving Next's router history state on the entry.

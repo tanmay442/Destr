@@ -317,20 +317,20 @@ function precedingUserMessageId(
 }
 
 export function ChatInterface({
-  conversationId = 'default-conversation',
+  conversationId,
   initialMessages = [],
   initialTurnIds = {},
   initialMessageCount,
   conversationLimitReached = false,
   truncated = false,
 }: {
-  conversationId?: string;
+  conversationId: string;
   initialMessages?: MyUIMessage[];
   initialTurnIds?: Record<string, string>;
   initialMessageCount?: number;
   conversationLimitReached?: boolean;
   truncated?: boolean;
-} = {}) {
+}) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});

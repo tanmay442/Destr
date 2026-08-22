@@ -52,6 +52,7 @@ import {
   SheetClose,
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
+import { toast } from '@/components/ui/sonner';
 import { onConversationsChanged, requestNewChat } from '@/chat/events';
 import { MAX_LIST_LIMIT } from '@app/domain';
 
@@ -126,6 +127,7 @@ export function AppSidebar({
   const fetchSeq = useRef(0);
 
   useEffect(() => {
+    if (onAdmin) return;
     const seq = ++fetchSeq.current;
     void (async () => {
       const accumulated: ConversationItem[] = [];
@@ -143,6 +145,7 @@ export function AppSidebar({
           accumulated.push(...rows);
           if (rows.length < MAX_LIST_LIMIT) break;
         } catch {
+          toast.error('Could not load your chats. Please try again.');
           return;
         }
       }
@@ -151,20 +154,16 @@ export function AppSidebar({
         setTotalConversations(total);
       }
     })();
-  }, [pages, refreshKey]);
+  }, [pages, refreshKey, onAdmin]);
 
   const refreshConversations = useCallback(() => setRefreshKey((key) => key + 1), []);
 
-  // Re-check the list when landing back on chat surfaces (e.g. turns that
-  // completed while visiting admin pages dispatched events we already caught,
-  // but a manual refresh keeps this robust without extra subscriptions).
   useEffect(() => {
-    if (!onAdmin) refreshConversations();
     return onConversationsChanged((activeId) => {
       setFreshActiveId(activeId ?? null);
       refreshConversations();
     });
-  }, [onAdmin, refreshConversations]);
+  }, [refreshConversations]);
 
   const commitRename = async (id: string) => {
     setRenamingId(null);
@@ -181,7 +180,7 @@ export function AppSidebar({
         prev.map((c) => (c.id === id ? { ...c, title } : c)),
       );
     } catch {
-      // Leave the previous title in place; the next refresh reconciles.
+      toast.error('Could not rename the chat. Please try again.');
     }
   };
 
@@ -200,7 +199,7 @@ export function AppSidebar({
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (id === activeConversationId) router.push('/chat');
     } catch {
-      // Keep the entry; the next refresh reconciles.
+      toast.error('Could not delete the chat. Please try again.');
     }
   };
 
@@ -715,4 +714,3 @@ function ConversationRow({
     </div>
   );
 }
-

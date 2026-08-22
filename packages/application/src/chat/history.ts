@@ -116,9 +116,11 @@ function findLastTextIndex(parts: Array<Record<string, unknown>>): number {
   return -1;
 }
 
+const STORED_BYTES_TARGET = MAX_STORED_MESSAGE_BYTES - 1_024;
+
 /** Truncate the last text part until the snapshot fits the storage byte cap. */
 export function enforceStoredBytes(message: StoredMessage): StoredMessage {
-  if (jsonBytes(message) <= MAX_STORED_MESSAGE_BYTES) return message;
+  if (jsonBytes(message) <= STORED_BYTES_TARGET) return message;
   const clone: StoredMessage = { ...message, parts: message.parts.map((p) => ({ ...p })) };
   for (;;) {
     const idx = findLastTextIndex(clone.parts);
@@ -132,16 +134,16 @@ export function enforceStoredBytes(message: StoredMessage): StoredMessage {
       continue;
     }
     const bytesWithoutText = jsonBytes(clone) - Buffer.byteLength(text);
-    const budget = MAX_STORED_MESSAGE_BYTES - bytesWithoutText - 16;
+    const budget = STORED_BYTES_TARGET - bytesWithoutText - 16;
     if (budget <= 0) {
       clone.parts.splice(idx, 1);
       continue;
     }
     const bytesPerChar = Math.max(1, Math.ceil(Buffer.byteLength(text) / chars.length));
     part.text = capCodePoints(text, Math.floor(budget / bytesPerChar));
-    if (jsonBytes(clone) <= MAX_STORED_MESSAGE_BYTES) break;
+    if (jsonBytes(clone) <= STORED_BYTES_TARGET) break;
   }
-  logger.warn('[chat-history] stored message exceeded byte cap; truncated last text part', {
+  logger.warn('chat.history.stored_bytes_truncated', {
     bytes: jsonBytes(clone),
   });
   return clone;
@@ -252,8 +254,9 @@ export interface AppendChatTurnInputUseCase {
 
 export async function appendChatTurn(
   input: AppendChatTurnInputUseCase,
-  deps: HistoryDeps,
+  deps: HistoryDeps & { captureQueryText: boolean },
 ): Promise<Result<{ conversationId: string }>> {
+  if (!deps.captureQueryText) return ok({ conversationId: input.conversationId });
   try {
     if (input.messageCount !== undefined && input.messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
       return err(new ConflictError('This chat is full — start a new one'));
