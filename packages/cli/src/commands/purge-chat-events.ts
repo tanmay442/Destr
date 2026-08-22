@@ -51,6 +51,9 @@ export async function runPurgeChatEvents({
   allowSubDay = false,
   confirmFn,
 }: PurgeOptions): Promise<{ deletedCount: number; dryRun?: boolean; cancelled?: boolean }> {
+  if (!Number.isFinite(days) || days <= 0) {
+    throw new Error(`Invalid --days value: must be a number greater than 0 (got ${days}).`);
+  }
   if (days < 1 && !allowSubDay) {
     throw new Error(`Purge retention window must be >= 1 day (got ${days}). Pass --allow-sub-day or --force to override.`);
   }
@@ -98,4 +101,3 @@ export async function runPurgeChatEvents({
   console.log(`Purged ${result.deletedCount} chat_events older than ${days} days (before ${cutoff.toISOString()}) and refreshed daily stats.`);
   return { deletedCount: result.deletedCount, dryRun: false };
 }
-
