@@ -190,6 +190,33 @@ describe('AppSidebar conversation nav', () => {
     );
   });
 
+  it('marks the collapsed sidebar inert so hidden controls leave the tab order', async () => {
+    render(<AppSidebar user={user} role="user" open={false} onToggle={() => undefined} />);
+    await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
+    const aside = screen.getByTestId('app-sidebar');
+    expect(aside).toHaveAttribute('inert');
+    expect(screen.getByTestId('conversation-item').closest('aside')).toBe(aside);
+  });
+
+  it('does not mark the expanded sidebar inert', async () => {
+    render(<AppSidebar user={user} role="user" open onToggle={() => undefined} />);
+    await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
+    expect(screen.getByTestId('app-sidebar')).not.toHaveAttribute('inert');
+  });
+
+  it('sets aria-current=page on the active conversation link', async () => {
+    render(<AppSidebar user={user} role="user" />);
+    await waitFor(() => expect(screen.getByTestId('conversation-item')).toBeInTheDocument());
+    expect(screen.getByTestId('conversation-item')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('sets aria-current=page on the active admin link', () => {
+    activePath = '/admin/settings';
+    render(<AppSidebar user={user} role="admin" />);
+    expect(screen.getByTestId('app-sidebar-admin-settings')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('app-sidebar-admin-users')).not.toHaveAttribute('aria-current');
+  });
+
   it('shows admin nav on admin routes with the pinned admin panel link', () => {
     activePath = '/admin/settings';
     render(<AppSidebar user={user} role="admin" />);

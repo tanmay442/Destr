@@ -236,6 +236,7 @@ export function AppSidebar({
           'fixed inset-y-0 left-0 z-30 hidden flex-col overflow-hidden border-r border-border-subtle bg-card/60 backdrop-blur-md transition-[width] duration-200 md:flex',
           open ? 'w-72' : 'w-0 border-r-0',
         )}
+        inert={!open}
         data-testid="app-sidebar"
         data-open={open}
       >
@@ -561,6 +562,7 @@ function AdminLink({ link }: { link: (typeof ADMIN_LINKS)[number] }) {
           : 'text-muted-foreground hover:bg-card hover:text-foreground',
       )}
       data-testid={`app-sidebar-admin-${link.label.toLowerCase().replace(/\s+/g, '-')}`}
+      aria-current={active ? 'page' : undefined}
     >
       <Link href={link.href}>
         <Icon className="shrink-0 text-foreground-subtle" aria-hidden />
@@ -667,6 +669,7 @@ function ConversationRow({
         variant="ghost"
         size="sm"
         className="h-9 min-w-0 flex-1 justify-start overflow-hidden px-2.5 font-normal hover:bg-transparent"
+        aria-current={active ? 'page' : undefined}
       >
         <Link href={`/chat/${item.id}`} onClick={onNavigate} data-testid="conversation-item" title={item.title}>
           <span className="truncate text-[13px]">{item.title || 'Untitled chat'}</span>
