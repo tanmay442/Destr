@@ -74,6 +74,55 @@ describe('/api/chat/conversations/[id]', () => {
     expect(renameMock).not.toHaveBeenCalled();
   });
 
+  it('rejects cross-site deletes with 403', async () => {
+    const res = await route.DELETE(
+      new Request(`http://localhost/api/chat/conversations/${ID}`, {
+        method: 'DELETE',
+        headers: { Origin: 'http://evil.test', 'sec-fetch-site': 'cross-site' },
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(403);
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it('does not apply same-origin checks to GET', async () => {
+    const res = await route.GET(
+      new Request(`http://localhost/api/chat/conversations/${ID}`, {
+        headers: { Origin: 'http://evil.test', 'sec-fetch-site': 'cross-site' },
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(200);
+    expect(getMock).toHaveBeenCalled();
+  });
+
+  it('rejects oversize rename bodies with 413', async () => {
+    const res = await route.PATCH(
+      new Request(`http://localhost/api/chat/conversations/${ID}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'x'.repeat(1_100_000) }),
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(413);
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-JSON rename content types with 415', async () => {
+    const res = await route.PATCH(
+      new Request(`http://localhost/api/chat/conversations/${ID}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'title=hi',
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(415);
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
   it('rate-limits all verbs under the chat_history bucket', async () => {
     rateLimitMock.mockResolvedValue({ ok: false, retryAfterMs: 2_000 });
     expect((await route.GET(req('GET'), ctx())).status).toBe(429);
