@@ -13,12 +13,14 @@ vi.mock('@/components/ChatInterface', () => ({
     conversationId: string;
     initialMessages: Array<{ id: string; role: string; parts: unknown[] }>;
     initialTurnIds?: Record<string, string>;
+    conversationLimitReached?: boolean;
   }) => (
     <div
       data-testid="chat-interface-stub"
       data-conversation={props.conversationId}
       data-messages={props.initialMessages.length}
       data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
+      data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
     />
   ),
 }));
@@ -90,6 +92,10 @@ describe('ChatConversationLoader', () => {
   });
 
   it('mints a new chat for /chat and syncs the id into the URL without navigation', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
+    );
     const replaceState = vi.fn();
     vi.stubGlobal('history', { replaceState });
     render(<ChatConversationLoader routeId={null} />);
@@ -121,6 +127,16 @@ describe('ChatConversationLoader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     const stub = await screen.findByTestId('chat-interface-stub');
     expect(stub).toHaveAttribute('data-messages', '2');
+  });
+
+  it('flags the composer when the conversation cap is already reached on mount', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 512 }) }) as Response),
+    );
+    render(<ChatConversationLoader routeId={null} />);
+    const stub = await screen.findByTestId('chat-interface-stub');
+    await waitFor(() => expect(stub).toHaveAttribute('data-limit-reached', 'true'));
   });
 
   it('surfaces a timeout error when the resume request hangs', async () => {

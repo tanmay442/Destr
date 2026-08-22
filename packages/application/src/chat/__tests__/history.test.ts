@@ -43,17 +43,20 @@ const turnInput = {
 };
 
 describe('listConversations', () => {
-  it('applies default pagination and forwards ownership', async () => {
+  it('applies default pagination, forwards ownership, and returns the caller total', async () => {
     const repo = fakeRepo({
       listConversations: async (userId, opts) => {
         expect(userId).toBe('u1');
         expect(opts).toEqual({ limit: 25, offset: 0 });
         return [];
       },
+      countConversations: async (userId) => {
+        expect(userId).toBe('u1');
+        return 7;
+      },
     });
     const res = await listConversations({ userId: 'u1' }, { repo });
-    expect(unwrap(res)).toEqual({ conversations: [] });
-    expect(repo.calls).toEqual([]);
+    expect(unwrap(res)).toEqual({ conversations: [], total: 7 });
   });
 
   it('caps the limit at MAX_LIST_LIMIT', async () => {

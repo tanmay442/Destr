@@ -125,6 +125,42 @@ describe('AppSidebar conversation nav', () => {
     expect(screen.getByTestId('conversation-item')).toBeInTheDocument();
   });
 
+  it('loads all pages through Show more when more conversations exist', async () => {
+    const pageRows = (page: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: `c${page}-${i}`,
+        title: `Chat ${page}-${i}`,
+        updatedAt: new Date().toISOString(),
+      }));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('offset=100')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ conversations: pageRows(1, 5), total: 105 }),
+        } as Response;
+      }
+      if (url.includes('/api/chat/conversations')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ conversations: pageRows(0, 100), total: 105 }),
+        } as Response;
+      }
+      return { ok: true, status: 200 } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<AppSidebar user={user} role="user" />);
+    await waitFor(() => expect(screen.getByTestId('conversation-show-more')).toBeInTheDocument());
+    expect(screen.getAllByTestId('conversation-item')).toHaveLength(100);
+
+    fireEvent.click(screen.getByTestId('conversation-show-more'));
+    await waitFor(() => expect(screen.getAllByTestId('conversation-item')).toHaveLength(105));
+    expect(screen.queryByTestId('conversation-show-more')).not.toBeInTheDocument();
+  });
+
   it('shows admin nav on admin routes with the pinned admin panel link', () => {
     activePath = '/admin/settings';
     render(<AppSidebar user={user} role="admin" />);

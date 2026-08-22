@@ -53,6 +53,7 @@ import {
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import { onConversationsChanged } from '@/chat/events';
+import { MAX_LIST_LIMIT } from '@app/domain';
 
 const ADMIN_LINKS = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard },
@@ -114,34 +115,50 @@ export function AppSidebar({
   const activeConversationId = parseConversationId(pathname);
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [totalConversations, setTotalConversations] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const fetchSeq = useRef(0);
 
-  const refreshConversations = useCallback(() => {
-    const seq = ++fetchSeq.current;
-    fetch('/api/chat/conversations?limit=100')
-      .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return (await res.json()) as { conversations: ConversationItem[] };
-      })
-      .then((data) => {
-        if (fetchSeq.current === seq) setConversations(data.conversations ?? []);
-      })
-      .catch(() => undefined);
-  }, []);
-
   useEffect(() => {
-    refreshConversations();
-    return onConversationsChanged(refreshConversations);
-  }, [refreshConversations]);
+    const seq = ++fetchSeq.current;
+    void (async () => {
+      const accumulated: ConversationItem[] = [];
+      let total = 0;
+      for (let page = 0; page < pages; page += 1) {
+        try {
+          const res = await fetch(
+            `/api/chat/conversations?limit=${MAX_LIST_LIMIT}&offset=${page * MAX_LIST_LIMIT}`,
+          );
+          if (!res.ok) throw new Error(String(res.status));
+          const data = (await res.json()) as { conversations: ConversationItem[]; total: number };
+          if (fetchSeq.current !== seq) return;
+          total = Number(data.total ?? 0);
+          const rows = data.conversations ?? [];
+          accumulated.push(...rows);
+          if (rows.length < MAX_LIST_LIMIT) break;
+        } catch {
+          return;
+        }
+      }
+      if (fetchSeq.current === seq) {
+        setConversations(accumulated);
+        setTotalConversations(total);
+      }
+    })();
+  }, [pages, refreshKey]);
+
+  const refreshConversations = useCallback(() => setRefreshKey((key) => key + 1), []);
 
   // Re-check the list when landing back on chat surfaces (e.g. turns that
   // completed while visiting admin pages dispatched events we already caught,
   // but a manual refresh keeps this robust without extra subscriptions).
   useEffect(() => {
     if (!onAdmin) refreshConversations();
+    return onConversationsChanged(refreshConversations);
   }, [onAdmin, refreshConversations]);
 
   const commitRename = async (id: string) => {
@@ -183,6 +200,8 @@ export function AppSidebar({
       role={role}
       section={onAdmin ? 'admin' : 'chat'}
       conversations={conversations}
+      hasMore={conversations.length < totalConversations}
+      onShowMore={() => setPages((count) => count + 1)}
       activeConversationId={activeConversationId}
       renamingId={renamingId}
       renameValue={renameValue}
@@ -329,6 +348,8 @@ function SidebarBody({
   role,
   section,
   conversations,
+  hasMore,
+  onShowMore,
   activeConversationId,
   renamingId,
   renameValue,
@@ -344,6 +365,8 @@ function SidebarBody({
   role: AppRole;
   section: SidebarSection;
   conversations: ConversationItem[];
+  hasMore: boolean;
+  onShowMore: () => void;
   activeConversationId: string | null;
   renamingId: string | null;
   renameValue: string;
@@ -411,18 +434,32 @@ function SidebarBody({
             ))}
           </ul>
         ) : (
-          <ConversationNav
-            conversations={conversations}
-            activeConversationId={activeConversationId}
-            renamingId={renamingId}
-            renameValue={renameValue}
-            setRenameValue={setRenameValue}
-            onRenameStart={onRenameStart}
-            onRenameCommit={onRenameCommit}
-            onRenameCancel={onRenameCancel}
-            onDeleteAsk={onDeleteAsk}
-            onNavigate={onNavigate}
-          />
+          <>
+            <ConversationNav
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              renamingId={renamingId}
+              renameValue={renameValue}
+              setRenameValue={setRenameValue}
+              onRenameStart={onRenameStart}
+              onRenameCommit={onRenameCommit}
+              onRenameCancel={onRenameCancel}
+              onDeleteAsk={onDeleteAsk}
+              onNavigate={onNavigate}
+            />
+            {hasMore ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onShowMore}
+                className="mt-1 w-full justify-center text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                data-testid="conversation-show-more"
+              >
+                Show more
+              </Button>
+            ) : null}
+          </>
         )}
       </nav>
 

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChatInterface } from '@/components/ChatInterface';
 import { toResumedConversation, type StoredMessagePayload } from '@/chat/resume';
+import { onConversationsChanged } from '@/chat/events';
+import { MAX_CONVERSATIONS_PER_USER } from '@app/domain';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { MyUIMessage } from '@/composition';
@@ -98,6 +100,28 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
   const [loaded, setLoaded] = useState(routeId === null);
   const [error, setError] = useState<ResumeError | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [limitReached, setLimitReached] = useState(false);
+
+  useEffect(() => {
+    if (routeId !== null) return;
+    let cancelled = false;
+    const checkLimit = () => {
+      Promise.resolve()
+        .then(() => fetch('/api/chat/conversations?limit=1'))
+        .then(async (res) => (res.ok ? ((await res.json()) as { total?: number }) : null))
+        .then((data) => {
+          if (cancelled || !data) return;
+          setLimitReached(Number(data.total ?? 0) >= MAX_CONVERSATIONS_PER_USER);
+        })
+        .catch(() => undefined);
+    };
+    checkLimit();
+    const off = onConversationsChanged(checkLimit);
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [routeId]);
 
   useEffect(() => {
     if (!routeId) return;
@@ -187,6 +211,7 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       initialMessages={resume?.messages ?? []}
       initialTurnIds={resume?.turnIds ?? {}}
       {...(resume?.messageCount !== undefined ? { initialMessageCount: resume.messageCount } : {})}
+      conversationLimitReached={limitReached}
     />
   );
 }

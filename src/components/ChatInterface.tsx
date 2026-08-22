@@ -19,7 +19,7 @@ import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
-import { MAX_MESSAGES_PER_CONVERSATION } from '@app/domain';
+import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION } from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
@@ -321,11 +321,13 @@ export function ChatInterface({
   initialMessages = [],
   initialTurnIds = {},
   initialMessageCount,
+  conversationLimitReached = false,
 }: {
   conversationId?: string;
   initialMessages?: MyUIMessage[];
   initialTurnIds?: Record<string, string>;
   initialMessageCount?: number;
+  conversationLimitReached?: boolean;
 } = {}) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
@@ -368,6 +370,12 @@ export function ChatInterface({
     const trimmed = text.trim();
     if (!trimmed) return;
     if (submittingRef.current) return;
+    if (conversationLimitReached) {
+      toast.error(
+        `You've reached the maximum of ${MAX_CONVERSATIONS_PER_USER} chats — delete older ones to start a new one.`,
+      );
+      return;
+    }
     if (messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
       toast.error('This chat is full — start a new one.');
       return;
@@ -383,19 +391,11 @@ export function ChatInterface({
         { body: { turnId, conversationId } },
       );
       setInput('');
-    } catch (err) {
+    } catch {
       if (userMessageId) {
         pendingTurnIdRef.current.delete(userMessageId);
       }
-      const status = (err as { status?: number })?.status;
-      if (
-        status === 409 ||
-        (err instanceof Error && err.message.includes('512'))
-      ) {
-        toast.error("You've reached the maximum of 512 chats — delete older ones to start a new one.");
-      } else {
-        toast.error('Could not send your message. Please try again.');
-      }
+      toast.error('Could not send your message. Please try again.');
     } finally {
       submittingRef.current = false;
     }

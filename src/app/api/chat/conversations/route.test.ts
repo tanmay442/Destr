@@ -67,6 +67,13 @@ describe('GET /api/chat/conversations', () => {
     expect(listMock).toHaveBeenCalledWith({ userId: 'user_1' });
   });
 
+  it('returns the caller total alongside conversations', async () => {
+    listMock.mockResolvedValue(ok({ conversations: [{ id: 'c1' }], total: 3 }));
+    const res = await route.GET(get());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversations: [{ id: 'c1' }], total: 3 });
+  });
+
   it('propagates domain errors (rate limited use case)', async () => {
     listMock.mockResolvedValue(err(new RateLimitedError('slow down', 1_000)));
     const res = await route.GET(get());

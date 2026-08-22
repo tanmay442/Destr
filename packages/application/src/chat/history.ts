@@ -170,11 +170,14 @@ export function buildAssistantMessageLike(input: {
 export async function listConversations(
   input: { userId: string; limit?: number; offset?: number },
   deps: HistoryDeps,
-): Promise<Result<{ conversations: ConversationSummary[] }>> {
+): Promise<Result<{ conversations: ConversationSummary[]; total: number }>> {
   try {
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const conversations = await deps.repo.listConversations(input.userId, { limit, offset });
-    return ok({ conversations });
+    const [conversations, total] = await Promise.all([
+      deps.repo.listConversations(input.userId, { limit, offset }),
+      deps.repo.countConversations(input.userId),
+    ]);
+    return ok({ conversations, total });
   } catch (e) {
     return err(new ExternalServiceError('Failed to list conversations', e));
   }

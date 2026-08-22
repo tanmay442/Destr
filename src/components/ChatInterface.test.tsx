@@ -640,6 +640,20 @@ describe('ChatInterface history integration', () => {
     expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(true);
   });
 
+  it('blocks submits with the cap message when the conversation limit is reached', async () => {
+    const sendMessage = vi.fn();
+    setupChat([], { send: sendMessage });
+    render(<ChatInterface conversationId="conv-limited" conversationLimitReached />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello?' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "You've reached the maximum of 512 chats — delete older ones to start a new one.",
+      ),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('retry sends a fresh turn id with retry and the conversation id', async () => {
     const sendMessage = vi.fn(async (...args: unknown[]) => {
       void args;
