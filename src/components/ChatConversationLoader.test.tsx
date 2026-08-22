@@ -14,6 +14,7 @@ vi.mock('@/components/ChatInterface', () => ({
     initialMessages: Array<{ id: string; role: string; parts: unknown[] }>;
     initialTurnIds?: Record<string, string>;
     conversationLimitReached?: boolean;
+    truncated?: boolean;
   }) => (
     <div
       data-testid="chat-interface-stub"
@@ -21,6 +22,7 @@ vi.mock('@/components/ChatInterface', () => ({
       data-messages={props.initialMessages.length}
       data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
       data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
+      data-truncated={props.truncated ? 'true' : 'false'}
     />
   ),
 }));
@@ -76,6 +78,21 @@ describe('ChatConversationLoader', () => {
       a1: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
     });
     expect(screen.queryByTestId('chat-resume-skeleton')).not.toBeInTheDocument();
+  });
+
+  it('flags truncated resumes so the interface shows the window notice', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => conversationPayload(350),
+      }) as Response),
+    );
+    render(<ChatConversationLoader routeId="b0000000-0000-4000-8000-000000000002" />);
+    const stub = await screen.findByTestId('chat-interface-stub');
+    expect(stub).toHaveAttribute('data-messages', '2');
+    expect(stub).toHaveAttribute('data-truncated', 'true');
   });
 
   it('shows an explicit not-found state when the conversation is gone', async () => {

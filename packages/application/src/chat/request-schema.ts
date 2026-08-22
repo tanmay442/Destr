@@ -43,7 +43,7 @@ export const ChatRequestSchema = z.object({
   messages: z
     .array(MessageSchema)
     .min(1)
-    .max(100)
+    .max(1000)
     .refine((messages) => {
       let total = 0;
       for (const message of messages) {

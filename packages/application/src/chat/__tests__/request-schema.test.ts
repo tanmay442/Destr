@@ -95,6 +95,14 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     expect(ChatRequestSchema.safeParse({ messages: [at] }).success).toBe(true);
   });
 
+  it('caps the messages array at 1000', () => {
+    const message = baseMessage('user', [{ type: 'text', text: 'hi' }]);
+    const at = Array.from({ length: 1000 }, () => message);
+    const over = Array.from({ length: 1001 }, () => message);
+    expect(ChatRequestSchema.safeParse({ messages: at }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ messages: over }).success).toBe(false);
+  });
+
   it('enforces a per-request total text character budget', () => {
     const bigMessage = baseMessage('user', [{ type: 'text', text: 'x'.repeat(60_000) }]);
     const threeBig = [bigMessage, bigMessage, bigMessage, bigMessage];

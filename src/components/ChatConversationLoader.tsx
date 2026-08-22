@@ -212,6 +212,7 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       initialTurnIds={resume?.turnIds ?? {}}
       {...(resume?.messageCount !== undefined ? { initialMessageCount: resume.messageCount } : {})}
       conversationLimitReached={limitReached}
+      truncated={resume !== null && resume.messageCount > resume.messages.length}
     />
   );
 }

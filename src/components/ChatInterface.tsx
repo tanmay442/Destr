@@ -19,7 +19,7 @@ import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData } from '@/chat/types';
-import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION } from '@app/domain';
+import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
@@ -322,12 +322,14 @@ export function ChatInterface({
   initialTurnIds = {},
   initialMessageCount,
   conversationLimitReached = false,
+  truncated = false,
 }: {
   conversationId?: string;
   initialMessages?: MyUIMessage[];
   initialTurnIds?: Record<string, string>;
   initialMessageCount?: number;
   conversationLimitReached?: boolean;
+  truncated?: boolean;
 } = {}) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
@@ -529,6 +531,14 @@ export function ChatInterface({
         aria-atomic="false"
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
+          {truncated && messages.length > 0 ? (
+            <p
+              className="text-center text-xs text-muted-foreground"
+              data-testid="chat-truncated-notice"
+            >
+              Showing the last {MAX_RESUME_MESSAGES} messages of this chat
+            </p>
+          ) : null}
           {messages.length === 0 ? (
             <div className="flex animate-in flex-col items-center gap-10 pt-[18vh] text-center duration-500 fade-in-0 slide-in-from-bottom-2">
               <div className="flex flex-col items-center gap-4">

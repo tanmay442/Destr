@@ -633,6 +633,24 @@ describe('ChatInterface history integration', () => {
     expect(screen.getByTestId('chat-feedback-up')).toBeInTheDocument();
   });
 
+  it('shows a truncation notice only when the resumed chat is truncated', () => {
+    const initialMessages: Msg[] = [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'q' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'a' }] },
+    ];
+    setupChat(initialMessages, {});
+    const view = render(
+      <ChatInterface conversationId="conv-trunc" initialMessages={initialMessages} truncated />,
+    );
+    expect(screen.getByTestId('chat-truncated-notice')).toHaveTextContent(
+      'Showing the last 200 messages of this chat',
+    );
+    view.rerender(
+      <ChatInterface conversationId="conv-trunc" initialMessages={initialMessages} />,
+    );
+    expect(screen.queryByTestId('chat-truncated-notice')).not.toBeInTheDocument();
+  });
+
   it('disables the composer when the message cap is reached', () => {
     setupChat([], {});
     render(<ChatInterface initialMessageCount={500} />);
