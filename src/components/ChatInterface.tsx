@@ -192,14 +192,19 @@ function GuardrailWallBanner() {
 /** Yellow soft banner for degraded best-effort answers (top-4 fallback); never offers a ticket. */
 function DegradedBanner({ message }: { message?: string | undefined }) {
   return (
-    <div
-      className="flex w-full items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+    <Alert
+      className="border-warning/40 bg-warning/10 text-warning"
       data-testid="chat-guardrail-degraded"
       role="status"
     >
-      <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-      <span>{message || DEGRADED_BANNER_FALLBACK}</span>
-    </div>
+      <AlertTriangle aria-hidden />
+      <div className="flex flex-col gap-1">
+        <AlertTitle>Best-effort answer</AlertTitle>
+        <AlertDescription className="text-xs text-warning/80">
+          {message || DEGRADED_BANNER_FALLBACK}
+        </AlertDescription>
+      </div>
+    </Alert>
   );
 }
 
