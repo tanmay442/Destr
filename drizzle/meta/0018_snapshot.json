@@ -266,36 +266,42 @@
           "type": "uuid",
           "primaryKey": true,
           "notNull": true,
-          "default": "gen_random_uuid()"
+          "default": "gen_random_uuid()",
+          "name": "id"
         },
         "user_id": {
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "name": "user_id"
         },
         "title": {
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "''"
+          "default": "''",
+          "name": "title"
         },
         "message_count": {
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": 0,
+          "name": "message_count"
         },
         "created_at": {
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "default": "now()",
+          "name": "created_at"
         },
         "updated_at": {
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "default": "now()",
+          "name": "updated_at"
         }
       },
       "indexes": {
@@ -627,33 +633,39 @@
         "id": {
           "type": "bigserial",
           "primaryKey": true,
-          "notNull": true
+          "notNull": true,
+          "name": "id"
         },
         "conversation_id": {
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "name": "conversation_id"
         },
         "turn_id": {
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "name": "turn_id"
         },
         "role": {
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "name": "role"
         },
         "content": {
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "name": "content"
         },
         "created_at": {
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "default": "now()",
+          "name": "created_at"
         }
       },
       "indexes": {

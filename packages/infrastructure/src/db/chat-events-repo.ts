@@ -1,13 +1,15 @@
-import { and, gte, lte, sql } from 'drizzle-orm';
+import { and, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
 import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
+  ChatEvent,
   ChatEventInput,
   ChatEventMetrics,
   ChatEventDailyUsage,
   ChatEventRange,
   ChatDailyTrendRow,
+  ChatDailyQualityRow,
   ModeComparison,
   CacheBusterQuery,
   DocumentUtilityRow,
@@ -77,6 +79,38 @@ function rangeWhere(range?: ChatEventRange) {
   return parts.length ? and(...parts) : undefined;
 }
 
+/** UTC-midnight start of the trailing `days` window (inclusive), matching the daily rollups. */
+function sinceStartUtc(days: number): Date {
+  const since = new Date();
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - (Math.max(days, 1) - 1));
+  return since;
+}
+
+function toChatEvent(row: typeof chatEvents.$inferSelect): ChatEvent {
+  return {
+    id: row.id,
+    turnId: row.turnId,
+    userId: row.userId,
+    query: row.query,
+    mode: row.mode as ChatEvent['mode'],
+    retrieveMs: row.retrieveMs,
+    generateMs: row.generateMs,
+    totalMs: row.totalMs,
+    hitCount: row.hitCount,
+    maxSimilarity: row.maxSimilarity,
+    outOfDomain: row.outOfDomain,
+    hallucinationBlocked: row.hallucinationBlocked,
+    cacheHit: row.cacheHit,
+    ticketCreated: row.ticketCreated,
+    citationCount: row.citationCount,
+    tokensIn: row.tokensIn,
+    tokensOut: row.tokensOut,
+    meta: (row.meta ?? {}) as Record<string, unknown>,
+    createdAt: row.createdAt,
+  };
+}
+
 export interface ChatEventBatcherOptions {
   flushScheduler?: (fn: () => void) => void;
 }
@@ -99,6 +133,93 @@ export class ChatEventBatcher implements ChatEventsRepo {
     } else if (!this.timer) {
       this.scheduleFlush();
     }
+  }
+
+  /**
+   * Merges `patch` into a buffered not-yet-flushed event's meta object [§C3].
+   * No-op when the turn already flushed or was never recorded here; the async
+   * judge path then falls back to `updateEventMeta`.
+   */
+  patchMeta(turnId: string, patch: Record<string, unknown>): void {
+    const row = this.buffer.find((e) => e.turnId === turnId);
+    if (!row) return;
+    row.meta = { ...(row.meta ?? {}), ...patch };
+  }
+
+  /** jsonb merge of `patch` into the persisted event's meta; true when a row matched. */
+  async updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean> {
+    if (!turnId || Object.keys(patch).length === 0) return false;
+    const result = await this.client.execute(sql`
+      update ${chatEvents}
+      set meta = ${chatEvents.meta} || ${JSON.stringify(patch)}::jsonb
+      where ${chatEvents.turnId} = ${turnId}
+      returning ${chatEvents.id}
+    `);
+    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    return rows.length > 0;
+  }
+
+  /** Random sample for the human review queue [§C4]. */
+  async getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean } = {}): Promise<ChatEvent[]> {
+    const capped = Math.min(Math.max(limit, 1), 100);
+    const parts: SQL[] = [];
+    if (filter.degraded === true) parts.push(sql`${chatEvents.meta} ->> 'degraded' = 'true'`);
+    if (filter.blocked === true) parts.push(sql`${chatEvents.hallucinationBlocked}`);
+    const rows = await this.client
+      .select()
+      .from(chatEvents)
+      .where(parts.length ? and(...parts) : undefined)
+      .orderBy(sql`random()`)
+      .limit(capped);
+    return rows.map(toChatEvent);
+  }
+
+  /** Daily judge-score aggregates for the quality sparklines [§C5]. Nulls → 0. */
+  async getDailyQuality(days: number): Promise<ChatDailyQualityRow[]> {
+    const since = sinceStartUtc(days);
+    const result = await this.client.execute(sql`
+      select
+        to_char(date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD') as day,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
+        count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::int as degraded_count
+      from ${chatEvents}
+      where ${chatEvents.createdAt} >= ${since}
+      group by day
+      order by day
+    `);
+    const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    return rows.map((r) => ({
+      day: String(r.day),
+      avgFaithfulness: Number(r.avg_faithfulness) || 0,
+      avgRetrievalRelevance: Number(r.avg_retrieval_relevance) || 0,
+      degradedCount: Number(r.degraded_count) || 0,
+    }));
+  }
+
+  /** Windowed judge averages + degraded rate; empty window → all zeros [§C5]. */
+  async getJudgeAverages(days?: number): Promise<{
+    avgFaithfulness: number;
+    avgRetrievalRelevance: number;
+    degradedRate: number;
+  }> {
+    // Judges sample 5% of traffic, so the default window needs enough volume to matter.
+    const windowDays = Math.min(Math.max(Math.floor(days ?? 7), 1), 365);
+    const since = sinceStartUtc(windowDays);
+    const result = await this.client.execute(sql`
+      select
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
+        coalesce(count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::numeric / nullif(count(*), 0), 0) as degraded_rate
+      from ${chatEvents}
+      where ${chatEvents.createdAt} >= ${since}
+    `);
+    const row = (result as unknown as { rows: Array<Record<string, unknown>> }).rows?.[0];
+    return {
+      avgFaithfulness: Number(row?.avg_faithfulness) || 0,
+      avgRetrievalRelevance: Number(row?.avg_retrieval_relevance) || 0,
+      degradedRate: Number(row?.degraded_rate) || 0,
+    };
   }
 
   private scheduleFlush(): void {

@@ -4,6 +4,7 @@ import type {
   BlobStorage,
   ChatEventsRepo,
   ChatFeedbackRepo,
+  QualityReviewsRepo,
   ChatHistoryRepo,
   ChunkRepository,
   DocumentRepository,
@@ -29,6 +30,7 @@ import {
   createSettingsRepo,
   createChatEventsRepo,
   createChatFeedbackRepo,
+  createQualityReviewsRepo,
   createChatHistoryRepo,
 } from './db';
 import {
@@ -62,6 +64,7 @@ export interface CoreDeps {
   settingsRepo: SettingsRepo;
   chatEventBatcher: ChatEventsRepo;
   chatFeedbackRepo: ChatFeedbackRepo;
+  qualityReviewsRepo: QualityReviewsRepo;
   chatHistoryRepo: ChatHistoryRepo;
   embeddingService: EmbeddingService;
   blobStorage: BlobStorage;
@@ -89,6 +92,7 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
       options.flushScheduler ? { flushScheduler: options.flushScheduler } : {},
     ),
     chatFeedbackRepo: createChatFeedbackRepo(dbClient),
+    qualityReviewsRepo: createQualityReviewsRepo(dbClient),
     chatHistoryRepo: createChatHistoryRepo(dbClient),
     embeddingService: getEmbeddingService(),
     blobStorage: createBlobStorage(),

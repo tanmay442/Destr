@@ -478,6 +478,37 @@ export interface ZeroHitDocument {
 
 export type FeedbackUpsertResult = 'ok' | 'not_found' | 'forbidden';
 
+/** Persisted `chat_events` row, as returned by quality-sampling reads [§C4]. */
+export interface ChatEvent {
+  id: number;
+  turnId: string | null;
+  userId: string | null;
+  query: string | null;
+  mode: 'agentic' | 'vector';
+  retrieveMs: number | null;
+  generateMs: number | null;
+  totalMs: number | null;
+  hitCount: number | null;
+  maxSimilarity: number | null;
+  outOfDomain: boolean;
+  hallucinationBlocked: boolean;
+  cacheHit: boolean;
+  ticketCreated: boolean;
+  citationCount: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  meta: Record<string, unknown>;
+  createdAt: Date;
+}
+
+/** Daily judge/health aggregates for the true-quality dashboard [§C5]. */
+export interface ChatDailyQualityRow {
+  day: string;
+  avgFaithfulness: number;
+  avgRetrievalRelevance: number;
+  degradedCount: number;
+}
+
 export interface FeedbackSummary {
   up: number;
   down: number;
@@ -502,9 +533,21 @@ export interface ThumbsDownDoc {
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
+  /** Merges `patch` into a flushed event's meta (jsonb ||); true when a row matched [§C3]. */
+  updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
+  /** Random quality-review sample; `degraded` reads meta->>'degraded', `blocked` the hallucination column [§C4]. */
+  getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean }): Promise<ChatEvent[]>;
+  getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
+  /** Daily judge-score aggregates over the trailing window; null judge data counts as 0 [§C5]. */
+  getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
+  /** Windowed judge averages + degraded rate for dashboard cards and the nightly cron log [§C5]. */
+  getJudgeAverages(days?: number): Promise<{
+    avgFaithfulness: number;
+    avgRetrievalRelevance: number;
+    degradedRate: number;
+  }>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
-  getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
   getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
   getCacheBusterQueries(limit: number, range?: ChatEventRange): Promise<CacheBusterQuery[]>;
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
@@ -514,6 +557,31 @@ export interface ChatEventsRepo {
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
+}
+
+/** Human review verdict from the /admin/quality queue [§C4]. */
+export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
+
+export interface QualityReviewInput {
+  turnId: string;
+  reviewerId: string;
+  verdict: QualityReviewVerdict;
+  note?: string | null;
+}
+
+export interface QualityReviewRow {
+  id: number;
+  turnId: string | null;
+  reviewerId: string | null;
+  verdict: QualityReviewVerdict;
+  note: string | null;
+  createdAt: Date;
+}
+
+/** Ground-truth spot checks feeding DocumentUtility improvement loops [§C4]. */
+export interface QualityReviewsRepo {
+  create(input: QualityReviewInput): Promise<QualityReviewRow>;
+  listRecent(limit: number): Promise<QualityReviewRow[]>;
 }
 
 

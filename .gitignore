@@ -65,3 +65,5 @@ skills-lock.json
 scripts/chunk-output/
 
 docs/modularityport/
+# Generated eval artifact (§C7) — uploaded as a CI artifact, not committed
+eval/golden-report.json

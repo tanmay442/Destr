@@ -372,6 +372,160 @@ let insertCalls = 0;
     expect(result.avgTurns).toBe(0);
     expect(result.buckets.every((b) => b.count === 0)).toBe(true);
   });
+
+  it('updateEventMeta merges via jsonb || and reports matched rows', async () => {
+    const { client, executed } = makeExecuteClient([{ id: 7 }]);
+    const result = await new ChatEventBatcher(client).updateEventMeta('turn-1', { degraded: true });
+    expect(result).toBe(true);
+    const query = compiled(executed);
+    expect(query).toContain('update "chat_events"');
+    expect(query).toContain('meta = "chat_events"."meta" ||');
+    expect(query).toContain('::jsonb');
+    expect(query).toContain('returning');
+  });
+
+  it('updateEventMeta is false for an empty patch or missing turnId without querying', async () => {
+    const { client, executed } = makeExecuteClient([{ id: 7 }]);
+    const batcher = new ChatEventBatcher(client);
+    await expect(batcher.updateEventMeta('turn-1', {})).resolves.toBe(false);
+    await expect(batcher.updateEventMeta('', { degraded: true })).resolves.toBe(false);
+    expect(executed).toHaveLength(0);
+  });
+
+  it('getQualitySamples filters by meta degraded / blocked column with random order', async () => {
+    const orderBys: SQL[] = [];
+    const fullRow = {
+      id: 1,
+      turnId: '33333333-3333-4333-8333-333333333333',
+      userId: 'u',
+      query: 'q',
+      mode: 'agentic',
+      retrieveMs: 5,
+      generateMs: 6,
+      totalMs: 11,
+      hitCount: 3,
+      maxSimilarity: 0.7,
+      outOfDomain: false,
+      hallucinationBlocked: true,
+      cacheHit: false,
+      ticketCreated: false,
+      citationCount: 2,
+      tokensIn: 10,
+      tokensOut: 20,
+      meta: { degraded: true },
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+    };
+    const client = {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  orderBy(order: SQL) {
+                    orderBys.push(order);
+                    return {
+                      limit: () => Promise.resolve([fullRow]),
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const batcher = new ChatEventBatcher(client as never);
+    const degraded = await batcher.getQualitySamples(20, { degraded: true });
+    expect(degraded).toEqual([
+      {
+        id: 1,
+        turnId: '33333333-3333-4333-8333-333333333333',
+        userId: 'u',
+        query: 'q',
+        mode: 'agentic',
+        retrieveMs: 5,
+        generateMs: 6,
+        totalMs: 11,
+        hitCount: 3,
+        maxSimilarity: 0.7,
+        outOfDomain: false,
+        hallucinationBlocked: true,
+        cacheHit: false,
+        ticketCreated: false,
+        citationCount: 2,
+        tokensIn: 10,
+        tokensOut: 20,
+        meta: { degraded: true },
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      },
+    ]);
+    const blocked = await batcher.getQualitySamples(20, { blocked: true });
+    expect(blocked).toHaveLength(1);
+    expect(orderBys).toHaveLength(2);
+    // §C4 sampling is random-order.
+    expect(orderBys.every((q) => dialect.sqlToQuery(q).sql.toLowerCase() === 'random()')).toBe(true);
+  });
+
+  it('getJudgeAverages maps averages with coalesce-to-zero semantics', async () => {
+    const { client, executed } = makeExecuteClient([
+      { avg_faithfulness: '0.8666666666666667', avg_retrieval_relevance: null, degraded_rate: '0.25' },
+    ]);
+    const result = await new ChatEventBatcher(client).getJudgeAverages(7);
+    expect(result.avgFaithfulness).toBeCloseTo(0.867, 3);
+    expect(result.avgRetrievalRelevance).toBe(0);
+    expect(result.degradedRate).toBeCloseTo(0.25, 5);
+    const query = compiled(executed);
+    expect(query).toContain("-> 'judgescores' ->> 'faithfulness'");
+    expect(query).toContain("->> 'degraded' = 'true'");
+    expect(query).toContain('nullif(count(*), 0)');
+  });
+
+  it('getDailyQuality groups judge aggregates per day', async () => {
+    const { client, executed } = makeExecuteClient([
+      {
+        day: '2026-08-22',
+        avg_faithfulness: '0.9',
+        avg_retrieval_relevance: '0.4',
+        degraded_count: 3,
+      },
+      {
+        day: '2026-08-23',
+        avg_faithfulness: null,
+        avg_retrieval_relevance: null,
+        degraded_count: 0,
+      },
+    ]);
+    const result = await new ChatEventBatcher(client).getDailyQuality(84);
+    expect(result).toEqual([
+      { day: '2026-08-22', avgFaithfulness: 0.9, avgRetrievalRelevance: 0.4, degradedCount: 3 },
+      { day: '2026-08-23', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 },
+    ]);
+    const query = compiled(executed);
+    expect(query).toContain("date_trunc('day'");
+    expect(query).toContain('group by day');
+  });
+
+  it('patchMeta merges into a buffered unflushed event and no-ops otherwise', async () => {
+    const { client, inserts } = makeFakeClient();
+    const batcher = new ChatEventBatcher(client);
+    batcher.record({ ...sample, turnId: '11111111-1111-4111-8111-111111111111', meta: { documentIds: [1] } });
+    batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: true, fallbackReason: 'all_filtered' });
+    // Unknown turn id → silent no-op.
+    batcher.patchMeta('22222222-2222-4222-8222-222222222222', { degraded: true });
+    await batcher.flush();
+    const payload = inserts[0]!.values as Array<{ meta: Record<string, unknown> }>;
+    expect(payload).toHaveLength(1);
+    expect(payload[0]!.meta).toEqual({
+      documentIds: [1],
+      degraded: true,
+      fallbackReason: 'all_filtered',
+    });
+    // After flush the buffer is empty → patch is a no-op again.
+    batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: false });
+    await batcher.flush();
+    expect(inserts).toHaveLength(1);
+  });
 });
 
 async function dbReachable(): Promise<boolean> {
@@ -547,6 +701,134 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
         ]);
         const rows = await batcher.getCacheBusterQueries(10);
         expect(rows).toEqual([{ query: 'cherry', misses: 2 }]);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
+  it('updateEventMeta merges the patch while preserving existing keys', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        await tx.insert(chatEvents).values({
+          turnId: uuid(1),
+          userId: 'meta-u',
+          query: 'q',
+          mode: 'agentic',
+          meta: { documentIds: [3], rewritten: true },
+        });
+        await tx.insert(chatEvents).values({
+          turnId: uuid(2),
+          userId: 'meta-u',
+          query: 'q',
+          mode: 'vector',
+          meta: {},
+        });
+        const patched = await batcher.updateEventMeta(uuid(1), {
+          degraded: true,
+          fallbackReason: 'grader_unavailable',
+          judgeScores: { retrievalRelevance: 0.9, faithfulness: 0.8, citationPrecision: 0.7 },
+        });
+        expect(patched).toBe(true);
+        const row = (await tx.select().from(chatEvents).where(eq(chatEvents.turnId, uuid(1))))[0]!;
+        expect(row.meta).toMatchObject({
+          documentIds: [3],
+          rewritten: true,
+          degraded: true,
+          fallbackReason: 'grader_unavailable',
+          judgeScores: { retrievalRelevance: 0.9, faithfulness: 0.8, citationPrecision: 0.7 },
+        });
+        // Unknown turn id → false, not an error.
+        await expect(batcher.updateEventMeta(uuid(99), { degraded: true })).resolves.toBe(false);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
+  it('getQualitySamples honors degraded and blocked filters with random order', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        await tx.insert(chatEvents).values([
+          { userId: 'qs-u', mode: 'agentic', meta: { degraded: true } },
+          { userId: 'qs-u', mode: 'vector', meta: { degraded: false } },
+          { userId: 'qs-u', mode: 'vector', hallucinationBlocked: true },
+          { userId: 'qs-u', mode: 'vector', meta: {} },
+        ]);
+        const degraded = await batcher.getQualitySamples(10, { degraded: true });
+        expect(degraded).toHaveLength(1);
+        expect(degraded[0]!.mode).toBe('agentic');
+        expect(degraded[0]!.meta.degraded).toBe(true);
+
+        const blocked = await batcher.getQualitySamples(20, { blocked: true });
+        expect(blocked).toHaveLength(1);
+        expect(blocked[0]!.hallucinationBlocked).toBe(true);
+
+        // limit is respected
+        const all = await batcher.getQualitySamples(2, {});
+        expect(all).toHaveLength(2);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
+  it('getDailyQuality and getJudgeAverages aggregate judgeScores with nulls as zero', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        const today = new Date();
+        await tx.insert(chatEvents).values([
+          {
+            userId: 'jq-u',
+            mode: 'agentic',
+            createdAt: today,
+            meta: {
+              degraded: true,
+              judgeScores: { retrievalRelevance: 1, faithfulness: 0.5, citationPrecision: 0.5, judgedAt: today.toISOString() },
+            },
+          },
+          {
+            userId: 'jq-u',
+            mode: 'agentic',
+            createdAt: today,
+            meta: {
+              degraded: false,
+              judgeScores: { retrievalRelevance: 0.5, faithfulness: 1, citationPrecision: 1, judgedAt: today.toISOString() },
+            },
+          },
+          // Unjudged + non-degraded turns count toward totals but add no judge average.
+          { userId: 'jq-u', mode: 'vector', createdAt: today, meta: {} },
+        ]);
+        const daily = await batcher.getDailyQuality(7);
+        expect(daily.length).toBeGreaterThanOrEqual(1);
+        const last = daily[daily.length - 1]!;
+        expect(last.avgFaithfulness).toBeCloseTo(0.75, 5);
+        expect(last.avgRetrievalRelevance).toBeCloseTo(0.75, 5);
+        expect(last.degradedCount).toBe(1);
+
+        const averages = await batcher.getJudgeAverages(7);
+        expect(averages.avgFaithfulness).toBeCloseTo(0.75, 5);
+        expect(averages.avgRetrievalRelevance).toBeCloseTo(0.75, 5);
+        expect(averages.degradedRate).toBeCloseTo(1 / 3, 5);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
+  it('getJudgeAverages returns zeros on an empty window', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        const averages = await batcher.getJudgeAverages(7);
+        expect(averages).toEqual({ avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedRate: 0 });
         throw ROLLBACK;
       });
     } catch (e) {

@@ -35,4 +35,21 @@ describe('golden question quality', () => {
       expect(q.refusalExpected).not.toBe(true);
     }
   });
+
+  it('§C2 additions carry modes, refusal coverage, and no stray expectedDocIds in mock', () => {
+    // Some questions opt into the agentic branch with a valid mode only.
+    for (const q of goldenQuestions) {
+      if (q.mode !== undefined) {
+        expect(['agentic', 'normal']).toContain(q.mode);
+      }
+      if (q.expectedDocIds !== undefined) {
+        expect(q.expectedDocIds.length).toBeGreaterThan(0);
+      }
+    }
+    // At least 5 out-of-scope refusal cases and at least 3 nonsense-empty cases.
+    const refusals = goldenQuestions.filter((q) => q.refusalExpected === true);
+    expect(refusals.length).toBeGreaterThanOrEqual(5);
+    const nonsense = refusals.filter((q) => q.id.startsWith('nonsense-'));
+    expect(nonsense.length).toBeGreaterThanOrEqual(3);
+  });
 });

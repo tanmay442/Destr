@@ -146,6 +146,8 @@ const isPublicRoute = createRouteMatcher([
   '/api/admin/ingest-dead-letter(.*)',
   '/api/admin/queue/sweep(.*)',
   '/api/admin/analytics/rollup',
+  // Nightly quality-rollup cron: gated solely by its CRON_SECRET Bearer check.
+  '/api/cron/refresh-quality',
   '/api/health',
 ]);
 

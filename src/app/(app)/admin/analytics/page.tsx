@@ -24,7 +24,7 @@ import { formatDuration } from '@/lib/format-duration';
 import type { ReactNode } from 'react';
 import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox, BarChart3, Gauge, Sparkles } from 'lucide-react';
 import type { AnalyticsTrendPoint } from '@app/application';
-import type { ModeComparison } from '@app/domain';
+import type { ChatDailyQualityRow, ModeComparison } from '@app/domain';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +32,11 @@ const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 const usd = (n: number) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
 const num = (n: number) => n.toLocaleString();
 const ms = (n: number) => `${Math.round(n).toLocaleString()} ms`;
+const score = (n: number) => n.toFixed(2);
+// §C5 dashboard targets for the true-quality cards.
+const FAITHFULNESS_TARGET = 0.85;
+const RETRIEVAL_TARGET = 0.75;
+const DEGRADED_TARGET = 0.1;
 const MODE_LABELS: Record<ModeComparison['mode'], string> = {
   agentic: 'Agentic',
   vector: 'Vector',
@@ -228,11 +233,15 @@ export default async function AnalyticsPage() {
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
-  const [chatRes, trendsRes, documentsRes, ticketsRes] = await Promise.all([
+  const [chatRes, trendsRes, documentsRes, ticketsRes, judges, dailyQuality] = await Promise.all([
     comp.getChatAnalytics({ actorId, usageDays: 7 }),
     comp.getAnalyticsTrends({ actorId }),
     comp.getDocumentAnalytics({ actorId }),
     comp.getTicketIntelligence({ actorId }),
+    // §C5 true-quality numbers come straight from the events repo; the page is
+    // already admin-gated and each read degrades to null independently.
+    comp.chatEventBatcher.getJudgeAverages(7).catch(() => null),
+    comp.chatEventBatcher.getDailyQuality(84).catch((): ChatDailyQualityRow[] => []),
   ]);
   const chat = chatRes.ok ? chatRes.value : null;
   const trends = trendsRes.ok ? trendsRes.value : null;
@@ -302,26 +311,86 @@ export default async function AnalyticsPage() {
           className="flex flex-col gap-5 data-[state=inactive]:hidden"
           data-testid="analytics-quality"
         >
+          <div className="flex flex-col gap-3">
+            <SectionHeading
+              title="True quality"
+              description="Sampled LLM-judge scores and thumbs feedback — real quality, not banners."
+            />
+            <div
+              className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
+              data-testid="analytics-true-quality-cards"
+            >
+              <MetricCard
+                label={`True faithfulness · target > ${FAITHFULNESS_TARGET}`}
+                value={judges ? score(judges.avgFaithfulness) : '—'}
+                icon={<Sparkles className="size-3.5" />}
+                tone={
+                  judges && judges.avgFaithfulness > 0
+                    ? judges.avgFaithfulness >= FAITHFULNESS_TARGET
+                      ? 'success'
+                      : 'warning'
+                    : 'default'
+                }
+              />
+              <MetricCard
+                label={`Retrieval relevance · target > ${RETRIEVAL_TARGET}`}
+                value={judges ? score(judges.avgRetrievalRelevance) : '—'}
+                icon={<Activity className="size-3.5" />}
+                tone={
+                  judges && judges.avgRetrievalRelevance > 0
+                    ? judges.avgRetrievalRelevance >= RETRIEVAL_TARGET
+                      ? 'success'
+                      : 'warning'
+                    : 'default'
+                }
+              />
+              <MetricCard
+                label="User helpful · thumbs ratio"
+                value={feedback && feedback.summary.up + feedback.summary.down > 0
+                  ? pct(feedback.summary.up / (feedback.summary.up + feedback.summary.down))
+                  : '—'}
+                icon={<ThumbsUp className="size-3.5" />}
+              />
+              <MetricCard
+                label={`Degraded rate · target < ${DEGRADED_TARGET * 100}%`}
+                value={judges ? pct(judges.degradedRate) : '—'}
+                icon={<Inbox className="size-3.5" />}
+                tone={
+                  judges
+                    ? judges.degradedRate >= DEGRADED_TARGET
+                      ? 'warning'
+                      : 'success'
+                    : 'default'
+                }
+              />
+            </div>
+            {!judges || (judges.avgFaithfulness === 0 && judges.avgRetrievalRelevance === 0 && judges.degradedRate === 0) ? (
+              <p className="text-xs text-muted-foreground">
+                Judge scores appear once live sampling has judged turns in the last 7 days.
+              </p>
+            ) : null}
+          </div>
+
           {hasChat ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <MetricCard label="Chat turns" value={num(chat.total)} icon={<MessageSquare className="size-3.5" />} />
               <MetricCard
-                label="Hallucination rate"
+                label="Hallucination banner rate · health"
                 value={pct(chat.hallucinationRate)}
                 icon={<Activity className="size-3.5" />}
                 tone={chat.hallucinationRate > 0.05 ? 'destructive' : 'default'}
               />
               <MetricCard
-                label="Out-of-domain rate"
+                label="Empty rate · health"
                 value={pct(chat.outOfDomainRate)}
                 icon={<Inbox className="size-3.5" />}
               />
               <MetricCard
-                label="Self-serve success"
+                label="Self-serve success · health"
                 value={pct(chat.selfServeSuccessRate)}
                 icon={<ThumbsUp className="size-3.5" />}
                 tone={chat.selfServeSuccessRate >= 0.8 ? 'success' : 'default'}
               />
+              <MetricCard label="Chat turns" value={num(chat.total)} icon={<MessageSquare className="size-3.5" />} />
             </div>
           ) : null}
 
@@ -339,7 +408,7 @@ export default async function AnalyticsPage() {
 
           {hasTrends ? (
             <div className="flex flex-col gap-3">
-              <SectionHeading title="Quality trends" description="Weekly quality signals" />
+              <SectionHeading title="Health trends" description="Weekly banner-proxy signals (system health, not quality)" />
               <div
                 className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
                 data-testid="analytics-quality-trends"
@@ -395,14 +464,69 @@ export default async function AnalyticsPage() {
           ) : (
             <Card className="gap-0">
               <CardHeader className="gap-1">
-                <CardTitle>Quality trends</CardTitle>
+                <CardTitle>Health trends</CardTitle>
                 <CardDescription>
-                  No trend data yet. Weekly quality charts appear once the daily rollup has
+                  No trend data yet. Weekly health charts appear once the daily rollup has
                   collected history.
                 </CardDescription>
               </CardHeader>
             </Card>
           )}
+
+          {dailyQuality.length > 0 ? (
+            <div className="flex flex-col gap-3" data-testid="analytics-daily-quality-trends">
+              <SectionHeading
+                title="True quality trends"
+                description="Daily judge scores and degraded turns over the last 84 days."
+              />
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle className="text-sm">Faithfulness</CardTitle>
+                    <CardDescription>Daily avg, target &gt; {FAITHFULNESS_TARGET}.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <LineChart
+                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.avgFaithfulness }))}
+                      formatValue={score}
+                      threshold={FAITHFULNESS_TARGET}
+                      // Floor target: red when latest is BELOW the line, not above.
+                      className="text-destructive"
+                      thresholdClassName="text-primary"
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle className="text-sm">Retrieval relevance</CardTitle>
+                    <CardDescription>Daily avg, target &gt; {RETRIEVAL_TARGET}.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <LineChart
+                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.avgRetrievalRelevance }))}
+                      formatValue={score}
+                      threshold={RETRIEVAL_TARGET}
+                      className="text-destructive"
+                      thresholdClassName="text-primary"
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0">
+                  <CardHeader className="gap-1 pb-4">
+                    <CardTitle className="text-sm">Degraded turns</CardTitle>
+                    <CardDescription>Daily count of degraded-fallback answers.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <LineChart
+                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))}
+                    />
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          ) : null}
 
           <Card className="gap-0">
             <CardHeader className="gap-1 pb-4">

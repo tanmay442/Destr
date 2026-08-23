@@ -70,7 +70,7 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = core.rateLimiter;
 
@@ -360,6 +360,8 @@ function createComposition() {
     answerCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
+    chatFeedbackRepo,
+    qualityReviewsRepo,
     chatHistoryRepo,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
