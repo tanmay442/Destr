@@ -87,6 +87,25 @@ function lenientVerdict(text: string): Verdict {
 }
 
 /**
+ * Lenient per-index fallback parsing (§0.2): every reply line starting with a
+ * document index yields that index's verdict (standalone "no" ⇒ 'no', else
+ * 'yes'). Returns null when no line carries an index so the caller can apply
+ * the batch-wide single-word parse as a last resort.
+ */
+function lenientIndexedVerdicts(text: string): Map<number, boolean> | null {
+  const byIndex = new Map<number, boolean>();
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*(\d+)/);
+    if (!match || match[1] === undefined) continue;
+    byIndex.set(
+      Number.parseInt(match[1], 10),
+      lenientVerdict(line.slice(match[0].length)) === 'yes',
+    );
+  }
+  return byIndex.size > 0 ? byIndex : null;
+}
+
+/**
  * Extract index→relevant verdicts from the first usable `rate_chunks` tool call.
  * Returns null when the response carries no usable tool args (malformed response);
  * individual malformed / out-of-range / duplicate entries are sanitized by the
@@ -147,7 +166,9 @@ export interface Graders {
  *  - Returns `null` when grading could not run (outage after retries, or the
  *    shared turn deadline hit) — callers degrade to top-4 fallback chunks.
  *  - After repeated malformed tool-arg responses, a batch falls back ONCE to
- *    plain text parsed leniently (standalone "no" ⇒ drop, otherwise keep).
+ *    plain text parsed leniently: per-index "0: yes" lines when present
+ *    (missing indices default to 'no'), else a batch-wide standalone-"no"
+ *    parse as last resort.
  *  - Rewrite + grading share one ~25s turn deadline started lazily on the
  *    first rewrite/gradeAll of this instance; an exhausted budget echoes the
  *    original query / returns `null` without calling the model.
@@ -181,7 +202,9 @@ export function createGraders(
     indexedDocs: Array<[number, string]>,
   ): Promise<Map<number, boolean>> {
     const numberedDocs = indexedDocs.map(([index, doc]) => `${index}. ${doc}`).join('\n\n');
-    const basePrompt = `QUESTION:\n${question}\n\nDOCUMENTS:\n${numberedDocs}`;
+    // Untrusted-data fence [§F12]: the numbered documents are data, not instructions.
+    const basePrompt =
+      `QUESTION:\n${question}\n\nDOCUMENTS:\nBEGIN UNTRUSTED DOCUMENTS\n${numberedDocs}\nEND UNTRUSTED DOCUMENTS`;
 
     let malformedResponses = 0;
     for (;;) {
@@ -191,7 +214,7 @@ export function createGraders(
             model: model(),
             system: GRADE_SYSTEM,
             prompt:
-              `${basePrompt}\n\nCall the rate_chunks tool with one entry per document index above.`,
+              `${basePrompt}\n\nCall rate_chunks with one verdict entry per document index.`,
             tools: rateChunksTools,
             toolChoice: 'required',
             abortSignal: turnScopedAbortSignal(),
@@ -214,15 +237,20 @@ export function createGraders(
           model: model(),
           system: GRADE_SYSTEM,
           prompt:
-            `${basePrompt}\n\nReply with a single word: "yes" if the documents help answer ` +
-            'the question, otherwise "no".',
+            `${basePrompt}\n\nReply with one line per document index like "0: yes" then ` +
+            '"1: no" covering every index.',
           abortSignal: turnScopedAbortSignal(),
         }),
       'document grader',
       GRADE_RETRY_ATTEMPTS,
     );
-    const verdict = lenientVerdict(text);
-    return new Map(indexedDocs.map(([index]) => [index, verdict === 'yes']));
+    const perIndex = lenientIndexedVerdicts(text);
+    if (perIndex !== null) {
+      // Missing/unparseable indices default to 'no'.
+      return new Map(indexedDocs.map(([index]) => [index, perIndex.get(index) ?? false]));
+    }
+    const batchVerdict = lenientVerdict(text);
+    return new Map(indexedDocs.map(([index]) => [index, batchVerdict === 'yes']));
   }
 
   return {
@@ -357,7 +385,3 @@ export function createGraders(
   };
 }
 
-const defaultGraders = createGraders();
-export const queryRewriter = defaultGraders.queryRewriter;
-export const documentGrader = defaultGraders.documentGrader;
-export const hallucinationGrader = defaultGraders.hallucinationGrader;
