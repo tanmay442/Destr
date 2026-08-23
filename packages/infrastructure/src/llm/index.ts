@@ -140,6 +140,7 @@ export {
   documentGrader,
   hallucinationGrader,
 };
+export { judgeRelevance, judgeFaithfulness } from './judge';
 
 /** Resolve the embedding model id string for the active provider.
  *  Used to stamp `DocumentChunk.embeddingModel` metadata. */

@@ -12,9 +12,11 @@ import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
+  JUDGE_SAMPLE_RATE,
   logger,
   sanitizeText,
   TOOL_CONTENT_CAP,
+  type AgenticResultState,
   type AnswerCache,
   type ChatEventInput,
   type RateLimiter,
@@ -26,6 +28,7 @@ import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
 import { buildEventMeta } from './build-event-meta';
+import { shouldCache } from './should-cache';
 import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
 import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit-citations';
@@ -113,6 +116,16 @@ export interface ChatTurnDeps {
       assistantMessage: unknown;
     }): Promise<unknown>;
   };
+  /** Schedules a deferred task (route injects an `after`-based scheduler; arch forbids next/server here). */
+  judgeScheduler?: (task: () => Promise<void>) => void;
+  /** §C3 runs both live quality judges and merges judgeScores for the turn. */
+  qualityJudge?: (ctx: {
+    question: string;
+    snippets: string[];
+    documents: string;
+    answer: string;
+    turnId: string;
+  }) => Promise<void>;
   traceEnabled: boolean;
 }
 
@@ -221,9 +234,25 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   request: Request;
   capturedCitations: EmittedCitation[];
   outOfDomainRef: { value: boolean };
+  isEmptyRef: { value: boolean };
+  degradedRef: { value: boolean };
+  fallbackReasonRef: { value: string | null };
+  resultStateRef: { value: AgenticResultState | null };
   metrics: TurnMetrics;
 }) {
-  const { cfg, effectiveMode, userId, request, capturedCitations, outOfDomainRef, metrics } = opts;
+  const {
+    cfg,
+    effectiveMode,
+    userId,
+    request,
+    capturedCitations,
+    outOfDomainRef,
+    isEmptyRef,
+    degradedRef,
+    fallbackReasonRef,
+    resultStateRef,
+    metrics,
+  } = opts;
   let ticketOpenedInTurn = false;
   return {
     searchDocumentation: deps.ai.tool({
@@ -259,7 +288,13 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           if (deps.traceEnabled) {
             logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           }
+          // §A3 transport refs: carry the agentic outcome out of the tool into
+          // post-stream guardrail, cache and analytics decisions.
           outOfDomainRef.value = r.value.outOfDomain;
+          isEmptyRef.value = r.value.isEmpty;
+          degradedRef.value = r.value.degraded;
+          fallbackReasonRef.value = r.value.fallbackReason;
+          resultStateRef.value = r.value.resultState;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -490,10 +525,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
 
   const outOfDomainRef = { value: false };
+  const isEmptyRef = { value: false };
+  const degradedRef = { value: false };
+  const fallbackReasonRef = { value: null as string | null };
+  const resultStateRef = { value: null as AgenticResultState | null };
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch),
+    system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: request.signal,
@@ -504,6 +543,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       request,
       capturedCitations,
       outOfDomainRef,
+      isEmptyRef,
+      degradedRef,
+      fallbackReasonRef,
+      resultStateRef,
       metrics,
     }),
   });
@@ -532,14 +575,29 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             result,
             capturedCitations: finalCitations,
             hallucinationGrader: deps.hallucinationGrader(cfg),
+            enabled: cfg.hallucinationCheckEnabled,
             outOfDomain: outOfDomainRef.value,
+            degraded: degradedRef.value,
           });
+          const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
             cacheKey &&
-            finalCitations.length > 0 &&
-            !hallucinationBlocked &&
-            !outOfDomainRef.value &&
-            !metrics.ticketCreated
+            shouldCache({
+              citations: finalCitations,
+              blocked: hallucinationBlocked,
+              isEmpty,
+              ticketCreated: metrics.ticketCreated,
+              cfg,
+              agentic: {
+                chunks: [],
+                rewrittenQuery: '',
+                outOfDomain: outOfDomainRef.value,
+                isEmpty: isEmptyRef.value,
+                degraded: degradedRef.value,
+                fallbackReason: fallbackReasonRef.value as AgenticResult['fallbackReason'],
+                resultState: resultStateRef.value ?? 'ok',
+              },
+            })
           ) {
             try {
               const finalAnswer = await result.text;
@@ -579,6 +637,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+              // Quality/agentic fields are only meaningful once agentic retrieval ran.
+              ...(resultStateRef.value
+                ? {
+                    degraded: degradedRef.value,
+                    fallbackReason: fallbackReasonRef.value ?? undefined,
+                    isEmpty,
+                    resultState: resultStateRef.value,
+                  }
+                : {}),
             }),
           });
           persistHistory(deps.historySink, cfg, userId, {
@@ -593,9 +660,42 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               citations: finalCitations,
               guardrail: hallucinationBlocked
                 ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
-                : null,
+                : degradedRef.value
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: DEGRADED_BANNER_MESSAGE,
+                      isEmpty: false,
+                      resultState: resultStateRef.value ?? 'degraded',
+                    }
+                  : null,
             }),
           });
+          // §C3 sampled live quality judge via injected deps (parity with route.ts).
+          // The cache-hit branch returns earlier, so !cacheHit holds at this point.
+          if (
+            turnId &&
+            deps.judgeScheduler &&
+            deps.qualityJudge &&
+            Math.random() < JUDGE_SAMPLE_RATE &&
+            finalCitations.length > 0 &&
+            !isEmpty &&
+            cfg.captureQueryText !== false
+          ) {
+            const answer = await Promise.resolve(result.text).catch(() => '');
+            const snippets = finalCitations.map((c) => c.snippet);
+            const qualityJudge = deps.qualityJudge;
+            deps.judgeScheduler(() =>
+              qualityJudge({
+                question: lastUserText,
+                snippets,
+                documents: snippets.join('\n\n'),
+                answer,
+                turnId,
+              }),
+            );
+          }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(new Error('Chat stream interrupted'));
@@ -613,18 +713,45 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   };
 }
 
+/** §A4 exact soft-banner copy for degraded best-effort turns (mirrored in route.ts). */
+const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
+
+/**
+ * Post-generation guardrail [§A4/§B3]: skipped entirely when the hallucination
+ * toggle is off. A true empty retrieval (0 rows) keeps the blocking wall with a
+ * ticket offer; a degraded top-4 fallback first emits a soft yellow banner
+ * (no ticket offer) and an explicit not-grounded verdict still blocks. Grader
+ * infra failures fail open — they count as pass, only an explicit verdict blocks.
+ */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
   result: { text: PromiseLike<string> };
   capturedCitations: EmittedCitation[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  enabled: boolean;
   outOfDomain: boolean;
+  degraded: boolean;
 }): Promise<boolean> {
-  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
-  if (!hallucinationGrader) return false;
+  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
+  if (!enabled || !hallucinationGrader) return false;
 
-  let ungrounded = outOfDomain;
-  if (!ungrounded && capturedCitations.length > 0) {
+  if (outOfDomain) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain: true, offerTicket: true },
+    } as InferUIMessageChunk<UIMessage>);
+    return true;
+  }
+
+  if (degraded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { degraded: true, isEmpty: false, offerTicket: false, message: DEGRADED_BANNER_MESSAGE },
+    } as InferUIMessageChunk<UIMessage>);
+  }
+
+  let ungrounded = false;
+  if (capturedCitations.length > 0) {
     try {
       const generation = await result.text;
       const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
@@ -637,7 +764,7 @@ async function runHallucinationCheck(opts: {
   if (ungrounded) {
     controller.enqueue({
       type: 'data-guardrail',
-      data: { outOfDomain, offerTicket: true },
+      data: { outOfDomain: false, offerTicket: true },
     } as InferUIMessageChunk<UIMessage>);
   }
   return ungrounded;

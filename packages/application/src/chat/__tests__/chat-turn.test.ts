@@ -3,7 +3,25 @@ import { err, ok, ExternalServiceError } from '@app/domain';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { AppConfig } from '@app/domain/app-config';
 import type { RetrievedChunk } from '../../rag/search';
+import type { AgenticResult } from '../../rag/agentic-search';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
+
+const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
+
+/** Full §A3 AgenticResult fixture (stale partial mocks broke typecheck after P3). */
+function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
+  return {
+    chunks: [CHUNK],
+    rewrittenQuery: 'rewritten',
+    outOfDomain: false,
+    isEmpty: false,
+    degraded: false,
+    fallbackReason: null,
+    resultState: 'ok',
+    gradingUnavailable: false,
+    ...overrides,
+  };
+}
 
 const { streamTextMock, stepCountMock, aiReal } = vi.hoisted(() => ({
   streamTextMock: vi.fn(),
@@ -46,6 +64,9 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
     agentStepBudget: 8,
     similarityThreshold: 0.5,
     hybridEnabled: true,
+    agenticQueryRewriteEnabled: true,
+    agenticChunkGradingEnabled: true,
+    hallucinationCheckEnabled: true,
     rerankerProvider: 'cosine',
     gradeModel: undefined,
     answerCacheEnabled: true,
@@ -63,9 +84,7 @@ type DepsOverrides = Partial<Omit<ChatTurnDeps, 'getRuntimeConfig'>> & {
 function makeDeps(overrides: DepsOverrides = {}) {
   const cfg = overrides.cfg ?? makeCfg();
   const searchChunks = vi.fn(async () => ok([CHUNK, CHUNK2]));
-  const agenticSearch = vi.fn(async () =>
-    ok({ chunks: [CHUNK], rewrittenQuery: 'rewritten', outOfDomain: false }),
-  );
+  const agenticSearch = vi.fn(async () => ok(agenticOk()));
   const answerCache = {
     get: vi.fn(async () => null as string | null),
     set: vi.fn<(key: string, value: string, ttlSec: number) => Promise<void>>(async () => undefined),
@@ -119,6 +138,9 @@ function makeDeps(overrides: DepsOverrides = {}) {
     userResolver: overrides.userResolver ?? userResolver,
     eventSink: overrides.eventSink ?? { record, flush },
     historySink: overrides.historySink ?? { appendTurn },
+    // Optional §C3 judge deps are only set when a test provides them.
+    ...(overrides.judgeScheduler ? { judgeScheduler: overrides.judgeScheduler } : {}),
+    ...(overrides.qualityJudge ? { qualityJudge: overrides.qualityJudge } : {}),
     traceEnabled: overrides.traceEnabled ?? false,
   };
   return {
@@ -355,7 +377,9 @@ describe('chatTurn', () => {
   it('does not cache an out-of-domain answer', async () => {
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: true })),
+      agenticSearch: vi.fn(async () =>
+        ok(agenticOk({ chunks: [], outOfDomain: true, isEmpty: true, resultState: 'empty' })),
+      ),
       hallucinationGrader: () => async () => 'yes' as const,
     });
     const { captured, closeLlm } = captureTools();
@@ -818,5 +842,231 @@ describe('chat history persistence', () => {
     if (result.kind !== 'stream') throw new Error('expected stream');
     await readParts(result.stream);
     expect(fakes.appendTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)', () => {
+  function agenticBody(): Record<string, unknown> {
+    return {
+      turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'what is the policy?' }] }],
+    };
+  }
+
+  it('emits the soft degraded banner, skips the cache and records degraded meta', async () => {
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi.fn(async () =>
+        ok(agenticOk({ degraded: true, fallbackReason: 'grader_unavailable', resultState: 'degraded', gradingUnavailable: true })),
+      ),
+      hallucinationGrader: () => async () => 'yes' as const,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
+      data: Record<string, unknown>;
+    };
+    expect(guardrail.data).toEqual({
+      degraded: true,
+      isEmpty: false,
+      offerTicket: false,
+      message: DEGRADED_BANNER_MESSAGE,
+    });
+    expect(fakes.answerCache.set).not.toHaveBeenCalled();
+    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event.outOfDomain).toBe(false);
+    expect(event.hallucinationBlocked).toBe(false);
+    expect(event.meta).toMatchObject({
+      degraded: true,
+      fallbackReason: 'grader_unavailable',
+      isEmpty: false,
+      resultState: 'degraded',
+    });
+  });
+
+  it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi.fn(async () =>
+        ok(agenticOk({ chunks: [], outOfDomain: true, isEmpty: true, resultState: 'empty' })),
+      ),
+      hallucinationGrader: () => async () => 'yes' as const,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
+      data: Record<string, unknown>;
+    };
+    expect(guardrail.data).toEqual({ outOfDomain: true, offerTicket: true });
+    expect(fakes.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('skips runHallucinationCheck entirely when hallucinationCheckEnabled is off', async () => {
+    const grader = vi.fn(async () => 'no' as const);
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic', hallucinationCheckEnabled: false }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      hallucinationGrader: () => grader,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    expect(grader).not.toHaveBeenCalled();
+    expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
+    // Toggle-off turns are excluded from the cache via shouldCache.
+    expect(fakes.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('treats a hallucination grader infra failure as pass (fail-open): no banner, answer cached', async () => {
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      hallucinationGrader: () =>
+        vi.fn(async () => {
+          throw new Error('grade model down');
+        }),
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
+    expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
+  });
+
+  it('still blocks on an explicit grounded:false even when the turn is degraded', async () => {
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi.fn(async () =>
+        ok(agenticOk({ degraded: true, fallbackReason: 'all_filtered', resultState: 'degraded' })),
+      ),
+      hallucinationGrader: () => async () => 'no' as const,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    const guardrails = parts.filter((p) => (p as { type: string }).type === 'data-guardrail') as Array<{
+      data: Record<string, unknown>;
+    }>;
+    expect(guardrails[0]?.data).toMatchObject({ degraded: true, offerTicket: false });
+    expect(guardrails.at(-1)?.data).toEqual({ outOfDomain: false, offerTicket: true });
+    expect(fakes.answerCache.set).not.toHaveBeenCalled();
+    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event.hallucinationBlocked).toBe(true);
+  });
+
+  it('enqueues the quality judge through the injected scheduler when sampled', async () => {
+    const qualityJudge = vi.fn(
+      async (ctx: { question: string; snippets: string[]; documents: string; answer: string; turnId: string }) => {
+        void ctx;
+        return undefined;
+      },
+    );
+    const judgeScheduler = vi.fn((task: () => Promise<void>) => void task());
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0); // sampled
+    try {
+      const { deps, fakes } = makeDeps({
+        cfg: makeCfg({ retrievalMode: 'agentic' }),
+        agenticSearch: vi.fn(async () => ok(agenticOk())),
+        hallucinationGrader: () => async () => 'yes' as const,
+        judgeScheduler,
+        qualityJudge,
+      });
+      const { captured, closeLlm } = captureTools();
+      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+      if (result.kind !== 'stream') throw new Error('expected stream');
+      await captured.current?.searchDocumentation?.execute({ query: 'q' });
+      closeLlm();
+      await readParts(result.stream);
+      expect(judgeScheduler).toHaveBeenCalledTimes(1);
+      expect(qualityJudge).toHaveBeenCalledTimes(1);
+      expect(qualityJudge.mock.calls[0]![0]).toEqual({
+        question: 'what is the policy?',
+        snippets: ['The dental plan covers two cleanings per year.'],
+        documents: 'The dental plan covers two cleanings per year.',
+        answer: 'Hello world',
+        turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      });
+      expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('never enqueues the judge above the sample rate or without citations', async () => {
+    const qualityJudge = vi.fn(async () => undefined);
+    const judgeScheduler = vi.fn();
+    // Above the rate.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    try {
+      const { deps } = makeDeps({
+        cfg: makeCfg({ retrievalMode: 'agentic' }),
+        agenticSearch: vi.fn(async () => ok(agenticOk())),
+        judgeScheduler,
+        qualityJudge,
+      });
+      const { captured, closeLlm } = captureTools();
+      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+      if (result.kind !== 'stream') throw new Error('expected stream');
+      await captured.current?.searchDocumentation?.execute({ query: 'q' });
+      closeLlm();
+      await readParts(result.stream);
+      expect(judgeScheduler).not.toHaveBeenCalled();
+
+      // Sampled but no search executed → no citations → no judge.
+      randomSpy.mockReturnValue(0);
+      const deps2 = makeDeps({
+        cfg: makeCfg({ retrievalMode: 'agentic' }),
+        judgeScheduler,
+        qualityJudge,
+      }).deps;
+      const result2 = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps2);
+      if (result2.kind !== 'stream') throw new Error('expected stream');
+      closeLlm();
+      await readParts(result2.stream);
+      expect(judgeScheduler).not.toHaveBeenCalled();
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('skips the judge when captureQueryText is disabled (privacy)', async () => {
+    const qualityJudge = vi.fn(async () => undefined);
+    const judgeScheduler = vi.fn();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const { deps } = makeDeps({
+        cfg: makeCfg({ retrievalMode: 'agentic', captureQueryText: false }),
+        agenticSearch: vi.fn(async () => ok(agenticOk())),
+        judgeScheduler,
+        qualityJudge,
+      });
+      const { captured, closeLlm } = captureTools();
+      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+      if (result.kind !== 'stream') throw new Error('expected stream');
+      await captured.current?.searchDocumentation?.execute({ query: 'q' });
+      closeLlm();
+      await readParts(result.stream);
+      expect(judgeScheduler).not.toHaveBeenCalled();
+      expect(qualityJudge).not.toHaveBeenCalled();
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 });

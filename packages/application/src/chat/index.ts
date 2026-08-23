@@ -5,5 +5,6 @@ export * from './dedupe-citations';
 export * from './emit-citations';
 export * from './turn-id';
 export * from './build-event-meta';
+export * from './should-cache';
 export * from './request-schema';
 export * from './history';

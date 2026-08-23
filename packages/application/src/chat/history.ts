@@ -31,6 +31,31 @@ export interface MessagePartLike {
   [key: string]: unknown;
 }
 
+/** Guardrail snapshot stored on assistant messages; optional fields carry the §A4 degraded soft banner. */
+export interface GuardrailMeta {
+  outOfDomain: boolean;
+  offerTicket: boolean;
+  degraded?: boolean | undefined;
+  message?: string | undefined;
+  isEmpty?: boolean | undefined;
+  resultState?: string | undefined;
+}
+
+/** Copy the optional degraded soft-banner fields when present and well-typed. */
+function readGuardrailMeta(data: Record<string, unknown>): GuardrailMeta {
+  const guardrail: GuardrailMeta = {
+    outOfDomain: Boolean(data.outOfDomain),
+    offerTicket: Boolean(data.offerTicket),
+  };
+  if (typeof data.degraded === 'boolean') guardrail.degraded = data.degraded;
+  if (typeof data.message === 'string' && data.message !== '') guardrail.message = data.message;
+  if (typeof data.isEmpty === 'boolean') guardrail.isEmpty = data.isEmpty;
+  if (typeof data.resultState === 'string' && data.resultState !== '') {
+    guardrail.resultState = data.resultState;
+  }
+  return guardrail;
+}
+
 export interface MessageLike {
   id?: string;
   role?: string;
@@ -42,7 +67,7 @@ export interface StoredMessage {
   id: string;
   role: 'user' | 'assistant';
   parts: Array<Record<string, unknown>>;
-  metadata: { citations?: unknown[]; guardrail?: { outOfDomain: boolean; offerTicket: boolean } };
+  metadata: { citations?: unknown[]; guardrail?: GuardrailMeta };
 }
 
 function plainObject(value: unknown): Record<string, unknown> | null {
@@ -87,7 +112,7 @@ export function toStoredMessage(message: MessageLike): StoredMessage {
       if (data) citations.push(data);
     } else if (type === 'data-guardrail') {
       const data = plainObject(part.data);
-      if (data) guardrail = { outOfDomain: Boolean(data.outOfDomain), offerTicket: Boolean(data.offerTicket) };
+      if (data) guardrail = readGuardrailMeta(data);
     }
   }
 
@@ -95,8 +120,7 @@ export function toStoredMessage(message: MessageLike): StoredMessage {
   if (meta) {
     if (Array.isArray(meta.citations)) citations.unshift(...meta.citations);
     if (!guardrail && plainObject(meta.guardrail)) {
-      const g = plainObject(meta.guardrail)!;
-      guardrail = { outOfDomain: Boolean(g.outOfDomain), offerTicket: Boolean(g.offerTicket) };
+      guardrail = readGuardrailMeta(plainObject(meta.guardrail)!);
     }
   }
 
@@ -153,7 +177,7 @@ export function buildAssistantMessageLike(input: {
   turnId: string | null;
   text: string;
   citations: ReadonlyArray<EmittedCitation>;
-  guardrail: { outOfDomain: boolean; offerTicket: boolean } | null;
+  guardrail: GuardrailMeta | null;
 }): MessageLike {
   const parts: MessagePartLike[] = [{ type: 'text', text: input.text }];
   for (const citation of input.citations) {

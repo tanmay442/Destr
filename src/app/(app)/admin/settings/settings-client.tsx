@@ -290,6 +290,9 @@ export function SettingsClient() {
     'agenticRetrieveLimit',
     'agenticMaxRetries',
     'similarityThreshold',
+    'agenticQueryRewriteEnabled',
+    'agenticChunkGradingEnabled',
+    'hallucinationCheckEnabled',
     'rerankerProvider',
     'gradeModel',
     'answerCacheEnabled',
@@ -630,6 +633,21 @@ export function SettingsClient() {
                   <div className="flex flex-col gap-4">
                     <h4 className="text-sm font-medium text-foreground">Agentic budget limits</h4>
                     {['agentStepBudget', 'agenticRetrieveLimit', 'agenticMaxRetries'].map((key) => {
+                      const field = fieldMap.get(key);
+                      if (!field) return null;
+                      return (
+                        <FieldControl
+                          key={field.key}
+                          field={field}
+                          value={values[field.key]}
+                          onChange={(v) => update(field.key, v)}
+                          onReset={() => update(field.key, field.default)}
+                        />
+                      );
+                    })}
+
+                    <h4 className="text-sm font-medium text-foreground">Agentic pipeline steps</h4>
+                    {['agenticQueryRewriteEnabled', 'agenticChunkGradingEnabled', 'hallucinationCheckEnabled'].map((key) => {
                       const field = fieldMap.get(key);
                       if (!field) return null;
                       return (

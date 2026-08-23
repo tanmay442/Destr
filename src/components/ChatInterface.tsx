@@ -18,7 +18,7 @@ import remarkGfm from 'remark-gfm';
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
-import type { CitationData } from '@/chat/types';
+import type { CitationData, GuardrailData } from '@/chat/types';
 import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
@@ -34,9 +34,13 @@ import {
   ThumbsUp,
   ThumbsDown,
   AlertCircle,
+  AlertTriangle,
 } from 'lucide-react';
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
+
+/** Default copy for the soft degraded banner when the server sends no custom message. */
+const DEGRADED_BANNER_FALLBACK = 'Based on best-effort matches — may be incomplete. Please verify.';
 
 function uuidv4(): string {
   const c = globalThis.crypto;
@@ -165,6 +169,47 @@ function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
   );
 }
 
+/** Red blocking wall: retrieval found nothing or the answer was not grounded — offers a ticket. */
+function GuardrailWallBanner() {
+  return (
+    <Alert
+      variant="destructive"
+      className="border-destructive/30 bg-destructive/10 text-destructive"
+      data-testid="chat-guardrail-wall"
+    >
+      <AlertCircle aria-hidden />
+      <div className="flex flex-col gap-1">
+        <AlertTitle>I couldn&apos;t find this in the documentation</AlertTitle>
+        <AlertDescription className="text-xs text-destructive/80">
+          I couldn&apos;t find a reliable answer in the official docs. Want me to open a
+          knowledge ticket so a human can follow up?
+        </AlertDescription>
+      </div>
+    </Alert>
+  );
+}
+
+/** Yellow soft banner for degraded best-effort answers (top-4 fallback); never offers a ticket. */
+function DegradedBanner({ message }: { message?: string | undefined }) {
+  return (
+    <div
+      className="flex w-full items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+      data-testid="chat-guardrail-degraded"
+      role="status"
+    >
+      <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+      <span>{message || DEGRADED_BANNER_FALLBACK}</span>
+    </div>
+  );
+}
+
+function AssistantGuardrail({ data }: { data: GuardrailData }) {
+  const isWall = data.outOfDomain || data.offerTicket;
+  if (isWall) return <GuardrailWallBanner />;
+  if (data.degraded) return <DegradedBanner message={data.message} />;
+  return null;
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   turnId,
@@ -184,6 +229,12 @@ const MessageItem = memo(function MessageItem({
     type: 'data-citation';
     data: CitationData;
   }>;
+  const guardrails = isUser
+    ? []
+    : (message.parts.filter((p) => p.type === 'data-guardrail') as Array<{
+        type: 'data-guardrail';
+        data: GuardrailData;
+      }>);
 
   return (
     <div
@@ -286,6 +337,10 @@ const MessageItem = memo(function MessageItem({
           })}
         </div>
       ) : null}
+
+      {guardrails.map((g, i) => (
+        <AssistantGuardrail key={i} data={g.data} />
+      ))}
 
       {!isUser && turnId ? (
         <FeedbackControl

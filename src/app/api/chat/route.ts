@@ -15,15 +15,24 @@ import {
   buildEventMeta,
   persistHistory,
   buildAssistantMessageLike,
+  shouldCache,
   type EmittedCitation,
 } from '@app/application/chat';
+import type { AgenticResult } from '@app/application';
 import { NextResponse, after } from 'next/server';
-import type { ChatEventInput } from '@app/domain';
+import type { AgenticResultState, ChatEventInput } from '@app/domain';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
 import { readBoundedText, respond } from '@/lib/http';
-import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP } from '@app/domain';
+import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP, JUDGE_SAMPLE_RATE } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
+import { judgeFaithfulness, judgeRelevance } from '@/composition';
+
+/** §A2 platform ceiling for this route; the shared rewrite+grading deadline (25s) sits under it. */
+export const maxDuration = 30;
+
+/** §A4 exact soft-banner copy for degraded best-effort turns (mirrored in chat-turn.ts). */
+const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
 
 const CHAT_MAX_CONCURRENT = 2;
 const chatSlotCounts = new Map<string, number>();
@@ -142,9 +151,27 @@ function buildChatTools(deps: {
   rateLimit: (key: string, opts: { limit: number; windowMs: number }) => ReturnType<Composition['rateLimit']>;
   userId: string;
   outOfDomainRef: { value: boolean };
+  isEmptyRef: { value: boolean };
+  degradedRef: { value: boolean };
+  fallbackReasonRef: { value: string | null };
+  resultStateRef: { value: AgenticResultState | null };
   metrics: TurnMetrics;
 }) {
-  const { effectiveMode, searchChunks: searchFn, agenticSearch: agenticFn, capturedCitations: citationTarget, createTicket: createTicketFn, rateLimit: rateLimitFn, userId: uid, outOfDomainRef, metrics } = deps;
+  const {
+    effectiveMode,
+    searchChunks: searchFn,
+    agenticSearch: agenticFn,
+    capturedCitations: citationTarget,
+    createTicket: createTicketFn,
+    rateLimit: rateLimitFn,
+    userId: uid,
+    outOfDomainRef,
+    isEmptyRef,
+    degradedRef,
+    fallbackReasonRef,
+    resultStateRef,
+    metrics,
+  } = deps;
   let ticketOpenedInTurn = false;
   return {
     searchDocumentation: tool({
@@ -178,7 +205,13 @@ function buildChatTools(deps: {
             return [];
           }
           if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
+          // §A3 transport refs: carry the agentic outcome out of the tool into
+          // post-stream guardrail, cache and analytics decisions.
           outOfDomainRef.value = r.value.outOfDomain;
+          isEmptyRef.value = r.value.isEmpty;
+          degradedRef.value = r.value.degraded;
+          fallbackReasonRef.value = r.value.fallbackReason;
+          resultStateRef.value = r.value.resultState;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -304,22 +337,129 @@ function scheduleFlush(comp: Composition): void {
   }
 }
 
+/** Structural §C3 contracts for patching a turn's persisted/buffered event meta. */
+interface EventMetaPatcher {
+  updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
+}
+interface BatcherMetaPatcher {
+  patchMeta(turnId: string, patch: Record<string, unknown>): void;
+}
+
 /**
- * Post-generation guardrail: if retrieval was out-of-domain or the grounded-grader
- * flags the answer as not supported, nudge the client toward a knowledge ticket.
+ * Resolve the §C3 meta-patchers structurally off the chat-event batcher:
+ * `updateEventMeta` patches already-flushed rows, `patchMeta` patches events
+ * still buffered pre-flush. Either may be absent while the storage layer is
+ * mid-rollout; the judge then runs but does not persist.
+ */
+function getMetaPatchers(comp: Composition): {
+  eventMeta: EventMetaPatcher | null;
+  batcher: BatcherMetaPatcher | null;
+} {
+  const candidate = comp.chatEventBatcher as unknown as Partial<EventMetaPatcher & BatcherMetaPatcher>;
+  return {
+    eventMeta:
+      typeof candidate.updateEventMeta === 'function'
+        ? { updateEventMeta: candidate.updateEventMeta.bind(candidate) }
+        : null,
+    batcher:
+      typeof candidate.patchMeta === 'function'
+        ? { patchMeta: candidate.patchMeta.bind(candidate) }
+        : null,
+  };
+}
+
+/**
+ * §C3 live quality judge: score retrieval relevance + answer faithfulness on
+ * the cheap grade model and merge `judgeScores` into the turn's event meta.
+ * Strictly fire-and-forget — every failure is logged under
+ * `judge.enqueue.failed` and never affects the stream. A missing verdict keeps
+ * that dimension unjudged (zeros would poison the quality averages).
+ */
+async function runJudge(ctx: {
+  question: string;
+  snippets: string[];
+  documents: string;
+  answer: string;
+  turnId: string;
+  eventMetaPatcher: EventMetaPatcher | null;
+  batcherPatcher: BatcherMetaPatcher | null;
+}): Promise<void> {
+  try {
+    const [relevance, faithfulness] = await Promise.all([
+      judgeRelevance(ctx.question, ctx.snippets),
+      judgeFaithfulness(ctx.documents, ctx.answer),
+    ]);
+    if (!relevance || !faithfulness) return;
+    const patch = {
+      judgeScores: {
+        retrievalRelevance: relevance.score,
+        faithfulness: faithfulness.score,
+        citationPrecision: faithfulness.citationPrecision,
+        judgedAt: new Date().toISOString(),
+      },
+    };
+    const persisted = ctx.eventMetaPatcher
+      ? await ctx.eventMetaPatcher.updateEventMeta(ctx.turnId, patch)
+      : false;
+    if (!persisted) {
+      if (ctx.batcherPatcher) ctx.batcherPatcher.patchMeta(ctx.turnId, patch);
+      else logger.debug('judge.enqueue.no_meta_patcher', { turnId: ctx.turnId });
+    }
+  } catch (err) {
+    logger.warn('quality judge failed', {
+      severity: 'warn',
+      event: 'judge.enqueue.failed',
+      turnId: ctx.turnId,
+      error: String(err),
+    });
+  }
+}
+
+/** Deferred task scheduling via Vercel `after`; inline fallback outside request scope. */
+function scheduleAfter(task: () => void): void {
+  try {
+    after(() => task());
+  } catch {
+    task();
+  }
+}
+
+/**
+ * Post-generation guardrail [§A4/§B3]: skipped entirely when the hallucination
+ * toggle is off. A true empty retrieval (0 rows) keeps the blocking wall with a
+ * ticket offer; a degraded top-4 fallback first emits a soft yellow banner
+ * (no ticket offer) and an explicit not-grounded verdict still blocks. Grader
+ * infra failures fail open — they count as pass, only an explicit verdict blocks.
  */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
   result: { text: PromiseLike<string> };
   capturedCitations: EmittedCitation[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  enabled: boolean;
   outOfDomain: boolean;
+  degraded: boolean;
 }): Promise<boolean> {
-  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
-  if (!hallucinationGrader) return false;
+  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
+  if (!enabled || !hallucinationGrader) return false;
 
-  let ungrounded = outOfDomain;
-  if (!ungrounded && capturedCitations.length > 0) {
+  if (outOfDomain) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain: true, offerTicket: true },
+    } as InferUIMessageChunk<MyUIMessage>);
+    return true;
+  }
+
+  if (degraded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { degraded: true, isEmpty: false, offerTicket: false, message: DEGRADED_BANNER_MESSAGE },
+    } as InferUIMessageChunk<MyUIMessage>);
+  }
+
+  let ungrounded = false;
+  if (capturedCitations.length > 0) {
     try {
       const generation = await result.text;
       const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
@@ -332,7 +472,7 @@ async function runHallucinationCheck(opts: {
   if (ungrounded) {
     controller.enqueue({
       type: 'data-guardrail',
-      data: { outOfDomain, offerTicket: true },
+      data: { outOfDomain: false, offerTicket: true },
     } as InferUIMessageChunk<MyUIMessage>);
   }
   return ungrounded;
@@ -505,10 +645,14 @@ async function streamChatResponse(req: Request): Promise<Response> {
   }
 
   const outOfDomainRef = { value: false };
+  const isEmptyRef = { value: false };
+  const degradedRef = { value: false };
+  const fallbackReasonRef = { value: null as string | null };
+  const resultStateRef = { value: null as AgenticResultState | null };
 
   const result = streamText({
     model: comp.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch),
+    system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: req.signal,
@@ -521,6 +665,10 @@ async function streamChatResponse(req: Request): Promise<Response> {
       rateLimit: (key, opts) => comp.rateLimit(key, opts),
       userId,
       outOfDomainRef,
+      isEmptyRef,
+      degradedRef,
+      fallbackReasonRef,
+      resultStateRef,
       metrics,
     }),
   });
@@ -549,14 +697,29 @@ async function streamChatResponse(req: Request): Promise<Response> {
             result,
             capturedCitations: finalCitations,
             hallucinationGrader: comp.getHallucinationGrader(cfg),
+            enabled: cfg.hallucinationCheckEnabled,
             outOfDomain: outOfDomainRef.value,
+            degraded: degradedRef.value,
           });
+          const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
             cacheKey &&
-            finalCitations.length > 0 &&
-            !hallucinationBlocked &&
-            !outOfDomainRef.value &&
-            !metrics.ticketCreated
+            shouldCache({
+              citations: finalCitations,
+              blocked: hallucinationBlocked,
+              isEmpty,
+              ticketCreated: metrics.ticketCreated,
+              cfg,
+              agentic: {
+                chunks: [],
+                rewrittenQuery: '',
+                outOfDomain: outOfDomainRef.value,
+                isEmpty: isEmptyRef.value,
+                degraded: degradedRef.value,
+                fallbackReason: fallbackReasonRef.value as AgenticResult['fallbackReason'],
+                resultState: resultStateRef.value ?? 'ok',
+              },
+            })
           ) {
             try {
               const finalAnswer = await result.text;
@@ -594,6 +757,15 @@ async function streamChatResponse(req: Request): Promise<Response> {
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+              // Quality/agentic fields are only meaningful once agentic retrieval ran.
+              ...(resultStateRef.value
+                ? {
+                    degraded: degradedRef.value,
+                    fallbackReason: fallbackReasonRef.value ?? undefined,
+                    isEmpty,
+                    resultState: resultStateRef.value,
+                  }
+                : {}),
             }),
           });
           persistHistory(historySink, cfg, userId, {
@@ -608,9 +780,42 @@ async function streamChatResponse(req: Request): Promise<Response> {
               citations: finalCitations,
               guardrail: hallucinationBlocked
                 ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
-                : null,
+                : degradedRef.value
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: DEGRADED_BANNER_MESSAGE,
+                      isEmpty: false,
+                      resultState: resultStateRef.value ?? 'degraded',
+                    }
+                  : null,
             }),
           });
+          // §C3 sampled live quality judge — strictly fire-and-forget. The cache-hit
+          // short-circuit above returns before this point, so !cacheHit holds here.
+          if (
+            turnId &&
+            Math.random() < JUDGE_SAMPLE_RATE &&
+            finalCitations.length > 0 &&
+            !isEmpty &&
+            cfg.captureQueryText !== false
+          ) {
+            const patchers = getMetaPatchers(comp);
+            const answer = await Promise.resolve(result.text).catch(() => '');
+            const snippets = finalCitations.map((c) => c.snippet);
+            scheduleAfter(() =>
+              void runJudge({
+                question: lastUserText,
+                snippets,
+                documents: snippets.join('\n\n'),
+                answer,
+                turnId,
+                eventMetaPatcher: patchers.eventMeta,
+                batcherPatcher: patchers.batcher,
+              }),
+            );
+          }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           controller.error(new Error('Chat stream interrupted'));
@@ -699,6 +904,17 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
           if (!result.ok) throw result.error;
           return result.value;
         },
+      },
+      // §C3 parity: the use-case path gets the same sampled judge via injected
+      // deps (chat-turn itself must not import next/server or infrastructure).
+      judgeScheduler: (task) => scheduleAfter(() => void task()),
+      qualityJudge: (ctx) => {
+        const patchers = getMetaPatchers(comp);
+        return runJudge({
+          ...ctx,
+          eventMetaPatcher: patchers.eventMeta,
+          batcherPatcher: patchers.batcher,
+        });
       },
       traceEnabled: TRACE_ENABLED,
     },

@@ -37,6 +37,14 @@ type Msg = {
           source?: string | null;
         };
       }
+    | { type: 'data-guardrail'; data: {
+        outOfDomain: boolean;
+        offerTicket: boolean;
+        degraded?: boolean;
+        message?: string;
+        isEmpty?: boolean;
+        resultState?: string;
+      } }
   >;
 };
 
@@ -280,6 +288,71 @@ describe('ChatInterface', () => {
     render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByText('Hello!')).toBeInTheDocument();
     expect(screen.getByText('Hi there.')).toBeInTheDocument();
+  });
+
+  it('renders a soft degraded banner without a ticket offer for degraded turns', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Best-effort answer.' },
+          {
+            type: 'data-guardrail',
+            data: {
+              outOfDomain: false,
+              degraded: true,
+              isEmpty: false,
+              offerTicket: false,
+              message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+            },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const banner = screen.getByTestId('chat-guardrail-degraded');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toContain(
+      'Based on best-effort matches (4) — may be incomplete. Please verify.',
+    );
+    // Soft banner: no red wall, no ticket offer.
+    expect(screen.queryByTestId('chat-guardrail-wall')).not.toBeInTheDocument();
+    expect(banner.textContent).not.toMatch(/ticket/i);
+  });
+
+  it('falls back to the default copy when the degraded banner has no message', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Answer.' },
+          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: false, degraded: true, isEmpty: false } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const banner = screen.getByTestId('chat-guardrail-degraded');
+    expect(banner.textContent).toContain('may be incomplete. Please verify.');
+  });
+
+  it('renders the red blocking wall with a ticket offer for out-of-domain turns', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'I could not find this.' },
+          { type: 'data-guardrail', data: { outOfDomain: true, offerTicket: true } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const wall = screen.getByTestId('chat-guardrail-wall');
+    expect(wall).toBeInTheDocument();
+    expect(wall.textContent).toMatch(/knowledge ticket/i);
+    expect(screen.queryByTestId('chat-guardrail-degraded')).not.toBeInTheDocument();
   });
 
   it('sends a message when the form is submitted', async () => {

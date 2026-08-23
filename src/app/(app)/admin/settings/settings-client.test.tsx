@@ -31,6 +31,7 @@ interface FieldFixture {
   max?: number;
   step?: number;
   rows?: number;
+  helpText?: string;
 }
 
 function descriptor(): FieldFixture[] {
@@ -40,6 +41,9 @@ function descriptor(): FieldFixture[] {
     { key: 'customInstructions', type: 'string', default: '', current: '', source: 'default', available: true, group: 'Persona & Prompt', label: 'Custom Instructions', inputType: 'textarea', rows: 4 },
     { key: 'outOfScopeTopics', type: 'array', default: [], current: [{ topic: 'legal', handling: 'decline' }], source: 'default', available: true, group: 'Persona & Prompt', label: 'Out-of-Scope Topics', inputType: 'textarea' },
     { key: 'similarityThreshold', type: 'number', default: 0.5, current: 0.5, source: 'default', available: true, group: 'Retrieval', label: 'Similarity Threshold', inputType: 'slider', min: 0, max: 1, step: 0.05 },
+    { key: 'agenticQueryRewriteEnabled', type: 'boolean', default: true, current: true, source: 'default', available: true, group: 'Retrieval', label: 'Query Rewrite (agentic)', inputType: 'toggle', helpText: 'When off, the raw user query is used for retrieval (no LLM rewrite).' },
+    { key: 'agenticChunkGradingEnabled', type: 'boolean', default: true, current: true, source: 'default', available: true, group: 'Retrieval', label: 'Chunk Grading (agentic)', inputType: 'toggle', helpText: 'When off, top 4 retrieved chunks are sent without grading and shown with a warning. Not cached.' },
+    { key: 'hallucinationCheckEnabled', type: 'boolean', default: true, current: true, source: 'default', available: true, group: 'Retrieval', label: 'Hallucination Check', inputType: 'toggle', helpText: 'Warning: disabling lets unverified answers be shown and they won\u2019t be cached. Use only for debugging.' },
     { key: 'hybridEnabled', type: 'boolean', default: true, current: true, source: 'default', available: true, group: 'Retrieval', label: 'Hybrid Search', inputType: 'toggle' },
     { key: 'chunkingStrategy', type: 'enum', options: ['document-aware', 'semantic'], default: 'document-aware', current: 'document-aware', source: 'env-locked', readOnly: true, available: true, group: 'Chunking', label: 'Chunking Strategy', inputType: 'select' },
     { key: 'embeddingModel', type: 'string', default: 'gemini-embedding-001', current: 'gemini-embedding-001', source: 'default', readOnly: true, available: true },
@@ -103,6 +107,20 @@ describe('SettingsClient', () => {
     await renderLoaded();
     const trigger = document.querySelector('#field-chunkingStrategy');
     expect(trigger).toBeDisabled();
+  });
+
+  it('renders the agentic pipeline step toggles under their labeled sub-section', async () => {
+    await renderLoaded();
+    expect(screen.getByText('Agentic pipeline steps')).toBeInTheDocument();
+    for (const label of ['Query Rewrite (agentic)', 'Chunk Grading (agentic)', 'Hallucination Check']) {
+      const toggle = screen.getByLabelText(label);
+      expect(toggle).not.toBeDisabled();
+      expect(toggle).toBeChecked();
+    }
+    // Help texts are surfaced so admins see the blast radius of each toggle.
+    expect(screen.getByText(/top 4 retrieved chunks are sent without grading/i)).toBeInTheDocument();
+    expect(screen.getByText(/disabling lets unverified answers be shown/i)).toBeInTheDocument();
+    expect(screen.getByText(/the raw user query is used for retrieval/i)).toBeInTheDocument();
   });
 
   it('supports out-of-scope add and remove', async () => {

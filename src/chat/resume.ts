@@ -77,7 +77,19 @@ export function toResumedConversation(input: {
       const guardrail = metadata.guardrail;
       parts.push({
         type: 'data-guardrail',
-        data: { outOfDomain: Boolean(guardrail.outOfDomain), offerTicket: Boolean(guardrail.offerTicket) },
+        data: {
+          outOfDomain: Boolean(guardrail.outOfDomain),
+          offerTicket: Boolean(guardrail.offerTicket),
+          // Degraded soft-banner fields are optional so legacy snapshots stay unchanged.
+          ...(typeof guardrail.degraded === 'boolean' ? { degraded: guardrail.degraded } : {}),
+          ...(typeof guardrail.message === 'string' && guardrail.message !== ''
+            ? { message: guardrail.message }
+            : {}),
+          ...(typeof guardrail.isEmpty === 'boolean' ? { isEmpty: guardrail.isEmpty } : {}),
+          ...(typeof guardrail.resultState === 'string' && guardrail.resultState !== ''
+            ? { resultState: guardrail.resultState }
+            : {}),
+        },
       } as unknown as MyUIMessage['parts'][number]);
     }
 

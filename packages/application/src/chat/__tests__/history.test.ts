@@ -230,6 +230,35 @@ describe('toStoredMessage whitelisting', () => {
     expect(stored.metadata.citations).toEqual([{ id: 1 }]);
     expect(stored.metadata.guardrail).toEqual({ outOfDomain: false, offerTicket: true });
   });
+
+  it('stores the degraded soft-banner fields from a data-guardrail part', () => {
+    const stored = toStoredMessage({
+      id: 'm4',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'best effort' },
+        {
+          type: 'data-guardrail',
+          data: {
+            outOfDomain: false,
+            offerTicket: false,
+            degraded: true,
+            message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+            isEmpty: false,
+            resultState: 'degraded',
+          },
+        },
+      ],
+    });
+    expect(stored.metadata.guardrail).toEqual({
+      outOfDomain: false,
+      offerTicket: false,
+      degraded: true,
+      message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+      isEmpty: false,
+      resultState: 'degraded',
+    });
+  });
 });
 
 describe('enforceStoredBytes', () => {
