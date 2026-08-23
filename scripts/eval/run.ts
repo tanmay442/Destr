@@ -94,6 +94,11 @@ async function main() {
   const report = await runEval(questions, deps, threshold);
   const goldenReport = buildGoldenReport(report);
 
+  // §C7/F5: a pass rate over zero expectations is vacuous — say so loudly.
+  if (!goldenReport.docHitGateActive) {
+    console.warn('[eval] doc-hit gate INACTIVE: no questions define expectedDocIds — passRate is vacuous');
+  }
+
   try {
     mkdirSync(REPORT_DIR, { recursive: true });
     writeFileSync(REPORT_PATH, `${JSON.stringify(goldenReport, null, 2)}\n`);

@@ -154,6 +154,8 @@ export interface EvalReport {
   /** §C7 golden-report aggregates (null when no judge ran / no doc expectations). */
   hits: number;
   passRate: number;
+  /** False when no question set expectedDocIds — passRate is vacuous [F5]. */
+  docHitGateActive: boolean;
   avgFaithfulnessJudge: number | null;
   avgRetrievalRelevanceJudge: number | null;
 }
@@ -180,6 +182,8 @@ export function aggregate(
   // §C2 hit rate is measured only over questions that set expectedDocIds.
   const withExpectation = results.filter((r) => r.hit !== undefined);
   const hits = withExpectation.filter((r) => r.hit === true).length;
+  // §C7/F5: with no expectations at all the pass rate is vacuous, not perfect.
+  const docHitGateActive = withExpectation.length > 0;
 
   // Judges may be unavailable (mock mode): average over judged samples only.
   const judgedFaithful = results
@@ -198,6 +202,7 @@ export function aggregate(
     threshold,
     hits,
     passRate: withExpectation.length > 0 ? hits / withExpectation.length : 1,
+    docHitGateActive,
     avgFaithfulnessJudge:
       judgedFaithful.length > 0
         ? judgedFaithful.reduce((a, b) => a + b, 0) / judgedFaithful.length
@@ -214,6 +219,8 @@ export interface GoldenReport {
   total: number;
   hits: number;
   passRate: number;
+  /** False when no golden question defines expectedDocIds; passRate is vacuous. */
+  docHitGateActive: boolean;
   avgFaithfulness: number | null;
   avgRetrievalRelevance: number | null;
   generatedAt: string;
@@ -224,6 +231,7 @@ export function buildGoldenReport(report: EvalReport): GoldenReport {
     total: report.results.length,
     hits: report.hits,
     passRate: report.passRate,
+    docHitGateActive: report.docHitGateActive,
     avgFaithfulness: report.avgFaithfulnessJudge,
     avgRetrievalRelevance: report.avgRetrievalRelevanceJudge,
     generatedAt: new Date().toISOString(),

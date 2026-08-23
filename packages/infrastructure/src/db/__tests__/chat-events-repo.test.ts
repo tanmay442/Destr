@@ -394,6 +394,7 @@ let insertCalls = 0;
 
   it('getQualitySamples filters by meta degraded / blocked column with random order', async () => {
     const orderBys: SQL[] = [];
+    const wheres: SQL[] = [];
     const fullRow = {
       id: 1,
       turnId: '33333333-3333-4333-8333-333333333333',
@@ -420,7 +421,8 @@ let insertCalls = 0;
         return {
           from() {
             return {
-              where() {
+              where(where?: SQL) {
+                if (where) wheres.push(where);
                 return {
                   orderBy(order: SQL) {
                     orderBys.push(order);
@@ -462,9 +464,16 @@ let insertCalls = 0;
     ]);
     const blocked = await batcher.getQualitySamples(20, { blocked: true });
     expect(blocked).toHaveLength(1);
-    expect(orderBys).toHaveLength(2);
+    const unfiltered = await batcher.getQualitySamples(20);
+    expect(unfiltered).toHaveLength(1);
+    expect(orderBys).toHaveLength(3);
     // §C4 sampling is random-order.
     expect(orderBys.every((q) => dialect.sqlToQuery(q).sql.toLowerCase() === 'random()')).toBe(true);
+    // §C4/F7: both filtered variants are bounded to the trailing 7 days;
+    // the unfiltered variant builds no WHERE clause at all.
+    expect(wheres).toHaveLength(2);
+    expect(dialect.sqlToQuery(wheres[0]!).sql.toLowerCase()).toContain(">= now() - interval '7 days'");
+    expect(dialect.sqlToQuery(wheres[1]!).sql.toLowerCase()).toContain(">= now() - interval '7 days'");
   });
 
   it('getJudgeAverages maps averages with coalesce-to-zero semantics', async () => {
@@ -510,9 +519,11 @@ let insertCalls = 0;
     const { client, inserts } = makeFakeClient();
     const batcher = new ChatEventBatcher(client);
     batcher.record({ ...sample, turnId: '11111111-1111-4111-8111-111111111111', meta: { documentIds: [1] } });
-    batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: true, fallbackReason: 'all_filtered' });
-    // Unknown turn id → silent no-op.
-    batcher.patchMeta('22222222-2222-4222-8222-222222222222', { degraded: true });
+    expect(
+      batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: true, fallbackReason: 'all_filtered' }),
+    ).toBe(true);
+    // Unknown turn id → false, nothing patched.
+    expect(batcher.patchMeta('22222222-2222-4222-8222-222222222222', { degraded: true })).toBe(false);
     await batcher.flush();
     const payload = inserts[0]!.values as Array<{ meta: Record<string, unknown> }>;
     expect(payload).toHaveLength(1);
@@ -521,8 +532,8 @@ let insertCalls = 0;
       degraded: true,
       fallbackReason: 'all_filtered',
     });
-    // After flush the buffer is empty → patch is a no-op again.
-    batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: false });
+    // After flush the buffer is empty → patch reports false again.
+    expect(batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: false })).toBe(false);
     await batcher.flush();
     expect(inserts).toHaveLength(1);
   });
@@ -771,6 +782,28 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
         // limit is respected
         const all = await batcher.getQualitySamples(2, {});
         expect(all).toHaveLength(2);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      expect(e).toBe(ROLLBACK);
+    }
+  });
+
+  it('getQualitySamples excludes rows older than 7 days from both filtered variants', async () => {
+    try {
+      await db.transaction(async (tx) => {
+        const batcher = new ChatEventBatcher(tx);
+        const stale = new Date(Date.now() - 8 * 86_400_000);
+        await tx.insert(chatEvents).values([
+          { userId: 'qs-stale', mode: 'agentic', meta: { degraded: true }, createdAt: stale },
+          { userId: 'qs-stale', mode: 'vector', hallucinationBlocked: true, createdAt: stale },
+          { userId: 'qs-fresh', mode: 'agentic', meta: { degraded: true } },
+          { userId: 'qs-fresh', mode: 'vector', hallucinationBlocked: true },
+        ]);
+        const degraded = await batcher.getQualitySamples(10, { degraded: true });
+        expect(degraded.map((r) => r.userId)).toEqual(['qs-fresh']);
+        const blocked = await batcher.getQualitySamples(10, { blocked: true });
+        expect(blocked.map((r) => r.userId)).toEqual(['qs-fresh']);
         throw ROLLBACK;
       });
     } catch (e) {

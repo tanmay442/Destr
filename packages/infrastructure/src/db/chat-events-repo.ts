@@ -137,13 +137,15 @@ export class ChatEventBatcher implements ChatEventsRepo {
 
   /**
    * Merges `patch` into a buffered not-yet-flushed event's meta object [§C3].
-   * No-op when the turn already flushed or was never recorded here; the async
-   * judge path then falls back to `updateEventMeta`.
+   * Returns true when a buffered event matched; false when the turn already
+   * flushed or was never recorded here — the async judge path then falls back
+   * to `updateEventMeta`.
    */
-  patchMeta(turnId: string, patch: Record<string, unknown>): void {
+  patchMeta(turnId: string, patch: Record<string, unknown>): boolean {
     const row = this.buffer.find((e) => e.turnId === turnId);
-    if (!row) return;
+    if (!row) return false;
     row.meta = { ...(row.meta ?? {}), ...patch };
+    return true;
   }
 
   /** jsonb merge of `patch` into the persisted event's meta; true when a row matched. */
@@ -159,12 +161,18 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return rows.length > 0;
   }
 
-  /** Random sample for the human review queue [§C4]. */
+  /** Random sample for the human review queue [§C4]; trailing-week window only. */
   async getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean } = {}): Promise<ChatEvent[]> {
     const capped = Math.min(Math.max(limit, 1), 100);
     const parts: SQL[] = [];
-    if (filter.degraded === true) parts.push(sql`${chatEvents.meta} ->> 'degraded' = 'true'`);
-    if (filter.blocked === true) parts.push(sql`${chatEvents.hallucinationBlocked}`);
+    if (filter.degraded === true) {
+      parts.push(sql`${chatEvents.meta} ->> 'degraded' = 'true'`);
+      parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
+    }
+    if (filter.blocked === true) {
+      parts.push(sql`${chatEvents.hallucinationBlocked}`);
+      parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
+    }
     const rows = await this.client
       .select()
       .from(chatEvents)

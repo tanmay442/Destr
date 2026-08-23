@@ -232,12 +232,14 @@ describe('§C2 agentic mode + expectedDocIds hits', () => {
     );
     expect(report.hits).toBe(1);
     expect(report.passRate).toBeCloseTo(0.5, 5);
+    expect(report.docHitGateActive).toBe(true);
   });
 
   it('passRate is 1 (vacuous) when no question sets expectedDocIds', async () => {
     const report = await runEval([{ id: 'x', question: 'q', mustMention: [] }], deps(), 0.7);
     expect(report.hits).toBe(0);
     expect(report.passRate).toBe(1);
+    expect(report.docHitGateActive).toBe(false);
   });
 });
 
@@ -293,9 +295,23 @@ describe('§C7 golden-report shape + gate', () => {
     expect(golden.total).toBe(2);
     expect(golden.hits).toBe(1);
     expect(golden.passRate).toBe(1);
+    expect(golden.docHitGateActive).toBe(true);
     expect(golden.avgFaithfulness).toBeCloseTo(0.82, 5);
     expect(golden.avgRetrievalRelevance).toBeNull();
     expect(new Date(golden.generatedAt).toString()).not.toBe('Invalid Date');
+  });
+
+  it('buildGoldenReport marks the doc-hit gate inactive without expectations', () => {
+    const base = {
+      answer: '', retrievedCount: 0, refusalExpected: false, refused: false,
+      faithfulness: 1, correctness: 1, contextRelevancy: 1,
+      forbiddenHit: [], passed: true, hit: undefined,
+      judgedFaithfulness: null as number | null, judgedRetrievalRelevance: null as number | null,
+    };
+    const report = aggregate([base] as never[], 0.7);
+    const golden = buildGoldenReport(report);
+    expect(golden.docHitGateActive).toBe(false);
+    expect(golden.passRate).toBe(1);
   });
 
   it('evalGateFailure passes a healthy run and fails each gate independently', () => {

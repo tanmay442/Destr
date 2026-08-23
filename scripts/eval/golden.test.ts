@@ -52,4 +52,11 @@ describe('golden question quality', () => {
     const nonsense = refusals.filter((q) => q.id.startsWith('nonsense-'));
     expect(nonsense.length).toBeGreaterThanOrEqual(3);
   });
+
+  it('§C7/F5 ships no expectedDocIds yet, so the doc-hit gate runs inactive', () => {
+    // Mock retrieval carries no document ids; flip this expectation together
+    // with the first expectedDocIds added to the golden set.
+    const withExpectations = goldenQuestions.filter((q) => (q.expectedDocIds ?? []).length > 0);
+    expect(withExpectations.map((q) => q.id)).toEqual([]);
+  });
 });
