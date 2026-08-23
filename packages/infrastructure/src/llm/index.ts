@@ -119,9 +119,7 @@ export function getGraders(
       hallucinationGrader: undefined,
     };
   }
-  if (modelProvider === getChatModel && !gradeModelId) {
-    return { queryRewriter, documentGrader, hallucinationGrader };
-  }
+  // Fresh instance per call so the shared rewrite+grading turn deadline is per-turn.
   const graders = createGraders(gradeModelId, modelProvider);
   return {
     queryRewriter: graders.queryRewriter,
