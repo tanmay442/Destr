@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok, unwrap, GRADE_MAX_ROWS } from '@app/domain';
+import { ok, unwrap, GRADE_MAX_ROWS, logger } from '@app/domain';
 import { agenticSearch, type AgenticDeps } from './agentic-search';
 
 const { searchChunksMock, rewriterMock, graderMock } = vi.hoisted(() => ({
@@ -83,16 +83,25 @@ describe('agenticSearch', () => {
     const rows = Array.from({ length: 6 }, (_, i) => chunk(`doc ${i}`, 0.9));
     searchChunksMock.mockResolvedValue(ok(rows));
     graderMock.mockResolvedValue(null);
-    const res = await agenticSearch('q', makeDeps());
-    expect(res.ok).toBe(true);
-    const r = unwrap(res);
-    expect(r.chunks.map((c) => c.content)).toEqual(['doc 0', 'doc 1', 'doc 2', 'doc 3']);
-    expect(r.degraded).toBe(true);
-    expect(r.fallbackReason).toBe('grader_unavailable');
-    expect(r.gradingUnavailable).toBe(true);
-    expect(r.outOfDomain).toBe(false);
-    expect(r.isEmpty).toBe(false);
-    expect(r.resultState).toBe('degraded');
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const res = await agenticSearch('q', makeDeps());
+      expect(res.ok).toBe(true);
+      const r = unwrap(res);
+      expect(r.chunks.map((c) => c.content)).toEqual(['doc 0', 'doc 1', 'doc 2', 'doc 3']);
+      expect(r.degraded).toBe(true);
+      expect(r.fallbackReason).toBe('grader_unavailable');
+      expect(r.gradingUnavailable).toBe(true);
+      expect(r.outOfDomain).toBe(false);
+      expect(r.isEmpty).toBe(false);
+      expect(r.resultState).toBe('degraded');
+      // §A3/T2: exactly one warn per degraded turn, tagged with the reason.
+      const degradedWarns = warnSpy.mock.calls.filter((c) => c[1] && (c[1] as { event?: string }).event === 'agentic.degraded_fallback');
+      expect(degradedWarns).toHaveLength(1);
+      expect((degradedWarns[0]![1] as { fallbackReason: string }).fallbackReason).toBe('grader_unavailable');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('genuine all-no returns top-4 fallback flagged all_filtered, not an empty wall', async () => {

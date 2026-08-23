@@ -776,7 +776,10 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
         faithfulness: 0.9,
         citationPrecision: 0.85,
       });
-      expect(compositionMock.chatEventBatcher.patchMeta).not.toHaveBeenCalled();
+      // F4 buffered-first ordering: patchMeta is attempted on both paths (and
+      // misses, since the events already flushed), then SQL persists.
+      expect(compositionMock.chatEventBatcher.patchMeta).toHaveBeenCalledTimes(2);
+      expect(compositionMock.chatEventBatcher.patchMeta.mock.calls[0]![1]).toHaveProperty('judgeScores');
     } finally {
       randomSpy.mockRestore();
     }

@@ -1202,6 +1202,47 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(JSON.stringify(event)).not.toMatch(/offerTicket":true/);
   });
 
+  it('delivers §A4 fallback instructions through the degraded tool result (T1)', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(
+        agenticResult({
+          chunks: [CHUNK_A],
+          degraded: true,
+          fallbackReason: 'all_filtered',
+          resultState: 'degraded',
+        }),
+      ) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    const tools = await captureToolsFromStreamText<{
+      searchDocumentation: {
+        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
+      };
+    }>();
+    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+      content: string;
+      similarity: number;
+    }>;
+    expect(result[0]!.similarity).toBe(-1);
+    expect(result[0]!.content).toContain('# Fallback Context');
+    expect(result[0]!.content).toContain("Note: I couldn't find a strongly matching document");
+    expect(result).toHaveLength(2);
+    // Non-degraded turns must not carry the instruction block.
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    const tools2 = await captureToolsFromStreamText<{
+      searchDocumentation: {
+        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
+      };
+    }>();
+    const ok2 = (await tools2?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+      content: string;
+    }>;
+    expect(ok2[0]!.content.startsWith('<reference')).toBe(true);
+    expect(JSON.stringify(ok2)).not.toContain('# Fallback Context');
+  });
+
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
@@ -1273,6 +1314,8 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0); // 0 < JUDGE_SAMPLE_RATE
+    // Buffered patch misses (event already flushed) → SQL persistence path.
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(false);
     await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' });
     await runPendingAfterCallbacks();
     expect(compositionMock.chatEventBatcher.updateEventMeta).toHaveBeenCalledTimes(1);
@@ -1287,20 +1330,40 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
       citationPrecision: 0.85,
     });
     expect(typeof patch.judgeScores.judgedAt).toBe('string');
-    expect(compositionMock.chatEventBatcher.patchMeta).not.toHaveBeenCalled();
   });
 
-  it('falls back to patchMeta when updateEventMeta reports the row was not persisted', async () => {
-    compositionMock.chatEventBatcher.updateEventMeta.mockResolvedValueOnce(false);
+  it('persists judge scores buffered-first; SQL only when the buffer missed (F4)', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [CHUNK_A] })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(true);
     await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3302' });
     await runPendingAfterCallbacks();
     expect(compositionMock.chatEventBatcher.patchMeta).toHaveBeenCalledTimes(1);
     expect(compositionMock.chatEventBatcher.patchMeta.mock.calls[0]![1]).toHaveProperty('judgeScores');
+    expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+  });
+
+  it('keeps partial judge verdicts when one dimension returns null (F3)', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    judgeRelevanceMock.mockResolvedValueOnce(null as unknown as { score: number; reason: string });
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(false);
+    await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3303' });
+    await runPendingAfterCallbacks();
+    const [, patch] = compositionMock.chatEventBatcher.updateEventMeta.mock.calls.at(-1)! as [
+      string,
+      { judgeScores: Record<string, unknown> },
+    ];
+    expect(patch.judgeScores).not.toHaveProperty('retrievalRelevance');
+    expect(patch.judgeScores.faithfulness).toBe(0.9);
+    expect(patch.judgeScores.citationPrecision).toBe(0.85);
+    expect(patch.judgeScores.judgedAt).toEqual(expect.any(String));
   });
 
   it('never samples the judge above the rate, on cache hits or empty retrievals', async () => {

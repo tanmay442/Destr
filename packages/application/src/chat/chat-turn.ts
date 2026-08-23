@@ -23,7 +23,7 @@ import {
   type Result,
 } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import { buildSystemPrompt } from '../prompt/build-system-prompt';
+import { buildSystemPrompt, FALLBACK_BLOCK } from '../prompt/build-system-prompt';
 import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
@@ -327,6 +327,11 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         });
         for (const citation of emitCitations(matches)) {
           capturedCitations.push(citation);
+        }
+        // §A4: the system prompt is fixed before tools run, so degraded turns
+        // receive the fallback instructions through the tool result instead.
+        if (effectiveMode === 'agentic' && degradedRef.value) {
+          return [{ content: FALLBACK_BLOCK, similarity: -1 }, ...capped];
         }
         return capped;
       },
@@ -659,7 +664,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               text: await Promise.resolve(result.text).catch(() => ''),
               citations: finalCitations,
               guardrail: hallucinationBlocked
-                ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
+                ? {
+                    outOfDomain: outOfDomainRef.value,
+                    offerTicket: true,
+                    // F11: keep degraded fidelity when a degraded turn was also blocked.
+                    ...(degradedRef.value ? { degraded: true, message: DEGRADED_BANNER_MESSAGE } : {}),
+                  }
                 : degradedRef.value
                   ? {
                       outOfDomain: false,

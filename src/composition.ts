@@ -22,7 +22,7 @@ import {
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
-  OUT_OF_DOMAIN_THRESHOLD, CCH_ENABLED,
+  CCH_ENABLED,
   defaultProcessEnv,
 } from '@app/infrastructure/config';
 import type { RerankerStatus } from '@app/infrastructure/llm';
@@ -198,7 +198,6 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
-    outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
     gradeEnabled: cfg.agenticChunkGradingEnabled,
     similarityThreshold: cfg.similarityThreshold,

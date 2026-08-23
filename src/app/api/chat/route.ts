@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, assertSameOrigin, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
-import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
+import { buildSystemPrompt, FALLBACK_BLOCK } from '@app/application/prompt/build-system-prompt';
 import {
   chatTurn,
   cacheFingerprint,
@@ -243,6 +243,11 @@ function buildChatTools(deps: {
         for (const citation of emitCitations(matches)) {
           citationTarget.push(citation);
         }
+        // §A4: the system prompt is fixed before tools run, so degraded turns
+        // receive the fallback instructions through the tool result instead.
+        if (effectiveMode === 'agentic' && degradedRef.value) {
+          return [{ content: FALLBACK_BLOCK, similarity: -1 }, ...capped];
+        }
         return capped;
       },
     }),
@@ -389,21 +394,26 @@ async function runJudge(ctx: {
       judgeRelevance(ctx.question, ctx.snippets),
       judgeFaithfulness(ctx.documents, ctx.answer),
     ]);
-    if (!relevance || !faithfulness) return;
-    const patch = {
-      judgeScores: {
-        retrievalRelevance: relevance.score,
-        faithfulness: faithfulness.score,
-        citationPrecision: faithfulness.citationPrecision,
-        judgedAt: new Date().toISOString(),
-      },
-    };
+    if (!relevance && !faithfulness) return;
+    const judgeScores: Record<string, unknown> = { judgedAt: new Date().toISOString() };
+    if (relevance) judgeScores.retrievalRelevance = relevance.score;
+    if (faithfulness) {
+      judgeScores.faithfulness = faithfulness.score;
+      judgeScores.citationPrecision = faithfulness.citationPrecision;
+    }
+    const patch = { judgeScores };
+    // Buffered-first so scores land even when the flush has not happened yet.
+    const buffered = ctx.batcherPatcher ? ctx.batcherPatcher.patchMeta(ctx.turnId, patch) : false;
+    if (buffered) return;
     const persisted = ctx.eventMetaPatcher
       ? await ctx.eventMetaPatcher.updateEventMeta(ctx.turnId, patch)
       : false;
     if (!persisted) {
-      if (ctx.batcherPatcher) ctx.batcherPatcher.patchMeta(ctx.turnId, patch);
-      else logger.debug('judge.enqueue.no_meta_patcher', { turnId: ctx.turnId });
+      // The event may flush between both attempts; retry once before giving up.
+      const retry = () => void ctx.eventMetaPatcher?.updateEventMeta(ctx.turnId, patch).catch(() => {});
+      const t = setTimeout(retry, 5_000);
+      if (typeof t.unref === 'function') t.unref();
+      logger.debug('judge.enqueue.meta_retry_scheduled', { turnId: ctx.turnId });
     }
   } catch (err) {
     logger.warn('quality judge failed', {
@@ -779,7 +789,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
               text: await Promise.resolve(result.text).catch(() => ''),
               citations: finalCitations,
               guardrail: hallucinationBlocked
-                ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
+                ? {
+                    outOfDomain: outOfDomainRef.value,
+                    offerTicket: true,
+                    // F11: keep degraded fidelity when a degraded turn was also blocked.
+                    ...(degradedRef.value ? { degraded: true, message: DEGRADED_BANNER_MESSAGE } : {}),
+                  }
                 : degradedRef.value
                   ? {
                       outOfDomain: false,

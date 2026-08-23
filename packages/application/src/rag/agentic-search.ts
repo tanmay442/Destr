@@ -1,4 +1,5 @@
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
+import { logger } from '@app/domain';
 import type { QueryRewriter, DocumentGrader, FallbackReason, AgenticResultState } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
 import {
@@ -20,7 +21,6 @@ export interface AgenticDeps {
   maxRetries?: number;
   /** Caps retry passes only (grading is bounded by GRADE_MAX_ROWS). */
   stepBudget?: number;
-  outOfDomainThreshold?: number;
   /** §B3 toggles. Off ⇒ skip rewrite / grading entirely. */
   rewriteEnabled?: boolean;
   gradeEnabled?: boolean;
@@ -154,6 +154,12 @@ export async function agenticSearch(
         const fallbackChunks = outcome.pool.slice(0, FALLBACK_CHUNK_COUNT);
         const fallbackReason: FallbackReason =
           outcome.kind === 'grading_disabled' ? 'grading_disabled' : outcome.reason;
+        logger.warn('agentic retrieval degraded; serving ungraded fallback chunks', {
+          severity: 'warn',
+          event: 'agentic.degraded_fallback',
+          fallbackReason,
+          chunks: fallbackChunks.length,
+        });
         return ok({
           chunks: fallbackChunks,
           rewrittenQuery: rewritten,

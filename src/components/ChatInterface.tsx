@@ -40,7 +40,7 @@ import {
 const FEEDBACK_RETRY_DELAY_MS = 1500;
 
 /** Default copy for the soft degraded banner when the server sends no custom message. */
-const DEGRADED_BANNER_FALLBACK = 'Based on best-effort matches — may be incomplete. Please verify.';
+const DEGRADED_BANNER_FALLBACK = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
 
 function uuidv4(): string {
   const c = globalThis.crypto;
