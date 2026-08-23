@@ -38,6 +38,13 @@ export const OUT_OF_DOMAIN_THRESHOLD = 0.3;
 export const AGENT_STEP_BUDGET = 8;
 export const AGENTIC_RETRIEVE_LIMIT = 10;
 export const AGENTIC_MAX_RETRIES = 1;
+// §A2/§A3 grading caps.
+export const GRADE_MAX_ROWS = 10;
+export const GRADE_DOC_CHAR_CAP = 3_000;
+export const GRADE_PROMPT_CHAR_BUDGET = 24_000;
+export const GRADE_BATCH_DOCS = 3;
+// §C3 live judge sampling rate (0-1).
+export const JUDGE_SAMPLE_RATE = 0.05;
 export const ANSWER_CACHE_ENABLED = true;
 export const ANSWER_CACHE_TTL_SEC = 3600;
 export const TRACE_ENABLED = false;

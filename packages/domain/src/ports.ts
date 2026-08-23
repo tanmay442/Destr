@@ -613,9 +613,26 @@ export interface QueryRewriter {
   rewrite(query: string): Promise<string>;
 }
 
-/** Binary relevance grader: returns 'yes' if document helps answer the question. */
+/**
+ * Binary relevance grading for a batch of documents.
+ * Returns one verdict per input index, or null when grading could not run
+ * (callers must return top-4 fallback chunks as degraded, not empty).
+ */
 export interface DocumentGrader {
-  grade(question: string, document: string): Promise<'yes' | 'no'>;
+  gradeAll(question: string, documents: string[]): Promise<Array<'yes' | 'no'> | null>;
+}
+
+/** Why an agentic turn fell back to ungraded context chunks. */
+export type FallbackReason = 'grader_unavailable' | 'all_filtered' | 'grading_disabled';
+
+/** Final state of an agentic retrieval turn. */
+export type AgenticResultState = 'ok' | 'degraded' | 'empty';
+
+/** Live quality-judge scores for one answered turn (0-1 each). */
+export interface JudgeScores {
+  retrievalRelevance: number;
+  faithfulness: number;
+  citationPrecision: number;
 }
 
 /** Hallucination grader: returns 'yes' when generation is grounded in documents. */
