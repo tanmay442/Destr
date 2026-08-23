@@ -184,17 +184,25 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
   const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
-  if (!graders.queryRewriter || !graders.documentGrader) {
+  // §B3: each grader is required only when its pipeline step is enabled.
+  if ((cfg.agenticQueryRewriteEnabled && !graders.queryRewriter) ||
+    (cfg.agenticChunkGradingEnabled && !graders.documentGrader)) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
+  // A toggle-disabled grader may be undefined; agentic-search only calls it
+  // behind its enable flag, so the dep stays typed as required.
   return {
     search: getSearchDeps(cfg),
-    queryRewriter: graders.queryRewriter,
-    documentGrader: graders.documentGrader,
+    queryRewriter: graders.queryRewriter!,
+    documentGrader: graders.documentGrader!,
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
     outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
+    rewriteEnabled: cfg.agenticQueryRewriteEnabled,
+    gradeEnabled: cfg.agenticChunkGradingEnabled,
+    similarityThreshold: cfg.similarityThreshold,
+    hybridEnabled: cfg.hybridEnabled,
   };
 }
 

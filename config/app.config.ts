@@ -123,6 +123,10 @@ const config: AppConfig = {
   agenticMaxRetries: AGENTIC_MAX_RETRIES,
   similarityThreshold: SIMILARITY_THRESHOLD,
   hybridEnabled: HYBRID_ENABLED,
+  // §B1 agentic step toggles — all default ON.
+  agenticQueryRewriteEnabled: true,
+  agenticChunkGradingEnabled: true,
+  hallucinationCheckEnabled: true,
   rerankerProvider: RERANKER_PROVIDER,
   gradeModel: GRADE_MODEL || undefined,
   answerCacheEnabled: ANSWER_CACHE_ENABLED,

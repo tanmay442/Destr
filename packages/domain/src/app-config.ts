@@ -90,6 +90,10 @@ export const appConfigSchema = z.object({
   agenticMaxRetries: z.coerce.number().int().nonnegative().default(1),
   similarityThreshold: z.coerce.number().min(0).max(1).default(0.5),
   hybridEnabled: z.boolean().default(true),
+  // §B1 per-step agentic pipeline toggles (all default ON, strict booleans).
+  agenticQueryRewriteEnabled: z.boolean().default(true),
+  agenticChunkGradingEnabled: z.boolean().default(true),
+  hallucinationCheckEnabled: z.boolean().default(true),
   rerankerProvider: z.enum(['cosine', 'local', 'cohere']).default('cosine'),
   gradeModel: z.string().optional(),
   answerCacheEnabled: z.boolean().default(true),

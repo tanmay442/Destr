@@ -1,12 +1,15 @@
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
-import type { QueryRewriter, DocumentGrader } from '@app/domain';
+import type { QueryRewriter, DocumentGrader, FallbackReason, AgenticResultState } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
 import {
-  OUT_OF_DOMAIN_THRESHOLD,
+  GRADE_MAX_ROWS,
   AGENTIC_RETRIEVE_LIMIT,
   AGENTIC_MAX_RETRIES,
   AGENT_STEP_BUDGET,
 } from '@app/domain';
+
+/** §A3 degraded fallback size: top 4 of the reranker-sorted fused rows. */
+const FALLBACK_CHUNK_COUNT = 4;
 
 export interface AgenticDeps {
   search: SearchDeps;
@@ -15,61 +18,69 @@ export interface AgenticDeps {
   /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
-  /** Absolute cap on total grader LLM calls this turn. */
+  /** Caps retry passes only (grading is bounded by GRADE_MAX_ROWS). */
   stepBudget?: number;
   outOfDomainThreshold?: number;
+  /** §B3 toggles. Off ⇒ skip rewrite / grading entirely. */
+  rewriteEnabled?: boolean;
+  gradeEnabled?: boolean;
+  similarityThreshold?: number;
+  hybridEnabled?: boolean;
 }
 
-/** Outcome of one agentic retrieval pass. */
+/** Outcome of one agentic retrieval turn (§A3). */
 export interface AgenticResult {
   chunks: RetrievedChunk[];
   /** Rewritten query used for the final retrieval. */
   rewrittenQuery: string;
-  /** True when no chunk cleared the relevance grade and similarity was below threshold. */
+  /** DB alias of `isEmpty`, kept for history compat. Only true when search found 0 rows. */
   outOfDomain: boolean;
+  isEmpty: boolean;
+  degraded: boolean;
+  fallbackReason: FallbackReason | null;
+  resultState: AgenticResultState;
+  /** Kept for compat; mirrors `fallbackReason === 'grader_unavailable'`. */
+  gradingUnavailable?: boolean;
 }
 
-const GRADER_CONCURRENCY = 3;
-
-async function gradeBounded(
-  query: string,
-  rows: RetrievedChunk[],
-  deps: AgenticDeps,
-): Promise<Array<'yes' | 'no'>> {
-  const grades: Array<'yes' | 'no'> = new Array(rows.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < rows.length) {
-      const i = next++;
-      try {
-        grades[i] = await deps.documentGrader.grade(query, rows[i]!.content);
-      } catch {
-        grades[i] = 'no';
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(GRADER_CONCURRENCY, rows.length) }, worker));
-  return grades;
-}
+type PassOutcome =
+  | { kind: 'empty' }
+  | { kind: 'kept'; chunks: RetrievedChunk[] }
+  | { kind: 'fallback'; reason: Exclude<FallbackReason, 'grading_disabled'>; pool: RetrievedChunk[] }
+  | { kind: 'grading_disabled'; pool: RetrievedChunk[] };
 
 /**
- * Agentic retrieval loop: 1. rewrite query, 2. retrieve + grade/drop irrelevant
- * chunks, 3. retry with a fresh rewrite of the previous rewrite if nothing kept
- * (bounded by retries, a hard total grader-call budget, and a grading
- * concurrency cap), 4. report out-of-domain when the final pool is empty and
- * below threshold. Generation + hallucination check happen in the route after
- * `streamText` returns.
+ * Agentic retrieval loop (§A3): 1. rewrite the query (toggleable), 2. retrieve
+ * fused reranker-sorted rows honoring admin similarity/hybrid knobs, 3. grade
+ * up to GRADE_MAX_ROWS in ONE batched call — grader outage or all-`no` yields a
+ * top-4 degraded fallback instead of an empty wall; only a 0-row search result
+ * produces the empty wall, 4. retry passes run solely while a pass found zero
+ * chunks with grading enabled and retries remain.
+ * Generation + hallucination check happen in the route after `streamText`.
  */
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,
 ): Promise<Result<AgenticResult>> {
   if (originalQuery.trim() === '') {
-    return ok({ chunks: [], rewrittenQuery: originalQuery, outOfDomain: true });
+    return ok({
+      chunks: [],
+      rewrittenQuery: originalQuery,
+      outOfDomain: true,
+      isEmpty: true,
+      degraded: false,
+      fallbackReason: null,
+      resultState: 'empty',
+      gradingUnavailable: false,
+    });
   }
 
   try {
+    const rewriteOn = deps.rewriteEnabled !== false;
+    const gradeOn = deps.gradeEnabled !== false;
+
     const tryRewrite = async (query: string): Promise<string> => {
+      if (!rewriteOn) return query;
       try {
         return await deps.queryRewriter.rewrite(query);
       } catch {
@@ -77,43 +88,95 @@ export async function agenticSearch(
       }
     };
 
+    // stepBudget now only caps retry passes through the maxRetries clamp.
     const stepBudget = Math.max(1, deps.stepBudget ?? AGENT_STEP_BUDGET);
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
-    // Share the budget across all passes so a dense first retrieval cannot starve the retry loop.
-    const perPassBudget = Math.max(1, Math.floor(stepBudget / (maxRetries + 1)));
-    let budget = stepBudget;
 
-    const runPass = async (query: string): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> => {
-      const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
+    const runPass = async (query: string): Promise<PassOutcome> => {
+      const found = await searchChunks(
+        query,
+        {
+          limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT,
+          threshold: deps.similarityThreshold,
+          hybridEnabled: deps.hybridEnabled,
+        },
+        deps.search,
+      );
       if (!found.ok) {
         throw new ExternalServiceError('Agentic retrieval failed', found.error);
       }
       const rows = found.value;
-      const graded = rows.slice(0, Math.min(perPassBudget, budget));
-      budget -= graded.length;
-      const grades = await gradeBounded(query, graded, deps);
-      const kept = graded.filter((_, i) => grades[i] === 'yes');
-      const maxSimilarity = graded.reduce((m, r) => Math.max(m, r.similarity), 0);
-      return { chunks: kept, maxSimilarity };
+      if (rows.length === 0) return { kind: 'empty' };
+      if (!gradeOn) return { kind: 'grading_disabled', pool: rows };
+
+      // Explicit visible cap on graded rows; the ranked tail is dropped audibly.
+      const graded = rows.slice(0, GRADE_MAX_ROWS);
+      let verdicts: Array<'yes' | 'no'> | null;
+      try {
+        verdicts = await deps.documentGrader.gradeAll(query, graded.map((r) => r.content));
+      } catch {
+        verdicts = null;
+      }
+      if (verdicts === null) return { kind: 'fallback', reason: 'grader_unavailable', pool: rows };
+      const kept = graded.filter((_, i) => verdicts[i] === 'yes');
+      if (kept.length === 0) return { kind: 'fallback', reason: 'all_filtered', pool: rows };
+      return { kind: 'kept', chunks: kept };
     };
 
     let rewritten = await tryRewrite(originalQuery);
-    let pass = await runPass(rewritten);
+    let outcome = await runPass(rewritten);
 
-    for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0 && budget > 0; attempt++) {
+    // Degraded outcomes return immediately; retries are only useful when the
+    // search itself came back empty (a fresh rewrite may find rows).
+    for (
+      let attempt = 0;
+      attempt < maxRetries && gradeOn && outcome.kind === 'empty';
+      attempt++
+    ) {
       rewritten = await tryRewrite(rewritten);
-      pass = await runPass(rewritten);
+      outcome = await runPass(rewritten);
     }
 
-    const outOfDomain =
-      pass.chunks.length === 0 &&
-      pass.maxSimilarity < (deps.outOfDomainThreshold ?? OUT_OF_DOMAIN_THRESHOLD);
-
-    return ok({
-      chunks: pass.chunks,
-      rewrittenQuery: rewritten,
-      outOfDomain,
-    });
+    switch (outcome.kind) {
+      case 'kept':
+        return ok({
+          chunks: outcome.chunks,
+          rewrittenQuery: rewritten,
+          outOfDomain: false,
+          isEmpty: false,
+          degraded: false,
+          fallbackReason: null,
+          resultState: 'ok',
+          gradingUnavailable: false,
+        });
+      case 'fallback':
+      case 'grading_disabled': {
+        const fallbackChunks = outcome.pool.slice(0, FALLBACK_CHUNK_COUNT);
+        const fallbackReason: FallbackReason =
+          outcome.kind === 'grading_disabled' ? 'grading_disabled' : outcome.reason;
+        return ok({
+          chunks: fallbackChunks,
+          rewrittenQuery: rewritten,
+          outOfDomain: false,
+          isEmpty: false,
+          degraded: true,
+          fallbackReason,
+          resultState: 'degraded',
+          gradingUnavailable: fallbackReason === 'grader_unavailable',
+        });
+      }
+      case 'empty':
+        return ok({
+          chunks: [],
+          rewrittenQuery: rewritten,
+          outOfDomain: true,
+          isEmpty: true,
+          degraded: false,
+          fallbackReason: null,
+          resultState: 'empty',
+          gradingUnavailable: false,
+        });
+    }
   } catch (e) {
     return err(new ExternalServiceError('Agentic search failed', e));
   }
