@@ -69,7 +69,7 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
   - `/chat(.*)`, `/admin(.*)`, `/api/chat(.*)`, `/api/admin(.*)` require an active authenticated session.
   - `/admin(.*)` and `/api/admin(.*)` additionally require `role === 'admin'` (DB-first, claims fallback for pre-DB-row admins).
   - Non-admin page visits redirect to `/chat`; non-admin API calls return `HTTP 403`; other unmatched `/api/*` routes return `401`.
-  - Exemptions: `/api/admin/analytics/rollup` and `/api/admin/queue/sweep` accept a valid `Authorization: Bearer <CRON_SECRET>`; `/api/admin/ingest-worker(.*)` is QStash-signed and excluded from middleware auth.
+  - Exemptions: `/api/admin/analytics/rollup`, `/api/admin/queue/sweep`, and `/api/cron/refresh-quality` accept a valid `Authorization: Bearer <CRON_SECRET>`; `/api/admin/ingest-worker(.*)` is QStash-signed and excluded from middleware auth.
 - **Defense in Depth**: the admin layout invokes `requireAdmin()`, and admin API routes re-check `requireAdminRoute`, independent of middleware.
 - **Server Action Gating**: every admin server action in `src/app/(app)/admin/actions.ts` invokes `requireAdmin()` first.
 
@@ -96,11 +96,17 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 - **Filters**: assignee and text search beyond status.
 
 ### Analytics & Telemetry Engine (`/admin/analytics`)
-Four tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
+Five tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
 1. **Statistics**: turns, hallucination blocks, out-of-domain refusals, self-serve rate; 12-week SVG `LineChart` with 5% hallucination threshold; token-cost estimate; 7-day `ActivityBars`.
 2. **Performance**: cache-hit rate + trend; p50/p95 latency (`retrieve`, `generate`, `total`); Agentic vs Vector avg tokens/query; top-5 cache-buster queries; agentic retry rate.
-3. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
-4. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
+3. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) and the degraded-answer rate over a trailing 7-day window — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
+4. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
+5. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
+
+### Quality Review Queue (`/admin/quality`)
+- Lists up to 20 recent **degraded** (top-4 fallback) and **guardrail-blocked** turns each, showing the query, retrieved chunk ids, judge scores when sampled, and any fallback reason from `chat_events.meta`.
+- Reviewers record a verdict — `good`, `bad`, or `docs_missing` — with an optional note; one verdict per turn per reviewer (unique index), stored in `quality_reviews`.
+- Reviews feed the analytics quality trends; the daily `/api/cron/refresh-quality` job snapshots judge averages (see §8.6).
 
 ### Comprehensive Audit Log (`/admin/audit`)
 - Consolidated over `audit_events`; filterable by `kind` (`document`/`ticket`/`user`/`settings`; `chat` entries from conversation deletions and history purges — see §5.1 — appear under *All kinds* but are not yet a quick-filter option), `action`, `actor`, `documentId`/`ticketId`, and date range.
@@ -129,8 +135,9 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 | `app_settings` | Single-row dynamic runtime config | `id` (fixed 1), `overrides` (JSONB), `version`, `updated_at`, `updated_by` |
 | `audit_events` | Central audit trail | `id`, `kind`, `action`, `actor_id`, `target_type`, `target_id`, `details` (JSONB), `source_ref`, `at` |
 | `audit_dead_letter` | Fallback store for failed audit writes | `id`, `kind`, `payload` (JSONB), `error`, `attempted_at`, `replayed` |
-| `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB) |
+| `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB — quality flags `degraded`/`fallbackReason`/`isEmpty`/`resultState`, sampled `judgeScores`, `turn_deadline`) |
 | `chat_feedback` | Sentiment votes | `turn_id` (PK, FK→`chat_events`), `feedback` (±1), `document_ids`, `chunk_ids`, `created_at` |
+| `quality_reviews` | Human verdicts on judge-flagged turns | `id` (serial PK), `turn_id` (FK→`chat_events.turn_id`, ON DELETE CASCADE), `reviewer_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `verdict` (`good`/`bad`/`docs_missing`), `note`, `created_at`; unique `(turn_id, reviewer_id)` |
 | `chat_conversations` | Persisted user chats (one row per conversation) | `id` (uuid PK), `user_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `title`, `message_count`, `created_at`, `updated_at` (last activity; retention key) |
 | `chat_messages` | Stored transcript messages per conversation | `id` (bigserial PK), `conversation_id` (FK→`chat_conversations`, ON DELETE CASCADE), `turn_id` (semantic link to `chat_events`, no FK), `role` (`user`/`assistant`), `content` (JSONB snapshot ≤256 KB), `created_at` |
 | `chat_daily_stats` | Materialized view of daily aggregates (refreshed by the telemetry job) | `day`, `mode`, `total`, `p50_ms`, `p95_ms`, `hallucination_count`, `ood_count`, `tickets_created`, `self_serve_count`, `avg_max_similarity`, `unique_users`, `tokens_in/out` |
@@ -153,6 +160,7 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 ### Turn Answer Cache
 - **Deterministic keying**: normalizes whitespace/casing/punctuation; incorporates embedding + chat model identifiers and the runtime retrieval fingerprint (mode, similarity threshold, hybrid flag, reranker). Keys are `rag:answer:<sha256>`, namespaced per user — a cached answer is never served cross-user.
 - **Providers**: `InMemoryAnswerCache` (LRU + TTL, 5,000-key sweep) for local dev; `UpstashAnswerCache` (Redis, TTL in **seconds** per `ANSWER_CACHE_TTL_SEC`, default 3600; value base64-wrapped) when Upstash is configured. Cache read/write failures are swallowed so caching never breaks the request path.
+- **Cache exclusion (`shouldCache`)**: turns that were guardrail-blocked, produced empty output, or returned a degraded top-4 fallback are never cached, so a retrieval outage can't poison answers for later identical queries.
 
 ---
 
@@ -165,13 +173,13 @@ pnpm eval          # local mock evaluation (deterministic deps)
 EVAL_REAL=1 pnpm eval   # live model evaluation with LLM grading (scheduled weekly in CI)
 ```
 
-- **Golden dataset (`golden.ts`)**: phrase-based — `{id, question, mustMention, forbidden?, refusalExpected?}`, no ground-truth answers or reference chunk IDs.
+- **Golden dataset (`golden.ts`)**: phrase-based — `{id, question, mustMention, forbidden?, refusalExpected?}`, plus agentic-mode entries (`mode: 'agentic'`) with optional `expectedDocIds` reference chunk ids; runs lacking `expectedDocIds` are flagged via a doc-hit gate warning.
 - **Metrics (0–1)**:
   - **Faithfulness**: LLM hallucination grader per response.
   - **Correctness**: lexical `mustMention` match ratio (not LLM-graded).
   - **ContextRelevancy**: approximation of retrieval recall (`mustMention` present in retrieved context).
   - A query passes when `faithfulness === 1`, no `forbiddenHit` in the answer, and `correctness >= 0.5`; refusal-expected queries are scored separately.
-- **Thresholds**: `EVAL_FAITHFULNESS_THRESHOLD` (default 0.7) gates live runs; CI (`.github/workflows/eval.yml`) runs weekly and auto-opens/closes failure issues.
+- **Thresholds**: `EVAL_FAITHFULNESS_THRESHOLD` (default 0.7) gates live runs; CI (`.github/workflows/eval.yml`) runs weekly and auto-opens/closes failure issues. Every PR to `master` additionally runs a **mock eval gate** (`eval-mock` job) that uploads the deterministic `eval/golden-report.json` as a build artifact.
 
 ---
 
@@ -206,14 +214,14 @@ The root layout (`src/app/layout.tsx`) renders the `google-site-verification` me
 
 | Variable | Role | Privileges | Used by |
 |---|---|---|---|
-| `DATABASE_URL` | `rag_app` (least privilege) | `SELECT/INSERT/UPDATE/DELETE` on the 11 app tables, `USAGE, SELECT` on sequences, `USAGE` on schema `public`. **No** DDL, no `TRUNCATE`/`TRIGGER`/`REFERENCES`, no `_migrations` access, no role management, `NOBYPASSRLS` | App runtime (Next.js API routes, CLI, scripts that do DML) |
+| `DATABASE_URL` | `rag_app` (least privilege) | `SELECT/INSERT/UPDATE/DELETE` on the 12 app tables, `USAGE, SELECT` on sequences, `USAGE` on schema `public`. **No** DDL, no `TRUNCATE`/`TRIGGER`/`REFERENCES`, no `_migrations` access, no role management, `NOBYPASSRLS` | App runtime (Next.js API routes, CLI, scripts that do DML) |
 | `MIGRATION_DATABASE_URL` | DB owner (e.g. `neondb_owner`) | Full (owner) | `pnpm db:migrate` (`scripts/migrate.ts` → `scripts/apply-migration.mjs`), `drizzle-kit push`/`studio`/`introspect` |
 
 Every tool that runs DDL prefers `MIGRATION_DATABASE_URL ?? DATABASE_URL` (`scripts/migrate.ts`, `scripts/apply-migration.mjs`, `drizzle.config.ts`). The app never holds the owner credential, so a leaked `DATABASE_URL` can no longer drop tables, plant triggers, or create roles.
 
-**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_conversations`, `chat_events`, `chat_feedback`, `chat_messages`, `chunks`, `documents`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_conversations`, `chat_events`, `chat_feedback`, `chat_messages`, `chunks`, `documents`, `quality_reviews`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
 
-**Manual runbook step for the chat history tables.** Migrations apply the DDL but not the live GRANT/RLS state — after applying `0018_chat_history.sql`, run the following as the DDL-capable owner (same pattern as the original rollout):
+**Manual runbook step for the chat history and quality tables.** Migrations apply the DDL but not the live GRANT/RLS state — after applying `0018_chat_history.sql` (and likewise `0020_military_mathemanic.sql`/`0021_misty_harbor.sql` for `quality_reviews`), run the following as the DDL-capable owner (same pattern as the original rollout):
 
 ```sql
 ALTER TABLE chat_conversations ENABLE ROW LEVEL SECURITY;
@@ -222,6 +230,11 @@ CREATE POLICY rag_app_full_access ON chat_conversations FOR ALL TO rag_app USING
 CREATE POLICY rag_app_full_access ON chat_messages      FOR ALL TO rag_app USING (true) WITH CHECK (true);
 GRANT SELECT, INSERT, UPDATE, DELETE ON chat_conversations, chat_messages TO rag_app;
 GRANT USAGE, SELECT ON SEQUENCE chat_messages_id_seq TO rag_app;
+
+ALTER TABLE quality_reviews ENABLE ROW LEVEL SECURITY;
+CREATE POLICY rag_app_full_access ON quality_reviews FOR ALL TO rag_app USING (true) WITH CHECK (true);
+GRANT SELECT, INSERT, UPDATE, DELETE ON quality_reviews TO rag_app;
+GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 ```
 
 **Skipping this step makes the app see zero rows silently** — RLS is default-deny, so without a policy (and grants) for `rag_app` every history query returns nothing. Verify afterwards that `rag_app` reads and writes normally while a role without a policy sees zero rows.
@@ -238,3 +251,7 @@ Uploads are processed asynchronously through QStash (`POST /api/admin/ingest-wor
 - **`QSTASH_DLQ_URL`** — set it to `https://<app>/api/admin/ingest-dead-letter` (public route, gated by the QStash signature exactly like the ingest worker: `Receiver.verify` with `QSTASH_CURRENT_SIGNING_KEY`/`QSTASH_NEXT_SIGNING_KEY`, 5-minute replay window, 1 MB cap). The handler persists the failure into the existing `audit_dead_letter` table with `kind='ingest'` (payload holds `documentId`, error, timestamp) — no new table, no migration — and flips the document to `failed` so it is visible in the admin UI.
 - **Sweeper** — `GET /api/admin/queue/sweep` is for the Vercel cron and requires `Authorization: Bearer <CRON_SECRET>`; `POST` is admin-authenticated. It marks documents stuck `queued` past 24 h as `failed` — a backstop for failures that never reached the DLQ (e.g. DLQ delivery itself failing, or old messages enqueued before DLQ was configured). The route is public at the middleware level but rejects an unauthenticated GET with 405.
 - Both routes are in the Clerk middleware `isPublicRoute` list **only** because each enforces its own signature/secret; they are not browsable by anonymous users.
+
+### 8.6 Quality refresh cron (`/api/cron/refresh-quality`)
+
+Daily Vercel cron (02:15 UTC, after the 02:00 analytics rollup) that refreshes quality aggregates: it re-runs `refreshDailyStats()` and snapshots the trailing 7-day judge averages (faithfulness, retrieval relevance, degraded rate), logging a structured `cron.refresh_quality` event with the results. Auth mirrors `/api/admin/analytics/rollup`: `GET` requires `Authorization: Bearer <CRON_SECRET>` (401 otherwise, warn-once when `CRON_SECRET` is unset); there is no admin `POST` variant. The route is middleware-exempt for the same reason as §8.5's cron routes — it enforces its own secret.

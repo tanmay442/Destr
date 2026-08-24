@@ -22,7 +22,7 @@
 
 ## Overview
 
-**Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback, and real-time administrative telemetry. Chats persist per signed-in account across sessions and devices, with automatic expiry on an admin-configured retention window.
+**Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback (with graceful top-4 degraded answers instead of empty replies), and real-time administrative telemetry. Answer quality is continuously monitored via sampled LLM judges plus an admin review queue. Chats persist per signed-in account across sessions and devices, with automatic expiry on an admin-configured retention window.
 
 ---
 
@@ -80,7 +80,7 @@ src/                # Next.js App Router shell, UI components, and single compos
 Every commit and pull request is validated through automated quality gates:
 
 ```bash
-# Run full quality gate: Vitest (1,200+ tests) + Typecheck + ESLint + Architecture Rules
+# Run full quality gate: Vitest (1,400+ tests) + Typecheck + ESLint + Architecture Rules
 pnpm gate
 
 # Run quality gate + Next.js production build:
@@ -88,9 +88,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-- **136 Test Files**: 131 passed, 5 skipped (live-DB gated).
-- **1,293 Total Tests**: 1,229 passed, 64 skipped.
-- **514 Architecture Modules**: 1,329 dependencies checked with **0 violations** (`pnpm arch`).
+- **142 Test Files**: 136 passed, 6 skipped (live-DB gated).
+- **1,463 Total Tests**: 1,387 passed, 76 skipped.
+- **535 Architecture Modules**: 1,410 dependencies checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 

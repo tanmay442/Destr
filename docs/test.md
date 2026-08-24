@@ -8,10 +8,10 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **136 files** | 131 passed, 5 skipped (live-DB gated) |
-| **Total Test Cases** | **1,293 tests** | 1,229 passed, 64 skipped (live-DB / external network gated) |
-| **Architecture Modules** | **514 modules** | 1,329 dependencies checked with **0 violations** |
-| **Suite Run Duration** | **~45s** | Full suite execution including transform, setup, import, and runner |
+| **Total Test Files** | **142 files** | 136 passed, 6 skipped (live-DB gated) |
+| **Total Test Cases** | **1,463 tests** | 1,387 passed, 76 skipped (live-DB / external network gated) |
+| **Architecture Modules** | **535 modules** | 1,410 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~37s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
@@ -93,7 +93,12 @@ Multi-implementation ports are validated through **shared contract-assertion har
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
   Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, first-turn prefetching, and answer cache hit/miss semantics.
 - **Agentic Retrieval (`packages/application/src/rag/agentic-search.test.ts`)**:
-  Query rewriter -> document grader -> hallucination check loop, step budget enforcement, out-of-domain detection.
+  Query rewriter -> document grader -> hallucination check loop, step budget enforcement, out-of-domain detection, and degraded top-4 fallback (grader outage / all-filtered / grading-disabled reasons, `GRADE_MAX_ROWS` batching cap, rewrite & grading step toggles).
+- **True Quality Checks (PR #60 suites)**:
+  - **LLM Judges (`packages/infrastructure/src/llm/judge.test.ts`, `graders.test.ts`)**: relevance/faithfulness judging with 10s timeout -> null, retry + lenient parse, untrusted-prompt fencing; batched `gradeAll` null-on-outage contract.
+  - **Cache gating (`packages/application/src/chat/__tests__/should-cache.test.ts`)**: blocked, empty, and degraded turns are excluded from the answer cache.
+  - **Event meta (`packages/application/src/chat/__tests__/build-event-meta.test.ts`)**: `degraded` / `fallbackReason` / `isEmpty` / `resultState` / `judgeScores` quality fields on `chat_events.meta`.
+  - **Quality review queue (`packages/infrastructure/src/db/__tests__/quality-reviews-repo.test.ts`)**: verdicts (`good`/`bad`/`docs_missing`), one review per turn per reviewer, sampled-turn listing.
 - **Admin Document & Ingestion (`packages/application/src/admin/__tests__/`)**:
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.
 - **Ingest Status Poller (`src/app/api/admin/documents/status/route.test.ts`)**:
