@@ -5,11 +5,11 @@ import { VECTOR_DIM } from '../db/schema-vector';
 import { embedBatchWithModel } from './embedding-batch-helper';
 import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
 
-export function getOllamaEmbeddingModelId(): string {
+function getOllamaEmbeddingModelId(): string {
   return process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
 }
 
-export function getOllamaEmbeddingModel(): EmbeddingModelV3 {
+function getOllamaEmbeddingModel(): EmbeddingModelV3 {
   const baseURL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
   const provider = createOpenAI({ apiKey: 'ollama', baseURL: `${baseURL}/v1` });
   return provider.textEmbedding(getOllamaEmbeddingModelId()) as EmbeddingModelV3;

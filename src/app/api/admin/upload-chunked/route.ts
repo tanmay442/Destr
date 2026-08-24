@@ -17,7 +17,7 @@ const MAX_DELIMITER_LENGTH = 200;
 const UPLOAD_CHUNKED_WINDOW_MS = 60_000;
 const UPLOAD_CHUNKED_RATE_LIMIT = 10;
 
-export function inspectDelimited(text: string, delimiter: string): { chunks: number; maxSegment: number } {
+function inspectDelimited(text: string, delimiter: string): { chunks: number; maxSegment: number } {
   if (delimiter.length === 0) return { chunks: 1, maxSegment: text.length };
   let chunks = 1;
   let maxSegment = 0;

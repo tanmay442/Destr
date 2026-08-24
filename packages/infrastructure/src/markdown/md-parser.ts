@@ -64,7 +64,7 @@ function isFenceOpener(line: string): { marker: string } | null {
 
 /** Split text at delimiter lines, ignoring lines that appear inside fenced
  *  code blocks so documented delimiters are not treated as segment breaks. */
-export function splitOutsideFences(text: string, delimiter: string): string[] {
+function splitOutsideFences(text: string, delimiter: string): string[] {
   const fenceRe = new RegExp(`^${escapeRegExp(delimiter)}\\s*$`);
   const lines = text.split(/\r?\n/);
   const segments: string[] = [];

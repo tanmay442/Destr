@@ -39,7 +39,7 @@ export interface BranchInfo {
  * delete a branch without it, so a human/alias branch whose name happens to
  * match a test prefix is never touched.
  */
-export const TEST_BRANCH_TAG = '__ragtest__';
+const TEST_BRANCH_TAG = '__ragtest__';
 
 /** Full test-owned branch name, e.g. `dev-test__ragtest__`. */
 export function makeTestBranchName(base: string): string {
