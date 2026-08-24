@@ -63,11 +63,11 @@ export function AppShellClient({
       {!open ? (
         <Button
           type="button"
-          variant="outline"
-          size="icon"
+          variant="ghost"
+          size="icon-sm"
           onClick={toggle}
           aria-label="Open sidebar"
-          className="fixed top-4 left-4 z-40 hidden size-10 rounded-full bg-card/90 shadow-sm backdrop-blur-md hover:bg-surface-elevated md:inline-flex"
+          className="fixed top-4 left-4 z-40 hidden text-muted-foreground hover:bg-surface-elevated hover:text-foreground md:inline-flex"
           data-testid="app-sidebar-reveal"
         >
           <PanelLeft aria-hidden />

@@ -320,40 +320,22 @@ export function SettingsClient() {
 
   return (
     <section className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3 border-b border-border-subtle pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
-          <p className="text-sm text-muted-foreground">
-            Configure persona, guardrails, chunking, and retrieval options.
-            <Badge variant="outline" className="ml-2 align-middle text-[11px] font-medium text-muted-foreground">
-              v{version}
-            </Badge>
-          </p>
+          <p className="text-sm text-muted-foreground">Configure persona, guardrails, chunking, and retrieval options.</p>
         </div>
         <div className="flex items-center gap-2">
           {changedKeys.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setValues({ ...baseline })}
-              disabled={saving}
-            >
+            <Button variant="outline" size="sm" onClick={() => setValues({ ...baseline })} disabled={saving}>
               <Undo2 data-icon="inline-start" />
               Reset
             </Button>
           ) : null}
-          <Button
-            size="sm"
-            onClick={() => setDiffOpen(true)}
-            disabled={changedKeys.length === 0 || saving}
-            data-testid="review-save"
-          >
+          <Button size="sm" onClick={() => setDiffOpen(true)} disabled={changedKeys.length === 0 || saving} data-testid="review-save">
             Review &amp; Save
             {changedKeys.length > 0 ? (
-              <Badge
-                variant="secondary"
-                className="ml-1 bg-primary-foreground/20 text-primary-foreground"
-              >
+              <Badge variant="secondary" className="ml-1 bg-primary-foreground/20 text-primary-foreground">
                 {changedKeys.length}
               </Badge>
             ) : null}
@@ -362,25 +344,16 @@ export function SettingsClient() {
       </div>
 
       <Tabs defaultValue="persona" className="flex w-full flex-col gap-6">
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-3 sm:gap-0">
-          <TabsTrigger
-            value="persona"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+        <TabsList className="h-auto w-full justify-start gap-1 bg-muted p-1 sm:h-10">
+          <TabsTrigger value="persona" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Shield data-icon="inline-start" />
             Persona &amp; Guardrails
           </TabsTrigger>
-          <TabsTrigger
-            value="chunking"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+          <TabsTrigger value="chunking" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Cpu data-icon="inline-start" />
             Chunking Strategy
           </TabsTrigger>
-          <TabsTrigger
-            value="retrieval"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+          <TabsTrigger value="retrieval" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Sliders data-icon="inline-start" />
             Retrieval Strategy
           </TabsTrigger>
@@ -424,26 +397,39 @@ export function SettingsClient() {
             </Card>
 
             {fieldMap.has('customInstructions') ? (
-              <FieldControl
-                field={fieldMap.get('customInstructions')!}
-                value={values['customInstructions']}
-                onChange={(v) => update('customInstructions', v)}
-                onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
-              />
+              <Card className="gap-0">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Custom instructions</CardTitle>
+                  <CardDescription>Additional persona guidance injected into every prompt.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FieldControl
+                    field={fieldMap.get('customInstructions')!}
+                    value={values['customInstructions']}
+                    onChange={(v) => update('customInstructions', v)}
+                    onReset={() => update('customInstructions', fieldMap.get('customInstructions')!.default)}
+                  />
+                </CardContent>
+              </Card>
             ) : null}
 
             {extraPersonaFields.length > 0 ? (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {extraPersonaFields.map((field) => (
-                  <FieldControl
-                    key={field.key}
-                    field={field}
-                    value={values[field.key]}
-                    onChange={(v) => update(field.key, v)}
-                    onReset={() => update(field.key, field.default)}
-                  />
-                ))}
-              </div>
+              <Card className="gap-0">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Additional persona fields</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {extraPersonaFields.map((field) => (
+                    <FieldControl
+                      key={field.key}
+                      field={field}
+                      value={values[field.key]}
+                      onChange={(v) => update(field.key, v)}
+                      onReset={() => update(field.key, field.default)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
             ) : null}
 
             {fieldMap.has('outOfScopeTopics') ? (
@@ -603,33 +589,36 @@ export function SettingsClient() {
         </TabsContent>
 
         <TabsContent value="retrieval" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden">
-          <div data-testid="group-Retrieval" className="flex flex-col gap-6">
-            <Card className="gap-0">
-              <CardHeader>
-                <CardTitle className="text-base">Retrieval settings</CardTitle>
-                <CardDescription>
-                  Fine-tune vector search threshold, agentic step limits, reranker provider, and response cache parameters.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
-                  <div className="flex flex-col gap-4">
-                    <h4 className="text-sm font-medium text-foreground">Search &amp; reranking</h4>
-                    {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'gradeModel'].map((key) => {
-                      const field = fieldMap.get(key);
-                      if (!field) return null;
-                      return (
-                        <FieldControl
-                          key={field.key}
-                          field={field}
-                          value={values[field.key]}
-                          onChange={(v) => update(field.key, v)}
-                          onReset={() => update(field.key, field.default)}
-                        />
-                      );
-                    })}
-                  </div>
+          <div data-testid="group-Retrieval" className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card className="gap-0">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-base">Search &amp; reranking</CardTitle>
+                  <CardDescription>Vector threshold, hybrid, reranker and grade model.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'gradeModel'].map((key) => {
+                    const field = fieldMap.get(key);
+                    if (!field) return null;
+                    return (
+                      <FieldControl
+                        key={field.key}
+                        field={field}
+                        value={values[field.key]}
+                        onChange={(v) => update(field.key, v)}
+                        onReset={() => update(field.key, field.default)}
+                      />
+                    );
+                  })}
+                </CardContent>
+              </Card>
 
+              <Card className="gap-0">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-base">Agentic controls</CardTitle>
+                  <CardDescription>Step budget and per-step pipeline toggles.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-6">
                   <div className="flex flex-col gap-4">
                     <h4 className="text-sm font-medium text-foreground">Agentic budget limits</h4>
                     {['agentStepBudget', 'agenticRetrieveLimit', 'agenticMaxRetries'].map((key) => {
@@ -645,7 +634,9 @@ export function SettingsClient() {
                         />
                       );
                     })}
-
+                  </div>
+                  <Separator />
+                  <div className="flex flex-col gap-4">
                     <h4 className="text-sm font-medium text-foreground">Agentic pipeline steps</h4>
                     {['agenticQueryRewriteEnabled', 'agenticChunkGradingEnabled', 'hallucinationCheckEnabled'].map((key) => {
                       const field = fieldMap.get(key);
@@ -661,65 +652,50 @@ export function SettingsClient() {
                       );
                     })}
                   </div>
-                </div>
+                </CardContent>
+              </Card>
+            </div>
 
-                <Separator />
-
-                <div className="flex flex-col gap-4">
-                  <h4 className="text-sm font-medium text-foreground">Cache settings</h4>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    {['answerCacheEnabled', 'answerCacheTtlSec'].map((key) => {
-                      const field = fieldMap.get(key);
-                      if (!field) return null;
-                      return (
-                        <FieldControl
-                          key={field.key}
-                          field={field}
-                          value={values[field.key]}
-                          onChange={(v) => update(field.key, v)}
-                          onReset={() => update(field.key, field.default)}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {['retrievalModeRolloutPercent', 'captureQueryText'].map((key) => {
-                    const field = fieldMap.get(key);
-                    if (!field) return null;
-                    return (
-                      <FieldControl
-                        key={field.key}
-                        field={field}
-                        value={values[field.key]}
-                        onChange={(v) => update(field.key, v)}
-                        onReset={() => update(field.key, field.default)}
-                      />
-                    );
-                  })}
-                </div>
-
-                {extraRetrievalFields.length > 0 ? (
-                  <>
-                    <Separator />
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      {extraRetrievalFields.map((field) => (
-                        <FieldControl
-                          key={field.key}
-                          field={field}
-                          value={values[field.key]}
-                          onChange={(v) => update(field.key, v)}
-                          onReset={() => update(field.key, field.default)}
-                        />
-                      ))}
-                    </div>
-                  </>
-                ) : null}
+            <Card className="gap-0">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-base">Cache &amp; rollout</CardTitle>
+                <CardDescription>Response cache, rollout and query capture.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {['answerCacheEnabled', 'answerCacheTtlSec', 'retrievalModeRolloutPercent', 'captureQueryText'].map((key) => {
+                  const field = fieldMap.get(key);
+                  if (!field) return null;
+                  return (
+                    <FieldControl
+                      key={field.key}
+                      field={field}
+                      value={values[field.key]}
+                      onChange={(v) => update(field.key, v)}
+                      onReset={() => update(field.key, field.default)}
+                    />
+                  );
+                })}
               </CardContent>
             </Card>
+
+            {extraRetrievalFields.length > 0 ? (
+              <Card className="gap-0">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Additional retrieval</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {extraRetrievalFields.map((field) => (
+                    <FieldControl
+                      key={field.key}
+                      field={field}
+                      value={values[field.key]}
+                      onChange={(v) => update(field.key, v)}
+                      onReset={() => update(field.key, field.default)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
         </TabsContent>
       </Tabs>

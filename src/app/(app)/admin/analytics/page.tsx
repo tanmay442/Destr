@@ -284,13 +284,7 @@ export default async function AnalyticsPage() {
       {/* Header — symmetry + live badge */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
-            <Badge variant="outline" className="gap-1.5 rounded-full border-primary/20 bg-primary/5 text-xs font-normal">
-              <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
-              Live
-            </Badge>
-          </div>
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
           <p className="text-sm text-muted-foreground">Quality, performance, and feedback across your knowledge agent.</p>
         </div>
         {hasChat ? (

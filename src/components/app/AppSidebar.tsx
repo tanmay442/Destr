@@ -13,8 +13,6 @@ import {
   BarChart3,
   ScrollText,
   Settings,
-  Menu,
-  X,
   LogOut,
   PanelLeft,
   SquarePen,
@@ -297,13 +295,13 @@ function MobileSidebar({
         <SheetTrigger asChild>
           <Button
             type="button"
-            variant="outline"
-            size="icon"
+            variant="ghost"
+            size="icon-sm"
             aria-label="Open navigation"
-            className="rounded-lg bg-card/90 shadow-sm hover:bg-surface-elevated"
+            className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
             data-testid="app-mobile-hamburger"
           >
-            <Menu aria-hidden />
+            <PanelLeft aria-hidden />
           </Button>
         </SheetTrigger>
         <Link
@@ -342,7 +340,7 @@ function MobileSidebar({
                 aria-label="Close navigation"
                 className="text-muted-foreground hover:bg-surface-elevated hover:text-foreground"
               >
-                <X aria-hidden />
+                <PanelLeft aria-hidden />
               </Button>
             </SheetClose>
           </div>
