@@ -1,5 +1,10 @@
 import type { AppConfig } from '@app/domain';
-import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP } from '@app/domain';
+import {
+  CITATION_SNIPPET_MAX,
+  TOOL_CONTENT_CAP,
+  FALLBACK_CHUNK_COUNT,
+  fallbackBlock,
+} from '@app/domain';
 import type { RetrievedChunk } from '../rag/search';
 
 const TOOL_CONTRACT_BLOCK = `# Interaction Guidelines
@@ -28,9 +33,11 @@ const GUARDRAIL_BLOCK = `# Guardrails
 - Grade chunks: use only highly relevant information and ignore off-topic chunks.
 - Never answer using information outside the provided reference documentation. If unsure, offer to open a ticket.`;
 
-/** §A4 exact fallback-context block, injected only when retrieval degraded to ungraded top-4 chunks. */
-export const FALLBACK_BLOCK = `# Fallback Context
-The following 4 reference chunks did NOT pass relevance grading (grader unavailable or no strong match). Use them only if they clearly support the answer. Prefix the answer with: "Note: I couldn't find a strongly matching document, so this is my best guess from related pages — please verify." Cite normally. If they do not support the answer, say so and offer to open a ticket.`;
+/** §A4 exact fallback-context block, injected only when retrieval degraded to ungraded chunks. */
+export const FALLBACK_BLOCK = fallbackBlock(FALLBACK_CHUNK_COUNT);
+export function buildFallbackBlock(count: number): string {
+  return fallbackBlock(count);
+}
 
 const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   friendly: 'Friendly, calm, and direct. Keep replies to a few sentences unless a detailed explanation is requested.',
@@ -100,10 +107,13 @@ export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,
   /** §A4: append the fallback-context block when the agentic turn degraded to ungraded chunks. */
-  degraded?: boolean,
+  degraded?: boolean | number,
 ): string {
   const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config), GUARDRAIL_BLOCK];
-  if (degraded === true) blocks.push(FALLBACK_BLOCK);
+  if (degraded) {
+    const count = typeof degraded === 'number' ? degraded : FALLBACK_CHUNK_COUNT;
+    blocks.push(fallbackBlock(count));
+  }
   
   const outOfScope = buildOutOfScopeBlock(config);
   if (outOfScope) blocks.push(outOfScope);

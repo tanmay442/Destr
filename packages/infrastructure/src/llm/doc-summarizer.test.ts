@@ -4,6 +4,7 @@ const generateText = vi.fn();
 vi.mock('ai', () => ({ generateText: (...args: unknown[]) => generateText(...args) }));
 
 vi.mock('./index', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
+vi.mock('./model', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
 
 import { docSummarizer, createDocSummarizer, clearDocContextCache, getDocContextCacheSize } from './doc-summarizer';
 import { CCH_CONTEXT_CHARS } from '@app/domain';

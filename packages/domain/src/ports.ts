@@ -533,6 +533,8 @@ export interface ThumbsDownDoc {
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
+  /** Merges `patch` into a buffered not-yet-flushed event's meta [§C3]; true when a buffered event matched. */
+  patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
   /** Merges `patch` into a flushed event's meta (jsonb ||); true when a row matched [§C3]. */
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
   /** Random quality-review sample; `degraded` reads meta->>'degraded', `blocked` the hallucination column [§C4]. */
@@ -691,7 +693,12 @@ export interface DocumentGrader {
 }
 
 /** Why an agentic turn fell back to ungraded context chunks. */
-export type FallbackReason = 'grader_unavailable' | 'all_filtered' | 'grading_disabled';
+export type FallbackReason =
+  | 'grader_unavailable'
+  | 'all_filtered'
+  | 'grading_disabled'
+  | 'turn_deadline'
+  | 'lenient_fallback';
 
 /** Final state of an agentic retrieval turn. */
 export type AgenticResultState = 'ok' | 'degraded' | 'empty';

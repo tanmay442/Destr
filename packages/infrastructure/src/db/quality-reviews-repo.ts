@@ -18,6 +18,13 @@ export class QualityReviewsRepository implements QualityReviewsRepo {
         verdict: input.verdict,
         note: input.note ?? null,
       })
+      .onConflictDoUpdate({
+        target: [qualityReviews.turnId, qualityReviews.reviewerId],
+        set: {
+          verdict: input.verdict,
+          note: input.note ?? null,
+        },
+      })
       .returning();
     if (!row) throw new Error('Failed to insert quality review');
     return row as QualityReviewRow;

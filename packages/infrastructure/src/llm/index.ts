@@ -5,7 +5,6 @@ import type {
   DocumentGrader,
   HallucinationGrader,
 } from '@app/domain';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
 import './openai-chat-service';
 import './google-chat-service';
 import './ollama-chat-service';
@@ -20,26 +19,21 @@ import {
   createGraders,
 } from './graders';
 import {
-  chatProviderRegistry,
   embeddingProviderRegistry,
   rerankerProviderRegistry,
   embeddingModelIdRegistry,
   registerRerankerProvider,
   type ChatModelProvider,
 } from './registries';
+import { getChatModel } from './model';
+
+export { getChatModel } from './model';
 
 export function getEmbeddingService(): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
   const service = embeddingProviderRegistry.get(provider);
   if (!service) throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
   return service;
-}
-
-export function getChatModel(modelId?: string): LanguageModelV3 {
-  const provider = process.env.CHAT_PROVIDER ?? 'openai';
-  const factory = chatProviderRegistry.get(provider);
-  if (!factory) throw new Error(`Unknown CHAT_PROVIDER: ${provider}`);
-  return factory(modelId);
 }
 
 /**

@@ -34,7 +34,7 @@ export const fieldConfig: Record<string, FieldMeta> = {
   'agenticChunkGradingEnabled': { group: 'Retrieval', label: 'Chunk Grading (agentic)', inputType: 'toggle',
                             helpText: 'When off, top 4 retrieved chunks are sent without grading and shown with a warning. Not cached.' },
   'hallucinationCheckEnabled': { group: 'Retrieval', label: 'Hallucination Check', inputType: 'toggle',
-                            helpText: 'Warning: disabling lets unverified answers be shown and they won\u2019t be cached. Use only for debugging.' },
+                            helpText: 'Warning: disabling lets unverified answers be shown and they won\u2019t be cached. Also disables out-of-domain wall + ticket offer for empty results. Only disable for debugging.' },
   'hybridEnabled':        { group: 'Retrieval', label: 'Hybrid Search', inputType: 'toggle' },
   'rerankerProvider':     { group: 'Retrieval', label: 'Reranker Provider', inputType: 'select' },
   'gradeModel':           { group: 'Retrieval', label: 'Grade Model Override', inputType: 'text' },

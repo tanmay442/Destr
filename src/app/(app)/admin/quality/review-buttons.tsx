@@ -68,9 +68,15 @@ export function ReviewButtons({ turnId }: { turnId: string }) {
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="Note (optional)"
+        maxLength={2000}
         className="h-7 w-48 text-xs"
         data-testid={`quality-note-${turnId}`}
       />
+      {note.length > 0 ? (
+        <span className="text-[11px] text-muted-foreground tabular-nums" data-testid={`quality-note-count-${turnId}`}>
+          {note.length}/2000
+        </span>
+      ) : null}
     </div>
   );
 }

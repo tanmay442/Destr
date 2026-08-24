@@ -91,6 +91,14 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
   return result as unknown as AppConfig;
 }
 
+/** XC-F-2: AGENTIC_ENABLED=false is a hard kill-switch; it forces vector mode even when a DB override still says agentic. */
+function enforceAgenticKillSwitch(cfg: AppConfig): AppConfig {
+  if (process.env.AGENTIC_ENABLED === 'false' && cfg.retrievalMode === 'agentic') {
+    return { ...cfg, retrievalMode: 'normal' };
+  }
+  return cfg;
+}
+
 let cache: CacheEntry | null = null;
 let refreshInFlight: Promise<AppConfig> | null = null;
 let degraded = false;
@@ -103,7 +111,7 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
   const now = Date.now();
 
   if (cache && now < cache.softExpiry) {
-    return applyEnvLock(cache.value);
+    return enforceAgenticKillSwitch(applyEnvLock(cache.value));
   }
   if (cache && now < cache.hardExpiry) {
     if (!refreshInFlight) {
@@ -111,16 +119,20 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
         refreshInFlight = null;
       });
     }
-    return applyEnvLock(cache.value);
+    return enforceAgenticKillSwitch(applyEnvLock(cache.value));
   }
-  return applyEnvLock(await refreshCache());
+  return enforceAgenticKillSwitch(applyEnvLock(await refreshCache()));
 }
 
 async function refreshCache(): Promise<AppConfig> {
   try {
     const { overrides, version } = await getComposition().settingsRepo.getOverrides();
     const merged = deepMerge(appConfig, overrides);
-    const validated = appConfigSchema.parse(merged);
+    let validated = appConfigSchema.parse(merged);
+    validated = enforceAgenticKillSwitch(validated);
+    if (process.env.AGENTIC_ENABLED === 'false' && (merged as Record<string, unknown>).retrievalMode === 'agentic') {
+      logger.warn('[runtime-config] AGENTIC_ENABLED=false forces retrievalMode=normal despite DB override — agentic retrieval disabled');
+    }
     const now = Date.now();
     cache = {
       value: validated,
@@ -134,8 +146,10 @@ async function refreshCache(): Promise<AppConfig> {
     logger.error('[runtime-config] DB read failed, entering degraded mode', { error: err });
     degraded = true;
     const now = Date.now();
+    const fallback = cache ? cache.value : appConfig;
+    const enforced = enforceAgenticKillSwitch(fallback);
     cache = {
-      value: cache ? cache.value : appConfig,
+      value: enforced,
       softExpiry: now + SOFT_TTL_MS,
       hardExpiry: now + HARD_TTL_MS,
       version: cache ? cache.version : 0,

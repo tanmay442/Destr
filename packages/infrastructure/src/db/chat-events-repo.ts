@@ -1,6 +1,6 @@
 import { and, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
+import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
   ChatEvent,
@@ -182,7 +182,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return rows.map(toChatEvent);
   }
 
-  /** Daily judge-score aggregates for the quality sparklines [§C5]. Nulls → 0. */
+  /** Daily judge-score aggregates for the quality sparklines [§C5]. Nulls → 0. Dense: zero-event days return 0s so sparklines don't collapse. */
   async getDailyQuality(days: number): Promise<ChatDailyQualityRow[]> {
     const since = sinceStartUtc(days);
     const result = await this.client.execute(sql`
@@ -197,12 +197,36 @@ export class ChatEventBatcher implements ChatEventsRepo {
       order by day
     `);
     const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
-    return rows.map((r) => ({
-      day: String(r.day),
-      avgFaithfulness: Number(r.avg_faithfulness) || 0,
-      avgRetrievalRelevance: Number(r.avg_retrieval_relevance) || 0,
-      degradedCount: Number(r.degraded_count) || 0,
-    }));
+    if (rows.length === 0) return [];
+    const map = new Map(
+      rows.map((r) => [
+        String(r.day),
+        {
+          day: String(r.day),
+          avgFaithfulness: Number(r.avg_faithfulness) || 0,
+          avgRetrievalRelevance: Number(r.avg_retrieval_relevance) || 0,
+          degradedCount: Number(r.degraded_count) || 0,
+        } as ChatDailyQualityRow,
+      ]),
+    );
+    // Fill missing calendar days with zeros so sparklines stay contiguous [SEC-L6].
+    const out: ChatDailyQualityRow[] = [];
+    const windowDays = Math.min(Math.max(Math.floor(days), 1), 365);
+    for (let i = windowDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      out.push(
+        map.get(key) ?? {
+          day: key,
+          avgFaithfulness: 0,
+          avgRetrievalRelevance: 0,
+          degradedCount: 0,
+        },
+      );
+    }
+    return out;
   }
 
   /** Windowed judge averages + degraded rate; empty window → all zeros [§C5]. */
@@ -587,6 +611,14 @@ export class ChatEventBatcher implements ChatEventsRepo {
           where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
         )
         returning ${chatFeedback.turnId}
+      ),
+      removed_reviews as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
+        )
+        returning ${qualityReviews.id}
       )
       delete from ${chatEvents}
       where ${chatEvents.createdAt} <= ${cutoff}
@@ -598,7 +630,20 @@ export class ChatEventBatcher implements ChatEventsRepo {
 
   async purgeUserData(userId: string): Promise<{ deletedCount: number }> {
     const result = await this.client.execute(sql`
-      with removed_feedback as (
+      with removed_reviews_by_turn as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
+        )
+        returning ${qualityReviews.id}
+      ),
+      removed_reviews_by_reviewer as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.reviewerId} = ${userId}
+        returning ${qualityReviews.id}
+      ),
+      removed_feedback as (
         delete from ${chatFeedback}
         where ${chatFeedback.turnId} in (
           select ${chatEvents.turnId} from ${chatEvents}

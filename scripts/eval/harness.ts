@@ -84,6 +84,10 @@ export async function evaluateOne(
 ): Promise<EvalResult> {
   // §C2 agentic branch: only used when the question opts in AND the deps wire it.
   const useAgentic = q.mode === 'agentic' && typeof deps.agenticSearch === 'function';
+  if (q.mode === 'agentic' && !useAgentic) {
+    // EVAL-M4: surface silent degradation instead of silently greening.
+    console.warn(`[eval] agentic question "${q.id}" degraded to plain searchChunks: agenticSearch unavailable`);
+  }
   const retrieved = useAgentic
     ? await deps.agenticSearch!(q.question)
     : await deps.searchChunks(q.question);
@@ -165,14 +169,32 @@ export async function runEval(
   deps: EvalDeps,
   threshold: number,
 ): Promise<EvalReport> {
-  const results = await Promise.all(questions.map((q) => evaluateOne(q, deps)));
+  // EVAL-M2: bounded concurrency to avoid 35×6 provider-call storm (429s). Simple
+  // chunked batches of 5; p-limit would be equivalent but this avoids a new dep.
+  const CONCURRENCY = 5;
+  const results: EvalResult[] = [];
+  for (let i = 0; i < questions.length; i += CONCURRENCY) {
+    const batch = questions.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(batch.map((q) => evaluateOne(q, deps)));
+    results.push(...batchResults);
+  }
   return { ...aggregate(results, threshold) };
+}
+
+function isValidThreshold(v: number): boolean {
+  return Number.isFinite(v) && v > 0 && v <= 1;
 }
 
 export function aggregate(
   results: EvalResult[],
   threshold: number,
 ): EvalReport {
+  // EVAL-M1: fail-closed on malformed threshold (NaN/Infinity/out-of-range bypassed gate before).
+  // We keep the raw threshold in the report for observability but never let a bad value green the gate.
+  if (!isValidThreshold(threshold)) {
+    console.warn(`[eval] invalid threshold ${String(threshold)} — must be finite in (0,1]; treating as gate failure`);
+  }
+  const thresholdValid = isValidThreshold(threshold);
   const mean = (sel: (r: EvalResult) => number) =>
     results.length ? results.reduce((acc, r) => acc + sel(r), 0) / results.length : 0;
   const meanFaithfulness = mean((r) => r.faithfulness);
@@ -198,7 +220,7 @@ export function aggregate(
     meanFaithfulness,
     meanCorrectness,
     meanContextRelevancy,
-    passed: meanFaithfulness >= threshold,
+    passed: thresholdValid && meanFaithfulness >= threshold,
     threshold,
     hits,
     passRate: withExpectation.length > 0 ? hits / withExpectation.length : 1,
@@ -244,6 +266,13 @@ export function buildGoldenReport(report: EvalReport): GoldenReport {
  * (only when judges produced scores), or doc-hit pass rate under 0.8.
  */
 export function evalGateFailure(report: EvalReport): string | null {
+  if (!isValidThreshold(report.threshold)) {
+    return `invalid threshold ${String(report.threshold)} — must be in (0,1]`;
+  }
+  // Fail-closed also on per-report passed=false (covers malformed threshold and meanFaithfulness < threshold).
+  if (!report.passed) {
+    return `mean faithfulness ${report.meanFaithfulness.toFixed(2)} < threshold ${report.threshold}`;
+  }
   if (report.meanFaithfulness < report.threshold) {
     return `mean faithfulness ${report.meanFaithfulness.toFixed(2)} < threshold ${report.threshold}`;
   }
@@ -283,9 +312,12 @@ export function mockEvalDeps(): EvalDeps & { cache: AnswerCache } {
     async searchChunks(query: string) {
       return search(query);
     },
-    // §C2 agentic mode reuses the same deterministic mock retrieval.
+    // §C2 agentic mode: deterministic mock but distinct from normal for audit
+    // traceability (EVAL-M4). Added [agentic] tag keeps mustMention words intact
+    // while letting logs differentiate the path.
     async agenticSearch(query: string) {
-      return search(query);
+      const base = await search(query);
+      return base.map((r) => ({ ...r, content: `[agentic] ${r.content}` }));
     },
     async generate(_query: string, context: string) {
       return context

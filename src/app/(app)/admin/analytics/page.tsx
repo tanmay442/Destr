@@ -127,6 +127,23 @@ function padUsage(rows: { day: string; total: number }[], days: number) {
   return out;
 }
 
+function padDailyQuality(rows: ChatDailyQualityRow[], days: number): ChatDailyQualityRow[] {
+  if (rows.length === 0) return rows;
+  const map = new Map(rows.map((r) => [r.day, r]));
+  // Only pad when the result looks sparse (repo fix already dense → no-op aside from re-emit).
+  if (map.size >= days) return rows;
+  const out: ChatDailyQualityRow[] = [];
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    out.push(map.get(key) ?? { day: key, avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
+  }
+  return out;
+}
+
 function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
   const buckets = mode.queryLengthBuckets;
   const bucketTotal = Math.max(1, buckets.short + buckets.medium + buckets.long);
@@ -260,6 +277,8 @@ export default async function AnalyticsPage() {
     weekly.map((w) => ({ label: w.label, value: pick(w) }));
 
   const usageBuckets = chat ? padUsage(chat.usageOverTime, 7) : [];
+  // SEC-L6: pad zero-event days so sparklines don't collapse gaps; repo now dense but keep UI fallback for sparse data.
+  const dailyQualityPadded = padDailyQuality(dailyQuality, 84);
 
   const activeModes = chat ? chat.modeComparison.filter((m) => m.total > 0) : [];
   const hasChat = chat != null && chat.total > 0;
@@ -473,7 +492,7 @@ export default async function AnalyticsPage() {
             </Card>
           )}
 
-          {dailyQuality.length > 0 ? (
+          {dailyQualityPadded.length > 0 ? (
             <div className="flex flex-col gap-3" data-testid="analytics-daily-quality-trends">
               <SectionHeading
                 title="True quality trends"
@@ -487,7 +506,7 @@ export default async function AnalyticsPage() {
                   </CardHeader>
                   <CardContent>
                     <LineChart
-                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.avgFaithfulness }))}
+                      data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.avgFaithfulness }))}
                       formatValue={score}
                       threshold={FAITHFULNESS_TARGET}
                       // Floor target: red when latest is BELOW the line, not above.
@@ -504,7 +523,7 @@ export default async function AnalyticsPage() {
                   </CardHeader>
                   <CardContent>
                     <LineChart
-                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.avgRetrievalRelevance }))}
+                      data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.avgRetrievalRelevance }))}
                       formatValue={score}
                       threshold={RETRIEVAL_TARGET}
                       className="text-destructive"
@@ -520,7 +539,7 @@ export default async function AnalyticsPage() {
                   </CardHeader>
                   <CardContent>
                     <LineChart
-                      data={dailyQuality.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))}
+                      data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))}
                     />
                   </CardContent>
                 </Card>

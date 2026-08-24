@@ -7,6 +7,11 @@ const MAX_DELAY_MS = 5_000;
 export const EMBED_REQUEST_TIMEOUT_MS = 120_000;
 export const GRADE_REQUEST_TIMEOUT_MS = 60_000;
 
+export function isDeadlineAbort(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

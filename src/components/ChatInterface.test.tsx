@@ -137,6 +137,38 @@ describe('ChatInterface', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('shows a fallback bubble with Retry when an assistant turn ends empty (§T7)', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'help' }] },
+        { id: 'a1', role: 'assistant', parts: [] },
+      ],
+      sendMessage: vi.fn(),
+      status: 'ready',
+      error: undefined,
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-test" />);
+    const bubble = screen.getByTestId('chat-empty-fallback');
+    expect(bubble).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it('does not show the empty-fallback bubble when the answer has visible content', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'help' }] },
+        ASSISTANT_WITH_CITATIONS,
+      ],
+      sendMessage: vi.fn(),
+      status: 'ready',
+      error: undefined,
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-test" />);
+    expect(screen.queryByTestId('chat-empty-fallback')).not.toBeInTheDocument();
+  });
+
   it('shows status stages while the assistant is generating with no text yet', () => {
     useChatMock.mockReturnValue({
       messages: [],

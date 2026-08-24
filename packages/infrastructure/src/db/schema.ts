@@ -171,13 +171,17 @@ export const chatFeedback = pgTable('chat_feedback', {
  */
 export const qualityReviews = pgTable('quality_reviews', {
   id: serial('id').primaryKey(),
-  turnId: uuid('turn_id').references(() => chatEvents.turnId),
-  reviewerId: text('reviewer_id').references(() => users.clerkUserId),
-  verdict: text('verdict'),
+  turnId: uuid('turn_id').references(() => chatEvents.turnId, { onDelete: 'cascade' }),
+  reviewerId: text('reviewer_id').references(() => users.clerkUserId, { onDelete: 'cascade' }),
+  verdict: text('verdict').notNull(),
   note: text('note'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   check('quality_reviews_verdict_check', sql`${table.verdict} IN ('good','bad','docs_missing')`),
+  index('quality_reviews_turn_id_idx').on(table.turnId),
+  index('quality_reviews_reviewer_id_idx').on(table.reviewerId),
+  index('quality_reviews_created_at_idx').on(table.createdAt),
+  uniqueIndex('quality_reviews_turn_reviewer_unique').on(table.turnId, table.reviewerId),
 ]);
 
 export const chatConversations = pgTable('chat_conversations', {

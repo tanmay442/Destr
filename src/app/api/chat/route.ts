@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, assertSameOrigin, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
-import { buildSystemPrompt, FALLBACK_BLOCK } from '@app/application/prompt/build-system-prompt';
+import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import {
   chatTurn,
   cacheFingerprint,
@@ -24,7 +24,18 @@ import type { AgenticResultState, ChatEventInput } from '@app/domain';
 import { sanitizeText } from '@/lib/sanitize';
 import { logger } from '@/lib/logger';
 import { readBoundedText, respond } from '@/lib/http';
-import { CHAT_RATE_LIMIT, CHAT_MAX_BODY_BYTES, TOOL_CONTENT_CAP, JUDGE_SAMPLE_RATE } from '@app/domain';
+import {
+  CHAT_RATE_LIMIT,
+  CHAT_MAX_BODY_BYTES,
+  TOOL_CONTENT_CAP,
+  JUDGE_SAMPLE_RATE,
+  DEGRADED_BANNER_MESSAGE,
+  degradedBannerMessage,
+  FALLBACK_CHUNK_COUNT,
+  fallbackBlock,
+  TURN_DEADLINE_BANNER_MESSAGE,
+  TURN_DEADLINE_TEXT,
+} from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
 
@@ -40,14 +51,6 @@ function positiveIntEnv(name: string): number | null {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
-
-/** §A4 exact soft-banner copy for degraded best-effort turns (mirrored in chat-turn.ts). */
-const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
-
-/** §T6 copy for turns ended by the soft deadline (mirrored in chat-turn.ts). */
-const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
-const TURN_DEADLINE_TEXT =
-  'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';
 
 const CHAT_MAX_CONCURRENT = 2;
 const chatSlotCounts = new Map<string, number>();
@@ -172,6 +175,7 @@ function buildChatTools(deps: {
   degradedRef: { value: boolean };
   fallbackReasonRef: { value: string | null };
   resultStateRef: { value: AgenticResultState | null };
+  fallbackCountRef?: { value: number | null };
   metrics: TurnMetrics;
 }) {
   const {
@@ -189,6 +193,7 @@ function buildChatTools(deps: {
     resultStateRef,
     metrics,
   } = deps;
+  const fallbackCountRef = deps.fallbackCountRef;
   let ticketOpenedInTurn = false;
   return {
     searchDocumentation: tool({
@@ -229,6 +234,7 @@ function buildChatTools(deps: {
           degradedRef.value = r.value.degraded;
           fallbackReasonRef.value = r.value.fallbackReason;
           resultStateRef.value = r.value.resultState;
+          if (fallbackCountRef) fallbackCountRef.value = r.value.chunks.length;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -263,7 +269,8 @@ function buildChatTools(deps: {
         // §A4: the system prompt is fixed before tools run, so degraded turns
         // receive the fallback instructions through the tool result instead.
         if (effectiveMode === 'agentic' && degradedRef.value) {
-          return [{ content: FALLBACK_BLOCK, similarity: -1 }, ...capped];
+          const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
+          return [{ content: block, similarity: -1 }, ...capped];
         }
         return capped;
       },
@@ -364,7 +371,7 @@ interface EventMetaPatcher {
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
 }
 interface BatcherMetaPatcher {
-  patchMeta(turnId: string, patch: Record<string, unknown>): void;
+  patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
 }
 
 /**
@@ -416,7 +423,8 @@ async function runJudge(ctx: {
     if (relevance) judgeScores.retrievalRelevance = relevance.score;
     if (faithfulness) {
       judgeScores.faithfulness = faithfulness.score;
-      judgeScores.citationPrecision = faithfulness.citationPrecision;
+      // EVAL-L3: keep score even when citationPrecision missing (null ⇒ omit that dimension).
+      if (faithfulness.citationPrecision !== null) judgeScores.citationPrecision = faithfulness.citationPrecision;
     }
     const patch = { judgeScores };
     // Buffered-first so scores land even when the flush has not happened yet.
@@ -427,7 +435,10 @@ async function runJudge(ctx: {
       : false;
     if (!persisted) {
       // The event may flush between both attempts; retry once before giving up.
-      const retry = () => void ctx.eventMetaPatcher?.updateEventMeta(ctx.turnId, patch).catch(() => {});
+      const retry = () =>
+        void ctx.eventMetaPatcher?.updateEventMeta(ctx.turnId, patch).catch((err) => {
+          logger.warn('judge.enqueue.meta_retry_failed', { turnId: ctx.turnId, error: String(err) });
+        });
       const t = setTimeout(retry, 5_000);
       if (typeof t.unref === 'function') t.unref();
       logger.debug('judge.enqueue.meta_retry_scheduled', { turnId: ctx.turnId });
@@ -457,6 +468,8 @@ function scheduleAfter(task: () => void): void {
  * ticket offer; a degraded top-4 fallback first emits a soft yellow banner
  * (no ticket offer) and an explicit not-grounded verdict still blocks. Grader
  * infra failures fail open — they count as pass, only an explicit verdict blocks.
+ * CHAT-M2 caching policy: timeout/infra → fail-open but NOT cached (unverified).
+ * CHAT-M4: caller may pass timeoutMs bounded by remaining wall time.
  */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
@@ -466,32 +479,58 @@ async function runHallucinationCheck(opts: {
   enabled: boolean;
   outOfDomain: boolean;
   degraded: boolean;
-}): Promise<boolean> {
+  degradedMessage?: string;
+  timeoutMs?: number;
+}): Promise<{ blocked: boolean; timedOut: boolean }> {
   const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
-  if (!enabled || !hallucinationGrader) return false;
+  const degradedMessage = opts.degradedMessage ?? DEGRADED_BANNER_MESSAGE;
+  if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
   if (outOfDomain) {
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: true, offerTicket: true },
     } as InferUIMessageChunk<MyUIMessage>);
-    return true;
+    return { blocked: true, timedOut: false };
   }
 
   if (degraded) {
     controller.enqueue({
       type: 'data-guardrail',
-      data: { degraded: true, isEmpty: false, offerTicket: false, message: DEGRADED_BANNER_MESSAGE },
+      data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: degradedMessage },
     } as InferUIMessageChunk<MyUIMessage>);
   }
 
   let ungrounded = false;
+  let timedOut = false;
   if (capturedCitations.length > 0) {
     try {
       const generation = await result.text;
       const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
-      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
+      let verdict: 'yes' | 'no';
+      if (opts.timeoutMs !== undefined && opts.timeoutMs <= 0) {
+        throw Object.assign(new Error('Hallucination verification skipped: no wall-time budget'), { name: 'TimeoutError' });
+      } else if (opts.timeoutMs !== undefined && opts.timeoutMs < 12_000) {
+        verdict = await Promise.race([
+          hallucinationGrader(documents, generation),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error('Hallucination verification timed out'), { name: 'TimeoutError' })), opts.timeoutMs),
+          ),
+        ]);
+      } else {
+        verdict = await hallucinationGrader(documents, generation);
+      }
+      ungrounded = verdict === 'no';
     } catch (err) {
+      // CHAT-M2 caching policy: timeout (including wall-budget exhaustion) is unverified → fail-open but NOT cached.
+      // Generic infra errors (e.g. grade model down) are also fail-open; we treat only Timeout/Abort as timedOut to preserve
+      // existing cached-on-infra-failure contract (tests expect cached). If strict not-cache-on-any-error is desired,
+      // change to `timedOut = true` for all errors — this documents the decision per audit's "Decide and document".
+      const isTimeout =
+        (err as { name?: string })?.name === 'TimeoutError' ||
+        (err as { name?: string })?.name === 'AbortError' ||
+        /timed out|budget/i.test(String((err as Error)?.message ?? ''));
+      if (isTimeout) timedOut = true;
       logger.error('Hallucination check failed', { error: err });
     }
   }
@@ -502,11 +541,13 @@ async function runHallucinationCheck(opts: {
       data: { outOfDomain: false, offerTicket: true },
     } as InferUIMessageChunk<MyUIMessage>);
   }
-  return ungrounded;
+  return { blocked: ungrounded, timedOut };
 }
 
 async function streamChatResponse(req: Request): Promise<Response> {
   const turnStart = performance.now();
+  // CHAT-M3: anchor soft deadline at request start, not streamText creation — preamble (auth, cache GET, prefetch) is already elapsed.
+  const requestStartedAt = Date.now();
   const { userId } = await auth();
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
@@ -586,11 +627,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const isFirstTurn = messages.length <= 1;
 
   const useConfiguredMode = Math.random() * 100 < cfg.retrievalModeRolloutPercent;
-  const effectiveMode = useConfiguredMode
+  let effectiveMode: 'agentic' | 'normal' = useConfiguredMode
     ? cfg.retrievalMode
     : cfg.retrievalMode === 'agentic'
       ? 'normal'
       : 'agentic';
+  if (process.env.AGENTIC_ENABLED === 'false') effectiveMode = 'normal';
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
@@ -676,12 +718,23 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const degradedRef = { value: false };
   const fallbackReasonRef = { value: null as string | null };
   const resultStateRef = { value: null as AgenticResultState | null };
+  const fallbackCountRef = { value: null as number | null };
 
   // §T6 soft deadline: aborts generation just before the platform ceiling so the
   // stream can end with our own graceful parts (see pump below) instead of a kill.
-  const turnSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
+  // CHAT-M3: anchored at requestStartedAt; preamble elapsed is subtracted so total wall time stays under maxDuration.
+  // CHAT-L5: clamp absurd env values to [1s, maxDuration-5s] with warning.
+  const rawSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
+  const maxSoftDeadlineMs = maxDuration * 1000 - 5_000;
+  let turnSoftDeadlineMs = rawSoftDeadlineMs;
+  if (turnSoftDeadlineMs > maxSoftDeadlineMs) {
+    logger.warn('CHAT_SOFT_DEADLINE_MS clamped', { requested: rawSoftDeadlineMs, clamped: maxSoftDeadlineMs });
+    turnSoftDeadlineMs = maxSoftDeadlineMs;
+  }
   const judgeMaxWallMs = positiveIntEnv('CHAT_JUDGE_MAX_WALL_MS') ?? 20_000;
-  const softDeadlineSignal = AbortSignal.timeout(turnSoftDeadlineMs);
+  const elapsedBeforeStream = Date.now() - requestStartedAt;
+  const turnSoftDeadlineMsRemaining = Math.max(1_000, turnSoftDeadlineMs - elapsedBeforeStream);
+  const softDeadlineSignal = AbortSignal.timeout(turnSoftDeadlineMsRemaining);
   let softDeadlineFired = false;
   softDeadlineSignal.addEventListener('abort', () => {
     softDeadlineFired = true;
@@ -689,6 +742,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const result = streamText({
     model: comp.getChatModel(),
+    // CHAT-L7: degradedRef.value is always false here — system prompt is fixed before tools run; degraded fallback is delivered via tool-result injection.
     system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
@@ -706,6 +760,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       degradedRef,
       fallbackReasonRef,
       resultStateRef,
+      fallbackCountRef,
       metrics,
     }),
   });
@@ -716,6 +771,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
     start(controller) {
       const reader = llmStream.getReader();
       (async () => {
+        // CHAT-M1: buffer partial streamed text so a soft-deadline abort can still persist what was already shown.
+        let partialText = '';
+        let generationCompletedCleanly = false;
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -727,15 +785,22 @@ async function streamChatResponse(req: Request): Promise<Response> {
             ) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
             }
+            // CHAT-M1: accumulate text-delta parts for fallback if result.text rejects.
+            const vt = (value as { type?: unknown; delta?: unknown }).type;
+            if (vt === 'text-delta' && typeof (value as { delta?: unknown }).delta === 'string') {
+              partialText += (value as { delta: string }).delta;
+            }
             controller.enqueue(value);
           }
+          // CHAT-M5: race fix — if stream ended cleanly before the deadline fired, don't mark degraded.
+          generationCompletedCleanly = !softDeadlineSignal.aborted;
           // §T6 graceful ending: the soft deadline aborted generation — close the
           // stream ourselves with a styled notice instead of leaving a dead pipe.
-          const timedOut = softDeadlineFired && !req.signal.aborted;
+          const timedOut = softDeadlineFired && !req.signal.aborted && !generationCompletedCleanly;
           if (timedOut) {
             controller.enqueue({
               type: 'data-guardrail',
-              data: { degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+              data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
             } as InferUIMessageChunk<MyUIMessage>);
             const tid = `deadline-${turnId}`;
             controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<MyUIMessage>);
@@ -753,10 +818,23 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
+          const degradedMessage = degradedRef.value
+            ? degradedBannerMessage(fallbackCountRef.value ?? FALLBACK_CHUNK_COUNT)
+            : DEGRADED_BANNER_MESSAGE;
           const hallucinationStart = performance.now();
-          const hallucinationBlocked = timedOut
-            ? false
-            : await runHallucinationCheck({
+          // CHAT-M4: bound verification by remaining wall time (reserve 2s for flush/persist). If no budget, treat as timedOut (M2 → not cached).
+          const maxDurationMs = maxDuration * 1000;
+          const remainingWallMs = maxDurationMs - (Date.now() - requestStartedAt);
+          const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
+          let hallucinationBlocked = false;
+          let hallucinationTimedOut = false;
+          if (timedOut) {
+            // soft-deadline already timed out — skip verification
+          } else if (hallucinationBudgetMs <= 0) {
+            hallucinationTimedOut = true;
+            logger.warn('hallucination check skipped: no wall-time budget', { remainingWallMs });
+          } else {
+            const hallucinationResult = await runHallucinationCheck({
               controller,
               result,
               capturedCitations: finalCitations,
@@ -764,7 +842,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
               enabled: cfg.hallucinationCheckEnabled,
               outOfDomain: outOfDomainRef.value,
               degraded: degradedRef.value,
+              degradedMessage,
+              timeoutMs: hallucinationBudgetMs,
             });
+            hallucinationBlocked = hallucinationResult.blocked;
+            hallucinationTimedOut = hallucinationResult.timedOut;
+          }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
           const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
@@ -773,6 +856,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             shouldCache({
               citations: finalCitations,
               blocked: hallucinationBlocked,
+              hallucinationTimedOut,
               isEmpty,
               ticketCreated: metrics.ticketCreated,
               cfg,
@@ -844,6 +928,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
             totalMs,
           });
+          // CHAT-M1: on soft-deadline result.text rejects — persist the partial text already streamed instead of empty.
+          const persistedText = await Promise.resolve(result.text).catch(() => partialText);
           persistHistory(historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -852,14 +938,14 @@ async function streamChatResponse(req: Request): Promise<Response> {
             userMessage: lastUserMessage,
             assistantMessage: buildAssistantMessageLike({
               turnId,
-              text: await Promise.resolve(result.text).catch(() => ''),
+              text: persistedText || partialText,
               citations: finalCitations,
               guardrail: hallucinationBlocked
                 ? {
                     outOfDomain: outOfDomainRef.value,
                     offerTicket: true,
                     // F11: keep degraded fidelity when a degraded turn was also blocked.
-                    ...(degradedRef.value ? { degraded: true, message: DEGRADED_BANNER_MESSAGE } : {}),
+                    ...(degradedRef.value ? { degraded: true, message: degradedMessage } : {}),
                   }
                 : timedOut
                   ? {
@@ -875,7 +961,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
                       outOfDomain: false,
                       offerTicket: false,
                       degraded: true,
-                      message: DEGRADED_BANNER_MESSAGE,
+                      message: degradedMessage,
                       isEmpty: false,
                       resultState: resultStateRef.value ?? 'degraded',
                     }
@@ -884,6 +970,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
           });
           // §C3 sampled live quality judge — strictly fire-and-forget. The cache-hit
           // short-circuit above returns before this point, so !cacheHit holds here.
+          // EVAL-M3 bias/cost note: sampling excludes cache-hits, isEmpty (0 rows), and
+          // wall-time > judgeMaxWallMs (20s) turns plus requires citations — so persisted
+          // judgeScores over-represent fast, non-cached, citation-bearing turns (survivorship
+          // bias for the dashboard). No daily max-samples ceiling yet; if volume grows
+          // add a counter check (e.g., skip when today's judged count >500) to bound cost.
+          // The 5% JUDGE_SAMPLE_RATE is the current cost ceiling (expected ~1 judge per 20 turns).
           if (
             turnId &&
             !timedOut &&
@@ -894,7 +986,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             cfg.captureQueryText !== false
           ) {
             const patchers = getMetaPatchers(comp);
-            const answer = await Promise.resolve(result.text).catch(() => '');
+            const answer = await Promise.resolve(result.text).catch(() => partialText);
             const snippets = finalCitations.map((c) => c.snippet);
             scheduleAfter(() =>
               void runJudge({
@@ -910,6 +1002,29 @@ async function streamChatResponse(req: Request): Promise<Response> {
           }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
+          // CHAT-L8: preserve ticket telemetry even when stream fails before normal event/history persistence.
+          try {
+            if (metrics.ticketCreated) {
+              logger.warn('chat.turn.ticket_created_but_stream_failed', { turnId, ticketId: metrics.ticketId });
+              // Best-effort event so analytics still sees ticketCreated.
+              comp.chatEventBatcher.record({
+                turnId,
+                userId,
+                query: queryText,
+                mode: persistedMode,
+                ticketCreated: true,
+                hallucinationBlocked: false,
+                citationCount: dedupeCitations(capturedCitations).length,
+                meta: buildEventMeta({
+                  ticketId: metrics.ticketId,
+                  degraded: degradedRef.value || undefined,
+                  fallbackReason: fallbackReasonRef.value ?? undefined,
+                  resultState: resultStateRef.value ?? undefined,
+                  isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
+                }),
+              });
+            }
+          } catch {}
           controller.error(new Error('Chat stream interrupted'));
           return;
         }

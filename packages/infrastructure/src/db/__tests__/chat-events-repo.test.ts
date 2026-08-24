@@ -506,10 +506,13 @@ let insertCalls = 0;
       },
     ]);
     const result = await new ChatEventBatcher(client).getDailyQuality(84);
-    expect(result).toEqual([
-      { day: '2026-08-22', avgFaithfulness: 0.9, avgRetrievalRelevance: 0.4, degradedCount: 3 },
-      { day: '2026-08-23', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 },
-    ]);
+    // Dense fill: 84 days, known days preserved, missing days filled with zeros [SEC-L6]
+    expect(result).toHaveLength(84);
+    const byDay = new Map(result.map((r) => [r.day, r]));
+    expect(byDay.get('2026-08-22')).toEqual({ day: '2026-08-22', avgFaithfulness: 0.9, avgRetrievalRelevance: 0.4, degradedCount: 3 });
+    expect(byDay.get('2026-08-23')).toEqual({ day: '2026-08-23', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
+    // spot-check a filler day is zero
+    expect(byDay.get('2026-08-21')).toEqual({ day: '2026-08-21', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
     const query = compiled(executed);
     expect(query).toContain("date_trunc('day'");
     expect(query).toContain('group by day');

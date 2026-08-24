@@ -16,6 +16,9 @@ on:
     branches:
       - master
 
+# Least-privilege default; jobs declare explicit permissions (EVAL-L4).
+permissions: {}
+
 # Serialize runs per ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,6 +76,14 @@ jobs:
 
       - name: Run eval
         run: pnpm eval
+
+      - name: Upload golden report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golden-report
+          path: eval/golden-report.json
+          if-no-files-found: warn
 
       # Scheduled/manual evals have no PR to make the failure visible on, so
       # surface a drop below the faithfulness threshold (or a harness error)

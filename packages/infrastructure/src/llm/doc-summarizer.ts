@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
 import { logger, type DocSummarizer } from '@app/domain';
-import { getChatModel } from './index';
+import { getChatModel } from './model';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 import { CCH_MODEL } from '@app/infrastructure/config';
 import type { ChatModelProvider } from './registries';

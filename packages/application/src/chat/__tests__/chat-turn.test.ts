@@ -6,8 +6,6 @@ import type { RetrievedChunk } from '../../rag/search';
 import type { AgenticResult } from '../../rag/agentic-search';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
 
-const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
-
 /** Full §A3 AgenticResult fixture (stale partial mocks broke typecheck after P3). */
 function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
   return {
@@ -870,12 +868,12 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
       data: Record<string, unknown>;
     };
-    expect(guardrail.data).toEqual({
+    expect(guardrail.data).toMatchObject({
       degraded: true,
       isEmpty: false,
       offerTicket: false,
-      message: DEGRADED_BANNER_MESSAGE,
     });
+    expect(String(guardrail.data.message)).toMatch(/Based on best-effort matches \(\d+\)/);
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event.outOfDomain).toBe(false);
@@ -1068,5 +1066,78 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     } finally {
       randomSpy.mockRestore();
     }
+  });
+});
+
+describe('§T6 soft turn deadline', () => {
+  it('ends a slow generation with graceful guardrail + notice, skipping cache and judge', async () => {
+    streamTextMock.mockImplementation((opts: { abortSignal?: AbortSignal }) => ({
+      toUIMessageStream: () =>
+        new ReadableStream({
+          start(controller) {
+            opts?.abortSignal?.addEventListener('abort', () => controller.close(), { once: true });
+          },
+        }) as Readonly<unknown> as never,
+      text: Promise.resolve(''),
+      usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+    }));
+    const { deps } = makeDeps();
+    deps.turnSoftDeadlineMs = 40;
+    deps.judgeMaxWallMs = 1;
+    const request = new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
+      }),
+    });
+    const res = await run({ request, userId: 'user_test' }, deps);
+    expect(res.kind).toBe('stream');
+    const parts = await readParts((res as { stream: ReadableStream }).stream);
+
+    const guardrail = parts.find(
+      (p) => (p as { type?: string }).type === 'data-guardrail',
+    ) as { data: { message: string; degraded: boolean; offerTicket: boolean } } | undefined;
+    expect(guardrail?.data.message).toContain('took too long');
+    expect(guardrail?.data.degraded).toBe(true);
+    expect(guardrail?.data.offerTicket).toBe(false);
+    expect(
+      parts.some(
+        (p) => (p as { type?: string }).type === 'text-delta' && String((p as { delta?: string }).delta).includes('Sorry'),
+      ),
+    ).toBe(true);
+
+    expect(deps.eventSink.record).toHaveBeenCalledTimes(1);
+    const event = (deps.eventSink.record as unknown as Mock).mock.calls[0]![0] as {
+      meta: Record<string, unknown>;
+      hallucinationBlocked: boolean;
+    };
+    expect(event.meta).toMatchObject({
+      degraded: true,
+      fallbackReason: 'turn_deadline',
+      resultState: 'degraded',
+    });
+    expect(event.hallucinationBlocked).toBe(false);
+    expect(deps.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('never arms the guardian on fast turns (no deadline parts)', async () => {
+    const res = await run(
+      {
+        request: new Request('http://localhost/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+          }),
+        }),
+        userId: 'user_test',
+      },
+      makeDeps().deps,
+    );
+    expect(res.kind).toBe('stream');
+    const parts = await readParts((res as { stream: ReadableStream }).stream);
+    expect(parts.some((p) => (p as { type?: string }).type === 'data-guardrail')).toBe(false);
+    expect(parts.some((p) => String((p as { delta?: string }).delta).includes('Sorry'))).toBe(false);
   });
 });

@@ -18,6 +18,11 @@ vi.mock('./index', async () => {
   return { ...actual, getChatModel: getChatModelMock };
 });
 
+vi.mock('./model', async () => {
+  const actual = await vi.importActual<typeof import('./model')>('./model');
+  return { ...actual, getChatModel: getChatModelMock };
+});
+
 vi.mock('./retry', async () => {
   const actual = await vi.importActual<typeof import('./retry')>('./retry');
   return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) };
@@ -307,6 +312,7 @@ describe('documentGrader', () => {
 describe('lenient text fallback parsing', () => {
   // These replies contain no leading index number, so each one reaches the
   // batch-wide single-word parser as the last resort.
+  // GRADING-F1: lenient parser now detects negation phrases, JSON, and multilingual negatives.
   it.each([
     ['yes', 'yes'],
     ['Yes', 'yes'],
@@ -325,6 +331,16 @@ describe('lenient text fallback parsing', () => {
     ['', 'yes'],
     ['n o', 'yes'],
     ['yes no', 'no'],
+    ['not relevant', 'no'],
+    ['Not Relevant', 'no'],
+    ['This document is not relevant to the question.', 'no'],
+    ['irrelevant', 'no'],
+    ['Document is irrelevant', 'no'],
+    ['{"relevant":false}', 'no'],
+    ['{"relevant": false}', 'no'],
+    ['Nein', 'no'],
+    ["isn't relevant", 'no'],
+    ['non relevant', 'no'],
   ])('parses fallback reply %j to %j', async (text, expected) => {
     generateTextMock
       .mockResolvedValueOnce(malformedResult())
@@ -375,10 +391,18 @@ describe('per-index lenient text fallback parsing', () => {
       'no',
       'no',
     ]);
+    // GRADING-F2: batch-wide last-resort is conservative for multi-doc → all 'no' (safe, degraded)
     expect(await gradeViaTextFallback('all of these look great', ['a', 'b'])).toEqual([
-      'yes',
-      'yes',
+      'no',
+      'no',
     ]);
+    // Single doc still uses lenientVerdict; 'great' has no negative signal → 'yes'
+    expect(await gradeViaTextFallback('all of these look great', ['a'])).toEqual(['yes']);
+    // GRADING-F1: negation phrases must map to 'no' even without standalone 'no'
+    expect(await gradeViaTextFallback('not relevant', ['doc'])).toEqual(['no']);
+    expect(await gradeViaTextFallback('irrelevant', ['doc'])).toEqual(['no']);
+    expect(await gradeViaTextFallback('{"relevant":false}', ['doc'])).toEqual(['no']);
+    expect(await gradeViaTextFallback('Nein', ['doc'])).toEqual(['no']);
   });
 });
 

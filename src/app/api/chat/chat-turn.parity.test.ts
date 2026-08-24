@@ -677,7 +677,7 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
     expect(useCaseText).toBe(legacyText);
     // Soft banner only — never a wall or ticket offer on either path.
     expect(useCaseText).toContain('data-guardrail');
-    expect(useCaseText).toContain('Based on best-effort matches (4)');
+    expect(useCaseText).toMatch(/Based on best-effort matches \(\d+\)/);
     expect(useCaseText).not.toContain('"offerTicket":true');
     // Degraded turns are excluded from the cache on both paths.
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();

@@ -6,7 +6,10 @@ import { logger } from '@app/domain';
 // averages reflect the refreshed daily view.
 function hasValidCronSecret(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
+  if (!secret) {
+    logger.warn('[cron.refresh-quality] CRON_SECRET is not set — cron auth will fail until it is configured');
+    return false;
+  }
   const header = req.headers.get('authorization');
   if (!header?.startsWith('Bearer ')) return false;
   const provided = Buffer.from(header.slice('Bearer '.length));
@@ -17,7 +20,7 @@ function hasValidCronSecret(req: Request): boolean {
 
 export async function GET(req: Request) {
   if (!hasValidCronSecret(req)) {
-    return new Response('Method Not Allowed', { status: 405 });
+    return new Response('Unauthorized', { status: 401 });
   }
   try {
     const comp = getComposition();

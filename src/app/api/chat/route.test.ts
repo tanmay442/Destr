@@ -1184,7 +1184,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     const body = await runAgenticStreamAndRead('obscure question?');
     expect(body).toMatch(/data-guardrail/);
     expect(body).toMatch(/degraded/);
-    expect(body).toMatch(/Based on best-effort matches \(4\)/);
+    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
     // Soft banner only — never a wall / ticket offer.
     expect(body).not.toMatch(/offerTicket":true/);
     // Degraded turns must not poison the answer cache.
@@ -1360,7 +1360,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
     // Soft banner first, then the explicit ungrounded wall.
-    expect(body).toMatch(/Based on best-effort matches \(4\)/);
+    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
     expect(body).toMatch(/offerTicket":true/);
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
     const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;

@@ -7,10 +7,12 @@ import {
   AGENTIC_RETRIEVE_LIMIT,
   AGENTIC_MAX_RETRIES,
   AGENT_STEP_BUDGET,
+  FALLBACK_CHUNK_COUNT,
 } from '@app/domain';
 
-/** §A3 degraded fallback size: top 4 of the reranker-sorted fused rows. */
-const FALLBACK_CHUNK_COUNT = 4;
+function isLenientFallbackVerdicts(value: unknown): boolean {
+  return Array.isArray(value) && (value as unknown as { lenientFallbackUsed?: boolean }).lenientFallbackUsed === true;
+}
 
 export interface AgenticDeps {
   search: SearchDeps;
@@ -111,6 +113,15 @@ export async function agenticSearch(
 
       // Explicit visible cap on graded rows; the ranked tail is dropped audibly.
       const graded = rows.slice(0, GRADE_MAX_ROWS);
+      if (rows.length > GRADE_MAX_ROWS) {
+        logger.warn('agentic retrieval: ranked tail dropped due to GRADE_MAX_ROWS cap', {
+          severity: 'warn',
+          event: 'agentic.ranked_tail_dropped',
+          total: rows.length,
+          graded: graded.length,
+          droppedCount: rows.length - GRADE_MAX_ROWS,
+        });
+      }
       let verdicts: Array<'yes' | 'no'> | null;
       try {
         verdicts = await deps.documentGrader.gradeAll(query, graded.map((r) => r.content));
@@ -118,6 +129,17 @@ export async function agenticSearch(
         verdicts = null;
       }
       if (verdicts === null) return { kind: 'fallback', reason: 'grader_unavailable', pool: rows };
+      // GRADING-F1: lenient fallback was used — mark degraded/non-cacheable even though
+      // we have verdicts. Propagate as lenient_fallback so shouldCache excludes it.
+      if (isLenientFallbackVerdicts(verdicts)) {
+        logger.warn('agentic retrieval degraded; lenient fallback used', {
+          severity: 'warn',
+          event: 'agentic.degraded_fallback',
+          fallbackReason: 'lenient_fallback' as FallbackReason,
+          chunks: Math.min(rows.length, FALLBACK_CHUNK_COUNT),
+        });
+        return { kind: 'fallback', reason: 'lenient_fallback', pool: rows };
+      }
       const kept = graded.filter((_, i) => verdicts[i] === 'yes');
       if (kept.length === 0) return { kind: 'fallback', reason: 'all_filtered', pool: rows };
       return { kind: 'kept', chunks: kept };

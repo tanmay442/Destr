@@ -9,9 +9,9 @@ import {
   type DocumentGrader,
   type HallucinationGrader,
 } from '@app/domain';
-import { getChatModel } from './index';
+import { getChatModel } from './model';
 import { GRADE_MODEL } from '@app/infrastructure/config';
-import { GRADE_REQUEST_TIMEOUT_MS, retryOnTransient } from './retry';
+import { GRADE_REQUEST_TIMEOUT_MS, retryOnTransient, isDeadlineAbort } from './retry';
 import type { ChatModelProvider } from './registries';
 
 const GRADE_RETRY_ATTEMPTS = 3;
@@ -19,13 +19,24 @@ const GRADE_RETRY_ATTEMPTS = 3;
 // §T2 post-stream hallucination check must fit inside the function window:
 // short per-attempt cap and NO retry on timeout (fail-open contract unchanged).
 const HALLUCINATION_TIMEOUT_MS = 12_000;
-const isDeadlineAbort = (err: unknown): boolean =>
-  (err as { name?: string } | null)?.name === 'TimeoutError' ||
-  (err as { name?: string } | null)?.name === 'AbortError';
+// isDeadlineAbort imported from './retry' — deadline aborts must not be retried (§T2, GRADING-F3).
 // §A2 shared turn deadline.
 const GRADING_TURN_DEADLINE_MS = 25_000;
 // Malformed tool responses tolerated per batch before the lenient text fallback fires.
 const MAX_MALFORMED_TOOL_RESPONSES = 2;
+
+// Module-level flag for lenient fallback observability; reset per gradeAll call.
+// agentic-search checks the returned array's `lenientFallbackUsed` property, but
+// this export remains for ad-hoc monitoring and tests.
+let _lastGradeUsedLenientFallback = false;
+export function getAndClearLenientFallbackFlag(): boolean {
+  const v = _lastGradeUsedLenientFallback;
+  _lastGradeUsedLenientFallback = false;
+  return v;
+}
+export function wasLenientFallbackVerdicts(value: unknown): boolean {
+  return Array.isArray(value) && (value as unknown as { lenientFallbackUsed?: boolean }).lenientFallbackUsed === true;
+}
 
 type Verdict = 'yes' | 'no';
 
@@ -88,9 +99,21 @@ const groundedVerdictTools: ToolSet = {
   }),
 };
 
-/** Lenient fallback parsing (§0.2): only a standalone word "no" means "not relevant". */
+/** Lenient fallback parsing (§0.2): detects negation conservatively. */
 function lenientVerdict(text: string): Verdict {
-  return /(^|[^a-z])no([^a-z]|$)/i.test(text) ? 'no' : 'yes';
+  // JSON {"relevant":false} — common when models echo structured intent
+  if (/"relevant"\s*:\s*false/i.test(text)) return 'no';
+  // Explicit irrelevance phrasing
+  if (/\birrelevant\b/i.test(text)) return 'no';
+  if (/\bnot\s+relevant\b/i.test(text)) return 'no';
+  if (/\bnot\b.{0,40}\brelevant\b/i.test(text)) return 'no';
+  // n't contraction + relevant  e.g. "isn't relevant"
+  if (/n['\u2019]t\b.{0,40}\brelevant\b/i.test(text)) return 'no';
+  // Multilingual standalone negatives (no, nein, non, non etc.)
+  if (/(^|[^a-z])(no|nein|non|n\u00e3o|nao|nyet|nee)\b/i.test(text)) return 'no';
+  // Keep original standalone "no" as fallback (covers punctuation cases)
+  if (/(^|[^a-z])no([^a-z]|$)/i.test(text)) return 'no';
+  return 'yes';
 }
 
 /**
@@ -218,6 +241,9 @@ export function createGraders(
   const model = () => modelProvider(gradeModelId || GRADE_MODEL || undefined);
 
   let turnDeadlineAt: number | null = null;
+  // Tracks whether any sub-batch in the current gradeAll call fell back to lenient text parsing.
+  // Propagated to callers via the verdict array's hidden property and the module flag (GRADING-F1).
+  let instanceLenientFallbackUsed = false;
   const ensureTurnDeadline = (): number => {
     turnDeadlineAt ??= Date.now() + GRADING_TURN_DEADLINE_MS;
     return turnDeadlineAt;
@@ -253,6 +279,7 @@ export function createGraders(
           }),
         'document grader',
         GRADE_RETRY_ATTEMPTS,
+        { isNonRetryable: isDeadlineAbort },
       );
       const batchVerdicts = extractBatchVerdicts(result.toolCalls);
       if (batchVerdicts !== null) return batchVerdicts;
@@ -263,6 +290,8 @@ export function createGraders(
     // Lenient plain-text fallback keeps weak/local models that ignore forced
     // tool choice usable instead of silently disabling grading app-wide.
     failureCounters.documentGraderFallback += 1;
+    instanceLenientFallbackUsed = true;
+    _lastGradeUsedLenientFallback = true;
     const { text } = await retryOnTransient(
       () =>
         generateText({
@@ -275,11 +304,18 @@ export function createGraders(
         }),
       'document grader',
       GRADE_RETRY_ATTEMPTS,
+      { isNonRetryable: isDeadlineAbort },
     );
     const perIndex = lenientIndexedVerdicts(text);
     if (perIndex !== null) {
       // Missing/unparseable indices default to 'no'.
       return new Map(indexedDocs.map(([index]) => [index, perIndex.get(index) ?? false]));
+    }
+    // GRADING-F2: batch-wide last-resort is risky when multiple docs share one verdict.
+    // If no digit-leading lines existed and batch has >1 doc, default all to 'no' (safe)
+    // rather than rubber-stamping all as 'yes' from a vague whole-text parse.
+    if (indexedDocs.length > 1) {
+      return new Map(indexedDocs.map(([index]) => [index, false]));
     }
     const batchVerdict = lenientVerdict(text);
     return new Map(indexedDocs.map(([index]) => [index, batchVerdict === 'yes']));
@@ -301,6 +337,7 @@ export function createGraders(
               }),
             'query rewriter',
             GRADE_RETRY_ATTEMPTS,
+            { isNonRetryable: isDeadlineAbort },
           );
           const trimmed = text.trim();
           return trimmed.length > 0 ? trimmed : query;
@@ -318,6 +355,9 @@ export function createGraders(
     documentGrader: {
       async gradeAll(question: string, documents: string[]): Promise<Array<Verdict> | null> {
         if (documents.length === 0) return [];
+        // Reset lenient fallback tracking for this turn (GRADING-F1).
+        instanceLenientFallbackUsed = false;
+        _lastGradeUsedLenientFallback = false;
         try {
           if (ensureTurnDeadline() - Date.now() <= 0) {
             logger.warn('[graders] shared turn deadline exhausted before grading', {
@@ -369,7 +409,24 @@ export function createGraders(
           }
 
           // Missing entries default to 'no'; Map lookups of unset keys are undefined.
-          return documents.map((_, index) => (verdictByIndex.get(index) ? 'yes' : 'no'));
+          const verdicts = documents.map((_, index) => (verdictByIndex.get(index) ? 'yes' : 'no')) as Array<Verdict> & {
+            lenientFallbackUsed?: boolean;
+          };
+          if (instanceLenientFallbackUsed) {
+            Object.defineProperty(verdicts, 'lenientFallbackUsed', {
+              value: true,
+              enumerable: false,
+              writable: true,
+              configurable: true,
+            });
+            _lastGradeUsedLenientFallback = true;
+            logger.warn('[graders] document grading used lenient fallback; marking degraded', {
+              severity: 'warn',
+              event: 'graders.document_grader.lenient_fallback',
+              documents: documents.length,
+            });
+          }
+          return verdicts;
         } catch (err) {
           failureCounters.documentGrader += 1;
           // Groq note: a 400 `tool_use_failed` here is the platform rejecting

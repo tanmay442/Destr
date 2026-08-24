@@ -27,7 +27,7 @@ import {
 } from '@app/infrastructure/config';
 import type { RerankerStatus } from '@app/infrastructure/llm';
 import type { MyUIMessage } from '@/chat/types';
-import type { DocumentRow, LogLevel } from '@app/domain';
+import type { DocumentRow, LogLevel, AgenticResultState } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type IngestQueue, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
@@ -232,6 +232,37 @@ function createComposition() {
         getSearchDeps(cfg),
       ),
     agenticSearch: async (cfg: AppConfig, query: string) => {
+      // XC-F-2: when the kill-switch is off, never degrade to empty wall — fall back to vector search instead of throwing.
+      if (process.env.AGENTIC_ENABLED === 'false') {
+        const fallback = await bind(
+          searchChunks,
+          query,
+          {
+            threshold: cfg.similarityThreshold,
+            hybridEnabled: cfg.hybridEnabled,
+            mode: cfg.parentChildMode,
+            parentChildWindow: cfg.parentChildWindow,
+            rrfK: RRF_K,
+            lexicalWeight: LEXICAL_WEIGHT,
+            rerankTopN: RERANK_TOP_N,
+            candidateLimit: CANDIDATE_POOL,
+          },
+          getSearchDeps(cfg),
+        );
+        if (!fallback.ok) return fallback;
+        const chunks = fallback.value;
+        const isEmpty = chunks.length === 0;
+        return ok({
+          chunks,
+          rewrittenQuery: query,
+          outOfDomain: isEmpty,
+          isEmpty,
+          degraded: false,
+          fallbackReason: null,
+          resultState: (isEmpty ? 'empty' : 'ok') as AgenticResultState,
+          gradingUnavailable: false,
+        });
+      }
       try {
         return await agenticSearch(query, getAgenticDeps(cfg));
       } catch (e) {

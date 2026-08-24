@@ -42,6 +42,13 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
   const searchDeps = { chunks: Db.createChunkRepo(Db.db), embeddings: embeddingService, reranker };
   const graders = Llm.getGraders();
   const chat = Llm.getChatModel();
+  // EVAL-M4: surface degraded agentic coverage at startup (don't silently green).
+  {
+    const agenticCount = goldenQuestions.filter((q) => q.mode === 'agentic').length;
+    if (agenticCount > 0 && (!graders.queryRewriter || !graders.documentGrader)) {
+      console.warn(`[eval] agentic coverage degraded at startup: ${agenticCount} agentic question(s) will run as plain searchChunks (AGENTIC_ENABLED=false or graders unavailable) (EVAL-M4)`);
+    }
+  }
 
   return {
     searchChunks: async (query: string) => {
@@ -52,8 +59,10 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
     // wired with the frozen defaults (admin knobs are runtime-only concerns).
     // When the loop is disabled (AGENTIC_ENABLED=false) the graders are
     // undefined, so agentic questions degrade to plain retrieval instead.
+    // EVAL-M4: warn loudly instead of silently greening.
     agenticSearch: async (query: string) => {
       if (!graders.queryRewriter || !graders.documentGrader) {
+        console.warn('[eval] agenticSearch degraded to plain searchChunks: graders unavailable (AGENTIC_ENABLED=false)');
         const r = await searchChunks(query, {}, searchDeps);
         return r.ok ? r.value.map((c) => ({ content: c.content, documentId: c.documentId })) : [];
       }
@@ -70,6 +79,7 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
         model: chat,
         system: 'Answer strictly from the provided context. If the context does not cover the question, say you cannot answer from the available docs.',
         prompt: `Context:\n${context}\n\nQuestion: ${query}`,
+        abortSignal: AbortSignal.timeout(30_000),
       });
       return out.text;
     },
@@ -87,7 +97,13 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
 }
 
 async function main() {
-  const threshold = Number(process.env.EVAL_FAITHFULNESS_THRESHOLD ?? 0.7);
+  // EVAL-M1: validate threshold (fail-closed); NaN/Infinity/out-of-range previously bypassed the gate.
+  const rawThreshold = process.env.EVAL_FAITHFULNESS_THRESHOLD ?? '0.7';
+  const threshold = Number(rawThreshold);
+  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) {
+    console.error(`[eval] invalid EVAL_FAITHFULNESS_THRESHOLD="${rawThreshold}" — must be a finite number in (0, 1]; failing closed`);
+    process.exit(1);
+  }
   const useReal = process.env.EVAL_REAL === '1';
   const questions = goldenQuestions;
   const deps = await buildDeps(useReal);
@@ -127,11 +143,15 @@ async function main() {
       `  ${r.passed ? 'PASS' : 'FAIL'}  ${r.id.padEnd(24)} mode=${qMode(r.id)} faith=${r.faithfulness} corr=${r.correctness} ctx=${r.contextRelevancy}${r.hit !== undefined ? ` hit=${r.hit ? 'yes' : 'no'}` : ''} hits=${r.retrievedCount}${r.refused ? ' refused' : ''}${r.forbiddenHit.length ? ` FORBIDDEN=${r.forbiddenHit.join(',')}` : ''}`,
     );
   }
-  console.log(`OVERALL: ${evalGateFailure(report) === null && report.passed ? 'PASS' : 'FAIL'}\n`);
-
   const failure = evalGateFailure(report);
-  if (failure) {
-    console.error(`Eval failed: ${failure}`);
+  const gateOk = failure === null;
+  // EVAL-M1: exit must fold report.passed (meanFaithfulness >= threshold) and gate together; printing and exit now agree.
+  const overallPass = gateOk && report.passed;
+  console.log(`OVERALL: ${overallPass ? 'PASS' : 'FAIL'}\n`);
+
+  if (!overallPass) {
+    if (failure) console.error(`Eval failed: ${failure}`);
+    else if (!report.passed) console.error(`Eval failed: mean faithfulness ${report.meanFaithfulness.toFixed(2)} < threshold ${report.threshold}`);
     process.exit(1);
   }
   process.exit(0);

@@ -19,7 +19,12 @@ import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData, GuardrailData } from '@/chat/types';
-import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
+import {
+  MAX_CONVERSATIONS_PER_USER,
+  MAX_MESSAGES_PER_CONVERSATION,
+  MAX_RESUME_MESSAGES,
+  DEGRADED_BANNER_MESSAGE,
+} from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
@@ -40,7 +45,7 @@ import {
 const FEEDBACK_RETRY_DELAY_MS = 1500;
 
 /** Default copy for the soft degraded banner when the server sends no custom message. */
-const DEGRADED_BANNER_FALLBACK = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
+const DEGRADED_BANNER_FALLBACK = DEGRADED_BANNER_MESSAGE;
 
 function uuidv4(): string {
   const c = globalThis.crypto;
@@ -682,14 +687,21 @@ export function ChatInterface({
           {(() => {
             // §T7 closure guarantee: an assistant turn that ended with nothing
             // visible must never leave the user without a response.
-            if (status !== 'ready' || messages.length === 0) return null;
+            // CHAT-L1: also cover status 'error' (network drop/hard kill) — the generic error block handles AbortError separately.
+            if ((status !== 'ready' && status !== 'error') || messages.length === 0) return null;
             const last = messages[messages.length - 1];
             if (!last || last.role !== 'assistant') return null;
+            // CHAT-L2: tool-only / ticket-only turns have no prose but did produce work — don't show empty fallback.
             const hasVisibleParts = last.parts.some(
               (p) =>
                 p.type === 'text'
                   ? p.text.trim().length > 0
-                  : p.type === 'data-citation' || p.type === 'data-guardrail',
+                  : p.type === 'data-citation' ||
+                    p.type === 'data-guardrail' ||
+                    String(p.type).startsWith('tool') ||
+                    p.type === 'reasoning' ||
+                    p.type === 'file' ||
+                    p.type === 'dynamic-tool',
             );
             if (hasVisibleParts) return null;
             return (

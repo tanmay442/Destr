@@ -8,6 +8,8 @@ import {
 import { ValidationError, ok, ExternalServiceError } from '@app/domain';
 import { V4_UUID_REGEX } from '@app/application/chat';
 
+const QUALITY_WRITE_WINDOW_MS = 5_000;
+
 const SAMPLES_LIMIT = 20;
 
 const ReviewRequestSchema = z.object({
@@ -50,6 +52,18 @@ export async function POST(req: Request) {
   }
 
   const { comp } = auth;
+  // SEC-L3: mirror settings PUT rate limit — 1 write per 5s per reviewer.
+  const limit = await comp.rateLimit(`quality-review:${session.user.id}`, {
+    limit: 1,
+    windowMs: QUALITY_WRITE_WINDOW_MS,
+  });
+  if (!limit.ok) {
+    const retryAfter = Number.isFinite(limit.retryAfterMs)
+      ? String(Math.ceil(limit.retryAfterMs / 1000))
+      : '5';
+    return Response.json({ error: 'Rate limited' }, { status: 429, headers: { 'Retry-After': retryAfter } });
+  }
+
   try {
     const row = await comp.qualityReviewsRepo.create({
       turnId: parsed.data.turnId,
@@ -59,6 +73,16 @@ export async function POST(req: Request) {
     });
     return respondResult(ok(row));
   } catch (e) {
+    // SEC-M2: FK violation (Postgres 23503) means turn_id not in chat_events → 4xx not 502.
+    const code =
+      (e as { code?: string })?.code ??
+      (e as { cause?: { code?: string } })?.cause?.code ??
+      (e as { cause?: { cause?: { code?: string } } })?.cause?.cause?.code;
+    // Some drivers surface code on the cause chain; also check message pattern.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (code === '23503' || /violates foreign key/i.test(msg) || /23503/.test(msg)) {
+      return respond(new ValidationError('Turn not found', { turnId: parsed.data.turnId }));
+    }
     return respond(new ExternalServiceError('Failed to save quality review', e));
   }
 }
