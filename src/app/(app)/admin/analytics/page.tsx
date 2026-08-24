@@ -19,10 +19,26 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { BarList, ActivityBars, LineChart } from '@/components/admin/Charts';
 import { Eyebrow } from '@/components/ui/eyebrow';
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/components/ui/empty';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/format-duration';
 import type { ReactNode } from 'react';
-import { ThumbsUp, ThumbsDown, MessageSquare, Activity, Ticket, Inbox, BarChart3, Gauge, Sparkles } from 'lucide-react';
+import {
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare,
+  Activity,
+  Ticket,
+  Inbox,
+  BarChart3,
+  Gauge,
+  Sparkles,
+  Coins,
+  ChevronDown,
+  TrendingUp,
+  ShieldAlert,
+} from 'lucide-react';
 import type { AnalyticsTrendPoint } from '@app/application';
 import type { ChatDailyQualityRow, ModeComparison } from '@app/domain';
 
@@ -47,11 +63,13 @@ function MetricCard({
   value,
   icon,
   tone,
+  hint,
 }: {
   label: string;
   value: string;
   icon?: ReactNode;
   tone?: 'default' | 'success' | 'warning' | 'destructive';
+  hint?: string | undefined;
 }) {
   const valueClass =
     tone === 'success'
@@ -67,9 +85,8 @@ function MetricCard({
         {icon ? <span aria-hidden>{icon}</span> : null}
         {label}
       </Eyebrow>
-      <span className={cn('text-2xl font-semibold tabular-nums', valueClass)}>
-        {value}
-      </span>
+      <span className={cn('text-2xl font-semibold tracking-tight tabular-nums', valueClass)}>{value}</span>
+      {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
     </Card>
   );
 }
@@ -157,57 +174,36 @@ function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Avg tokens/query</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {num(Math.round(mode.avgTokensPerQuery))}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{num(Math.round(mode.avgTokensPerQuery))}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Avg similarity</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {mode.avgMaxSimilarity.toFixed(3)}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{mode.avgMaxSimilarity.toFixed(3)}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Ticket rate</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {pct(mode.ticketRate)}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{pct(mode.ticketRate)}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Hallucination rate</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {pct(mode.hallucinationRate)}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{pct(mode.hallucinationRate)}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Latency p50</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {ms(mode.totalP50Ms)}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{ms(mode.totalP50Ms)}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">Latency p95</dt>
-            <dd className="font-medium text-foreground tabular-nums">
-              {ms(mode.totalP95Ms)}
-            </dd>
+            <dd className="font-medium text-foreground tabular-nums">{ms(mode.totalP95Ms)}</dd>
           </div>
         </dl>
         <Separator className="opacity-50" />
         <div className="flex flex-col gap-2">
           <Eyebrow>Query length</Eyebrow>
           <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
-            <div
-              className="bg-primary"
-              style={{ width: `${(buckets.short / bucketTotal) * 100}%` }}
-            />
-            <div
-              className="bg-foreground-subtle"
-              style={{ width: `${(buckets.medium / bucketTotal) * 100}%` }}
-            />
-            <div
-              className="bg-foreground-faint"
-              style={{ width: `${(buckets.long / bucketTotal) * 100}%` }}
-            />
+            <div className="bg-primary" style={{ width: `${(buckets.short / bucketTotal) * 100}%` }} />
+            <div className="bg-foreground-subtle" style={{ width: `${(buckets.medium / bucketTotal) * 100}%` }} />
+            <div className="bg-foreground-faint" style={{ width: `${(buckets.long / bucketTotal) * 100}%` }} />
           </div>
           <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
             <span>Short {num(buckets.short)}</span>
@@ -224,24 +220,27 @@ function SectionHeading({
   title,
   description,
   icon,
+  action,
 }: {
   title: string;
   description?: string;
   icon?: ReactNode;
+  action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-        {icon ? (
-          <span className="text-muted-foreground" aria-hidden>
-            {icon}
-          </span>
-        ) : null}
-        {title}
-      </h3>
-      {description ? (
-        <p className="text-xs text-muted-foreground">{description}</p>
-      ) : null}
+    <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+          {icon ? (
+            <span className="text-muted-foreground" aria-hidden>
+              {icon}
+            </span>
+          ) : null}
+          {title}
+        </h3>
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }
@@ -267,14 +266,11 @@ export default async function AnalyticsPage() {
 
   const feedback = documents?.feedback ?? null;
   const feedbackRate =
-    feedback && feedback.summary.totalEvents > 0
-      ? feedback.summary.total / feedback.summary.totalEvents
-      : 0;
+    feedback && feedback.summary.totalEvents > 0 ? feedback.summary.total / feedback.summary.totalEvents : 0;
 
   const weekly = trends ? toWeekly(trends.points) : [];
   const hasTrends = weekly.some((w) => w.total > 0);
-  const series = (pick: (w: WeeklyPoint) => number) =>
-    weekly.map((w) => ({ label: w.label, value: pick(w) }));
+  const series = (pick: (w: WeeklyPoint) => number) => weekly.map((w) => ({ label: w.label, value: pick(w) }));
 
   const usageBuckets = chat ? padUsage(chat.usageOverTime, 7) : [];
   // SEC-L6: pad zero-event days so sparklines don't collapse gaps; repo now dense but keep UI fallback for sparse data.
@@ -285,60 +281,58 @@ export default async function AnalyticsPage() {
 
   return (
     <section className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
-        <p className="text-sm text-muted-foreground">
-          Quality, performance, and feedback across your knowledge agent.
-        </p>
+      {/* Header — symmetry + live badge */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
+            <Badge variant="outline" className="gap-1.5 rounded-full border-primary/20 bg-primary/5 text-xs font-normal">
+              <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
+              Live
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">Quality, performance, and feedback across your knowledge agent.</p>
+        </div>
+        {hasChat ? (
+          <Card className="hidden gap-1 border-border/50 bg-muted/30 px-3 py-2 shadow-none sm:flex">
+            <span className="text-xs text-muted-foreground">Last 7 days</span>
+            <span className="flex items-center gap-1.5 text-sm font-medium tabular-nums">
+              <TrendingUp className="size-3.5 text-muted-foreground" data-icon="inline-start" />
+              {num(chat.total)} turns
+            </span>
+          </Card>
+        ) : null}
       </div>
 
       <Tabs defaultValue="quality" className="flex w-full flex-col gap-6">
-        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 bg-transparent p-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
-          <TabsTrigger
-            value="quality"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+        <TabsList className="h-auto w-full justify-start gap-1 bg-muted p-1 sm:h-10">
+          <TabsTrigger value="quality" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <BarChart3 data-icon="inline-start" />
             Statistics
           </TabsTrigger>
-          <TabsTrigger
-            value="performance"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+          <TabsTrigger value="performance" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Gauge data-icon="inline-start" />
             Performance
           </TabsTrigger>
-          <TabsTrigger
-            value="tickets"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+          <TabsTrigger value="tickets" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Ticket data-icon="inline-start" />
             Tickets
           </TabsTrigger>
-          <TabsTrigger
-            value="feedback"
-            className="h-9 w-full justify-start gap-2 data-[state=active]:bg-secondary"
-          >
+          <TabsTrigger value="feedback" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
             <Sparkles data-icon="inline-start" />
             Feedback
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent
-          value="quality"
-          forceMount
-          className="flex flex-col gap-5 data-[state=inactive]:hidden"
-          data-testid="analytics-quality"
-        >
+        <TabsContent value="quality" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden" data-testid="analytics-quality">
+          {/* A — True quality (4 cards, symmetric) */}
           <div className="flex flex-col gap-3">
             <SectionHeading
               title="True quality"
               description="Sampled LLM-judge scores and thumbs feedback — real quality, not banners."
+              icon={<Sparkles className="size-4" />}
             />
-            <div
-              className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
-              data-testid="analytics-true-quality-cards"
-            >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="analytics-true-quality-cards">
               <MetricCard
                 label={`True faithfulness · target > ${FAITHFULNESS_TARGET}`}
                 value={judges ? score(judges.avgFaithfulness) : '—'}
@@ -350,6 +344,7 @@ export default async function AnalyticsPage() {
                       : 'warning'
                     : 'default'
                 }
+                hint={judges ? 'last 7 days' : undefined}
               />
               <MetricCard
                 label={`Retrieval relevance · target > ${RETRIEVAL_TARGET}`}
@@ -362,143 +357,85 @@ export default async function AnalyticsPage() {
                       : 'warning'
                     : 'default'
                 }
+                hint={judges ? 'avg relevance' : undefined}
               />
               <MetricCard
                 label="User helpful · thumbs ratio"
-                value={feedback && feedback.summary.up + feedback.summary.down > 0
-                  ? pct(feedback.summary.up / (feedback.summary.up + feedback.summary.down))
-                  : '—'}
+                value={
+                  feedback && feedback.summary.up + feedback.summary.down > 0
+                    ? pct(feedback.summary.up / (feedback.summary.up + feedback.summary.down))
+                    : '—'
+                }
                 icon={<ThumbsUp className="size-3.5" />}
+                hint={feedback ? `${num(feedback.summary.up + feedback.summary.down)} votes` : undefined}
               />
               <MetricCard
                 label={`Degraded rate · target < ${DEGRADED_TARGET * 100}%`}
                 value={judges ? pct(judges.degradedRate) : '—'}
-                icon={<Inbox className="size-3.5" />}
-                tone={
-                  judges
-                    ? judges.degradedRate >= DEGRADED_TARGET
-                      ? 'warning'
-                      : 'success'
-                    : 'default'
-                }
+                icon={<ShieldAlert className="size-3.5" />}
+                tone={judges ? (judges.degradedRate >= DEGRADED_TARGET ? 'warning' : 'success') : 'default'}
+                hint={judges ? 'fallback answers' : undefined}
               />
             </div>
             {!judges || (judges.avgFaithfulness === 0 && judges.avgRetrievalRelevance === 0 && judges.degradedRate === 0) ? (
-              <p className="text-xs text-muted-foreground">
-                Judge scores appear once live sampling has judged turns in the last 7 days.
-              </p>
+              <p className="text-xs text-muted-foreground">Judge scores appear once live sampling has judged turns in the last 7 days.</p>
             ) : null}
           </div>
 
-          {hasChat ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <MetricCard
-                label="Hallucination banner rate · health"
-                value={pct(chat.hallucinationRate)}
-                icon={<Activity className="size-3.5" />}
-                tone={chat.hallucinationRate > 0.05 ? 'destructive' : 'default'}
-              />
-              <MetricCard
-                label="Empty rate · health"
-                value={pct(chat.outOfDomainRate)}
-                icon={<Inbox className="size-3.5" />}
-              />
-              <MetricCard
-                label="Self-serve success · health"
-                value={pct(chat.selfServeSuccessRate)}
-                icon={<ThumbsUp className="size-3.5" />}
-                tone={chat.selfServeSuccessRate >= 0.8 ? 'success' : 'default'}
-              />
-              <MetricCard label="Chat turns" value={num(chat.total)} icon={<MessageSquare className="size-3.5" />} />
-            </div>
-          ) : null}
-
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Token cost</CardTitle>
-              <CardDescription>Estimated spend and token throughput.</CardDescription>
+          {/* B — Throughput & Cost (now absorbs Chat turns, 4 metrics symmetric) */}
+          <Card className="gap-0 border-border/60">
+            <CardHeader className="flex flex-row items-start justify-between gap-4 pb-4">
+              <div className="flex flex-col gap-1">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <Coins className="size-4 text-muted-foreground" data-icon="inline-start" />
+                  Throughput & Cost
+                </CardTitle>
+                <CardDescription>Estimated spend and token throughput — last 7 days.</CardDescription>
+              </div>
+              {hasChat ? (
+                <Badge variant="secondary" className="shrink-0 rounded-full font-normal tabular-nums">
+                  {usd(chat.estimatedCostUsd)} · {num(chat.total)} chats
+                </Badge>
+              ) : null}
             </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <MetricCard label="Est. cost" value={chat ? usd(chat.estimatedCostUsd) : usd(0)} />
-              <MetricCard label="Tokens in" value={chat ? num(chat.tokensIn) : '0'} />
-              <MetricCard label="Tokens out" value={chat ? num(chat.tokensOut) : '0'} />
+            <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <Card className="gap-1 p-4 shadow-none">
+                <Eyebrow className="text-xs">Est. cost</Eyebrow>
+                <span className="text-xl font-semibold tabular-nums">{chat ? usd(chat.estimatedCostUsd) : usd(0)}</span>
+                {hasChat && chat.total > 0 ? (
+                  <span className="text-xs text-muted-foreground tabular-nums">{usd(chat.estimatedCostUsd / chat.total)} / chat</span>
+                ) : null}
+              </Card>
+              <Card className="gap-1 p-4 shadow-none">
+                <Eyebrow className="text-xs">Tokens in</Eyebrow>
+                <span className="text-xl font-semibold tabular-nums">{chat ? num(chat.tokensIn) : '0'}</span>
+                <span className="text-xs text-muted-foreground">input</span>
+              </Card>
+              <Card className="gap-1 p-4 shadow-none">
+                <Eyebrow className="text-xs">Tokens out</Eyebrow>
+                <span className="text-xl font-semibold tabular-nums">{chat ? num(chat.tokensOut) : '0'}</span>
+                <span className="text-xs text-muted-foreground">generated</span>
+              </Card>
+              <Card className="gap-1 bg-muted/20 p-4 shadow-none">
+                <Eyebrow className="flex items-center gap-1 text-xs">
+                  <MessageSquare className="size-3" />
+                  Chat turns
+                </Eyebrow>
+                <span className="text-xl font-semibold tabular-nums">{chat ? num(chat.total) : '0'}</span>
+                <span className="text-xs text-muted-foreground">7-day total</span>
+              </Card>
             </CardContent>
           </Card>
 
-          {hasTrends ? (
-            <div className="flex flex-col gap-3">
-              <SectionHeading title="Health trends" description="Weekly banner-proxy signals (system health, not quality)" />
-              <div
-                className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
-                data-testid="analytics-quality-trends"
-              >
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle className="text-sm">Hallucination rate</CardTitle>
-                    <CardDescription>Weekly, threshold 5%.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <LineChart
-                      data={series((w) => w.hallucinationRate)}
-                      percentage
-                      threshold={0.05}
-                    />
-                  </CardContent>
-                </Card>
-
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle className="text-sm">Out-of-domain rate</CardTitle>
-                    <CardDescription>Weekly coverage gap.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <LineChart data={series((w) => w.outOfDomainRate)} percentage />
-                  </CardContent>
-                </Card>
-
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle className="text-sm">Avg similarity</CardTitle>
-                    <CardDescription>Best-match cosine, weekly.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <LineChart
-                      data={series((w) => w.avgMaxSimilarity)}
-                      formatValue={(v) => v.toFixed(3)}
-                    />
-                  </CardContent>
-                </Card>
-
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle className="text-sm">Self-serve success</CardTitle>
-                    <CardDescription>Resolved without a ticket or gap.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          ) : (
-            <Card className="gap-0">
-              <CardHeader className="gap-1">
-                <CardTitle>Health trends</CardTitle>
-                <CardDescription>
-                  No trend data yet. Weekly health charts appear once the daily rollup has
-                  collected history.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          )}
-
+          {/* C — True quality trends (3 cards, symmetric md:grid-cols-3) */}
           {dailyQualityPadded.length > 0 ? (
             <div className="flex flex-col gap-3" data-testid="analytics-daily-quality-trends">
               <SectionHeading
                 title="True quality trends"
                 description="Daily judge scores and degraded turns over the last 84 days."
+                icon={<TrendingUp className="size-4" />}
               />
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <Card className="gap-0">
                   <CardHeader className="gap-1 pb-4">
                     <CardTitle className="text-sm">Faithfulness</CardTitle>
@@ -509,7 +446,6 @@ export default async function AnalyticsPage() {
                       data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.avgFaithfulness }))}
                       formatValue={score}
                       threshold={FAITHFULNESS_TARGET}
-                      // Floor target: red when latest is BELOW the line, not above.
                       className="text-destructive"
                       thresholdClassName="text-primary"
                     />
@@ -538,49 +474,104 @@ export default async function AnalyticsPage() {
                     <CardDescription>Daily count of degraded-fallback answers.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <LineChart
-                      data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))}
-                    />
+                    <LineChart data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))} />
                   </CardContent>
                 </Card>
               </div>
             </div>
-          ) : null}
+          ) : (
+            <Card className="gap-0 border-dashed">
+              <CardContent className="py-8">
+                <Empty>
+                  <EmptyMedia variant="icon">
+                    <TrendingUp />
+                  </EmptyMedia>
+                  <EmptyHeader>
+                    <EmptyTitle>No quality trends yet</EmptyTitle>
+                    <EmptyDescription>Daily judge trends appear once sampling has history.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              </CardContent>
+            </Card>
+          )}
 
-          <Card className="gap-0">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle>Usage</CardTitle>
-              <CardDescription>Chat turns over the last 7 days.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {chat ? (
-                <ActivityBars buckets={usageBuckets} />
-              ) : (
-                <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
-              )}
-            </CardContent>
-          </Card>
+          {/* D — Health trends (moved to bottom, collapsible) */}
+          <Collapsible defaultOpen={hasTrends} className="flex flex-col gap-3" data-testid="analytics-quality-trends">
+            <Card className="gap-0 border-border/60 bg-muted/10">
+              <CardHeader className="flex flex-row items-center justify-between gap-4 pb-2">
+                <div className="flex flex-col gap-1">
+                  <CardTitle className="text-sm">Health trends</CardTitle>
+                  <CardDescription>Weekly banner-proxy signals — system health, not quality.</CardDescription>
+                </div>
+                <CollapsibleTrigger className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-xs font-medium shadow-sm transition hover:bg-accent">
+                  {hasTrends ? 'Hide' : 'Show'}
+                  <ChevronDown className="size-3.5 transition data-[state=open]:rotate-180" />
+                </CollapsibleTrigger>
+              </CardHeader>
+              <CollapsibleContent>
+                <CardContent className="pt-3">
+                  {hasTrends ? (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <Card className="gap-0 shadow-none">
+                        <CardHeader className="gap-1 pb-4">
+                          <CardTitle className="text-sm">Hallucination rate</CardTitle>
+                          <CardDescription>Weekly, threshold 5%.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <LineChart data={series((w) => w.hallucinationRate)} percentage threshold={0.05} />
+                        </CardContent>
+                      </Card>
+                      <Card className="gap-0 shadow-none">
+                        <CardHeader className="gap-1 pb-4">
+                          <CardTitle className="text-sm">Out-of-domain rate</CardTitle>
+                          <CardDescription>Weekly coverage gap.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <LineChart data={series((w) => w.outOfDomainRate)} percentage />
+                        </CardContent>
+                      </Card>
+                      <Card className="gap-0 shadow-none">
+                        <CardHeader className="gap-1 pb-4">
+                          <CardTitle className="text-sm">Avg similarity</CardTitle>
+                          <CardDescription>Best-match cosine, weekly.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <LineChart data={series((w) => w.avgMaxSimilarity)} formatValue={(v) => v.toFixed(3)} />
+                        </CardContent>
+                      </Card>
+                      <Card className="gap-0 shadow-none">
+                        <CardHeader className="gap-1 pb-4">
+                          <CardTitle className="text-sm">Self-serve success</CardTitle>
+                          <CardDescription>Resolved without a ticket or gap.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <LineChart data={series((w) => w.selfServeSuccessRate)} percentage />
+                        </CardContent>
+                      </Card>
+                    </div>
+                  ) : (
+                    <Empty className="border border-dashed bg-background">
+                      <EmptyMedia variant="icon">
+                        <Activity />
+                      </EmptyMedia>
+                      <EmptyHeader>
+                        <EmptyTitle>No health history yet</EmptyTitle>
+                        <EmptyDescription>Weekly health charts appear once the daily rollup has collected history.</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
         </TabsContent>
 
-        <TabsContent
-          value="performance"
-          forceMount
-          className="flex flex-col gap-5 data-[state=inactive]:hidden"
-          data-testid="analytics-performance"
-        >
+        <TabsContent value="performance" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden" data-testid="analytics-performance">
           {hasChat ? (
             <>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <MetricCard
-                  label="Cache hit rate"
-                  value={pct(chat.cacheHitRate)}
-                  tone={chat.cacheHitRate >= 0.5 ? 'success' : 'default'}
-                />
-                <MetricCard
-                  label="Agentic retry rate"
-                  value={pct(chat.agenticRetryRate)}
-                  tone={chat.agenticRetryRate > 0.1 ? 'warning' : 'default'}
-                />
+                <MetricCard label="Cache hit rate" value={pct(chat.cacheHitRate)} tone={chat.cacheHitRate >= 0.5 ? 'success' : 'default'} hint="last 7 days" />
+                <MetricCard label="Agentic retry rate" value={pct(chat.agenticRetryRate)} tone={chat.agenticRetryRate > 0.1 ? 'warning' : 'default'} hint="retry passes" />
               </div>
 
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -608,9 +599,7 @@ export default async function AnalyticsPage() {
                 <Card className="gap-0">
                   <CardHeader className="gap-1 pb-4">
                     <CardTitle>Cache-buster queries</CardTitle>
-                    <CardDescription>
-                      Repeatedly miss cache — candidates for new docs.
-                    </CardDescription>
+                    <CardDescription>Repeatedly miss cache — candidates for new docs.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {chat.cacheBusterQueries.length > 0 ? (
@@ -624,7 +613,15 @@ export default async function AnalyticsPage() {
                         }))}
                       />
                     ) : (
-                      <p className="text-sm text-muted-foreground">No repeat cache misses.</p>
+                      <Empty className="py-6">
+                        <EmptyMedia variant="icon">
+                          <Inbox />
+                        </EmptyMedia>
+                        <EmptyHeader>
+                          <EmptyTitle>No repeat misses</EmptyTitle>
+                          <EmptyDescription>Cache is warm — no buster queries.</EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
                     )}
                   </CardContent>
                 </Card>
@@ -641,7 +638,6 @@ export default async function AnalyticsPage() {
                       <LineChart data={series((w) => w.cacheHitRate)} percentage />
                     </CardContent>
                   </Card>
-
                   <Card className="gap-0">
                     <CardHeader className="gap-1 pb-4">
                       <CardTitle>Total latency</CardTitle>
@@ -650,11 +646,7 @@ export default async function AnalyticsPage() {
                     <CardContent className="flex flex-col gap-4">
                       <div className="flex flex-col gap-1">
                         <Eyebrow>p50</Eyebrow>
-                        <LineChart
-                          data={series((w) => w.totalP50Ms)}
-                          valueSuffix=" ms"
-                          height={72}
-                        />
+                        <LineChart data={series((w) => w.totalP50Ms)} valueSuffix=" ms" height={72} />
                       </div>
                       <div className="flex flex-col gap-1">
                         <Eyebrow>p95</Eyebrow>
@@ -669,16 +661,34 @@ export default async function AnalyticsPage() {
                   </Card>
                 </div>
               ) : (
-                <Card className="gap-0">
-                  <CardHeader className="gap-1">
-                    <CardTitle>Performance trends</CardTitle>
-                    <CardDescription>
-                      No trend data yet. Weekly performance charts appear once the daily rollup
-                      has collected history.
-                    </CardDescription>
-                  </CardHeader>
+                <Card className="gap-0 border-dashed">
+                  <CardContent className="py-8">
+                    <Empty>
+                      <EmptyMedia variant="icon">
+                        <Gauge />
+                      </EmptyMedia>
+                      <EmptyHeader>
+                        <EmptyTitle>No performance history yet</EmptyTitle>
+                        <EmptyDescription>Weekly perf charts appear once the rollup has data.</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  </CardContent>
                 </Card>
               )}
+
+              {/* H — Usage moved from Statistics */}
+              <Card className="gap-0">
+                <CardHeader className="gap-1 pb-4">
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="size-4 text-muted-foreground" />
+                    Usage
+                  </CardTitle>
+                  <CardDescription>Chat turns over the last 7 days.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {chat ? <ActivityBars buckets={usageBuckets} /> : <p className="text-sm text-muted-foreground">No usage recorded yet.</p>}
+                </CardContent>
+              </Card>
 
               <div className="flex flex-col gap-3" data-testid="analytics-mode-comparison">
                 <SectionHeading title="Mode comparison" description="Per-mode A/B metrics" />
@@ -689,16 +699,12 @@ export default async function AnalyticsPage() {
                     ))}
                   </div>
                 ) : (
-                  <Card className="gap-0">
+                  <Card className="gap-0 border-dashed">
                     <CardHeader className="gap-1">
                       <CardTitle>Comparison unavailable</CardTitle>
                       <CardDescription>
-                        Only{' '}
-                        {activeModes.length === 1
-                          ? MODE_LABELS[activeModes[0]!.mode]
-                          : 'one'}{' '}
-                        mode has traffic. Set the retrieval mode rollout below 100% to collect
-                        A/B data.
+                        Only {activeModes.length === 1 ? MODE_LABELS[activeModes[0]!.mode] : 'one'} mode has traffic. Set the retrieval mode
+                        rollout below 100% to collect A/B data.
                       </CardDescription>
                     </CardHeader>
                   </Card>
@@ -706,21 +712,23 @@ export default async function AnalyticsPage() {
               </div>
             </>
           ) : (
-            <Card className="gap-0">
-              <CardHeader className="gap-1">
-                <CardTitle>Performance</CardTitle>
-                <CardDescription>No chat activity recorded yet.</CardDescription>
-              </CardHeader>
+            <Card className="gap-0 border-dashed">
+              <CardContent className="py-12">
+                <Empty>
+                  <EmptyMedia variant="icon">
+                    <Gauge />
+                  </EmptyMedia>
+                  <EmptyHeader>
+                    <EmptyTitle>No performance data yet</EmptyTitle>
+                    <EmptyDescription>Start chatting to see latency, cache, and mode stats.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              </CardContent>
             </Card>
           )}
         </TabsContent>
 
-        <TabsContent
-          value="tickets"
-          forceMount
-          className="flex flex-col gap-5 data-[state=inactive]:hidden"
-          data-testid="analytics-tickets"
-        >
+        <TabsContent value="tickets" forceMount className="flex flex-col gap-5 data-[state=inactive]:hidden" data-testid="analytics-tickets">
           <div className="flex flex-col gap-3" data-testid="analytics-ticket-intelligence">
             <SectionHeading title="Ticket intelligence" description="Volume, response times" icon={<Ticket className="size-4" />} />
             {ticketIntel ? (
@@ -728,25 +736,17 @@ export default async function AnalyticsPage() {
                 <Card className="gap-0" data-testid="analytics-ticket-volume">
                   <CardHeader className="gap-1 pb-4">
                     <CardTitle>Ticket volume</CardTitle>
-                    <CardDescription>
-                      Tickets created per week across the trend window.
-                    </CardDescription>
+                    <CardDescription>Tickets created per week across the trend window.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    {hasTrends ? (
-                      <LineChart data={series((w) => w.ticketsCreated)} />
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No trend data yet.</p>
-                    )}
+                    {hasTrends ? <LineChart data={series((w) => w.ticketsCreated)} /> : <p className="text-sm text-muted-foreground">No trend data yet.</p>}
                   </CardContent>
                 </Card>
 
                 <Card className="gap-0" data-testid="analytics-turns-to-ticket">
                   <CardHeader className="gap-1 pb-4">
                     <CardTitle>Turns before a ticket</CardTitle>
-                    <CardDescription>
-                      Session turns up to the first ticket created.
-                    </CardDescription>
+                    <CardDescription>Session turns up to the first ticket created.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {ticketIntel.turnsToTicket.ticketSessions > 0 ? (
@@ -759,14 +759,13 @@ export default async function AnalyticsPage() {
                           }))}
                         />
                         <p className="text-xs text-muted-foreground tabular-nums">
-                          Avg {ticketIntel.turnsToTicket.avgTurns} turns ·{' '}
-                          {num(ticketIntel.turnsToTicket.ticketSessions)} ticket sessions
+                          Avg {ticketIntel.turnsToTicket.avgTurns} turns · {num(ticketIntel.turnsToTicket.ticketSessions)} ticket sessions
                         </p>
                       </div>
                     ) : (
-                      <p className="text-sm text-muted-foreground">
-                        No ticket-creating sessions yet.
-                      </p>
+                      <Empty className="py-4">
+                        <EmptyDescription>No ticket-creating sessions yet.</EmptyDescription>
+                      </Empty>
                     )}
                   </CardContent>
                 </Card>
@@ -783,13 +782,10 @@ export default async function AnalyticsPage() {
                           {formatDuration(ticketIntel.responseTimes.medianFirstResponseMs)}
                         </span>
                       ) : (
-                        <p className="text-sm text-muted-foreground">
-                          No audit history of status changes yet.
-                        </p>
+                        <p className="text-sm text-muted-foreground">No audit history of status changes yet.</p>
                       )}
                     </CardContent>
                   </Card>
-
                   <Card className="gap-0">
                     <CardHeader className="gap-1 pb-4">
                       <CardTitle>Resolution</CardTitle>
@@ -808,36 +804,20 @@ export default async function AnalyticsPage() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">Ticket intelligence unavailable.</p>
+              <Empty>
+                <EmptyDescription>Ticket intelligence unavailable.</EmptyDescription>
+              </Empty>
             )}
           </div>
         </TabsContent>
 
-        <TabsContent
-          value="feedback"
-          forceMount
-          className="flex flex-col gap-5 data-[state=inactive]:hidden"
-          data-testid="analytics-feedback"
-        >
+        <TabsContent value="feedback" forceMount className="flex flex-col gap-5 data-[state=inactive]:hidden" data-testid="analytics-feedback">
           <div className="flex flex-col gap-3">
             <SectionHeading title="Feedback" description="What users think" />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <MetricCard
-                label="Helpful"
-                icon={<ThumbsUp className="size-3.5" />}
-                value={feedback ? num(feedback.summary.up) : '0'}
-                tone="success"
-              />
-              <MetricCard
-                label="Unhelpful"
-                icon={<ThumbsDown className="size-3.5" />}
-                value={feedback ? num(feedback.summary.down) : '0'}
-                tone="destructive"
-              />
-              <MetricCard
-                label="Feedback rate"
-                value={pct(feedbackRate)}
-              />
+              <MetricCard label="Helpful" icon={<ThumbsUp className="size-3.5" />} value={feedback ? num(feedback.summary.up) : '0'} tone="success" />
+              <MetricCard label="Unhelpful" icon={<ThumbsDown className="size-3.5" />} value={feedback ? num(feedback.summary.down) : '0'} tone="destructive" />
+              <MetricCard label="Feedback rate" value={pct(feedbackRate)} />
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <Card className="gap-0" data-testid="analytics-document-sentiment">
@@ -863,15 +843,9 @@ export default async function AnalyticsPage() {
                       <TableBody>
                         {feedback.documentSentiment.map((d) => (
                           <TableRow key={d.documentId}>
-                            <TableCell className="font-medium text-foreground">
-                              {d.fileName ?? `Document #${d.documentId}`}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {num(d.up)}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {num(d.down)}
-                            </TableCell>
+                            <TableCell className="font-medium text-foreground">{d.fileName ?? `Document #${d.documentId}`}</TableCell>
+                            <TableCell className="text-right tabular-nums">{num(d.up)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{num(d.down)}</TableCell>
                             <TableCell className="text-right">
                               <Badge
                                 variant="outline"
@@ -891,9 +865,7 @@ export default async function AnalyticsPage() {
                       </TableBody>
                     </Table>
                   ) : (
-                    <p className="px-6 text-sm text-muted-foreground">
-                      No feedback yet. Votes appear as users rate answers.
-                    </p>
+                    <p className="px-6 text-sm text-muted-foreground">No feedback yet. Votes appear as users rate answers.</p>
                   )}
                 </CardContent>
               </Card>
@@ -901,9 +873,7 @@ export default async function AnalyticsPage() {
               <Card className="gap-0" data-testid="analytics-thumbs-down-docs">
                 <CardHeader className="gap-1 pb-4">
                   <CardTitle>Thumbs-down hot docs</CardTitle>
-                  <CardDescription>
-                    Cited most often in negative feedback — review for accuracy.
-                  </CardDescription>
+                  <CardDescription>Cited most often in negative feedback — review for accuracy.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {feedback && feedback.thumbsDownDocs.length > 0 ? (
@@ -916,7 +886,9 @@ export default async function AnalyticsPage() {
                       }))}
                     />
                   ) : (
-                    <p className="text-sm text-muted-foreground">No thumbs-down votes recorded.</p>
+                    <Empty className="py-4">
+                      <EmptyDescription>No thumbs-down votes recorded.</EmptyDescription>
+                    </Empty>
                   )}
                 </CardContent>
               </Card>
@@ -928,9 +900,7 @@ export default async function AnalyticsPage() {
               <Card className="gap-0" data-testid="analytics-document-utility">
                 <CardHeader className="gap-1 pb-4">
                   <CardTitle>Document utility</CardTitle>
-                  <CardDescription>
-                    Retrieval volume, match quality, and ticket conversion per document.
-                  </CardDescription>
+                  <CardDescription>Retrieval volume, match quality, and ticket conversion per document.</CardDescription>
                 </CardHeader>
                 <CardContent className="px-0">
                   {documents && documents.utility.length > 0 ? (
@@ -946,26 +916,16 @@ export default async function AnalyticsPage() {
                       <TableBody>
                         {documents.utility.map((d) => (
                           <TableRow key={d.documentId}>
-                            <TableCell className="font-medium text-foreground">
-                              {d.fileName ?? `Document #${d.documentId}`}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {num(d.retrievalCount)}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {d.p95Similarity.toFixed(3)}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {pct(d.ticketConversionRate)}
-                            </TableCell>
+                            <TableCell className="font-medium text-foreground">{d.fileName ?? `Document #${d.documentId}`}</TableCell>
+                            <TableCell className="text-right tabular-nums">{num(d.retrievalCount)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{d.p95Similarity.toFixed(3)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{pct(d.ticketConversionRate)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
                   ) : (
-                    <p className="px-6 text-sm text-muted-foreground">
-                      No document references yet. Populates as new chats reference documents.
-                    </p>
+                    <p className="px-6 text-sm text-muted-foreground">No document references yet. Populates as new chats reference documents.</p>
                   )}
                 </CardContent>
               </Card>
@@ -973,37 +933,23 @@ export default async function AnalyticsPage() {
               <Card className="gap-0" data-testid="analytics-zero-hit-documents">
                 <CardHeader className="gap-1 pb-4">
                   <CardTitle>Zero-hit documents</CardTitle>
-                  <CardDescription>
-                    Never referenced in any chat — dead-weight candidates.
-                  </CardDescription>
+                  <CardDescription>Never referenced in any chat — dead-weight candidates.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {documents && documents.zeroHit.length > 0 ? (
                     <ul className="flex flex-col gap-2.5">
                       {documents.zeroHit.map((d) => (
-                        <li
-                          key={d.documentId}
-                          className="flex items-center justify-between gap-3 text-sm"
-                        >
+                        <li key={d.documentId} className="flex items-center justify-between gap-3 text-sm">
                           <span className="flex min-w-0 items-center gap-2">
-                            <span
-                              className="size-1.5 shrink-0 rounded-full bg-destructive/70"
-                              aria-hidden
-                            />
-                            <span className="truncate font-medium text-foreground">
-                              {d.fileName ?? `Document #${d.documentId}`}
-                            </span>
+                            <span className="size-1.5 shrink-0 rounded-full bg-destructive/70" aria-hidden />
+                            <span className="truncate font-medium text-foreground">{d.fileName ?? `Document #${d.documentId}`}</span>
                           </span>
-                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                            {new Date(d.createdAt).toLocaleDateString()}
-                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{new Date(d.createdAt).toLocaleDateString()}</span>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-sm text-muted-foreground">
-                      All documents have been retrieved.
-                    </p>
+                    <p className="text-sm text-muted-foreground">All documents have been retrieved.</p>
                   )}
                 </CardContent>
               </Card>
