@@ -80,7 +80,6 @@ export function toResumedConversation(input: {
         data: {
           outOfDomain: Boolean(guardrail.outOfDomain),
           offerTicket: Boolean(guardrail.offerTicket),
-          // Degraded soft-banner fields are optional so legacy snapshots stay unchanged.
           ...(typeof guardrail.degraded === 'boolean' ? { degraded: guardrail.degraded } : {}),
           ...(typeof guardrail.message === 'string' && guardrail.message !== ''
             ? { message: guardrail.message }

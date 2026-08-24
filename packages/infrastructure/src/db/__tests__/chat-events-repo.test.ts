@@ -467,10 +467,7 @@ let insertCalls = 0;
     const unfiltered = await batcher.getQualitySamples(20);
     expect(unfiltered).toHaveLength(1);
     expect(orderBys).toHaveLength(3);
-    // §C4 sampling is random-order.
     expect(orderBys.every((q) => dialect.sqlToQuery(q).sql.toLowerCase() === 'random()')).toBe(true);
-    // §C4/F7: both filtered variants are bounded to the trailing 7 days;
-    // the unfiltered variant builds no WHERE clause at all.
     expect(wheres).toHaveLength(2);
     expect(dialect.sqlToQuery(wheres[0]!).sql.toLowerCase()).toContain(">= now() - interval '7 days'");
     expect(dialect.sqlToQuery(wheres[1]!).sql.toLowerCase()).toContain(">= now() - interval '7 days'");
@@ -506,12 +503,10 @@ let insertCalls = 0;
       },
     ]);
     const result = await new ChatEventBatcher(client).getDailyQuality(84);
-    // Dense fill: 84 days, known days preserved, missing days filled with zeros [SEC-L6]
     expect(result).toHaveLength(84);
     const byDay = new Map(result.map((r) => [r.day, r]));
     expect(byDay.get('2026-08-22')).toEqual({ day: '2026-08-22', avgFaithfulness: 0.9, avgRetrievalRelevance: 0.4, degradedCount: 3 });
     expect(byDay.get('2026-08-23')).toEqual({ day: '2026-08-23', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
-    // spot-check a filler day is zero
     expect(byDay.get('2026-08-21')).toEqual({ day: '2026-08-21', avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
     const query = compiled(executed);
     expect(query).toContain("date_trunc('day'");
@@ -525,7 +520,6 @@ let insertCalls = 0;
     expect(
       batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: true, fallbackReason: 'all_filtered' }),
     ).toBe(true);
-    // Unknown turn id → false, nothing patched.
     expect(batcher.patchMeta('22222222-2222-4222-8222-222222222222', { degraded: true })).toBe(false);
     await batcher.flush();
     const payload = inserts[0]!.values as Array<{ meta: Record<string, unknown> }>;
@@ -535,7 +529,6 @@ let insertCalls = 0;
       degraded: true,
       fallbackReason: 'all_filtered',
     });
-    // After flush the buffer is empty → patch reports false again.
     expect(batcher.patchMeta('11111111-1111-4111-8111-111111111111', { degraded: false })).toBe(false);
     await batcher.flush();
     expect(inserts).toHaveLength(1);
@@ -754,7 +747,6 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
           fallbackReason: 'grader_unavailable',
           judgeScores: { retrievalRelevance: 0.9, faithfulness: 0.8, citationPrecision: 0.7 },
         });
-        // Unknown turn id → false, not an error.
         await expect(batcher.updateEventMeta(uuid(99), { degraded: true })).resolves.toBe(false);
         throw ROLLBACK;
       });
@@ -782,7 +774,6 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
         expect(blocked).toHaveLength(1);
         expect(blocked[0]!.hallucinationBlocked).toBe(true);
 
-        // limit is respected
         const all = await batcher.getQualitySamples(2, {});
         expect(all).toHaveLength(2);
         throw ROLLBACK;
@@ -838,7 +829,6 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
               judgeScores: { retrievalRelevance: 0.5, faithfulness: 1, citationPrecision: 1, judgedAt: today.toISOString() },
             },
           },
-          // Unjudged + non-degraded turns count toward totals but add no judge average.
           { userId: 'jq-u', mode: 'vector', createdAt: today, meta: {} },
         ]);
         const daily = await batcher.getDailyQuality(7);

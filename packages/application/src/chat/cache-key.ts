@@ -14,7 +14,6 @@ export function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'nor
     agentStepBudget: cfg.agentStepBudget,
     agenticRetrieveLimit: cfg.agenticRetrieveLimit,
     agenticMaxRetries: cfg.agenticMaxRetries,
-    // §B1: these two change retrieved context ⇒ answer text (hallucinationCheckEnabled only gates banner/caching, so excluded).
     agenticQueryRewriteEnabled: cfg.agenticQueryRewriteEnabled,
     agenticChunkGradingEnabled: cfg.agenticChunkGradingEnabled,
     gradeModel: cfg.gradeModel,

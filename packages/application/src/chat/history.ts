@@ -31,7 +31,6 @@ export interface MessagePartLike {
   [key: string]: unknown;
 }
 
-/** Guardrail snapshot stored on assistant messages; optional fields carry the §A4 degraded soft banner. */
 export interface GuardrailMeta {
   outOfDomain: boolean;
   offerTicket: boolean;

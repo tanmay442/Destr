@@ -49,7 +49,6 @@ const usd = (n: number) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
 const num = (n: number) => n.toLocaleString();
 const ms = (n: number) => `${Math.round(n).toLocaleString()} ms`;
 const score = (n: number) => n.toFixed(2);
-// §C5 dashboard targets for the true-quality cards.
 const FAITHFULNESS_TARGET = 0.85;
 const RETRIEVAL_TARGET = 0.75;
 const DEGRADED_TARGET = 0.1;
@@ -147,7 +146,6 @@ function padUsage(rows: { day: string; total: number }[], days: number) {
 function padDailyQuality(rows: ChatDailyQualityRow[], days: number): ChatDailyQualityRow[] {
   if (rows.length === 0) return rows;
   const map = new Map(rows.map((r) => [r.day, r]));
-  // Only pad when the result looks sparse (repo fix already dense → no-op aside from re-emit).
   if (map.size >= days) return rows;
   const out: ChatDailyQualityRow[] = [];
   const today = new Date();
@@ -254,8 +252,6 @@ export default async function AnalyticsPage() {
     comp.getAnalyticsTrends({ actorId }),
     comp.getDocumentAnalytics({ actorId }),
     comp.getTicketIntelligence({ actorId }),
-    // §C5 true-quality numbers come straight from the events repo; the page is
-    // already admin-gated and each read degrades to null independently.
     comp.chatEventBatcher.getJudgeAverages(7).catch(() => null),
     comp.chatEventBatcher.getDailyQuality(84).catch((): ChatDailyQualityRow[] => []),
   ]);
@@ -273,7 +269,6 @@ export default async function AnalyticsPage() {
   const series = (pick: (w: WeeklyPoint) => number) => weekly.map((w) => ({ label: w.label, value: pick(w) }));
 
   const usageBuckets = chat ? padUsage(chat.usageOverTime, 7) : [];
-  // SEC-L6: pad zero-event days so sparklines don't collapse gaps; repo now dense but keep UI fallback for sparse data.
   const dailyQualityPadded = padDailyQuality(dailyQuality, 84);
 
   const activeModes = chat ? chat.modeComparison.filter((m) => m.total > 0) : [];
@@ -281,7 +276,7 @@ export default async function AnalyticsPage() {
 
   return (
     <section className="flex flex-col gap-6">
-      {/* Header — symmetry + live badge */}
+      
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1.5">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h2>
@@ -319,7 +314,7 @@ export default async function AnalyticsPage() {
         </TabsList>
 
         <TabsContent value="quality" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden" data-testid="analytics-quality">
-          {/* A — True quality (4 cards, symmetric) */}
+          
           <div className="flex flex-col gap-3">
             <SectionHeading
               title="True quality"
@@ -376,7 +371,7 @@ export default async function AnalyticsPage() {
             ) : null}
           </div>
 
-          {/* B — Throughput & Cost (now absorbs Chat turns, 4 metrics symmetric) */}
+          
           <Card className="gap-0 border-border/60">
             <CardHeader className="flex flex-row items-start justify-between gap-4 pb-4">
               <div className="flex flex-col gap-1">
@@ -421,7 +416,7 @@ export default async function AnalyticsPage() {
             </CardContent>
           </Card>
 
-          {/* C — True quality trends (3 cards, symmetric md:grid-cols-3) */}
+          
           {dailyQualityPadded.length > 0 ? (
             <div className="flex flex-col gap-3" data-testid="analytics-daily-quality-trends">
               <SectionHeading
@@ -489,7 +484,7 @@ export default async function AnalyticsPage() {
             </Card>
           )}
 
-          {/* D — Health trends (moved to bottom, collapsible) */}
+          
           <Collapsible defaultOpen={hasTrends} className="flex flex-col gap-3" data-testid="analytics-quality-trends">
             <Card className="gap-0 border-border/60 bg-muted/10">
               <CardHeader className="flex flex-row items-center justify-between gap-4 pb-2">

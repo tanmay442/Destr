@@ -37,7 +37,6 @@ describe('golden question quality', () => {
   });
 
   it('§C2 additions carry modes, refusal coverage, and no stray expectedDocIds in mock', () => {
-    // Some questions opt into the agentic branch with a valid mode only.
     for (const q of goldenQuestions) {
       if (q.mode !== undefined) {
         expect(['agentic', 'normal']).toContain(q.mode);
@@ -46,7 +45,6 @@ describe('golden question quality', () => {
         expect(q.expectedDocIds.length).toBeGreaterThan(0);
       }
     }
-    // At least 5 out-of-scope refusal cases and at least 3 nonsense-empty cases.
     const refusals = goldenQuestions.filter((q) => q.refusalExpected === true);
     expect(refusals.length).toBeGreaterThanOrEqual(5);
     const nonsense = refusals.filter((q) => q.id.startsWith('nonsense-'));
@@ -54,8 +52,6 @@ describe('golden question quality', () => {
   });
 
   it('§C7/F5 ships no expectedDocIds yet, so the doc-hit gate runs inactive', () => {
-    // Mock retrieval carries no document ids; flip this expectation together
-    // with the first expectedDocIds added to the golden set.
     const withExpectations = goldenQuestions.filter((q) => (q.expectedDocIds ?? []).length > 0);
     expect(withExpectations.map((q) => q.id)).toEqual([]);
   });

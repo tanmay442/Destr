@@ -96,8 +96,6 @@ async function ingestQueuedDocumentStandalone(
   if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
   if (!doc.storageKey) return err(new NotFoundError(`Document ${documentId} has no stored blob`));
 
-  // Claim before the expensive parse/embed so concurrent deliveries can never
-  // both pay for it; losers report `busy` and the winner covers the whole phase.
   const claimed = await documentRepo.claimIngest(documentId);
   if (!claimed) return ok({ status: 'busy', chunks: 0 });
 
@@ -113,7 +111,6 @@ async function ingestQueuedDocumentStandalone(
 
   const expectedHash = systemHasher.sha256(buffer);
 
-  // Skip the work if the row was replaced or deleted after we claimed it.
   const current = await documentRepo.findById(documentId);
   if (!current || current.fileHash !== expectedHash) {
     await requeue();
@@ -128,8 +125,6 @@ async function ingestQueuedDocumentStandalone(
 
   try {
     await Db.transactionRunner.run(async (tx) => {
-      // Re-verify the row inside the transaction: a replace-upload landing
-      // during parse/embed must not be overwritten by these stale chunks.
       const fresh = await tx.documents.findById(documentId);
       if (!fresh || fresh.fileHash !== expectedHash) throw new StaleIngestError();
       await tx.chunks.deleteByDocumentId(documentId);
@@ -184,13 +179,10 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
   const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
-  // §B3: each grader is required only when its pipeline step is enabled.
   if ((cfg.agenticQueryRewriteEnabled && !graders.queryRewriter) ||
     (cfg.agenticChunkGradingEnabled && !graders.documentGrader)) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
-  // A toggle-disabled grader may be undefined; agentic-search only calls it
-  // behind its enable flag, so the dep stays typed as required.
   return {
     search: getSearchDeps(cfg),
     queryRewriter: graders.queryRewriter!,
@@ -232,7 +224,6 @@ function createComposition() {
         getSearchDeps(cfg),
       ),
     agenticSearch: async (cfg: AppConfig, query: string) => {
-      // XC-F-2: when the kill-switch is off, never degrade to empty wall — fall back to vector search instead of throwing.
       if (process.env.AGENTIC_ENABLED === 'false') {
         const fallback = await bind(
           searchChunks,
@@ -403,9 +394,8 @@ export { appConfig, isTicketStatus, TICKET_STATUSES, type MyUIMessage };
 export { requireAdmin, requireSession, getAppSession, ForbiddenError, unwrap };
 export { respond, respondResult };
 export { TRACE_ENABLED, MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/infrastructure/config';
-/** §C3 live quality judges — re-exported so routes stay behind the arch layering rule. */
-export { judgeRelevance, judgeFaithfulness } from '@app/infrastructure/llm';
 
+export { judgeRelevance, judgeFaithfulness } from '@app/infrastructure/llm';
 
 export type Composition = ReturnType<typeof createComposition>;
 

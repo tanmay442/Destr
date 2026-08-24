@@ -110,7 +110,6 @@ export function getGraders(
       hallucinationGrader: undefined,
     };
   }
-  // Fresh instance per call so the shared rewrite+grading turn deadline is per-turn.
   const graders = createGraders(gradeModelId, modelProvider);
   return {
     queryRewriter: graders.queryRewriter,

@@ -1,8 +1,4 @@
-/** Golden questions for the eval harness. `mustMention` phrases a faithful
- *  answer should surface; `forbidden` phrases an answer must not contain.
- *  §C2 additions: `mode` routes the question through the agentic branch and
- *  `expectedDocIds` checks the RIGHT document was retrieved (hit = any overlap).
- *  Both are optional — omitted means current behavior. */
+
 export interface GoldenQuestion {
   id: string;
   question: string;
@@ -138,11 +134,6 @@ export const goldenQuestions: GoldenQuestion[] = [
     refusalExpected: true,
   },
 
-  // --- §C2 added coverage: common topics, out-of-scope refusals, nonsense.
-  // These run green in mock mode: the mock search retrieves an org doc whose
-  // text echoes the question, so `mustMention` words are drawn from the
-  // question itself. Mock retrieval carries no document ids, so
-  // `expectedDocIds` stays unset (omit = current behavior).
   {
     id: 'password-change',
     question: 'How do I change my password?',

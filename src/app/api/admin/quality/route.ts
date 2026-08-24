@@ -18,7 +18,6 @@ const ReviewRequestSchema = z.object({
   note: z.string().max(2000).optional(),
 });
 
-/** GET: the two §C4 review samples (degraded + hallucination-blocked turns). */
 export async function GET(req: Request) {
   const auth = await requireAdminGet(req);
   if (!auth.ok) return auth.response;
@@ -34,7 +33,6 @@ export async function GET(req: Request) {
   }
 }
 
-/** POST: write one human review verdict to quality_reviews [§C4]. */
 export async function POST(req: Request) {
   const auth = await requireAdminRoute(req);
   if (!auth.ok) return auth.response;
@@ -52,7 +50,6 @@ export async function POST(req: Request) {
   }
 
   const { comp } = auth;
-  // SEC-L3: mirror settings PUT rate limit — 1 write per 5s per reviewer.
   const limit = await comp.rateLimit(`quality-review:${session.user.id}`, {
     limit: 1,
     windowMs: QUALITY_WRITE_WINDOW_MS,
@@ -73,12 +70,10 @@ export async function POST(req: Request) {
     });
     return respondResult(ok(row));
   } catch (e) {
-    // SEC-M2: FK violation (Postgres 23503) means turn_id not in chat_events → 4xx not 502.
     const code =
       (e as { code?: string })?.code ??
       (e as { cause?: { code?: string } })?.cause?.code ??
       (e as { cause?: { cause?: { code?: string } } })?.cause?.cause?.code;
-    // Some drivers surface code on the cause chain; also check message pattern.
     const msg = e instanceof Error ? e.message : String(e);
     if (code === '23503' || /violates foreign key/i.test(msg) || /23503/.test(msg)) {
       return respond(new ValidationError('Turn not found', { turnId: parsed.data.turnId }));

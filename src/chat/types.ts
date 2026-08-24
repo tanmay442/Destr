@@ -11,7 +11,6 @@ export interface CitationData {
   source?: string | null;
 }
 
-/** Server-emitted guardrail payload: hard wall (ticket offer) or soft degraded banner [§A4]. */
 export interface GuardrailData {
   outOfDomain: boolean;
   offerTicket: boolean;

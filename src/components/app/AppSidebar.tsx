@@ -240,10 +240,10 @@ export function AppSidebar({
         <div className="flex h-full w-72 flex-col">{sidebarBody(() => undefined, onToggle)}</div>
       </aside>
 
-      {/* Mobile drawer */}
+      
       <MobileSidebar>{sidebarBody}</MobileSidebar>
 
-      {/* Delete confirmation */}
+      
       <Dialog open={deletingId !== null} onOpenChange={(open) => !open && setDeletingId(null)}>
         <DialogContent className="max-w-sm rounded-xl border-border-subtle bg-card p-5 shadow-2xl">
           <DialogHeader>

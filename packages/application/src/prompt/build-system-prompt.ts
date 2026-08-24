@@ -33,7 +33,6 @@ const GUARDRAIL_BLOCK = `# Guardrails
 - Grade chunks: use only highly relevant information and ignore off-topic chunks.
 - Never answer using information outside the provided reference documentation. If unsure, offer to open a ticket.`;
 
-/** §A4 exact fallback-context block, injected only when retrieval degraded to ungraded chunks. */
 export const FALLBACK_BLOCK = fallbackBlock(FALLBACK_CHUNK_COUNT);
 export function buildFallbackBlock(count: number): string {
   return fallbackBlock(count);
@@ -106,7 +105,7 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
 export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,
-  /** §A4: append the fallback-context block when the agentic turn degraded to ungraded chunks. */
+  
   degraded?: boolean | number,
 ): string {
   const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config), GUARDRAIL_BLOCK];

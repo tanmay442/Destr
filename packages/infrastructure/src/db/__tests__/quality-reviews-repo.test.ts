@@ -26,7 +26,6 @@ suite('QualityReviewsRepository (real SQL)', () => {
     try {
       await db.transaction(async (tx) => {
         const { chatEvents, users } = await import('../schema');
-        // quality_reviews FKs require the turn and reviewer to exist.
         await tx.insert(users).values({ clerkUserId: 'qr-admin', email: 'qr-admin@example.com', role: 'admin' });
         await tx.insert(chatEvents).values([
           { turnId: uuid(1), userId: 'qr-u', query: 'q1', mode: 'vector' },
@@ -35,8 +34,6 @@ suite('QualityReviewsRepository (real SQL)', () => {
         const repo = new QualityReviewsRepository(tx);
         await repo.create({ turnId: uuid(1), reviewerId: 'qr-admin', verdict: 'bad', note: 'wrong doc' });
         await repo.create({ turnId: uuid(2), reviewerId: 'qr-admin', verdict: 'docs_missing' });
-        // Backdate the first review so newest-first ordering is deterministic
-        // (both rows otherwise share the same transaction timestamp).
         await tx.execute(sql`update ${qualityReviews} set created_at = now() - interval '1 hour' where verdict = 'bad'`);
 
         const rows = await repo.listRecent(10);
@@ -51,10 +48,8 @@ suite('QualityReviewsRepository (real SQL)', () => {
         });
         expect(rows[1]!.createdAt).toBeInstanceOf(Date);
 
-        // limit is respected
         expect(await repo.listRecent(1)).toHaveLength(1);
 
-        // invalid verdict is rejected by the CHECK constraint
         await expect(
           tx.insert(qualityReviews).values({
             turnId: uuid(1),

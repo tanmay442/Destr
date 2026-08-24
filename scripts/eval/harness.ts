@@ -1,19 +1,14 @@
 import type { AnswerCache } from '@app/domain';
 import type { GoldenQuestion } from './golden';
 
-/** Pure, provider-agnostic eval logic. Scores each question on three 0–1
- *  metrics: faithfulness (hallucination grader), correctness (mustMention
- *  recall), and contextRelevancy (mustMention present in retrieved context).
- *  §C2: optional 0–1 judge scores (live-comparable), agentic retrieval branch,
- *  and expectedDocIds hit checks. */
 export interface EvalDeps {
   searchChunks: (query: string) => Promise<Array<{ content: string; documentId?: number }>>;
   generate: (query: string, context: string) => Promise<string>;
   gradeFaithfulness: (documents: string, generation: string) => Promise<'yes' | 'no'>;
-  /** §C3 judges; return null when unavailable (mock mode) so averages exclude them. */
+  
   judgeRelevance?: (question: string, snippets: string[]) => Promise<number | null>;
   judgeFaithfulness?: (documents: string, answer: string) => Promise<number | null>;
-  /** Agentic retrieval branch [§A3]; results must carry documentId for hit checks. */
+  
   agenticSearch?: (query: string) => Promise<Array<{ content: string; documentId?: number }>>;
 }
 
@@ -31,7 +26,7 @@ export interface EvalResult {
   passed: boolean;
   /** True when any retrieved doc id overlaps expectedDocIds; undefined when no expectation set. */
   hit?: boolean;
-  /** §C3 0–1 judge scores; null when the judge was unavailable. */
+  
   judgedRetrievalRelevance: number | null;
   judgedFaithfulness: number | null;
 }
@@ -72,7 +67,6 @@ export function isDistinctPhrases(phrases: string[]): boolean {
   return new Set(phrases.map((p) => p.trim().toLowerCase()).filter(Boolean)).size >= 2;
 }
 
-/** Hit [§C2]: any overlap between retrieved and expected document ids. */
 export function isDocHit(actualDocIds: number[], expectedDocIds: number[]): boolean {
   const expected = new Set(expectedDocIds);
   return actualDocIds.some((id) => expected.has(id));
@@ -82,10 +76,8 @@ export async function evaluateOne(
   q: GoldenQuestion,
   deps: EvalDeps,
 ): Promise<EvalResult> {
-  // §C2 agentic branch: only used when the question opts in AND the deps wire it.
   const useAgentic = q.mode === 'agentic' && typeof deps.agenticSearch === 'function';
   if (q.mode === 'agentic' && !useAgentic) {
-    // EVAL-M4: surface silent degradation instead of silently greening.
     console.warn(`[eval] agentic question "${q.id}" degraded to plain searchChunks: agenticSearch unavailable`);
   }
   const retrieved = useAgentic
@@ -103,7 +95,6 @@ export async function evaluateOne(
     faithfulness = (await deps.gradeFaithfulness(context, answer)) === 'yes' ? 1 : 0;
   }
 
-  // §C3 judges: null (unavailable) propagates so averages exclude the sample.
   const judgedRetrievalRelevance =
     typeof deps.judgeRelevance === 'function'
       ? await deps.judgeRelevance(q.question, retrieved.map((r) => r.content))
@@ -155,7 +146,7 @@ export interface EvalReport {
   meanContextRelevancy: number;
   passed: boolean;
   threshold: number;
-  /** §C7 golden-report aggregates (null when no judge ran / no doc expectations). */
+  
   hits: number;
   passRate: number;
   /** False when no question set expectedDocIds — passRate is vacuous [F5]. */
@@ -169,8 +160,6 @@ export async function runEval(
   deps: EvalDeps,
   threshold: number,
 ): Promise<EvalReport> {
-  // EVAL-M2: bounded concurrency to avoid 35×6 provider-call storm (429s). Simple
-  // chunked batches of 5; p-limit would be equivalent but this avoids a new dep.
   const CONCURRENCY = 5;
   const results: EvalResult[] = [];
   for (let i = 0; i < questions.length; i += CONCURRENCY) {
@@ -189,8 +178,6 @@ export function aggregate(
   results: EvalResult[],
   threshold: number,
 ): EvalReport {
-  // EVAL-M1: fail-closed on malformed threshold (NaN/Infinity/out-of-range bypassed gate before).
-  // We keep the raw threshold in the report for observability but never let a bad value green the gate.
   if (!isValidThreshold(threshold)) {
     console.warn(`[eval] invalid threshold ${String(threshold)} — must be finite in (0,1]; treating as gate failure`);
   }
@@ -201,13 +188,10 @@ export function aggregate(
   const meanCorrectness = mean((r) => r.correctness);
   const meanContextRelevancy = mean((r) => r.contextRelevancy);
 
-  // §C2 hit rate is measured only over questions that set expectedDocIds.
   const withExpectation = results.filter((r) => r.hit !== undefined);
   const hits = withExpectation.filter((r) => r.hit === true).length;
-  // §C7/F5: with no expectations at all the pass rate is vacuous, not perfect.
   const docHitGateActive = withExpectation.length > 0;
 
-  // Judges may be unavailable (mock mode): average over judged samples only.
   const judgedFaithful = results
     .map((r) => r.judgedFaithfulness)
     .filter((v): v is number => v !== null);
@@ -236,7 +220,6 @@ export function aggregate(
   };
 }
 
-/** eval/golden-report.json payload for the §C5 dashboard card [§C7]. */
 export interface GoldenReport {
   total: number;
   hits: number;
@@ -260,16 +243,10 @@ export function buildGoldenReport(report: EvalReport): GoldenReport {
   };
 }
 
-/**
- * §C7 exit gate. Returns the failure reason, or null when the run passes:
- * grader faithfulness below threshold, judge faithfulness below threshold
- * (only when judges produced scores), or doc-hit pass rate under 0.8.
- */
 export function evalGateFailure(report: EvalReport): string | null {
   if (!isValidThreshold(report.threshold)) {
     return `invalid threshold ${String(report.threshold)} — must be in (0,1]`;
   }
-  // Fail-closed also on per-report passed=false (covers malformed threshold and meanFaithfulness < threshold).
   if (!report.passed) {
     return `mean faithfulness ${report.meanFaithfulness.toFixed(2)} < threshold ${report.threshold}`;
   }
@@ -288,7 +265,6 @@ export function evalGateFailure(report: EvalReport): string | null {
   return null;
 }
 
-// §C7 merge-blocking floor for the golden-set doc-hit pass rate.
 const PASS_RATE_MIN = 0.8;
 
 /** Mock deps for CI: deterministic, no network/DB. */
@@ -312,9 +288,6 @@ export function mockEvalDeps(): EvalDeps & { cache: AnswerCache } {
     async searchChunks(query: string) {
       return search(query);
     },
-    // §C2 agentic mode: deterministic mock but distinct from normal for audit
-    // traceability (EVAL-M4). Added [agentic] tag keeps mustMention words intact
-    // while letting logs differentiate the path.
     async agenticSearch(query: string) {
       const base = await search(query);
       return base.map((r) => ({ ...r, content: `[agentic] ${r.content}` }));

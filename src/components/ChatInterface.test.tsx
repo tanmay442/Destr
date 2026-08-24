@@ -348,7 +348,6 @@ describe('ChatInterface', () => {
     expect(banner.textContent).toContain(
       'Based on best-effort matches (4) — may be incomplete. Please verify.',
     );
-    // Soft banner: no red wall, no ticket offer.
     expect(screen.queryByTestId('chat-guardrail-wall')).not.toBeInTheDocument();
     expect(banner.textContent).not.toMatch(/ticket/i);
   });
@@ -625,7 +624,6 @@ describe('ChatInterface', () => {
     const msgA = (callA[0] as { id: string }).id;
     const turnA = (callA[1] as { body: { turnId: string } }).body.turnId;
 
-    // First stream errors, freeing the composer; the retry starts a new turn.
     setupChat(
       [{ id: msgA, role: 'user', parts: [{ type: 'text', text: 'A?' }] }],
       { send: sendMessage, status: 'error' },
@@ -655,7 +653,6 @@ describe('ChatInterface', () => {
     view.rerender(<ChatInterface conversationId="conv-test" />);
     const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
 
-    // B finishes first; A's error onFinish arrives afterwards. B must keep turnB.
     act(() =>
       chatOptions.onFinish({
         message: assistantB,

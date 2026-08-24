@@ -66,7 +66,6 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
       }
     }
   } catch {
-    // legacy plain-text cache entry
   }
   return { text: value, citations: [] };
 }
@@ -122,9 +121,9 @@ export interface ChatTurnDeps {
       assistantMessage: unknown;
     }): Promise<unknown>;
   };
-  /** Schedules a deferred task (route injects an `after`-based scheduler; arch forbids next/server here). */
+  /** Schedules a deferred task. */
   judgeScheduler?: (task: () => Promise<void>) => void;
-  /** §C3 runs both live quality judges and merges judgeScores for the turn. */
+  
   qualityJudge?: (ctx: {
     question: string;
     snippets: string[];
@@ -132,9 +131,9 @@ export interface ChatTurnDeps {
     answer: string;
     turnId: string;
   }) => Promise<void>;
-  /** §T6 soft turn deadline in ms (fires before the platform ceiling). */
+  
   turnSoftDeadlineMs?: number;
-  /** §T4 skip sampled judging once the turn is this old (ms). */
+  
   judgeMaxWallMs?: number;
   traceEnabled: boolean;
 }
@@ -302,8 +301,6 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           if (deps.traceEnabled) {
             logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           }
-          // §A3 transport refs: carry the agentic outcome out of the tool into
-          // post-stream guardrail, cache and analytics decisions.
           outOfDomainRef.value = r.value.outOfDomain;
           isEmptyRef.value = r.value.isEmpty;
           degradedRef.value = r.value.degraded;
@@ -343,8 +340,6 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         for (const citation of emitCitations(matches)) {
           capturedCitations.push(citation);
         }
-        // §A4: the system prompt is fixed before tools run, so degraded turns
-        // receive the fallback instructions through the tool result instead.
         if (effectiveMode === 'agentic' && degradedRef.value) {
           const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
           return [{ content: block, similarity: -1 }, ...capped];
@@ -420,7 +415,6 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
 
 export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
   const turnStart = input.startedAt ?? performance.now();
-  // CHAT-M3: anchor soft deadline at request start — preamble elapsed is subtracted so total wall time stays under maxDuration.
   const requestStartedAt = Date.now();
   const { request, userId } = input;
   const cfg = await deps.getRuntimeConfig();
@@ -464,7 +458,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     : cfg.retrievalMode === 'agentic'
       ? 'normal'
       : 'agentic';
-  // XC-F-2: hard kill-switch — env flag wins over DB override and rollout.
   if (process.env.AGENTIC_ENABLED === 'false') effectiveMode = 'normal';
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
@@ -556,9 +549,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const resultStateRef = { value: null as AgenticResultState | null };
   const fallbackCountRef = { value: null as number | null };
 
-  // §T6 soft deadline: aborts generation just before the platform ceiling so the
-  // stream can end with our own graceful parts (see pump below) instead of a kill.
-  // CHAT-M3: anchored at requestStartedAt; preamble elapsed is subtracted. CHAT-L5 clamp.
   const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
   const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
   let softDeadlineMs = rawSoftDeadlineMs;
@@ -577,7 +567,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    // CHAT-L7: degradedRef.value is always false here — system prompt fixed before tools; degraded fallback via tool-result injection.
     system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
@@ -604,7 +593,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     start(controller) {
       const reader = llmStream.getReader();
       (async () => {
-        // CHAT-M1: buffer partial streamed text for fallback if result.text rejects.
         let partialText = '';
         let generationCompletedCleanly = false;
         try {
@@ -624,10 +612,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }
             controller.enqueue(value);
           }
-          // CHAT-M5: race fix — if stream ended cleanly before deadline, don't mark degraded.
           generationCompletedCleanly = !softDeadlineSignal.aborted;
-          // §T6 graceful ending: the soft deadline aborted generation — close the
-          // stream ourselves with a styled notice instead of leaving a dead pipe.
           const timedOut = softDeadlineFired && !request.signal.aborted && !generationCompletedCleanly;
           if (timedOut) {
             controller.enqueue({
@@ -654,7 +639,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const degradedMessage = degradedRef.value
             ? degradedBannerMessage(fallbackCountRef.value ?? FALLBACK_CHUNK_COUNT)
             : DEGRADED_BANNER_MESSAGE;
-          // CHAT-M4: bound verification by remaining wall time (reserve 2s). If no budget, treat as timedOut (M2 → not cached).
           const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;
@@ -739,8 +723,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
-              // Quality/agentic fields are meaningful once agentic retrieval ran;
-              // a soft-deadline turn records its own degraded shape (§T6).
               ...(resultStateRef.value || timedOut
                 ? {
                     degraded: degradedRef.value || timedOut,
@@ -760,7 +742,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
             totalMs,
           });
-          // CHAT-M1: on soft-deadline result.text rejects — persist partialText instead of empty.
           const persistedText = await Promise.resolve(result.text).catch(() => partialText);
           persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
@@ -776,7 +757,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 ? {
                     outOfDomain: outOfDomainRef.value,
                     offerTicket: true,
-                    // F11: keep degraded fidelity when a degraded turn was also blocked.
                     ...(degradedRef.value ? { degraded: true, message: degradedMessage } : {}),
                   }
                 : timedOut
@@ -800,13 +780,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   : null,
             }),
           });
-          // §C3 sampled live quality judge via injected deps (parity with route.ts).
-          // The cache-hit branch returns earlier, so !cacheHit holds at this point.
-          // EVAL-M3 bias/cost note: sampling excludes cache-hits, isEmpty (0 rows), and
-          // wall-time > judgeMaxWallMs (20s) turns plus requires citations — so persisted
-          // judgeScores over-represent fast, non-cached, citation-bearing turns (survivorship
-          // bias). JUDGE_SAMPLE_RATE (5%) is the current cost ceiling; consider a daily
-          // max-samples check (e.g., skip when today's judged count >500) if volume grows.
           if (
             turnId &&
             deps.judgeScheduler &&
@@ -833,7 +806,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
-          // CHAT-L8: preserve ticket telemetry even when stream fails before normal event/history persistence.
           try {
             if (metrics.ticketCreated) {
               logger.warn('chat.turn.ticket_created_but_stream_failed', { turnId, ticketId: metrics.ticketId });
@@ -874,15 +846,6 @@ const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
 const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
 const MAX_DURATION_MS = 60_000;
 
-/**
- * Post-generation guardrail [§A4/§B3]: skipped entirely when the hallucination
- * toggle is off. A true empty retrieval (0 rows) keeps the blocking wall with a
- * ticket offer; a degraded top-4 fallback first emits a soft yellow banner
- * (no ticket offer) and an explicit not-grounded verdict still blocks. Grader
- * infra failures fail open — they count as pass, only an explicit verdict blocks.
- * CHAT-M2 caching policy: timeout/infra → fail-open but NOT cached (unverified).
- * CHAT-M4: caller may pass timeoutMs bounded by remaining wall time.
- */
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
   result: { text: PromiseLike<string> };
@@ -934,9 +897,6 @@ async function runHallucinationCheck(opts: {
       }
       ungrounded = verdict === 'no';
     } catch (err) {
-      // CHAT-M2 caching policy: timeout (including wall-budget exhaustion) is unverified → fail-open but NOT cached.
-      // Generic infra errors are also fail-open; we treat only Timeout/Abort as timedOut to preserve existing cached-on-infra-failure contract.
-      // For strict not-cache-on-any-error, change to `timedOut = true` for all errors — documented per audit's "Decide and document".
       const isTimeout =
         (err as { name?: string })?.name === 'TimeoutError' ||
         (err as { name?: string })?.name === 'AbortError' ||

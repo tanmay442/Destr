@@ -5,7 +5,6 @@ import type { QualityReviewsRepo, QualityReviewInput, QualityReviewRow } from '@
 
 type Client = typeof db;
 
-/** Human review verdicts for sampled turns [§C4]. */
 export class QualityReviewsRepository implements QualityReviewsRepo {
   constructor(private readonly client: Client = db) {}
 

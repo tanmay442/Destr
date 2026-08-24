@@ -119,7 +119,6 @@ function SampleTable({ events, testId }: { events: ChatEvent[]; testId: string }
 
 export default async function QualityPage() {
   const comp = getComposition();
-  // §C4 weekly triage: random degraded turns + hallucination-blocked turns.
   const [degraded, blocked] = await Promise.all([
     comp.chatEventBatcher.getQualitySamples(SAMPLE_LIMIT, { degraded: true }),
     comp.chatEventBatcher.getQualitySamples(SAMPLE_LIMIT, { blocked: true }),

@@ -402,8 +402,6 @@ export function ChatInterface({
   const [messageCount, setMessageCount] = useState(
     initialMessageCount ?? initialMessages.length,
   );
-  // Pending turns keyed by the id of the user message that started them, so a
-  // late/failed stream can never steal the turn of a newer message.
   const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
   const retriedMessageIdRef = useRef<string | null>(null);
   const messagesRef = useRef<MyUIMessage[]>([]);
@@ -546,7 +544,6 @@ export function ChatInterface({
         .join('\n')
     : '';
 
-  // Resend the existing user message instead of appending a duplicate.
   const retryLastMessage = () => {
     const target = lastUserMessage;
     if (!target || isStreaming) return;
@@ -685,13 +682,9 @@ export function ChatInterface({
             })()}
 
           {(() => {
-            // §T7 closure guarantee: an assistant turn that ended with nothing
-            // visible must never leave the user without a response.
-            // CHAT-L1: also cover status 'error' (network drop/hard kill) — the generic error block handles AbortError separately.
             if ((status !== 'ready' && status !== 'error') || messages.length === 0) return null;
             const last = messages[messages.length - 1];
             if (!last || last.role !== 'assistant') return null;
-            // CHAT-L2: tool-only / ticket-only turns have no prose but did produce work — don't show empty fallback.
             const hasVisibleParts = last.parts.some(
               (p) =>
                 p.type === 'text'

@@ -117,7 +117,6 @@ describe('SettingsClient', () => {
       expect(toggle).not.toBeDisabled();
       expect(toggle).toBeChecked();
     }
-    // Help texts are surfaced so admins see the blast radius of each toggle.
     expect(screen.getByText(/top 4 retrieved chunks are sent without grading/i)).toBeInTheDocument();
     expect(screen.getByText(/disabling lets unverified answers be shown/i)).toBeInTheDocument();
     expect(screen.getByText(/the raw user query is used for retrieval/i)).toBeInTheDocument();

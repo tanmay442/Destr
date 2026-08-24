@@ -179,7 +179,6 @@ vi.mock('ai', async () => {
   };
 });
 
-// Run `after` tasks inline so fire-and-forget judge work settles within the test.
 vi.mock('next/server', () => ({
   NextResponse: {
     json: (body: unknown, init?: ResponseInit) => Response.json(body, init),
@@ -191,7 +190,6 @@ vi.mock('next/server', () => ({
 
 import * as appHandler from './route';
 
-/** Full §A3 AgenticResult shape for composition.agenticSearch mocks. */
 function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     chunks: [
@@ -675,11 +673,9 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
     await finishScriptedStreams();
     const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
     expect(useCaseText).toBe(legacyText);
-    // Soft banner only — never a wall or ticket offer on either path.
     expect(useCaseText).toContain('data-guardrail');
     expect(useCaseText).toMatch(/Based on best-effort matches \(\d+\)/);
     expect(useCaseText).not.toContain('"offerTicket":true');
-    // Degraded turns are excluded from the cache on both paths.
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
     const calls = compositionMock.chatEventBatcher.record.mock.calls;
     expect(calls).toHaveLength(2);
@@ -700,7 +696,7 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
     retrievalConfig.hallucinationCheckEnabled = false;
     try {
       scriptAgenticSearch({});
-      graderHolder.fn = vi.fn(async () => 'no' as const); // would block if enabled
+      graderHolder.fn = vi.fn(async () => 'no' as const);
       scriptStream({
         toolTrace: { toolCallId: 'search-off', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
         drive: (tools) => tools?.searchDocumentation?.execute({ query: 'dental coverage' }),
@@ -742,7 +738,7 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
     retrievalConfig.retrievalMode = 'agentic';
     scriptAgenticSearch({});
     graderHolder.fn = vi.fn(async () => 'yes' as const);
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0); // sample on both paths
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     const judgeBody = JSON.stringify({
       turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
       messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
@@ -756,14 +752,12 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
       const useCase = await post(true, judgeBody);
       await finishScriptedStreams();
       await Promise.all([drain(legacy), drain(useCase)]);
-      // Let the inline fire-and-forget judge chains settle.
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
       const calls = compositionMock.chatEventBatcher.updateEventMeta.mock.calls;
       expect(calls).toHaveLength(2);
       const [legacyTurnId, legacyPatch] = calls[0]! as [string, { judgeScores: Record<string, unknown> }];
       const [useCaseTurnId, useCasePatch] = calls[1]! as [string, { judgeScores: Record<string, unknown> }];
-      // Same explicit turn id on both paths; identical context → identical scores.
       expect(useCaseTurnId).toBe(legacyTurnId);
       const stripJudgedAt = (patch: { judgeScores: Record<string, unknown> }) => ({
         retrievalRelevance: patch.judgeScores.retrievalRelevance,
@@ -776,8 +770,6 @@ describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge 
         faithfulness: 0.9,
         citationPrecision: 0.85,
       });
-      // F4 buffered-first ordering: patchMeta is attempted on both paths (and
-      // misses, since the events already flushed), then SQL persists.
       expect(compositionMock.chatEventBatcher.patchMeta).toHaveBeenCalledTimes(2);
       expect(compositionMock.chatEventBatcher.patchMeta.mock.calls[0]![1]).toHaveProperty('judgeScores');
     } finally {

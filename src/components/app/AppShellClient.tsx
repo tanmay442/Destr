@@ -25,7 +25,6 @@ function writeOpen(next: boolean): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, String(next));
   } catch {
-    // Storage disabled: keep the in-memory value for this session.
   }
   listeners.forEach((listener) => listener());
 }

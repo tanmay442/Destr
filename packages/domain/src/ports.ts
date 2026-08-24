@@ -38,7 +38,6 @@ export interface UserRow {
   createdAt: Date;
 }
 
-
 export interface DocumentRepository {
   findByName(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   findByNameForUpdate?(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
@@ -214,7 +213,6 @@ export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore
   recountAll(): Promise<Array<{ documentId: number; count: number }>>;
 }
 
-
 export interface TicketRepository {
   findByTicketId(ticketId: string): Promise<TicketRow | null>;
   findByTicketIdForUpdate?(ticketId: string): Promise<TicketRow | null>;
@@ -244,7 +242,6 @@ export interface TicketRepository {
   getTicketResponseTimes(range?: ChatEventRange): Promise<TicketResponseTimes>;
 }
 
-
 export interface UserRepository {
   upsertFromClerk(input: {
     clerkUserId: string;
@@ -267,7 +264,6 @@ export interface UserRepository {
   /** Count admin rows while holding row locks so concurrent demotions serialize on the same count. */
   countAdminsForUpdate(): Promise<number>;
 }
-
 
 type DocumentAuditAction = 'upload' | 'replace' | 'delete' | 'restore';
 type TicketAuditAction =
@@ -344,7 +340,6 @@ export interface AuditLog {
     total: number;
   }>;
 }
-
 
 /** Per-turn chat metrics. `mode`: 'agentic' or 'vector'. */
 export interface ChatEventInput {
@@ -478,7 +473,6 @@ export interface ZeroHitDocument {
 
 export type FeedbackUpsertResult = 'ok' | 'not_found' | 'forbidden';
 
-/** Persisted `chat_events` row, as returned by quality-sampling reads [§C4]. */
 export interface ChatEvent {
   id: number;
   turnId: string | null;
@@ -501,7 +495,6 @@ export interface ChatEvent {
   createdAt: Date;
 }
 
-/** Daily judge/health aggregates for the true-quality dashboard [§C5]. */
 export interface ChatDailyQualityRow {
   day: string;
   avgFaithfulness: number;
@@ -533,16 +526,16 @@ export interface ThumbsDownDoc {
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
-  /** Merges `patch` into a buffered not-yet-flushed event's meta [§C3]; true when a buffered event matched. */
+  
   patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
-  /** Merges `patch` into a flushed event's meta (jsonb ||); true when a row matched [§C3]. */
+  
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
-  /** Random quality-review sample; `degraded` reads meta->>'degraded', `blocked` the hallucination column [§C4]. */
+  
   getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean }): Promise<ChatEvent[]>;
   getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
-  /** Daily judge-score aggregates over the trailing window; null judge data counts as 0 [§C5]. */
+  
   getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
-  /** Windowed judge averages + degraded rate for dashboard cards and the nightly cron log [§C5]. */
+  
   getJudgeAverages(days?: number): Promise<{
     avgFaithfulness: number;
     avgRetrievalRelevance: number;
@@ -561,7 +554,6 @@ export interface ChatEventsRepo {
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
 }
 
-/** Human review verdict from the /admin/quality queue [§C4]. */
 export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
 
 export interface QualityReviewInput {
@@ -580,12 +572,10 @@ export interface QualityReviewRow {
   createdAt: Date;
 }
 
-/** Ground-truth spot checks feeding DocumentUtility improvement loops [§C4]. */
 export interface QualityReviewsRepo {
   create(input: QualityReviewInput): Promise<QualityReviewRow>;
   listRecent(limit: number): Promise<QualityReviewRow[]>;
 }
-
 
 export interface ChatFeedbackRepo {
   upsertFeedback(input: {
@@ -599,7 +589,6 @@ export interface ChatFeedbackRepo {
   getDocumentSentiment(limit: number, range?: ChatEventRange): Promise<DocumentSentiment[]>;
   getThumbsDownDocs(limit: number, range?: ChatEventRange): Promise<ThumbsDownDoc[]>;
 }
-
 
 export interface ConversationSummary {
   id: string;
@@ -647,7 +636,6 @@ export interface ChatHistoryRepo {
   purgeUserData(userId: string): Promise<{ deletedConversations: number; deletedMessages: number }>;
 }
 
-
 export interface RateLimiter {
   check(
     key: string,
@@ -660,7 +648,6 @@ export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
 }
-
 
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;
@@ -720,7 +707,6 @@ export interface DocSummarizer {
   generateDocContext(text: string): Promise<{ title: string; summary: string }>;
 }
 
-
 export interface BlobStorage {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
@@ -729,12 +715,10 @@ export interface BlobStorage {
   signedUrl?(key: string, ttlSec: number): Promise<string>;
 }
 
-
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
   isNoOp(): boolean;
 }
-
 
 export interface PdfParser {
   extractText(buffer: Buffer): Promise<string>;
@@ -743,7 +727,6 @@ export interface PdfParser {
 export interface TextSplitter {
   splitText(text: string): Promise<string[]>;
 }
-
 
 export interface TransactionContext {
   documents: DocumentRepository;

@@ -46,7 +46,6 @@ export const chunks = pgTable('chunks', {
   contentHash: text('content_hash'),
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
-  // HNSW index excludes parent blocks (kind='parent') to keep the index small.
   index('embedding_idx')
     .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
     .where(sql`${table.kind} <> 'parent'`),
@@ -165,10 +164,6 @@ export const chatFeedback = pgTable('chat_feedback', {
   index('chat_feedback_created_at_idx').on(table.createdAt),
 ]);
 
-/**
- * Human review verdicts for sampled chat turns [§C4]. One row per review;
- * `docs_missing` signals a coverage gap, `bad` a retrieval/grading bug.
- */
 export const qualityReviews = pgTable('quality_reviews', {
   id: serial('id').primaryKey(),
   turnId: uuid('turn_id').references(() => chatEvents.turnId, { onDelete: 'cascade' }),

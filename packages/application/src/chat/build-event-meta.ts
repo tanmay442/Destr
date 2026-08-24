@@ -8,7 +8,7 @@ export interface EventMetaInput {
   fallbackReason?: string | undefined;
   isEmpty?: boolean | undefined;
   resultState?: string | undefined;
-  /** Stored as a nested `meta.judgeScores` object [§C6]; judgedAt stamps the sample. */
+  
   judgeScores?: (JudgeScores & { judgedAt: string }) | undefined;
 }
 

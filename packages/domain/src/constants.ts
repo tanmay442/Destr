@@ -38,14 +38,11 @@ export const OUT_OF_DOMAIN_THRESHOLD = 0.3;
 export const AGENT_STEP_BUDGET = 8;
 export const AGENTIC_RETRIEVE_LIMIT = 10;
 export const AGENTIC_MAX_RETRIES = 1;
-// §A2/§A3 grading caps.
 export const GRADE_MAX_ROWS = 10;
 export const GRADE_DOC_CHAR_CAP = 3_000;
 export const GRADE_PROMPT_CHAR_BUDGET = 24_000;
 export const GRADE_BATCH_DOCS = 3;
-// §A3 degraded fallback size: top 4 of the reranker-sorted fused rows.
 export const FALLBACK_CHUNK_COUNT = 4;
-/** §A4 shared soft-banner copy for degraded best-effort turns (mirrored in route.ts / chat-turn.ts / ChatInterface). */
 export const DEGRADED_BANNER_MESSAGE = `Based on best-effort matches (${FALLBACK_CHUNK_COUNT}) — may be incomplete. Please verify.`;
 export function degradedBannerMessage(count: number): string {
   return `Based on best-effort matches (${count}) — may be incomplete. Please verify.`;
@@ -55,12 +52,10 @@ export function fallbackBlock(count: number): string {
 The following ${count} reference chunks did NOT pass relevance grading (grader unavailable or no strong match). Use them only if they clearly support the answer. Prefix the answer with: "Note: I couldn't find a strongly matching document, so this is my best guess from related pages — please verify." Cite normally. If they do not support the answer, say so and offer to open a ticket.`;
 }
 
-// §T6 soft-deadline copy — shared to avoid drift between route.ts / chat-turn.ts / UI.
 export const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
 export const TURN_DEADLINE_TEXT =
   'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';
 
-// §C3 live judge sampling rate (0-1).
 export const JUDGE_SAMPLE_RATE = 0.05;
 export const ANSWER_CACHE_ENABLED = true;
 export const ANSWER_CACHE_TTL_SEC = 3600;

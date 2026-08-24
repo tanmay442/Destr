@@ -10,24 +10,19 @@ export interface ShouldCacheInput {
   ticketCreated: boolean;
   cfg: AppConfig;
   agentic: AgenticResult;
-  /** §T2/CHAT-M2: hallucination verification timed out or threw — unverified, must not cache (fail-open but not cached-as-clean). */
+  
   hallucinationTimedOut?: boolean;
 }
 
-/**
- * §B1 shared cache-exclusion gate for BOTH pipeline copies (route.ts /
- * chat-turn.ts): degraded turns (grader outage, all-filtered, grading toggle
- * off) and hallucination-check-off turns must never poison the answer cache.
- */
 export function shouldCache({ citations, blocked, isEmpty, ticketCreated, cfg, agentic, hallucinationTimedOut }: ShouldCacheInput): boolean {
   return (
     citations.length > 0 &&
     !blocked &&
     !isEmpty &&
     !ticketCreated &&
-    !hallucinationTimedOut && // CHAT-M2: timeout/infra error is unverified — fail open but never cached
+    !hallucinationTimedOut &&
     cfg.hallucinationCheckEnabled &&
-    !agentic.degraded && // covers grader_unavailable + all_filtered + grading_disabled
+    !agentic.degraded &&
     cfg.agenticChunkGradingEnabled !== false
   );
 }

@@ -226,7 +226,7 @@ describe('§C2 agentic mode + expectedDocIds hits', () => {
       [
         { ...base, hit: true },
         { ...base, hit: false },
-        { ...base }, // no expectation — excluded from the denominator
+        { ...base },
       ] as never[],
       0.7,
     );
@@ -332,7 +332,6 @@ describe('§C7 golden-report shape + gate', () => {
     expect(evalGateFailure({ ...healthy, meanFaithfulness: 0.5 } as never)).toMatch(/mean faithfulness/);
     expect(evalGateFailure({ ...healthy, avgFaithfulnessJudge: 0.69 } as never)).toMatch(/judge faithfulness/);
     expect(evalGateFailure({ ...healthy, passRate: 0.79 } as never)).toMatch(/passRate/);
-    // Null judges (mock mode) skip the judge gate entirely.
     expect(evalGateFailure({ ...healthy, avgFaithfulnessJudge: null } as never)).toBeNull();
   });
 });

@@ -91,7 +91,6 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
   return result as unknown as AppConfig;
 }
 
-/** XC-F-2: AGENTIC_ENABLED=false is a hard kill-switch; it forces vector mode even when a DB override still says agentic. */
 function enforceAgenticKillSwitch(cfg: AppConfig): AppConfig {
   if (process.env.AGENTIC_ENABLED === 'false' && cfg.retrievalMode === 'agentic') {
     return { ...cfg, retrievalMode: 'normal' };

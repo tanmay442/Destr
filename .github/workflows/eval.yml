@@ -10,7 +10,6 @@ on:
         required: true
         default: true
         type: boolean
-  # §C7: mock-mode golden-set gate on PRs (no secrets); absolute quality is
   # still measured by the scheduled real run below.
   pull_request:
     branches:
@@ -118,7 +117,6 @@ jobs:
               await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'closed' });
             }
 
-  # §C7 PR gate: mock-mode eval (no secrets, no DB). Catches golden/harness
   # regressions before merge; the scheduled real job measures absolute quality.
   eval-mock:
     if: github.event_name == 'pull_request'

@@ -1,12 +1,4 @@
-/**
- * Usage:
- *   pnpm eval                 # mock harness (CI-safe)
- *   EVAL_REAL=1 pnpm eval    # wire real search + generation + graders + judges
- *
- * §C2/§C7: agentic-mode questions, expectedDocIds hit checks, 0–1 judge
- * scores, and the eval/golden-report.json artifact. Exit is non-zero when the
- * grader/judge faithfulness or the doc-hit pass rate falls below threshold.
- */
+
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadDotEnv } from '../../packages/infrastructure/src/config/dotenv-bootstrap';
@@ -21,7 +13,6 @@ import {
 
 loadDotEnv();
 
-// §C7 report location (repo-relative; created on demand).
 const REPORT_DIR = 'eval';
 const REPORT_PATH = join(REPORT_DIR, 'golden-report.json');
 
@@ -29,7 +20,6 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
   if (!useReal) {
     return mockEvalDeps();
   }
-  // Lazily import infra so the mock path never touches DB/LLM modules.
   const [{ Db, Llm }, { searchChunks }, { agenticSearch }] = await Promise.all([
     import('@app/infrastructure'),
     import('@app/application/rag/search'),
@@ -42,7 +32,6 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
   const searchDeps = { chunks: Db.createChunkRepo(Db.db), embeddings: embeddingService, reranker };
   const graders = Llm.getGraders();
   const chat = Llm.getChatModel();
-  // EVAL-M4: surface degraded agentic coverage at startup (don't silently green).
   {
     const agenticCount = goldenQuestions.filter((q) => q.mode === 'agentic').length;
     if (agenticCount > 0 && (!graders.queryRewriter || !graders.documentGrader)) {
@@ -55,11 +44,6 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
       const r = await searchChunks(query, {}, searchDeps);
       return r.ok ? r.value.map((c) => ({ content: c.content, documentId: c.documentId })) : [];
     },
-    // §C2: agentic questions run through the exact loop defects #1–#3 touch,
-    // wired with the frozen defaults (admin knobs are runtime-only concerns).
-    // When the loop is disabled (AGENTIC_ENABLED=false) the graders are
-    // undefined, so agentic questions degrade to plain retrieval instead.
-    // EVAL-M4: warn loudly instead of silently greening.
     agenticSearch: async (query: string) => {
       if (!graders.queryRewriter || !graders.documentGrader) {
         console.warn('[eval] agenticSearch degraded to plain searchChunks: graders unavailable (AGENTIC_ENABLED=false)');
@@ -90,14 +74,12 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
       }
       return graders.hallucinationGrader.grade(documents, generation);
     },
-    // §C3 judges for offline/online-comparable 0–1 scores.
     judgeRelevance: (question, snippets) => Llm.judgeRelevance(question, snippets).then((v) => v?.score ?? null),
     judgeFaithfulness: (documents, answer) => Llm.judgeFaithfulness(documents, answer).then((v) => v?.score ?? null),
   };
 }
 
 async function main() {
-  // EVAL-M1: validate threshold (fail-closed); NaN/Infinity/out-of-range previously bypassed the gate.
   const rawThreshold = process.env.EVAL_FAITHFULNESS_THRESHOLD ?? '0.7';
   const threshold = Number(rawThreshold);
   if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) {
@@ -110,7 +92,6 @@ async function main() {
   const report = await runEval(questions, deps, threshold);
   const goldenReport = buildGoldenReport(report);
 
-  // §C7/F5: a pass rate over zero expectations is vacuous — say so loudly.
   if (!goldenReport.docHitGateActive) {
     console.warn('[eval] doc-hit gate INACTIVE: no questions define expectedDocIds — passRate is vacuous');
   }
@@ -120,7 +101,6 @@ async function main() {
     writeFileSync(REPORT_PATH, `${JSON.stringify(goldenReport, null, 2)}\n`);
     console.log(`golden report written to ${REPORT_PATH}`);
   } catch (e) {
-    // The artifact is observability, not the gate — never fail the run on IO.
     console.warn(`[eval] could not write ${REPORT_PATH}:`, e instanceof Error ? e.message : e);
   }
 
@@ -145,7 +125,6 @@ async function main() {
   }
   const failure = evalGateFailure(report);
   const gateOk = failure === null;
-  // EVAL-M1: exit must fold report.passed (meanFaithfulness >= threshold) and gate together; printing and exit now agree.
   const overallPass = gateOk && report.passed;
   console.log(`OVERALL: ${overallPass ? 'PASS' : 'FAIL'}\n`);
 

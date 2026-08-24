@@ -95,7 +95,6 @@ describe('agenticSearch', () => {
       expect(r.outOfDomain).toBe(false);
       expect(r.isEmpty).toBe(false);
       expect(r.resultState).toBe('degraded');
-      // §A3/T2: exactly one warn per degraded turn, tagged with the reason.
       const degradedWarns = warnSpy.mock.calls.filter((c) => c[1] && (c[1] as { event?: string }).event === 'agentic.degraded_fallback');
       expect(degradedWarns).toHaveLength(1);
       expect((degradedWarns[0]![1] as { fallbackReason: string }).fallbackReason).toBe('grader_unavailable');

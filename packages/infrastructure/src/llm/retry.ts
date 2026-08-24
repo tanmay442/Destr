@@ -60,7 +60,6 @@ export async function retryOnTransient<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      // Permanent failures surface as-is so callers see the real cause.
       if (!isRetryableError(err)) throw err;
       if (opts.isNonRetryable?.(err)) throw err;
       if (attempt === attempts - 1) break;

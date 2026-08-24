@@ -13,7 +13,6 @@ const VERDICTS = [
 
 type Verdict = (typeof VERDICTS)[number]['value'];
 
-/** One row's Good / Bad / Docs Missing controls; POSTs to /api/admin/quality [§C4]. */
 export function ReviewButtons({ turnId }: { turnId: string }) {
   const [submitted, setSubmitted] = useState<Verdict | null>(null);
   const [note, setNote] = useState('');

@@ -135,12 +135,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
     }
   }
 
-  /**
-   * Merges `patch` into a buffered not-yet-flushed event's meta object [§C3].
-   * Returns true when a buffered event matched; false when the turn already
-   * flushed or was never recorded here — the async judge path then falls back
-   * to `updateEventMeta`.
-   */
+  
   patchMeta(turnId: string, patch: Record<string, unknown>): boolean {
     const row = this.buffer.find((e) => e.turnId === turnId);
     if (!row) return false;
@@ -161,7 +156,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return rows.length > 0;
   }
 
-  /** Random sample for the human review queue [§C4]; trailing-week window only. */
+  
   async getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean } = {}): Promise<ChatEvent[]> {
     const capped = Math.min(Math.max(limit, 1), 100);
     const parts: SQL[] = [];
@@ -182,7 +177,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return rows.map(toChatEvent);
   }
 
-  /** Daily judge-score aggregates for the quality sparklines [§C5]. Nulls → 0. Dense: zero-event days return 0s so sparklines don't collapse. */
+  
   async getDailyQuality(days: number): Promise<ChatDailyQualityRow[]> {
     const since = sinceStartUtc(days);
     const result = await this.client.execute(sql`
@@ -209,7 +204,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
         } as ChatDailyQualityRow,
       ]),
     );
-    // Fill missing calendar days with zeros so sparklines stay contiguous [SEC-L6].
     const out: ChatDailyQualityRow[] = [];
     const windowDays = Math.min(Math.max(Math.floor(days), 1), 365);
     for (let i = windowDays - 1; i >= 0; i--) {
@@ -229,13 +223,12 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return out;
   }
 
-  /** Windowed judge averages + degraded rate; empty window → all zeros [§C5]. */
+  
   async getJudgeAverages(days?: number): Promise<{
     avgFaithfulness: number;
     avgRetrievalRelevance: number;
     degradedRate: number;
   }> {
-    // Judges sample 5% of traffic, so the default window needs enough volume to matter.
     const windowDays = Math.min(Math.max(Math.floor(days ?? 7), 1), 365);
     const since = sinceStartUtc(windowDays);
     const result = await this.client.execute(sql`
@@ -261,11 +254,9 @@ export class ChatEventBatcher implements ChatEventsRepo {
         scheduler(() => void this.flush());
         return;
       } catch {
-        // Not inside a request scope; fall back to the interval timer.
       }
     }
     this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
-    // Keep the event loop free in serverless; explicit flushes run via after().
     this.timer.unref?.();
   }
 

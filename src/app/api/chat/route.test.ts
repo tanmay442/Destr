@@ -179,7 +179,6 @@ vi.mock('ai', async () => {
 
 import * as appHandler from './route';
 
-/** Full §A3 AgenticResult shape for composition.agenticSearch mocks. */
 function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     chunks: [],
@@ -1150,7 +1149,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
   async function runPendingAfterCallbacks(): Promise<void> {
     const pending = afterCallbacks.splice(0);
     for (const task of pending) task();
-    // Let the fire-and-forget judge chain (mocked judges + meta patch) settle.
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -1161,7 +1159,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     compositionMock.answerCache.get.mockResolvedValue(null);
     compositionMock.answerCache.set.mockReset();
     compositionMock.answerCache.set.mockResolvedValue(undefined);
-    vi.spyOn(Math, 'random').mockReturnValue(0.99); // default: judge not sampled
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
   });
 
   afterEach(() => {
@@ -1185,9 +1183,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(body).toMatch(/data-guardrail/);
     expect(body).toMatch(/degraded/);
     expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
-    // Soft banner only — never a wall / ticket offer.
     expect(body).not.toMatch(/offerTicket":true/);
-    // Degraded turns must not poison the answer cache.
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
     const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event.outOfDomain).toBe(false);
@@ -1198,7 +1194,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
       isEmpty: false,
       resultState: 'degraded',
     });
-    // Stored history carries the soft guardrail so resume can rebuild it.
     expect(JSON.stringify(event)).not.toMatch(/offerTicket":true/);
   });
 
@@ -1227,7 +1222,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(result[0]!.content).toContain('# Fallback Context');
     expect(result[0]!.content).toContain("Note: I couldn't find a strongly matching document");
     expect(result).toHaveLength(2);
-    // Non-degraded turns must not carry the instruction block.
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [CHUNK_A] })) as never,
     );
@@ -1271,7 +1265,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
         }),
       );
       expect(res.status).toBe(200);
-      // Let the 40ms soft deadline fire before draining.
       await new Promise((resolve) => setTimeout(resolve, 120));
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
@@ -1294,7 +1287,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
         resultState: 'degraded',
       });
       expect(event.hallucinationBlocked).toBe(false);
-      // Deadline turns are never cached and never judged.
       expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
       expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
     } finally {
@@ -1319,11 +1311,10 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
       compositionMock.agenticSearch = vi.fn(async () =>
         ok(agenticResult({ chunks: [CHUNK_A] })) as never,
       );
-      graderHolder.fn = vi.fn(async () => 'no' as const); // would block if enabled
+      graderHolder.fn = vi.fn(async () => 'no' as const);
       const body = await runAgenticStreamAndRead('what is the policy?');
       expect(graderHolder.fn).not.toHaveBeenCalled();
       expect(body).not.toMatch(/data-guardrail/);
-      // Toggle-off turns are excluded from the cache via shouldCache.
       expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
       const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
       expect(event.hallucinationBlocked).toBe(false);
@@ -1359,7 +1350,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
-    // Soft banner first, then the explicit ungrounded wall.
     expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
     expect(body).toMatch(/offerTicket":true/);
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
@@ -1372,8 +1362,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
       ok(agenticResult({ chunks: [CHUNK_A] })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
-    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0); // 0 < JUDGE_SAMPLE_RATE
-    // Buffered patch misses (event already flushed) → SQL persistence path.
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
     compositionMock.chatEventBatcher.patchMeta.mockReturnValue(false);
     await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' });
     await runPendingAfterCallbacks();
@@ -1426,7 +1415,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
   });
 
   it('never samples the judge above the rate, on cache hits or empty retrievals', async () => {
-    // Above the sample rate.
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [CHUNK_A] })) as never,
     );
@@ -1435,7 +1423,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     await runPendingAfterCallbacks();
     expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
 
-    // Empty retrieval (isEmpty) — degraded would be allowed, empty is not.
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,

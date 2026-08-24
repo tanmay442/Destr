@@ -38,7 +38,6 @@ describe('buildSystemPrompt', () => {
     const outOfScopeAt = prompt.indexOf('# Out-of-Scope Topics');
     expect(guardrailAt).toBeGreaterThanOrEqual(0);
     expect(fallbackAt).toBeGreaterThan(guardrailAt);
-    // The block sits directly after the guardrails and before later sections.
     expect(outOfScopeAt).toBeGreaterThan(fallbackAt);
   });
 

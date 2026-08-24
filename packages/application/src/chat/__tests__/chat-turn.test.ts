@@ -6,7 +6,6 @@ import type { RetrievedChunk } from '../../rag/search';
 import type { AgenticResult } from '../../rag/agentic-search';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
 
-/** Full §A3 AgenticResult fixture (stale partial mocks broke typecheck after P3). */
 function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
   return {
     chunks: [CHUNK],
@@ -136,7 +135,6 @@ function makeDeps(overrides: DepsOverrides = {}) {
     userResolver: overrides.userResolver ?? userResolver,
     eventSink: overrides.eventSink ?? { record, flush },
     historySink: overrides.historySink ?? { appendTurn },
-    // Optional §C3 judge deps are only set when a test provides them.
     ...(overrides.judgeScheduler ? { judgeScheduler: overrides.judgeScheduler } : {}),
     ...(overrides.qualityJudge ? { qualityJudge: overrides.qualityJudge } : {}),
     traceEnabled: overrides.traceEnabled ?? false,
@@ -922,7 +920,6 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     const parts = await readParts(result.stream);
     expect(grader).not.toHaveBeenCalled();
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
-    // Toggle-off turns are excluded from the cache via shouldCache.
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
   });
 
@@ -977,7 +974,7 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
       },
     );
     const judgeScheduler = vi.fn((task: () => Promise<void>) => void task());
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0); // sampled
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
       const { deps, fakes } = makeDeps({
         cfg: makeCfg({ retrievalMode: 'agentic' }),
@@ -1010,7 +1007,6 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
   it('never enqueues the judge above the sample rate or without citations', async () => {
     const qualityJudge = vi.fn(async () => undefined);
     const judgeScheduler = vi.fn();
-    // Above the rate.
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
     try {
       const { deps } = makeDeps({
@@ -1027,7 +1023,6 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
       await readParts(result.stream);
       expect(judgeScheduler).not.toHaveBeenCalled();
 
-      // Sampled but no search executed → no citations → no judge.
       randomSpy.mockReturnValue(0);
       const deps2 = makeDeps({
         cfg: makeCfg({ retrievalMode: 'agentic' }),

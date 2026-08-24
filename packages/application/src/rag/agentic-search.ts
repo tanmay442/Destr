@@ -18,30 +18,23 @@ export interface AgenticDeps {
   search: SearchDeps;
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
-  /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
-  /** Caps retry passes only (grading is bounded by GRADE_MAX_ROWS). */
   stepBudget?: number;
-  /** §B3 toggles. Off ⇒ skip rewrite / grading entirely. */
   rewriteEnabled?: boolean;
   gradeEnabled?: boolean;
   similarityThreshold?: number;
   hybridEnabled?: boolean;
 }
 
-/** Outcome of one agentic retrieval turn (§A3). */
 export interface AgenticResult {
   chunks: RetrievedChunk[];
-  /** Rewritten query used for the final retrieval. */
   rewrittenQuery: string;
-  /** DB alias of `isEmpty`, kept for history compat. Only true when search found 0 rows. */
   outOfDomain: boolean;
   isEmpty: boolean;
   degraded: boolean;
   fallbackReason: FallbackReason | null;
   resultState: AgenticResultState;
-  /** Kept for compat; mirrors `fallbackReason === 'grader_unavailable'`. */
   gradingUnavailable?: boolean;
 }
 
@@ -51,15 +44,6 @@ type PassOutcome =
   | { kind: 'fallback'; reason: Exclude<FallbackReason, 'grading_disabled'>; pool: RetrievedChunk[] }
   | { kind: 'grading_disabled'; pool: RetrievedChunk[] };
 
-/**
- * Agentic retrieval loop (§A3): 1. rewrite the query (toggleable), 2. retrieve
- * fused reranker-sorted rows honoring admin similarity/hybrid knobs, 3. grade
- * up to GRADE_MAX_ROWS in ONE batched call — grader outage or all-`no` yields a
- * top-4 degraded fallback instead of an empty wall; only a 0-row search result
- * produces the empty wall, 4. retry passes run solely while a pass found zero
- * chunks with grading enabled and retries remain.
- * Generation + hallucination check happen in the route after `streamText`.
- */
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,
@@ -90,7 +74,6 @@ export async function agenticSearch(
       }
     };
 
-    // stepBudget now only caps retry passes through the maxRetries clamp.
     const stepBudget = Math.max(1, deps.stepBudget ?? AGENT_STEP_BUDGET);
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
 
@@ -111,7 +94,6 @@ export async function agenticSearch(
       if (rows.length === 0) return { kind: 'empty' };
       if (!gradeOn) return { kind: 'grading_disabled', pool: rows };
 
-      // Explicit visible cap on graded rows; the ranked tail is dropped audibly.
       const graded = rows.slice(0, GRADE_MAX_ROWS);
       if (rows.length > GRADE_MAX_ROWS) {
         logger.warn('agentic retrieval: ranked tail dropped due to GRADE_MAX_ROWS cap', {
@@ -129,8 +111,6 @@ export async function agenticSearch(
         verdicts = null;
       }
       if (verdicts === null) return { kind: 'fallback', reason: 'grader_unavailable', pool: rows };
-      // GRADING-F1: lenient fallback was used — mark degraded/non-cacheable even though
-      // we have verdicts. Propagate as lenient_fallback so shouldCache excludes it.
       if (isLenientFallbackVerdicts(verdicts)) {
         logger.warn('agentic retrieval degraded; lenient fallback used', {
           severity: 'warn',
@@ -148,8 +128,6 @@ export async function agenticSearch(
     let rewritten = await tryRewrite(originalQuery);
     let outcome = await runPass(rewritten);
 
-    // Degraded outcomes return immediately; retries are only useful when the
-    // search itself came back empty (a fresh rewrite may find rows).
     for (
       let attempt = 0;
       attempt < maxRetries && gradeOn && outcome.kind === 'empty';
