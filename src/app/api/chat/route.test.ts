@@ -1243,6 +1243,65 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(JSON.stringify(ok2)).not.toContain('# Fallback Context');
   });
 
+  it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', async () => {
+    vi.stubEnv('CHAT_SOFT_DEADLINE_MS', '40');
+    vi.stubEnv('CHAT_JUDGE_MAX_WALL_MS', '1');
+    try {
+      authMock.mockResolvedValue({ userId: 'user_test' });
+      streamTextImpl.mockImplementation((opts: { abortSignal?: AbortSignal }) => {
+        return {
+          toUIMessageStream: () =>
+            new ReadableStream<{ type: string }>({
+              start(c) {
+                opts?.abortSignal?.addEventListener('abort', () => c.close(), { once: true });
+              },
+            }) as unknown as ReadableStream<Uint8Array>,
+          text: Promise.resolve(''),
+          usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+        };
+      });
+      const res = await appHandler.POST(
+        new Request('http://localhost/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3305',
+            messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
+          }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      // Let the 40ms soft deadline fire before draining.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let body = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        body += decoder.decode(value);
+      }
+      expect(body).toContain('data-guardrail');
+      expect(body).toContain('took too long');
+      expect(body).toContain('Sorry — this answer took longer than allowed');
+      const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as {
+        meta: Record<string, unknown>;
+        hallucinationBlocked: boolean;
+      };
+      expect(event.meta).toMatchObject({
+        degraded: true,
+        fallbackReason: 'turn_deadline',
+        resultState: 'degraded',
+      });
+      expect(event.hallucinationBlocked).toBe(false);
+      // Deadline turns are never cached and never judged.
+      expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+      expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,

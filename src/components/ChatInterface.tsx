@@ -679,6 +679,34 @@ export function ChatInterface({
               );
             })()}
 
+          {(() => {
+            // §T7 closure guarantee: an assistant turn that ended with nothing
+            // visible must never leave the user without a response.
+            if (status !== 'ready' || messages.length === 0) return null;
+            const last = messages[messages.length - 1];
+            if (!last || last.role !== 'assistant') return null;
+            const hasVisibleParts = last.parts.some(
+              (p) =>
+                p.type === 'text'
+                  ? p.text.trim().length > 0
+                  : p.type === 'data-citation' || p.type === 'data-guardrail',
+            );
+            if (hasVisibleParts) return null;
+            return (
+              <div
+                className="flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-sm text-muted-foreground"
+                data-testid="chat-empty-fallback"
+              >
+                <span>I couldn&apos;t finish that answer. Please try again.</span>
+                {lastUserText ? (
+                  <Button variant="outline" size="xs" onClick={retryLastMessage} disabled={isStreaming}>
+                    Retry
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })()}
+
           <div ref={anchorRef} />
 
           {error && !(error instanceof Error && error.name === 'AbortError') ? (

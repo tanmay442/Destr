@@ -29,10 +29,25 @@ import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
 
 /** §A2 platform ceiling for this route; the shared rewrite+grading deadline (25s) sits under it. */
-export const maxDuration = 30;
+export const maxDuration = 60;
+
+/**
+ * §T6 soft turn deadline: fires BEFORE the platform ceiling so a slow generation
+ * ends with our own graceful parts instead of a hard kill. Env-tunable for tests.
+ */
+/** §T4 sampled quality judging is skipped once a turn is this old (ms). */
+function positiveIntEnv(name: string): number | null {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
 
 /** §A4 exact soft-banner copy for degraded best-effort turns (mirrored in chat-turn.ts). */
 const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
+
+/** §T6 copy for turns ended by the soft deadline (mirrored in chat-turn.ts). */
+const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
+const TURN_DEADLINE_TEXT =
+  'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';
 
 const CHAT_MAX_CONCURRENT = 2;
 const chatSlotCounts = new Map<string, number>();
@@ -135,6 +150,8 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
 
 interface TurnMetrics {
   retrieveMs: number;
+  firstTokenMs: number | null;
+  hallucinationMs: number | null;
   hitCount: number | null;
   maxSimilarity: number | null;
   ticketCreated: boolean;
@@ -577,7 +594,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+  const metrics: TurnMetrics = { retrieveMs: 0, firstTokenMs: null, hallucinationMs: null, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -660,12 +677,22 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const fallbackReasonRef = { value: null as string | null };
   const resultStateRef = { value: null as AgenticResultState | null };
 
+  // §T6 soft deadline: aborts generation just before the platform ceiling so the
+  // stream can end with our own graceful parts (see pump below) instead of a kill.
+  const turnSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
+  const judgeMaxWallMs = positiveIntEnv('CHAT_JUDGE_MAX_WALL_MS') ?? 20_000;
+  const softDeadlineSignal = AbortSignal.timeout(turnSoftDeadlineMs);
+  let softDeadlineFired = false;
+  softDeadlineSignal.addEventListener('abort', () => {
+    softDeadlineFired = true;
+  });
+
   const result = streamText({
     model: comp.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
-    abortSignal: req.signal,
+    abortSignal: AbortSignal.any([req.signal, softDeadlineSignal]),
     tools: buildChatTools({
       effectiveMode,
       searchChunks: (query, opts) => comp.searchChunks(cfg, query, opts),
@@ -693,7 +720,31 @@ async function streamChatResponse(req: Request): Promise<Response> {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (
+              metrics.firstTokenMs === null &&
+              typeof (value as { type?: unknown }).type === 'string' &&
+              String((value as { type?: unknown }).type).startsWith('text')
+            ) {
+              metrics.firstTokenMs = Math.round(performance.now() - turnStart);
+            }
             controller.enqueue(value);
+          }
+          // §T6 graceful ending: the soft deadline aborted generation — close the
+          // stream ourselves with a styled notice instead of leaving a dead pipe.
+          const timedOut = softDeadlineFired && !req.signal.aborted;
+          if (timedOut) {
+            controller.enqueue({
+              type: 'data-guardrail',
+              data: { degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+            } as InferUIMessageChunk<MyUIMessage>);
+            const tid = `deadline-${turnId}`;
+            controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<MyUIMessage>);
+            controller.enqueue({
+              type: 'text-delta',
+              id: tid,
+              delta: TURN_DEADLINE_TEXT,
+            } as InferUIMessageChunk<MyUIMessage>);
+            controller.enqueue({ type: 'text-end', id: tid } as InferUIMessageChunk<MyUIMessage>);
           }
           const finalCitations = dedupeCitations(capturedCitations);
           for (const src of finalCitations) {
@@ -702,18 +753,23 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
-          const hallucinationBlocked = await runHallucinationCheck({
-            controller,
-            result,
-            capturedCitations: finalCitations,
-            hallucinationGrader: comp.getHallucinationGrader(cfg),
-            enabled: cfg.hallucinationCheckEnabled,
-            outOfDomain: outOfDomainRef.value,
-            degraded: degradedRef.value,
-          });
+          const hallucinationStart = performance.now();
+          const hallucinationBlocked = timedOut
+            ? false
+            : await runHallucinationCheck({
+              controller,
+              result,
+              capturedCitations: finalCitations,
+              hallucinationGrader: comp.getHallucinationGrader(cfg),
+              enabled: cfg.hallucinationCheckEnabled,
+              outOfDomain: outOfDomainRef.value,
+              degraded: degradedRef.value,
+            });
+          metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
           const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
             cacheKey &&
+            !timedOut &&
             shouldCache({
               citations: finalCitations,
               blocked: hallucinationBlocked,
@@ -767,16 +823,26 @@ async function streamChatResponse(req: Request): Promise<Response> {
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
-              // Quality/agentic fields are only meaningful once agentic retrieval ran.
-              ...(resultStateRef.value
+              // Quality/agentic fields are meaningful once agentic retrieval ran;
+              // a soft-deadline turn records its own degraded shape (§T6).
+              ...(resultStateRef.value || timedOut
                 ? {
-                    degraded: degradedRef.value,
-                    fallbackReason: fallbackReasonRef.value ?? undefined,
+                    degraded: degradedRef.value || timedOut,
+                    fallbackReason: timedOut ? 'turn_deadline' : fallbackReasonRef.value ?? undefined,
                     isEmpty,
-                    resultState: resultStateRef.value,
+                    resultState: timedOut ? 'degraded' : resultStateRef.value ?? undefined,
                   }
                 : {}),
             }),
+          });
+          logger.info('chat.turn.timings', {
+            event: 'chat.turn.timings',
+            turnId,
+            retrieveMs: metrics.retrieveMs,
+            firstTokenMs: metrics.firstTokenMs,
+            hallucinationMs: metrics.hallucinationMs,
+            generateMs: Math.max(0, totalMs - metrics.retrieveMs),
+            totalMs,
           });
           persistHistory(historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
@@ -795,7 +861,16 @@ async function streamChatResponse(req: Request): Promise<Response> {
                     // F11: keep degraded fidelity when a degraded turn was also blocked.
                     ...(degradedRef.value ? { degraded: true, message: DEGRADED_BANNER_MESSAGE } : {}),
                   }
-                : degradedRef.value
+                : timedOut
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: TURN_DEADLINE_BANNER_MESSAGE,
+                      isEmpty: false,
+                      resultState: 'degraded',
+                    }
+                  : degradedRef.value
                   ? {
                       outOfDomain: false,
                       offerTicket: false,
@@ -811,9 +886,11 @@ async function streamChatResponse(req: Request): Promise<Response> {
           // short-circuit above returns before this point, so !cacheHit holds here.
           if (
             turnId &&
+            !timedOut &&
             Math.random() < JUDGE_SAMPLE_RATE &&
             finalCitations.length > 0 &&
             !isEmpty &&
+            performance.now() - turnStart <= judgeMaxWallMs &&
             cfg.captureQueryText !== false
           ) {
             const patchers = getMetaPatchers(comp);
@@ -847,6 +924,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
 async function streamChatResponseUseCase(req: Request): Promise<Response> {
   const turnStart = performance.now();
+  const turnSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
+  const judgeMaxWallMs = positiveIntEnv('CHAT_JUDGE_MAX_WALL_MS') ?? 20_000;
   const { userId } = await auth();
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
@@ -923,6 +1002,8 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       // §C3 parity: the use-case path gets the same sampled judge via injected
       // deps (chat-turn itself must not import next/server or infrastructure).
       judgeScheduler: (task) => scheduleAfter(() => void task()),
+      turnSoftDeadlineMs: turnSoftDeadlineMs,
+      judgeMaxWallMs: judgeMaxWallMs,
       qualityJudge: (ctx) => {
         const patchers = getMetaPatchers(comp);
         return runJudge({

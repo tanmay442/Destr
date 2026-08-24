@@ -126,6 +126,10 @@ export interface ChatTurnDeps {
     answer: string;
     turnId: string;
   }) => Promise<void>;
+  /** §T6 soft turn deadline in ms (fires before the platform ceiling). */
+  turnSoftDeadlineMs?: number;
+  /** §T4 skip sampled judging once the turn is this old (ms). */
+  judgeMaxWallMs?: number;
   traceEnabled: boolean;
 }
 
@@ -220,6 +224,8 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
 
 interface TurnMetrics {
   retrieveMs: number;
+  firstTokenMs: number | null;
+  hallucinationMs: number | null;
   hitCount: number | null;
   maxSimilarity: number | null;
   ticketCreated: boolean;
@@ -449,7 +455,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+  const metrics: TurnMetrics = { retrieveMs: 0, firstTokenMs: null, hallucinationMs: null, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -535,12 +541,22 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const fallbackReasonRef = { value: null as string | null };
   const resultStateRef = { value: null as AgenticResultState | null };
 
+  // §T6 soft deadline: aborts generation just before the platform ceiling so the
+  // stream can end with our own graceful parts (see pump below) instead of a kill.
+  const softDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
+  const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
+  const softDeadlineSignal = AbortSignal.timeout(softDeadlineMs);
+  let softDeadlineFired = false;
+  softDeadlineSignal.addEventListener('abort', () => {
+    softDeadlineFired = true;
+  });
+
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
-    abortSignal: request.signal,
+    abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
     tools: buildChatTools(deps, {
       cfg,
       effectiveMode,
@@ -566,7 +582,31 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (
+              metrics.firstTokenMs === null &&
+              typeof (value as { type?: unknown }).type === 'string' &&
+              String((value as { type?: unknown }).type).startsWith('text')
+            ) {
+              metrics.firstTokenMs = Math.round(performance.now() - turnStart);
+            }
             controller.enqueue(value);
+          }
+          // §T6 graceful ending: the soft deadline aborted generation — close the
+          // stream ourselves with a styled notice instead of leaving a dead pipe.
+          const timedOut = softDeadlineFired && !request.signal.aborted;
+          if (timedOut) {
+            controller.enqueue({
+              type: 'data-guardrail',
+              data: { degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+            } as InferUIMessageChunk<UIMessage>);
+            const tid = `deadline-${turnId}`;
+            controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({
+              type: 'text-delta',
+              id: tid,
+              delta: TURN_DEADLINE_TEXT,
+            } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({ type: 'text-end', id: tid } as InferUIMessageChunk<UIMessage>);
           }
           const finalCitations = dedupeCitations(capturedCitations);
           for (const src of finalCitations) {
@@ -575,18 +615,23 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               data: src,
             } as InferUIMessageChunk<UIMessage>);
           }
-          const hallucinationBlocked = await runHallucinationCheck({
-            controller,
-            result,
-            capturedCitations: finalCitations,
-            hallucinationGrader: deps.hallucinationGrader(cfg),
-            enabled: cfg.hallucinationCheckEnabled,
-            outOfDomain: outOfDomainRef.value,
-            degraded: degradedRef.value,
-          });
+          const hallucinationStart = performance.now();
+          const hallucinationBlocked = timedOut
+            ? false
+            : await runHallucinationCheck({
+              controller,
+              result,
+              capturedCitations: finalCitations,
+              hallucinationGrader: deps.hallucinationGrader(cfg),
+              enabled: cfg.hallucinationCheckEnabled,
+              outOfDomain: outOfDomainRef.value,
+              degraded: degradedRef.value,
+            });
+          metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
           const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
             cacheKey &&
+            !timedOut &&
             shouldCache({
               citations: finalCitations,
               blocked: hallucinationBlocked,
@@ -642,16 +687,26 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
-              // Quality/agentic fields are only meaningful once agentic retrieval ran.
-              ...(resultStateRef.value
+              // Quality/agentic fields are meaningful once agentic retrieval ran;
+              // a soft-deadline turn records its own degraded shape (§T6).
+              ...(resultStateRef.value || timedOut
                 ? {
-                    degraded: degradedRef.value,
-                    fallbackReason: fallbackReasonRef.value ?? undefined,
+                    degraded: degradedRef.value || timedOut,
+                    fallbackReason: timedOut ? 'turn_deadline' : fallbackReasonRef.value ?? undefined,
                     isEmpty,
-                    resultState: resultStateRef.value,
+                    resultState: timedOut ? 'degraded' : resultStateRef.value ?? undefined,
                   }
                 : {}),
             }),
+          });
+          logger.info('chat.turn.timings', {
+            event: 'chat.turn.timings',
+            turnId,
+            retrieveMs: metrics.retrieveMs,
+            firstTokenMs: metrics.firstTokenMs,
+            hallucinationMs: metrics.hallucinationMs,
+            generateMs: Math.max(0, totalMs - metrics.retrieveMs),
+            totalMs,
           });
           persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
@@ -670,7 +725,16 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                     // F11: keep degraded fidelity when a degraded turn was also blocked.
                     ...(degradedRef.value ? { degraded: true, message: DEGRADED_BANNER_MESSAGE } : {}),
                   }
-                : degradedRef.value
+                : timedOut
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: TURN_DEADLINE_BANNER_MESSAGE,
+                      isEmpty: false,
+                      resultState: 'degraded',
+                    }
+                  : degradedRef.value
                   ? {
                       outOfDomain: false,
                       offerTicket: false,
@@ -688,9 +752,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             turnId &&
             deps.judgeScheduler &&
             deps.qualityJudge &&
+            !timedOut &&
             Math.random() < JUDGE_SAMPLE_RATE &&
             finalCitations.length > 0 &&
             !isEmpty &&
+            performance.now() - turnStart <= judgeMaxWallMs &&
             cfg.captureQueryText !== false
           ) {
             const answer = await Promise.resolve(result.text).catch(() => '');
@@ -725,6 +791,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
 /** §A4 exact soft-banner copy for degraded best-effort turns (mirrored in route.ts). */
 const DEGRADED_BANNER_MESSAGE = 'Based on best-effort matches (4) — may be incomplete. Please verify.';
+
+/** §T6 copy for turns ended by the soft deadline (mirrored in route.ts). */
+const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
+const TURN_DEADLINE_TEXT =
+  'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';
+const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
+const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
 
 /**
  * Post-generation guardrail [§A4/§B3]: skipped entirely when the hallucination
