@@ -433,6 +433,28 @@ describe('hallucinationGrader', () => {
     expect(getGraderFailureCounts().hallucinationGrader).toBe(before + 1);
   });
 
+  it('does NOT retry a deadline abort — single attempt then throw (§T2)', async () => {
+    const deadlineAbort = Object.assign(new Error('This operation was aborted'), { name: 'TimeoutError' });
+    generateTextMock.mockRejectedValue(deadlineAbort);
+    const graders = createGraders();
+    const before = getGraderFailureCounts().hallucinationGrader;
+    await expect(graders.hallucinationGrader.grade('docs', 'answer')).rejects.toThrow();
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    expect(getGraderFailureCounts().hallucinationGrader).toBe(before + 1);
+  });
+
+  it('caps its abort window at the §T2 post-stream budget, not the grade timeout', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      generateTextMock.mockResolvedValue(groundedResult(true));
+      const graders = createGraders();
+      await graders.hallucinationGrader.grade('docs', 'answer');
+      expect(timeoutSpy).toHaveBeenCalledWith(12_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it('retries transient failures before returning a verdict', async () => {
     generateTextMock.mockRejectedValueOnce(retryable);
     generateTextMock.mockResolvedValueOnce(groundedResult(true));

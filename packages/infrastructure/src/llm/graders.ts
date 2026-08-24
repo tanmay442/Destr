@@ -15,6 +15,13 @@ import { GRADE_REQUEST_TIMEOUT_MS, retryOnTransient } from './retry';
 import type { ChatModelProvider } from './registries';
 
 const GRADE_RETRY_ATTEMPTS = 3;
+
+// §T2 post-stream hallucination check must fit inside the function window:
+// short per-attempt cap and NO retry on timeout (fail-open contract unchanged).
+const HALLUCINATION_TIMEOUT_MS = 12_000;
+const isDeadlineAbort = (err: unknown): boolean =>
+  (err as { name?: string } | null)?.name === 'TimeoutError' ||
+  (err as { name?: string } | null)?.name === 'AbortError';
 // §A2 shared turn deadline.
 const GRADING_TURN_DEADLINE_MS = 25_000;
 // Malformed tool responses tolerated per batch before the lenient text fallback fires.
@@ -391,10 +398,13 @@ export function createGraders(
                   'Call the grounded_verdict tool with your verdict.',
                 tools: groundedVerdictTools,
                 toolChoice: 'required',
-                abortSignal: AbortSignal.timeout(GRADE_REQUEST_TIMEOUT_MS),
+                abortSignal: AbortSignal.timeout(HALLUCINATION_TIMEOUT_MS),
               }),
             'hallucination grader',
             GRADE_RETRY_ATTEMPTS,
+            // A deadline abort must not be retried — the turn window is already
+            // nearly spent; genuine transients (429/5xx) still retry normally.
+            { isNonRetryable: isDeadlineAbort },
           );
           const grounded = extractGroundedVerdict(toolCalls);
           if (grounded === null) throw new Error('hallucination grader returned malformed output');
