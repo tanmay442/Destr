@@ -41,7 +41,7 @@ const REFUSAL_PHRASES = [
   'no information',
 ];
 
-function escapeRegExp(s: string): string {
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -52,7 +52,7 @@ export function matchesPhrase(haystack: string, phrase: string): boolean {
   return new RegExp(`\\b${escapeRegExp(needle)}\\b`, 'i').test(haystack);
 }
 
-function matchedCount(text: string, phrases: string[]): number {
+export function matchedCount(text: string, phrases: string[]): number {
   return phrases.filter((p) => matchesPhrase(text, p)).length;
 }
 

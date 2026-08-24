@@ -21,12 +21,12 @@ const GRADING_TURN_DEADLINE_MS = 25_000;
 const MAX_MALFORMED_TOOL_RESPONSES = 2;
 
 let _lastGradeUsedLenientFallback = false;
-function getAndClearLenientFallbackFlag(): boolean {
+export function getAndClearLenientFallbackFlag(): boolean {
   const v = _lastGradeUsedLenientFallback;
   _lastGradeUsedLenientFallback = false;
   return v;
 }
-function wasLenientFallbackVerdicts(value: unknown): boolean {
+export function wasLenientFallbackVerdicts(value: unknown): boolean {
   return Array.isArray(value) && (value as unknown as { lenientFallbackUsed?: boolean }).lenientFallbackUsed === true;
 }
 

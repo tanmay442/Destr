@@ -390,7 +390,7 @@ function createComposition() {
   };
 }
 
-export { isTicketStatus, TICKET_STATUSES, type MyUIMessage };
+export { appConfig, isTicketStatus, TICKET_STATUSES, type MyUIMessage };
 export { requireAdmin, requireSession, getAppSession, ForbiddenError, unwrap };
 export { respond, respondResult };
 export { TRACE_ENABLED, MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/infrastructure/config';

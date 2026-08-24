@@ -126,7 +126,7 @@ export async function requireAdmin(): Promise<AppSessionFull> {
   return session;
 }
 
-async function requireSession(): Promise<AppSessionFull> {
+export async function requireSession(): Promise<AppSessionFull> {
   const session = await getAppSession();
   if (!session) throw new UnauthorizedError('Not signed in');
   return session;

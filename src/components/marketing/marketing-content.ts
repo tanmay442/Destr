@@ -19,7 +19,7 @@ export const FEATURES = [
   },
 ];
 
-const TECH = [
+export const TECH = [
   'Next.js', 'React', 'Clerk', 'Vercel AI SDK', 'Drizzle', 'Neon Postgres',
   'pgvector', 'Docker', 'Ollama', 'Google AI Studio', 'OpenAI-compatible',
   'Cloudflare R2', 'Upstash Redis', 'Upstash QStash', 'Tailwind CSS', 'Vitest',

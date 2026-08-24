@@ -14,7 +14,7 @@ import {
 } from '@/components/admin/settings-revert-button';
 import { TableShell, TableEmptyRow } from '@/components/admin/TableShell';
 
-function auditTargetLabel(
+export function auditTargetLabel(
   e: Pick<AuditEventRecord, 'kind' | 'targetId'>,
 ): string {
   switch (e.kind) {

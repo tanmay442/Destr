@@ -5,7 +5,7 @@ import { embedBatchWithModel } from './embedding-batch-helper';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
 import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
 
-function getOpenAIEmbeddingModel(): EmbeddingModelV3 {
+export function getOpenAIEmbeddingModel(): EmbeddingModelV3 {
   const apiKey = process.env.OPENAI_EMBEDDING_API_KEY ?? process.env.CUSTOM_LLM_API_KEY;
   const baseURL = process.env.OPENAI_EMBEDDING_BASE_URL ?? process.env.CUSTOM_LLM_BASE_URL;
   if (!apiKey || !baseURL) {

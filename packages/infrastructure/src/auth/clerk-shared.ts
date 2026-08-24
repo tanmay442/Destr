@@ -1,8 +1,8 @@
 import { currentUser } from '@clerk/nextjs/server';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
+export const ADMIN_EMAILS: readonly string[] = (process.env.ADMIN_EMAILS ?? '')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter((e) => e && EMAIL_RE.test(e));
