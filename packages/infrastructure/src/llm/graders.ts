@@ -148,6 +148,31 @@ function extractGroundedVerdict(toolCalls: unknown): boolean | null {
   return null;
 }
 
+/**
+ * Minimal cause label for platform-side tool-call rejections. Groq (observed in
+ * production) converts model output into a tool call server-side and returns
+ * 400 `tool_use_failed` when the output is not canonical — the model's raw
+ * answer is preserved in `failed_generation`. Returns null for other errors.
+ */
+function toolCallRejectionCause(err: unknown): string | null {
+  const e = err as { message?: unknown; data?: { failed_generation?: unknown } } | null;
+  if (!e || typeof e.message !== 'string') return null;
+  if (/failed to call a function|tool_use_failed/i.test(e.message)) {
+    return 'platform rejected the generated tool call (known Groq tool_use_failed behaviour); raw model output is in failed_generation';
+  }
+  if (/tool call validation failed|did not match schema/i.test(e.message)) {
+    return 'tool call arrived with wrongly typed arguments (e.g. boolean as string)';
+  }
+  return null;
+}
+
+/** First ~200 chars of a platform `failed_generation` payload, for error logs. */
+function failedGenerationSnippet(err: unknown): string | undefined {
+  const e = err as { data?: { failed_generation?: unknown } } | null;
+  const raw = e?.data?.failed_generation;
+  return typeof raw === 'string' ? raw.slice(0, 200) : undefined;
+}
+
 export interface Graders {
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
@@ -340,9 +365,13 @@ export function createGraders(
           return documents.map((_, index) => (verdictByIndex.get(index) ? 'yes' : 'no'));
         } catch (err) {
           failureCounters.documentGrader += 1;
+          // Groq note: a 400 `tool_use_failed` here is the platform rejecting
+          // the model's non-canonical tool call — not our parsing or prompts.
           logger.warn('chunk grading unavailable; failing open with 4 fallback chunks', {
             severity: 'warn',
             event: 'graders.document_grader.failed',
+            cause: toolCallRejectionCause(err) ?? undefined,
+            failedGeneration: failedGenerationSnippet(err),
             error: err,
           });
           return null;
@@ -372,10 +401,14 @@ export function createGraders(
           return grounded ? 'yes' : 'no';
         } catch (err) {
           failureCounters.hallucinationGrader += 1;
+          // Groq note: a 400 `tool_use_failed` here is the platform rejecting
+          // the model's non-canonical tool call — not our parsing or prompts.
           // Intentional fail-open: rethrow so callers treat grader outage as pass.
           logger.error('[graders] hallucination grader failed; failing open (caller treats as pass)', {
             severity: 'error',
             event: 'graders.hallucination_grader.failed',
+            cause: toolCallRejectionCause(err) ?? undefined,
+            failedGeneration: failedGenerationSnippet(err),
             error: err,
           });
           throw err;
