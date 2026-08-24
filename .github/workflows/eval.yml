@@ -10,6 +10,13 @@ on:
         required: true
         default: true
         type: boolean
+  # still measured by the scheduled real run below.
+  pull_request:
+    branches:
+      - master
+
+# Least-privilege default; jobs declare explicit permissions (EVAL-L4).
+permissions: {}
 
 # Serialize runs per ref.
 concurrency:
@@ -69,6 +76,14 @@ jobs:
       - name: Run eval
         run: pnpm eval
 
+      - name: Upload golden report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golden-report
+          path: eval/golden-report.json
+          if-no-files-found: warn
+
       # Scheduled/manual evals have no PR to make the failure visible on, so
       # surface a drop below the faithfulness threshold (or a harness error)
       # as an issue instead of failing silently in the Actions tab.
@@ -101,3 +116,49 @@ jobs:
             if (existing) {
               await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'closed' });
             }
+
+  # regressions before merge; the scheduled real job measures absolute quality.
+  eval-mock:
+    if: github.event_name == 'pull_request'
+    name: RAG Eval (mock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: |
+          echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run eval (mock)
+        run: pnpm eval
+
+      - name: Upload golden report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golden-report
+          path: eval/golden-report.json
+          if-no-files-found: warn

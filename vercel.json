@@ -8,6 +8,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron/refresh-quality",
+      "schedule": "15 2 * * *"
+    },
+    {
       "path": "/api/admin/queue/sweep",
       "schedule": "0 3 * * *"
     }

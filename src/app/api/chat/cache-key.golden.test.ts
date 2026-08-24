@@ -17,6 +17,8 @@ interface Fixture {
     | 'agentStepBudget'
     | 'agenticRetrieveLimit'
     | 'agenticMaxRetries'
+    | 'agenticQueryRewriteEnabled'
+    | 'agenticChunkGradingEnabled'
     | 'gradeModel'
     | 'orgName'
     | 'audience'
@@ -40,6 +42,8 @@ const baseCfg = {
   agentStepBudget: 8,
   agenticRetrieveLimit: 10,
   agenticMaxRetries: 1,
+  agenticQueryRewriteEnabled: true,
+  agenticChunkGradingEnabled: true,
   gradeModel: undefined as string | undefined,
   orgName: 'Test Corp',
   audience: 'test customers',
@@ -49,7 +53,7 @@ const baseCfg = {
 } as const;
 
 const FINGERPRINT_BASE =
-  '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
+  '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
 
 const FIXTURES: Fixture[] = [
   {
@@ -61,7 +65,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:683232d7b0ef3c1da5c2ad8123e8b6d4',
+    key: 'rag:answer:e34bf6f8d1604f2f22bdb1e3b13260b4',
   },
   {
     name: 'query-normalization',
@@ -72,7 +76,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:41bff03d38319008e312d33f09c6d0f5',
+    key: 'rag:answer:d0c8fc0df3c773acd05ad6a306ae81db',
   },
   {
     name: 'punct-space',
@@ -83,7 +87,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:a1b48bffc1c4e531a9fc2ebfc464d603',
+    key: 'rag:answer:4e990fc610249d20eb1a07688b0693af',
   },
   {
     name: 'agentic-mode',
@@ -93,8 +97,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:90f0edab677ca987d9ef1c6811c63aa3',
+    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:45e1a54b67c2362a4ab14caee8497e99',
   },
   {
     name: 'agentic-inverted-rollout',
@@ -104,8 +108,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:08ca3209f12595341caf034afdde142d',
+    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:26ac59f4a8527628c88f145463321869',
   },
   {
     name: 'different-user',
@@ -116,7 +120,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:7b92ce114d83047e35ff2ddc5a46d6d1',
+    key: 'rag:answer:37b3a5da0a97518e564f974681a4c966',
   },
   {
     name: 'different-chat-model',
@@ -127,7 +131,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:25d9dc3d21ed2d8e3461bb5d1267f003',
+    key: 'rag:answer:2fe6eecbfd779dc83af65819efb07e36',
   },
   {
     name: 'different-embedding',
@@ -138,7 +142,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-large',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:9c71bbb0780947ff122af4dd8603c125',
+    key: 'rag:answer:25eee611b71351bb20b76352a1d695aa',
   },
   {
     name: 'reranker-cohere',
@@ -148,8 +152,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:1300bed0d73529fb103c8c50ae542a9a',
+    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:dd7867ab245cf470f2bfd3111f110b78',
   },
   {
     name: 'hybrid-off',
@@ -159,8 +163,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:2cf371e7bc61d4d849f6a2a250745486',
+    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:98625ada8c456f2598d0dbe25a5b5205',
   },
   {
     name: 'threshold-diff',
@@ -170,8 +174,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:68550b44baf358db974bbcfc8b971929',
+    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:1898baf4e294de68bd379bd113d4be3c',
   },
   {
     name: 'prefetch-on',
@@ -181,8 +185,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:375d0f7ccc0126dee1d3656bb6c7efe6',
+    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:c9d8955dfd773cbeeaab3ec639705f92',
   },
   {
     name: 'prompt-config-sensitive',
@@ -196,8 +200,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"gradeModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
-    key: 'rag:answer:388b3cd351e51db429ec87bf255c148f',
+    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"gradeModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
+    key: 'rag:answer:8595366827c2a68976ce183d5b933140',
   },
 ];
 

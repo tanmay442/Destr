@@ -51,7 +51,7 @@ describe('GET /api/admin/analytics/rollup', () => {
   it('rejects a wrong bearer with 405 and never consults the admin session', async () => {
     process.env.CRON_SECRET = 's3cret';
     const res = await route.GET(req({ authorization: 'Bearer wrong' }));
-    expect(res.status).toBe(405);
+    expect(res.status).toBe(401);
     expect(refreshMock).not.toHaveBeenCalled();
     expect(requireAdminRouteMock).not.toHaveBeenCalled();
   });
@@ -59,7 +59,7 @@ describe('GET /api/admin/analytics/rollup', () => {
   it('rejects GET with 405 when CRON_SECRET is unset (cron-only endpoint)', async () => {
     delete process.env.CRON_SECRET;
     const res = await route.GET(req({ authorization: 'Bearer anything' }));
-    expect(res.status).toBe(405);
+    expect(res.status).toBe(401);
     expect(refreshMock).not.toHaveBeenCalled();
     expect(requireAdminRouteMock).not.toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe('GET /api/admin/analytics/rollup', () => {
   it('rejects GET without a bearer with 405 (cron-only endpoint)', async () => {
     delete process.env.CRON_SECRET;
     const res = await route.GET(req());
-    expect(res.status).toBe(405);
+    expect(res.status).toBe(401);
     expect(refreshMock).not.toHaveBeenCalled();
   });
 });

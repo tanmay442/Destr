@@ -90,12 +90,14 @@ export const appConfigSchema = z.object({
   agenticMaxRetries: z.coerce.number().int().nonnegative().default(1),
   similarityThreshold: z.coerce.number().min(0).max(1).default(0.5),
   hybridEnabled: z.boolean().default(true),
+  agenticQueryRewriteEnabled: z.boolean().default(true),
+  agenticChunkGradingEnabled: z.boolean().default(true),
+  hallucinationCheckEnabled: z.boolean().default(true),
   rerankerProvider: z.enum(['cosine', 'local', 'cohere']).default('cosine'),
   gradeModel: z.string().optional(),
   answerCacheEnabled: z.boolean().default(true),
   answerCacheTtlSec: z.coerce.number().int().positive().default(3600),
   captureQueryText: z.boolean().default(true),
-  // Auto-delete window for saved chats. 0 = Off (never auto-delete).
   chatHistoryRetentionDays: z
     .union([z.literal(0), z.literal(30), z.literal(120), z.literal(365)])
     .default(120),

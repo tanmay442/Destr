@@ -38,7 +38,6 @@ export interface UserRow {
   createdAt: Date;
 }
 
-
 export interface DocumentRepository {
   findByName(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   findByNameForUpdate?(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
@@ -214,7 +213,6 @@ export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore
   recountAll(): Promise<Array<{ documentId: number; count: number }>>;
 }
 
-
 export interface TicketRepository {
   findByTicketId(ticketId: string): Promise<TicketRow | null>;
   findByTicketIdForUpdate?(ticketId: string): Promise<TicketRow | null>;
@@ -244,7 +242,6 @@ export interface TicketRepository {
   getTicketResponseTimes(range?: ChatEventRange): Promise<TicketResponseTimes>;
 }
 
-
 export interface UserRepository {
   upsertFromClerk(input: {
     clerkUserId: string;
@@ -267,7 +264,6 @@ export interface UserRepository {
   /** Count admin rows while holding row locks so concurrent demotions serialize on the same count. */
   countAdminsForUpdate(): Promise<number>;
 }
-
 
 type DocumentAuditAction = 'upload' | 'replace' | 'delete' | 'restore';
 type TicketAuditAction =
@@ -344,7 +340,6 @@ export interface AuditLog {
     total: number;
   }>;
 }
-
 
 /** Per-turn chat metrics. `mode`: 'agentic' or 'vector'. */
 export interface ChatEventInput {
@@ -478,6 +473,35 @@ export interface ZeroHitDocument {
 
 export type FeedbackUpsertResult = 'ok' | 'not_found' | 'forbidden';
 
+export interface ChatEvent {
+  id: number;
+  turnId: string | null;
+  userId: string | null;
+  query: string | null;
+  mode: 'agentic' | 'vector';
+  retrieveMs: number | null;
+  generateMs: number | null;
+  totalMs: number | null;
+  hitCount: number | null;
+  maxSimilarity: number | null;
+  outOfDomain: boolean;
+  hallucinationBlocked: boolean;
+  cacheHit: boolean;
+  ticketCreated: boolean;
+  citationCount: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  meta: Record<string, unknown>;
+  createdAt: Date;
+}
+
+export interface ChatDailyQualityRow {
+  day: string;
+  avgFaithfulness: number;
+  avgRetrievalRelevance: number;
+  degradedCount: number;
+}
+
 export interface FeedbackSummary {
   up: number;
   down: number;
@@ -502,9 +526,23 @@ export interface ThumbsDownDoc {
 export interface ChatEventsRepo {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
+  
+  patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
+  
+  updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
+  
+  getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean }): Promise<ChatEvent[]>;
+  getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
+  
+  getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
+  
+  getJudgeAverages(days?: number): Promise<{
+    avgFaithfulness: number;
+    avgRetrievalRelevance: number;
+    degradedRate: number;
+  }>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
-  getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
   getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
   getCacheBusterQueries(limit: number, range?: ChatEventRange): Promise<CacheBusterQuery[]>;
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
@@ -516,6 +554,28 @@ export interface ChatEventsRepo {
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
 }
 
+export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
+
+export interface QualityReviewInput {
+  turnId: string;
+  reviewerId: string;
+  verdict: QualityReviewVerdict;
+  note?: string | null;
+}
+
+export interface QualityReviewRow {
+  id: number;
+  turnId: string | null;
+  reviewerId: string | null;
+  verdict: QualityReviewVerdict;
+  note: string | null;
+  createdAt: Date;
+}
+
+export interface QualityReviewsRepo {
+  create(input: QualityReviewInput): Promise<QualityReviewRow>;
+  listRecent(limit: number): Promise<QualityReviewRow[]>;
+}
 
 export interface ChatFeedbackRepo {
   upsertFeedback(input: {
@@ -529,7 +589,6 @@ export interface ChatFeedbackRepo {
   getDocumentSentiment(limit: number, range?: ChatEventRange): Promise<DocumentSentiment[]>;
   getThumbsDownDocs(limit: number, range?: ChatEventRange): Promise<ThumbsDownDoc[]>;
 }
-
 
 export interface ConversationSummary {
   id: string;
@@ -577,7 +636,6 @@ export interface ChatHistoryRepo {
   purgeUserData(userId: string): Promise<{ deletedConversations: number; deletedMessages: number }>;
 }
 
-
 export interface RateLimiter {
   check(
     key: string,
@@ -590,7 +648,6 @@ export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
 }
-
 
 export interface EmbeddingService {
   embed(value: string): Promise<number[]>;
@@ -613,9 +670,31 @@ export interface QueryRewriter {
   rewrite(query: string): Promise<string>;
 }
 
-/** Binary relevance grader: returns 'yes' if document helps answer the question. */
+/**
+ * Binary relevance grading for a batch of documents.
+ * Returns one verdict per input index, or null when grading could not run
+ * (callers must return top-4 fallback chunks as degraded, not empty).
+ */
 export interface DocumentGrader {
-  grade(question: string, document: string): Promise<'yes' | 'no'>;
+  gradeAll(question: string, documents: string[]): Promise<Array<'yes' | 'no'> | null>;
+}
+
+/** Why an agentic turn fell back to ungraded context chunks. */
+export type FallbackReason =
+  | 'grader_unavailable'
+  | 'all_filtered'
+  | 'grading_disabled'
+  | 'turn_deadline'
+  | 'lenient_fallback';
+
+/** Final state of an agentic retrieval turn. */
+export type AgenticResultState = 'ok' | 'degraded' | 'empty';
+
+/** Live quality-judge scores for one answered turn (0-1 each). */
+export interface JudgeScores {
+  retrievalRelevance: number;
+  faithfulness: number;
+  citationPrecision: number;
 }
 
 /** Hallucination grader: returns 'yes' when generation is grounded in documents. */
@@ -628,7 +707,6 @@ export interface DocSummarizer {
   generateDocContext(text: string): Promise<{ title: string; summary: string }>;
 }
 
-
 export interface BlobStorage {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
@@ -637,12 +715,10 @@ export interface BlobStorage {
   signedUrl?(key: string, ttlSec: number): Promise<string>;
 }
 
-
 export interface IngestQueue {
   enqueue(payload: { documentId: number }): Promise<void>;
   isNoOp(): boolean;
 }
-
 
 export interface PdfParser {
   extractText(buffer: Buffer): Promise<string>;
@@ -651,7 +727,6 @@ export interface PdfParser {
 export interface TextSplitter {
   splitText(text: string): Promise<string[]>;
 }
-
 
 export interface TransactionContext {
   documents: DocumentRepository;

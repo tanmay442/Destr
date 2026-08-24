@@ -40,6 +40,49 @@ describe('toResumedConversation', () => {
     expect(guardrail.data).toEqual({ outOfDomain: true, offerTicket: true });
   });
 
+  it('rebuilds the degraded soft guardrail (no ticket offer) from metadata', () => {
+    const res = toResumedConversation({
+      messages: [
+        stored({
+          id: 5,
+          role: 'assistant',
+          content: {
+            id: 'a5',
+            parts: [{ type: 'text', text: 'best effort' }],
+            metadata: {
+              guardrail: {
+                outOfDomain: false,
+                offerTicket: false,
+                degraded: true,
+                message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+                isEmpty: false,
+                resultState: 'degraded',
+              },
+            },
+          },
+        }),
+      ],
+    });
+    const guardrail = res.messages[0]!.parts.find((p) => p.type === 'data-guardrail') as {
+      data: {
+        outOfDomain: boolean;
+        offerTicket: boolean;
+        degraded?: boolean;
+        message?: string;
+        isEmpty?: boolean;
+        resultState?: string;
+      };
+    };
+    expect(guardrail.data).toEqual({
+      outOfDomain: false,
+      offerTicket: false,
+      degraded: true,
+      message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+      isEmpty: false,
+      resultState: 'degraded',
+    });
+  });
+
   it('keeps file parts by reference and drops unknown part types', () => {
     const res = toResumedConversation({
       messages: [

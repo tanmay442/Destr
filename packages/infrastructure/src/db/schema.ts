@@ -46,7 +46,6 @@ export const chunks = pgTable('chunks', {
   contentHash: text('content_hash'),
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
-  // HNSW index excludes parent blocks (kind='parent') to keep the index small.
   index('embedding_idx')
     .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
     .where(sql`${table.kind} <> 'parent'`),
@@ -165,6 +164,21 @@ export const chatFeedback = pgTable('chat_feedback', {
   index('chat_feedback_created_at_idx').on(table.createdAt),
 ]);
 
+export const qualityReviews = pgTable('quality_reviews', {
+  id: serial('id').primaryKey(),
+  turnId: uuid('turn_id').references(() => chatEvents.turnId, { onDelete: 'cascade' }),
+  reviewerId: text('reviewer_id').references(() => users.clerkUserId, { onDelete: 'cascade' }),
+  verdict: text('verdict').notNull(),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check('quality_reviews_verdict_check', sql`${table.verdict} IN ('good','bad','docs_missing')`),
+  index('quality_reviews_turn_id_idx').on(table.turnId),
+  index('quality_reviews_reviewer_id_idx').on(table.reviewerId),
+  index('quality_reviews_created_at_idx').on(table.createdAt),
+  uniqueIndex('quality_reviews_turn_reviewer_unique').on(table.turnId, table.reviewerId),
+]);
+
 export const chatConversations = pgTable('chat_conversations', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => users.clerkUserId, { onDelete: 'cascade' }),
@@ -173,7 +187,7 @@ export const chatConversations = pgTable('chat_conversations', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
-  check('chat_conversations_title_len_check', sql`char_length(${table.title}) <= ${MAX_CONVERSATION_TITLE_LENGTH}`),
+  check('chat_conversations_title_len_check', sql`char_length(${table.title}) <= ${sql.raw(String(MAX_CONVERSATION_TITLE_LENGTH))}`),
   index('idx_chat_conversations_user_updated').on(table.userId, table.updatedAt.desc()),
   index('chat_conversations_updated_at_idx').on(table.updatedAt),
 ]);
@@ -187,7 +201,7 @@ export const chatMessages = pgTable('chat_messages', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   check('chat_messages_role_check', sql`${table.role} IN ('user','assistant')`),
-  check('chat_messages_content_bytes_check', sql`octet_length(${table.content}::text) <= ${MAX_STORED_MESSAGE_BYTES}`),
+  check('chat_messages_content_bytes_check', sql`octet_length(${table.content}::text) <= ${sql.raw(String(MAX_STORED_MESSAGE_BYTES))}`),
   index('idx_chat_messages_conversation_id').on(table.conversationId, table.id),
   uniqueIndex('chat_messages_turn_unique').on(table.conversationId, table.turnId, table.role),
 ]);
@@ -201,6 +215,8 @@ export type ChatEvent = typeof chatEvents.$inferSelect;
 export type NewChatEvent = typeof chatEvents.$inferInsert;
 export type ChatFeedback = typeof chatFeedback.$inferSelect;
 export type NewChatFeedback = typeof chatFeedback.$inferInsert;
+export type QualityReview = typeof qualityReviews.$inferSelect;
+export type NewQualityReview = typeof qualityReviews.$inferInsert;
 
 export type Document = typeof documents.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;

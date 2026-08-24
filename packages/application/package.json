@@ -11,6 +11,7 @@
     "./rag/ingest": "./src/rag/ingest.ts",
     "./rag/ingest-prechunked": "./src/rag/ingest-prechunked.ts",
     "./rag/search": "./src/rag/search.ts",
+    "./rag/agentic-search": "./src/rag/agentic-search.ts",
     "./auth": "./src/auth/index.ts",
     "./auth/audit": "./src/auth/audit.ts",
     "./auth/rate-limit": "./src/auth/rate-limit.ts",

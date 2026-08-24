@@ -49,6 +49,47 @@ describe('partialAppConfigSchema', () => {
   });
 });
 
+describe('agentic pipeline toggles', () => {
+  it('defaults all three toggles to true in a full parse', () => {
+    const result = appConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agenticQueryRewriteEnabled).toBe(true);
+      expect(result.data.agenticChunkGradingEnabled).toBe(true);
+      expect(result.data.hallucinationCheckEnabled).toBe(true);
+    }
+  });
+
+  it('round-trips explicit false values', () => {
+    const result = appConfigSchema.safeParse({
+      agenticQueryRewriteEnabled: false,
+      agenticChunkGradingEnabled: false,
+      hallucinationCheckEnabled: false,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agenticQueryRewriteEnabled).toBe(false);
+      expect(result.data.agenticChunkGradingEnabled).toBe(false);
+      expect(result.data.hallucinationCheckEnabled).toBe(false);
+    }
+  });
+
+  it('booleans are strict — no coercion of strings', () => {
+    for (const key of ['agenticQueryRewriteEnabled', 'agenticChunkGradingEnabled', 'hallucinationCheckEnabled']) {
+      expect(appConfigSchema.safeParse({ [key]: 'true' }).success).toBe(false);
+      expect(appConfigSchema.safeParse({ [key]: 1 }).success).toBe(false);
+    }
+  });
+
+  it('accepts a deepPartial override for each toggle', () => {
+    const result = parse({ agenticChunkGradingEnabled: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ agenticChunkGradingEnabled: false });
+    }
+  });
+});
+
 describe('chatHistoryRetentionDays', () => {
   it('defaults to 120 in a full parse', () => {
     const result = appConfigSchema.safeParse({});

@@ -1,13 +1,15 @@
-import { and, gte, lte, sql } from 'drizzle-orm';
+import { and, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
+import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
+  ChatEvent,
   ChatEventInput,
   ChatEventMetrics,
   ChatEventDailyUsage,
   ChatEventRange,
   ChatDailyTrendRow,
+  ChatDailyQualityRow,
   ModeComparison,
   CacheBusterQuery,
   DocumentUtilityRow,
@@ -77,6 +79,38 @@ function rangeWhere(range?: ChatEventRange) {
   return parts.length ? and(...parts) : undefined;
 }
 
+/** UTC-midnight start of the trailing `days` window (inclusive), matching the daily rollups. */
+function sinceStartUtc(days: number): Date {
+  const since = new Date();
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - (Math.max(days, 1) - 1));
+  return since;
+}
+
+function toChatEvent(row: typeof chatEvents.$inferSelect): ChatEvent {
+  return {
+    id: row.id,
+    turnId: row.turnId,
+    userId: row.userId,
+    query: row.query,
+    mode: row.mode as ChatEvent['mode'],
+    retrieveMs: row.retrieveMs,
+    generateMs: row.generateMs,
+    totalMs: row.totalMs,
+    hitCount: row.hitCount,
+    maxSimilarity: row.maxSimilarity,
+    outOfDomain: row.outOfDomain,
+    hallucinationBlocked: row.hallucinationBlocked,
+    cacheHit: row.cacheHit,
+    ticketCreated: row.ticketCreated,
+    citationCount: row.citationCount,
+    tokensIn: row.tokensIn,
+    tokensOut: row.tokensOut,
+    meta: (row.meta ?? {}) as Record<string, unknown>,
+    createdAt: row.createdAt,
+  };
+}
+
 export interface ChatEventBatcherOptions {
   flushScheduler?: (fn: () => void) => void;
 }
@@ -101,6 +135,118 @@ export class ChatEventBatcher implements ChatEventsRepo {
     }
   }
 
+  
+  patchMeta(turnId: string, patch: Record<string, unknown>): boolean {
+    const row = this.buffer.find((e) => e.turnId === turnId);
+    if (!row) return false;
+    row.meta = { ...(row.meta ?? {}), ...patch };
+    return true;
+  }
+
+  /** jsonb merge of `patch` into the persisted event's meta; true when a row matched. */
+  async updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean> {
+    if (!turnId || Object.keys(patch).length === 0) return false;
+    const result = await this.client.execute(sql`
+      update ${chatEvents}
+      set meta = ${chatEvents.meta} || ${JSON.stringify(patch)}::jsonb
+      where ${chatEvents.turnId} = ${turnId}
+      returning ${chatEvents.id}
+    `);
+    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    return rows.length > 0;
+  }
+
+  
+  async getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean } = {}): Promise<ChatEvent[]> {
+    const capped = Math.min(Math.max(limit, 1), 100);
+    const parts: SQL[] = [];
+    if (filter.degraded === true) {
+      parts.push(sql`${chatEvents.meta} ->> 'degraded' = 'true'`);
+      parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
+    }
+    if (filter.blocked === true) {
+      parts.push(sql`${chatEvents.hallucinationBlocked}`);
+      parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
+    }
+    const rows = await this.client
+      .select()
+      .from(chatEvents)
+      .where(parts.length ? and(...parts) : undefined)
+      .orderBy(sql`random()`)
+      .limit(capped);
+    return rows.map(toChatEvent);
+  }
+
+  
+  async getDailyQuality(days: number): Promise<ChatDailyQualityRow[]> {
+    const since = sinceStartUtc(days);
+    const result = await this.client.execute(sql`
+      select
+        to_char(date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD') as day,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
+        count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::int as degraded_count
+      from ${chatEvents}
+      where ${chatEvents.createdAt} >= ${since}
+      group by day
+      order by day
+    `);
+    const rows = (result as unknown as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    if (rows.length === 0) return [];
+    const map = new Map(
+      rows.map((r) => [
+        String(r.day),
+        {
+          day: String(r.day),
+          avgFaithfulness: Number(r.avg_faithfulness) || 0,
+          avgRetrievalRelevance: Number(r.avg_retrieval_relevance) || 0,
+          degradedCount: Number(r.degraded_count) || 0,
+        } as ChatDailyQualityRow,
+      ]),
+    );
+    const out: ChatDailyQualityRow[] = [];
+    const windowDays = Math.min(Math.max(Math.floor(days), 1), 365);
+    for (let i = windowDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      out.push(
+        map.get(key) ?? {
+          day: key,
+          avgFaithfulness: 0,
+          avgRetrievalRelevance: 0,
+          degradedCount: 0,
+        },
+      );
+    }
+    return out;
+  }
+
+  
+  async getJudgeAverages(days?: number): Promise<{
+    avgFaithfulness: number;
+    avgRetrievalRelevance: number;
+    degradedRate: number;
+  }> {
+    const windowDays = Math.min(Math.max(Math.floor(days ?? 7), 1), 365);
+    const since = sinceStartUtc(windowDays);
+    const result = await this.client.execute(sql`
+      select
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
+        coalesce(count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::numeric / nullif(count(*), 0), 0) as degraded_rate
+      from ${chatEvents}
+      where ${chatEvents.createdAt} >= ${since}
+    `);
+    const row = (result as unknown as { rows: Array<Record<string, unknown>> }).rows?.[0];
+    return {
+      avgFaithfulness: Number(row?.avg_faithfulness) || 0,
+      avgRetrievalRelevance: Number(row?.avg_retrieval_relevance) || 0,
+      degradedRate: Number(row?.degraded_rate) || 0,
+    };
+  }
+
   private scheduleFlush(): void {
     const scheduler = this.options.flushScheduler;
     if (scheduler) {
@@ -108,11 +254,9 @@ export class ChatEventBatcher implements ChatEventsRepo {
         scheduler(() => void this.flush());
         return;
       } catch {
-        // Not inside a request scope; fall back to the interval timer.
       }
     }
     this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
-    // Keep the event loop free in serverless; explicit flushes run via after().
     this.timer.unref?.();
   }
 
@@ -458,6 +602,14 @@ export class ChatEventBatcher implements ChatEventsRepo {
           where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
         )
         returning ${chatFeedback.turnId}
+      ),
+      removed_reviews as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
+        )
+        returning ${qualityReviews.id}
       )
       delete from ${chatEvents}
       where ${chatEvents.createdAt} <= ${cutoff}
@@ -469,7 +621,20 @@ export class ChatEventBatcher implements ChatEventsRepo {
 
   async purgeUserData(userId: string): Promise<{ deletedCount: number }> {
     const result = await this.client.execute(sql`
-      with removed_feedback as (
+      with removed_reviews_by_turn as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.turnId} in (
+          select ${chatEvents.turnId} from ${chatEvents}
+          where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
+        )
+        returning ${qualityReviews.id}
+      ),
+      removed_reviews_by_reviewer as (
+        delete from ${qualityReviews}
+        where ${qualityReviews.reviewerId} = ${userId}
+        returning ${qualityReviews.id}
+      ),
+      removed_feedback as (
         delete from ${chatFeedback}
         where ${chatFeedback.turnId} in (
           select ${chatEvents.turnId} from ${chatEvents}

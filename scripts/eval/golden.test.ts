@@ -35,4 +35,24 @@ describe('golden question quality', () => {
       expect(q.refusalExpected).not.toBe(true);
     }
   });
+
+  it('§C2 additions carry modes, refusal coverage, and no stray expectedDocIds in mock', () => {
+    for (const q of goldenQuestions) {
+      if (q.mode !== undefined) {
+        expect(['agentic', 'normal']).toContain(q.mode);
+      }
+      if (q.expectedDocIds !== undefined) {
+        expect(q.expectedDocIds.length).toBeGreaterThan(0);
+      }
+    }
+    const refusals = goldenQuestions.filter((q) => q.refusalExpected === true);
+    expect(refusals.length).toBeGreaterThanOrEqual(5);
+    const nonsense = refusals.filter((q) => q.id.startsWith('nonsense-'));
+    expect(nonsense.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('§C7/F5 ships no expectedDocIds yet, so the doc-hit gate runs inactive', () => {
+    const withExpectations = goldenQuestions.filter((q) => (q.expectedDocIds ?? []).length > 0);
+    expect(withExpectations.map((q) => q.id)).toEqual([]);
+  });
 });

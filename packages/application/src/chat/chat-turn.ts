@@ -12,9 +12,17 @@ import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
+  JUDGE_SAMPLE_RATE,
   logger,
   sanitizeText,
   TOOL_CONTENT_CAP,
+  DEGRADED_BANNER_MESSAGE,
+  degradedBannerMessage,
+  FALLBACK_CHUNK_COUNT,
+  fallbackBlock,
+  TURN_DEADLINE_BANNER_MESSAGE,
+  TURN_DEADLINE_TEXT,
+  type AgenticResultState,
   type AnswerCache,
   type ChatEventInput,
   type RateLimiter,
@@ -26,6 +34,7 @@ import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
 import { buildEventMeta } from './build-event-meta';
+import { shouldCache } from './should-cache';
 import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
 import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit-citations';
@@ -57,7 +66,6 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
       }
     }
   } catch {
-    // legacy plain-text cache entry
   }
   return { text: value, citations: [] };
 }
@@ -113,6 +121,20 @@ export interface ChatTurnDeps {
       assistantMessage: unknown;
     }): Promise<unknown>;
   };
+  /** Schedules a deferred task. */
+  judgeScheduler?: (task: () => Promise<void>) => void;
+  
+  qualityJudge?: (ctx: {
+    question: string;
+    snippets: string[];
+    documents: string;
+    answer: string;
+    turnId: string;
+  }) => Promise<void>;
+  
+  turnSoftDeadlineMs?: number;
+  
+  judgeMaxWallMs?: number;
   traceEnabled: boolean;
 }
 
@@ -207,6 +229,8 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
 
 interface TurnMetrics {
   retrieveMs: number;
+  firstTokenMs: number | null;
+  hallucinationMs: number | null;
   hitCount: number | null;
   maxSimilarity: number | null;
   ticketCreated: boolean;
@@ -221,9 +245,27 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   request: Request;
   capturedCitations: EmittedCitation[];
   outOfDomainRef: { value: boolean };
+  isEmptyRef: { value: boolean };
+  degradedRef: { value: boolean };
+  fallbackReasonRef: { value: string | null };
+  resultStateRef: { value: AgenticResultState | null };
+  fallbackCountRef: { value: number | null };
   metrics: TurnMetrics;
 }) {
-  const { cfg, effectiveMode, userId, request, capturedCitations, outOfDomainRef, metrics } = opts;
+  const {
+    cfg,
+    effectiveMode,
+    userId,
+    request,
+    capturedCitations,
+    outOfDomainRef,
+    isEmptyRef,
+    degradedRef,
+    fallbackReasonRef,
+    resultStateRef,
+    fallbackCountRef,
+    metrics,
+  } = opts;
   let ticketOpenedInTurn = false;
   return {
     searchDocumentation: deps.ai.tool({
@@ -260,6 +302,11 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           }
           outOfDomainRef.value = r.value.outOfDomain;
+          isEmptyRef.value = r.value.isEmpty;
+          degradedRef.value = r.value.degraded;
+          fallbackReasonRef.value = r.value.fallbackReason;
+          resultStateRef.value = r.value.resultState;
+          fallbackCountRef.value = r.value.chunks.length;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -292,6 +339,10 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         });
         for (const citation of emitCitations(matches)) {
           capturedCitations.push(citation);
+        }
+        if (effectiveMode === 'agentic' && degradedRef.value) {
+          const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
+          return [{ content: block, similarity: -1 }, ...capped];
         }
         return capped;
       },
@@ -364,6 +415,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
 
 export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
   const turnStart = input.startedAt ?? performance.now();
+  const requestStartedAt = Date.now();
   const { request, userId } = input;
   const cfg = await deps.getRuntimeConfig();
   const limit = await deps.rateLimit.check(`chat:${userId}`, CHAT_RATE_LIMIT);
@@ -401,15 +453,16 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const isFirstTurn = messages.length <= 1;
 
   const useConfiguredMode = Math.random() * 100 < cfg.retrievalModeRolloutPercent;
-  const effectiveMode = useConfiguredMode
+  let effectiveMode: 'agentic' | 'normal' = useConfiguredMode
     ? cfg.retrievalMode
     : cfg.retrievalMode === 'agentic'
       ? 'normal'
       : 'agentic';
+  if (process.env.AGENTIC_ENABLED === 'false') effectiveMode = 'normal';
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+  const metrics: TurnMetrics = { retrieveMs: 0, firstTokenMs: null, hallucinationMs: null, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -490,13 +543,34 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
 
   const outOfDomainRef = { value: false };
+  const isEmptyRef = { value: false };
+  const degradedRef = { value: false };
+  const fallbackReasonRef = { value: null as string | null };
+  const resultStateRef = { value: null as AgenticResultState | null };
+  const fallbackCountRef = { value: null as number | null };
+
+  const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
+  const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
+  let softDeadlineMs = rawSoftDeadlineMs;
+  if (softDeadlineMs > maxSoftDeadlineMs) {
+    logger.warn('CHAT_SOFT_DEADLINE_MS clamped', { requested: rawSoftDeadlineMs, clamped: maxSoftDeadlineMs });
+    softDeadlineMs = maxSoftDeadlineMs;
+  }
+  const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
+  const elapsedBeforeStream = Date.now() - requestStartedAt;
+  const softDeadlineMsRemaining = Math.max(1_000, softDeadlineMs - elapsedBeforeStream);
+  const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsRemaining);
+  let softDeadlineFired = false;
+  softDeadlineSignal.addEventListener('abort', () => {
+    softDeadlineFired = true;
+  });
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch),
+    system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
     messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
-    abortSignal: request.signal,
+    abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
     tools: buildChatTools(deps, {
       cfg,
       effectiveMode,
@@ -504,6 +578,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       request,
       capturedCitations,
       outOfDomainRef,
+      isEmptyRef,
+      degradedRef,
+      fallbackReasonRef,
+      resultStateRef,
+      fallbackCountRef,
       metrics,
     }),
   });
@@ -514,11 +593,40 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     start(controller) {
       const reader = llmStream.getReader();
       (async () => {
+        let partialText = '';
+        let generationCompletedCleanly = false;
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (
+              metrics.firstTokenMs === null &&
+              typeof (value as { type?: unknown }).type === 'string' &&
+              String((value as { type?: unknown }).type).startsWith('text')
+            ) {
+              metrics.firstTokenMs = Math.round(performance.now() - turnStart);
+            }
+            const vt = (value as { type?: unknown; delta?: unknown }).type;
+            if (vt === 'text-delta' && typeof (value as { delta?: unknown }).delta === 'string') {
+              partialText += (value as { delta: string }).delta;
+            }
             controller.enqueue(value);
+          }
+          generationCompletedCleanly = !softDeadlineSignal.aborted;
+          const timedOut = softDeadlineFired && !request.signal.aborted && !generationCompletedCleanly;
+          if (timedOut) {
+            controller.enqueue({
+              type: 'data-guardrail',
+              data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+            } as InferUIMessageChunk<UIMessage>);
+            const tid = `deadline-${turnId}`;
+            controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({
+              type: 'text-delta',
+              id: tid,
+              delta: TURN_DEADLINE_TEXT,
+            } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({ type: 'text-end', id: tid } as InferUIMessageChunk<UIMessage>);
           }
           const finalCitations = dedupeCitations(capturedCitations);
           for (const src of finalCitations) {
@@ -527,19 +635,55 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               data: src,
             } as InferUIMessageChunk<UIMessage>);
           }
-          const hallucinationBlocked = await runHallucinationCheck({
-            controller,
-            result,
-            capturedCitations: finalCitations,
-            hallucinationGrader: deps.hallucinationGrader(cfg),
-            outOfDomain: outOfDomainRef.value,
-          });
+          const hallucinationStart = performance.now();
+          const degradedMessage = degradedRef.value
+            ? degradedBannerMessage(fallbackCountRef.value ?? FALLBACK_CHUNK_COUNT)
+            : DEGRADED_BANNER_MESSAGE;
+          const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
+          const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
+          let hallucinationBlocked = false;
+          let hallucinationTimedOut = false;
+          if (timedOut) {
+          } else if (hallucinationBudgetMs <= 0) {
+            hallucinationTimedOut = true;
+            logger.warn('hallucination check skipped: no wall-time budget', { remainingWallMs });
+          } else {
+            const hallucinationResult = await runHallucinationCheck({
+              controller,
+              result,
+              capturedCitations: finalCitations,
+              hallucinationGrader: deps.hallucinationGrader(cfg),
+              enabled: cfg.hallucinationCheckEnabled,
+              outOfDomain: outOfDomainRef.value,
+              degraded: degradedRef.value,
+              degradedMessage,
+              timeoutMs: hallucinationBudgetMs,
+            });
+            hallucinationBlocked = hallucinationResult.blocked;
+            hallucinationTimedOut = hallucinationResult.timedOut;
+          }
+          metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
+          const isEmpty = isEmptyRef.value || outOfDomainRef.value;
           if (
             cacheKey &&
-            finalCitations.length > 0 &&
-            !hallucinationBlocked &&
-            !outOfDomainRef.value &&
-            !metrics.ticketCreated
+            !timedOut &&
+            shouldCache({
+              citations: finalCitations,
+              blocked: hallucinationBlocked,
+              hallucinationTimedOut,
+              isEmpty,
+              ticketCreated: metrics.ticketCreated,
+              cfg,
+              agentic: {
+                chunks: [],
+                rewrittenQuery: '',
+                outOfDomain: outOfDomainRef.value,
+                isEmpty: isEmptyRef.value,
+                degraded: degradedRef.value,
+                fallbackReason: fallbackReasonRef.value as AgenticResult['fallbackReason'],
+                resultState: resultStateRef.value ?? 'ok',
+              },
+            })
           ) {
             try {
               const finalAnswer = await result.text;
@@ -579,8 +723,26 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
+              ...(resultStateRef.value || timedOut
+                ? {
+                    degraded: degradedRef.value || timedOut,
+                    fallbackReason: timedOut ? 'turn_deadline' : fallbackReasonRef.value ?? undefined,
+                    isEmpty,
+                    resultState: timedOut ? 'degraded' : resultStateRef.value ?? undefined,
+                  }
+                : {}),
             }),
           });
+          logger.info('chat.turn.timings', {
+            event: 'chat.turn.timings',
+            turnId,
+            retrieveMs: metrics.retrieveMs,
+            firstTokenMs: metrics.firstTokenMs,
+            hallucinationMs: metrics.hallucinationMs,
+            generateMs: Math.max(0, totalMs - metrics.retrieveMs),
+            totalMs,
+          });
+          const persistedText = await Promise.resolve(result.text).catch(() => partialText);
           persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -589,15 +751,82 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             userMessage: lastUserMessage,
             assistantMessage: buildAssistantMessageLike({
               turnId,
-              text: await Promise.resolve(result.text).catch(() => ''),
+              text: persistedText || partialText,
               citations: finalCitations,
               guardrail: hallucinationBlocked
-                ? { outOfDomain: outOfDomainRef.value, offerTicket: true }
-                : null,
+                ? {
+                    outOfDomain: outOfDomainRef.value,
+                    offerTicket: true,
+                    ...(degradedRef.value ? { degraded: true, message: degradedMessage } : {}),
+                  }
+                : timedOut
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: TURN_DEADLINE_BANNER_MESSAGE,
+                      isEmpty: false,
+                      resultState: 'degraded',
+                    }
+                  : degradedRef.value
+                  ? {
+                      outOfDomain: false,
+                      offerTicket: false,
+                      degraded: true,
+                      message: degradedMessage,
+                      isEmpty: false,
+                      resultState: resultStateRef.value ?? 'degraded',
+                    }
+                  : null,
             }),
           });
+          if (
+            turnId &&
+            deps.judgeScheduler &&
+            deps.qualityJudge &&
+            !timedOut &&
+            Math.random() < JUDGE_SAMPLE_RATE &&
+            finalCitations.length > 0 &&
+            !isEmpty &&
+            performance.now() - turnStart <= judgeMaxWallMs &&
+            cfg.captureQueryText !== false
+          ) {
+            const answer = await Promise.resolve(result.text).catch(() => partialText);
+            const snippets = finalCitations.map((c) => c.snippet);
+            const qualityJudge = deps.qualityJudge;
+            deps.judgeScheduler(() =>
+              qualityJudge({
+                question: lastUserText,
+                snippets,
+                documents: snippets.join('\n\n'),
+                answer,
+                turnId,
+              }),
+            );
+          }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
+          try {
+            if (metrics.ticketCreated) {
+              logger.warn('chat.turn.ticket_created_but_stream_failed', { turnId, ticketId: metrics.ticketId });
+              deps.eventSink.record({
+                turnId,
+                userId,
+                query: queryText,
+                mode: persistedMode,
+                ticketCreated: true,
+                hallucinationBlocked: false,
+                citationCount: dedupeCitations(capturedCitations).length,
+                meta: buildEventMeta({
+                  ticketId: metrics.ticketId,
+                  degraded: degradedRef.value || undefined,
+                  fallbackReason: fallbackReasonRef.value ?? undefined,
+                  resultState: resultStateRef.value ?? undefined,
+                  isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
+                }),
+              });
+            }
+          } catch {}
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
@@ -613,23 +842,66 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   };
 }
 
+const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
+const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
+const MAX_DURATION_MS = 60_000;
+
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
   result: { text: PromiseLike<string> };
   capturedCitations: EmittedCitation[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
+  enabled: boolean;
   outOfDomain: boolean;
-}): Promise<boolean> {
-  const { controller, result, capturedCitations, hallucinationGrader, outOfDomain } = opts;
-  if (!hallucinationGrader) return false;
+  degraded: boolean;
+  degradedMessage?: string;
+  timeoutMs?: number;
+}): Promise<{ blocked: boolean; timedOut: boolean }> {
+  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
+  const degradedMessage = opts.degradedMessage ?? DEGRADED_BANNER_MESSAGE;
+  if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
-  let ungrounded = outOfDomain;
-  if (!ungrounded && capturedCitations.length > 0) {
+  if (outOfDomain) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain: true, offerTicket: true },
+    } as InferUIMessageChunk<UIMessage>);
+    return { blocked: true, timedOut: false };
+  }
+
+  if (degraded) {
+    controller.enqueue({
+      type: 'data-guardrail',
+      data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: degradedMessage },
+    } as InferUIMessageChunk<UIMessage>);
+  }
+
+  let ungrounded = false;
+  let timedOut = false;
+  if (capturedCitations.length > 0) {
     try {
       const generation = await result.text;
       const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
-      ungrounded = (await hallucinationGrader(documents, generation)) === 'no';
+      let verdict: 'yes' | 'no';
+      if (opts.timeoutMs !== undefined && opts.timeoutMs <= 0) {
+        throw Object.assign(new Error('Hallucination verification skipped: no wall-time budget'), { name: 'TimeoutError' });
+      } else if (opts.timeoutMs !== undefined && opts.timeoutMs < 12_000) {
+        verdict = await Promise.race([
+          hallucinationGrader(documents, generation),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error('Hallucination verification timed out'), { name: 'TimeoutError' })), opts.timeoutMs),
+          ),
+        ]);
+      } else {
+        verdict = await hallucinationGrader(documents, generation);
+      }
+      ungrounded = verdict === 'no';
     } catch (err) {
+      const isTimeout =
+        (err as { name?: string })?.name === 'TimeoutError' ||
+        (err as { name?: string })?.name === 'AbortError' ||
+        /timed out|budget/i.test(String((err as Error)?.message ?? ''));
+      if (isTimeout) timedOut = true;
       logger.error('Hallucination check failed', { error: err });
     }
   }
@@ -637,8 +909,8 @@ async function runHallucinationCheck(opts: {
   if (ungrounded) {
     controller.enqueue({
       type: 'data-guardrail',
-      data: { outOfDomain, offerTicket: true },
+      data: { outOfDomain: false, offerTicket: true },
     } as InferUIMessageChunk<UIMessage>);
   }
-  return ungrounded;
+  return { blocked: ungrounded, timedOut };
 }

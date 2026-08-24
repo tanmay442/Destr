@@ -141,6 +141,20 @@
       "when": 1787407548059,
       "tag": "0019_chat_conversations_updated_at_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787492432353,
+      "tag": "0020_military_mathemanic",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787492432450,
+      "tag": "0021_misty_harbor",
+      "breakpoints": true
     }
   ]
 }

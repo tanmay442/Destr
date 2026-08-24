@@ -7,6 +7,11 @@ const MAX_DELAY_MS = 5_000;
 export const EMBED_REQUEST_TIMEOUT_MS = 120_000;
 export const GRADE_REQUEST_TIMEOUT_MS = 60_000;
 
+export function isDeadlineAbort(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -40,11 +45,14 @@ export function isRetryableError(err: unknown): boolean {
  * Run `fn` with bounded retries. Only retryable failures are retried; permanent
  * errors surface immediately. The final error carries the failing batch offset
  * so callers can report exactly which slice of work failed.
+ * `opts.isNonRetryable` forces an error class (e.g. deadline aborts) to bypass
+ * all retries and surface on the first attempt.
  */
 export async function retryOnTransient<T>(
   fn: () => Promise<T>,
   context: string,
   attempts: number = RETRY_ATTEMPTS,
+  opts: { isNonRetryable?: (err: unknown) => boolean } = {},
 ): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -52,8 +60,8 @@ export async function retryOnTransient<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      // Permanent failures surface as-is so callers see the real cause.
       if (!isRetryableError(err)) throw err;
+      if (opts.isNonRetryable?.(err)) throw err;
       if (attempt === attempts - 1) break;
       await sleep(retryDelay(attempt));
     }

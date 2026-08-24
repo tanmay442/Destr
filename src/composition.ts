@@ -22,12 +22,12 @@ import {
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
-  OUT_OF_DOMAIN_THRESHOLD, CCH_ENABLED,
+  CCH_ENABLED,
   defaultProcessEnv,
 } from '@app/infrastructure/config';
 import type { RerankerStatus } from '@app/infrastructure/llm';
 import type { MyUIMessage } from '@/chat/types';
-import type { DocumentRow, LogLevel } from '@app/domain';
+import type { DocumentRow, LogLevel, AgenticResultState } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type IngestQueue, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
@@ -70,7 +70,7 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = core.rateLimiter;
 
@@ -96,8 +96,6 @@ async function ingestQueuedDocumentStandalone(
   if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
   if (!doc.storageKey) return err(new NotFoundError(`Document ${documentId} has no stored blob`));
 
-  // Claim before the expensive parse/embed so concurrent deliveries can never
-  // both pay for it; losers report `busy` and the winner covers the whole phase.
   const claimed = await documentRepo.claimIngest(documentId);
   if (!claimed) return ok({ status: 'busy', chunks: 0 });
 
@@ -113,7 +111,6 @@ async function ingestQueuedDocumentStandalone(
 
   const expectedHash = systemHasher.sha256(buffer);
 
-  // Skip the work if the row was replaced or deleted after we claimed it.
   const current = await documentRepo.findById(documentId);
   if (!current || current.fileHash !== expectedHash) {
     await requeue();
@@ -128,8 +125,6 @@ async function ingestQueuedDocumentStandalone(
 
   try {
     await Db.transactionRunner.run(async (tx) => {
-      // Re-verify the row inside the transaction: a replace-upload landing
-      // during parse/embed must not be overwritten by these stale chunks.
       const fresh = await tx.documents.findById(documentId);
       if (!fresh || fresh.fileHash !== expectedHash) throw new StaleIngestError();
       await tx.chunks.deleteByDocumentId(documentId);
@@ -184,17 +179,21 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
   const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
-  if (!graders.queryRewriter || !graders.documentGrader) {
+  if ((cfg.agenticQueryRewriteEnabled && !graders.queryRewriter) ||
+    (cfg.agenticChunkGradingEnabled && !graders.documentGrader)) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
   return {
     search: getSearchDeps(cfg),
-    queryRewriter: graders.queryRewriter,
-    documentGrader: graders.documentGrader,
+    queryRewriter: graders.queryRewriter!,
+    documentGrader: graders.documentGrader!,
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
-    outOfDomainThreshold: OUT_OF_DOMAIN_THRESHOLD,
+    rewriteEnabled: cfg.agenticQueryRewriteEnabled,
+    gradeEnabled: cfg.agenticChunkGradingEnabled,
+    similarityThreshold: cfg.similarityThreshold,
+    hybridEnabled: cfg.hybridEnabled,
   };
 }
 
@@ -225,6 +224,36 @@ function createComposition() {
         getSearchDeps(cfg),
       ),
     agenticSearch: async (cfg: AppConfig, query: string) => {
+      if (process.env.AGENTIC_ENABLED === 'false') {
+        const fallback = await bind(
+          searchChunks,
+          query,
+          {
+            threshold: cfg.similarityThreshold,
+            hybridEnabled: cfg.hybridEnabled,
+            mode: cfg.parentChildMode,
+            parentChildWindow: cfg.parentChildWindow,
+            rrfK: RRF_K,
+            lexicalWeight: LEXICAL_WEIGHT,
+            rerankTopN: RERANK_TOP_N,
+            candidateLimit: CANDIDATE_POOL,
+          },
+          getSearchDeps(cfg),
+        );
+        if (!fallback.ok) return fallback;
+        const chunks = fallback.value;
+        const isEmpty = chunks.length === 0;
+        return ok({
+          chunks,
+          rewrittenQuery: query,
+          outOfDomain: isEmpty,
+          isEmpty,
+          degraded: false,
+          fallbackReason: null,
+          resultState: (isEmpty ? 'empty' : 'ok') as AgenticResultState,
+          gradingUnavailable: false,
+        });
+      }
       try {
         return await agenticSearch(query, getAgenticDeps(cfg));
       } catch (e) {
@@ -352,6 +381,8 @@ function createComposition() {
     answerCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
+    chatFeedbackRepo,
+    qualityReviewsRepo,
     chatHistoryRepo,
     session: Auth.clerkSessionStore,
     rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
@@ -364,6 +395,7 @@ export { requireAdmin, requireSession, getAppSession, ForbiddenError, unwrap };
 export { respond, respondResult };
 export { TRACE_ENABLED, MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/infrastructure/config';
 
+export { judgeRelevance, judgeFaithfulness } from '@app/infrastructure/llm';
 
 export type Composition = ReturnType<typeof createComposition>;
 

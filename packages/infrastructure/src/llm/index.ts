@@ -5,7 +5,6 @@ import type {
   DocumentGrader,
   HallucinationGrader,
 } from '@app/domain';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
 import './openai-chat-service';
 import './google-chat-service';
 import './ollama-chat-service';
@@ -18,31 +17,23 @@ import { localReranker, checkLocalRerankerAvailable } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
 import {
   createGraders,
-  queryRewriter,
-  documentGrader,
-  hallucinationGrader,
 } from './graders';
 import {
-  chatProviderRegistry,
   embeddingProviderRegistry,
   rerankerProviderRegistry,
   embeddingModelIdRegistry,
   registerRerankerProvider,
   type ChatModelProvider,
 } from './registries';
+import { getChatModel } from './model';
+
+export { getChatModel } from './model';
 
 export function getEmbeddingService(): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
   const service = embeddingProviderRegistry.get(provider);
   if (!service) throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
   return service;
-}
-
-export function getChatModel(modelId?: string): LanguageModelV3 {
-  const provider = process.env.CHAT_PROVIDER ?? 'openai';
-  const factory = chatProviderRegistry.get(provider);
-  if (!factory) throw new Error(`Unknown CHAT_PROVIDER: ${provider}`);
-  return factory(modelId);
 }
 
 /**
@@ -119,9 +110,6 @@ export function getGraders(
       hallucinationGrader: undefined,
     };
   }
-  if (modelProvider === getChatModel && !gradeModelId) {
-    return { queryRewriter, documentGrader, hallucinationGrader };
-  }
   const graders = createGraders(gradeModelId, modelProvider);
   return {
     queryRewriter: graders.queryRewriter,
@@ -138,10 +126,8 @@ export {
   checkLocalRerankerAvailable,
   cohereReranker,
   createGraders,
-  queryRewriter,
-  documentGrader,
-  hallucinationGrader,
 };
+export { judgeRelevance, judgeFaithfulness } from './judge';
 
 /** Resolve the embedding model id string for the active provider.
  *  Used to stamp `DocumentChunk.embeddingModel` metadata. */

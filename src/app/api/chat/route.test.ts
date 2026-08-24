@@ -17,6 +17,25 @@ const { authMock, rateLimitResult } = vi.hoisted(() => ({
   rateLimitResult: { ok: true, remaining: 29, resetMs: 60_000 } as { ok: boolean; remaining?: number; resetMs?: number; retryAfterMs?: number },
 }));
 
+const { afterMock } = vi.hoisted(() => ({
+  afterMock: vi.fn((task: () => void) => {
+    afterCallbacks.push(task);
+  }),
+}));
+const afterCallbacks: Array<() => void> = [];
+
+const { judgeRelevanceMock, judgeFaithfulnessMock } = vi.hoisted(() => ({
+  judgeRelevanceMock: vi.fn(async () => ({ score: 0.8, reason: 'relevant' })),
+  judgeFaithfulnessMock: vi.fn(async () => ({ score: 0.9, citationPrecision: 0.85, reason: 'grounded' })),
+}));
+
+vi.mock('next/server', () => ({
+  NextResponse: {
+    json: (body: unknown, init?: ResponseInit) => Response.json(body, init),
+  },
+  after: afterMock,
+}));
+
 const { currentUserMock } = vi.hoisted(() => ({
   currentUserMock: vi.fn(),
 }));
@@ -66,6 +85,9 @@ const { retrievalConfig } = vi.hoisted(() => ({
     agenticMaxRetries: 1,
     similarityThreshold: 0.5,
     hybridEnabled: true,
+    agenticQueryRewriteEnabled: true,
+    agenticChunkGradingEnabled: true,
+    hallucinationCheckEnabled: true,
     rerankerProvider: 'cosine' as const,
     gradeModel: undefined as string | undefined,
     answerCacheEnabled: true,
@@ -102,7 +124,12 @@ type MockComposition = {
   logTicketEvent: ReturnType<typeof vi.fn>;
   agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
   getHallucinationGrader: (cfg: unknown) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
-  chatEventBatcher: { record: ReturnType<typeof vi.fn>; flush: ReturnType<typeof vi.fn> };
+  chatEventBatcher: {
+    record: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn>;
+    updateEventMeta: ReturnType<typeof vi.fn>;
+    patchMeta: ReturnType<typeof vi.fn>;
+  };
 };
 
 const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => ({
@@ -121,9 +148,14 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
       set: vi.fn(async () => undefined),
     },
     logTicketEvent: vi.fn(),
-    agenticSearch: vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never),
+    agenticSearch: vi.fn(async () => ok(agenticResult()) as never),
     getHallucinationGrader: vi.fn(() => graderHolder.fn),
-    chatEventBatcher: { record: vi.fn(), flush: vi.fn(async () => undefined) },
+    chatEventBatcher: {
+      record: vi.fn(),
+      flush: vi.fn(async () => undefined),
+      updateEventMeta: vi.fn(async () => true),
+      patchMeta: vi.fn(),
+    },
   },
 }));
 
@@ -132,6 +164,8 @@ vi.mock('@/composition', () => ({
   appConfig: appConfigMock,
   assertSameOrigin: assertSameOriginMock,
   TRACE_ENABLED: false,
+  judgeRelevance: judgeRelevanceMock,
+  judgeFaithfulness: judgeFaithfulnessMock,
 }));
 
 vi.mock('ai', async () => {
@@ -144,6 +178,20 @@ vi.mock('ai', async () => {
 });
 
 import * as appHandler from './route';
+
+function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    chunks: [],
+    rewrittenQuery: 'rewritten',
+    outOfDomain: false,
+    isEmpty: false,
+    degraded: false,
+    fallbackReason: null,
+    resultState: 'ok',
+    gradingUnavailable: false,
+    ...overrides,
+  };
+}
 
 function makeUIMessageStream(): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -200,10 +248,16 @@ beforeEach(() => {
   appConfigMock.prefetchFirstTurn = false;
   retrievalConfig.retrievalMode = 'normal';
   retrievalConfig.retrievalModeRolloutPercent = 100;
-  compositionMock.agenticSearch = vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never);
+  compositionMock.agenticSearch = vi.fn(async () => ok(agenticResult()) as never);
   graderHolder.fn = null;
   compositionMock.chatEventBatcher.record.mockClear();
   compositionMock.chatEventBatcher.flush.mockClear();
+  compositionMock.chatEventBatcher.updateEventMeta.mockClear();
+  compositionMock.chatEventBatcher.patchMeta.mockClear();
+  judgeRelevanceMock.mockClear();
+  judgeFaithfulnessMock.mockClear();
+  afterMock.mockClear();
+  afterCallbacks.length = 0;
 });
 
 describe('/api/chat', () => {
@@ -636,7 +690,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
       { content: 'drop this', similarity: 0.2, id: 2, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
     ];
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({ chunks: [allChunks[0]], rewrittenQuery: 'rewritten', outOfDomain: false }) as never,
+      ok(agenticResult({ chunks: [allChunks[0]] })) as never,
     );
     const { tools } = await captureToolsForAgentic();
     const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
@@ -658,7 +712,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
 
   it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({ chunks: [], rewrittenQuery: 'rewritten', outOfDomain: true }) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
@@ -715,7 +769,7 @@ async function captureToolsForAgentic() {
   return { tools: captured ?? null };
 }
 
-async function runAgenticStreamAndRead(query: string): Promise<string> {
+async function runAgenticStreamAndRead(query: string, extraBody: Record<string, unknown> = {}): Promise<string> {
   authMock.mockResolvedValue({ userId: 'user_test' });
   type Ctl = ReadableStreamDefaultController<{ type: string }>;
   let streamController: Ctl | null = null;
@@ -731,13 +785,15 @@ async function runAgenticStreamAndRead(query: string): Promise<string> {
     }
     return {
       toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
+      text: Promise.resolve('generated answer'),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
     };
   });
   const res = await appHandler.POST(
     new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: query }] }] }),
+      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: query }] }], ...extraBody }),
     }),
   );
   expect(res.status).toBe(200);
@@ -1013,7 +1069,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = vi.fn(async () => 'no' as const);
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({ chunks: [], rewrittenQuery: '', outOfDomain: true }) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
     );
     const body = await runAgenticStreamAndRead('where is my refund?');
     expect(body).toMatch(/data-guardrail/);
@@ -1026,7 +1082,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const chunk = { content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({ chunks: [chunk], rewrittenQuery: '', outOfDomain: false }) as never,
+      ok(agenticResult({ chunks: [chunk] })) as never,
     );
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).toMatch(/data-guardrail/);
@@ -1083,5 +1139,313 @@ describe('/api/chat answer cache (Session 10)', () => {
     await readBody(res);
     expect(createTicketMock).toHaveBeenCalled();
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)', () => {
+  const CHUNK_A = { content: 'fallback chunk A', similarity: 0.7, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
+  const CHUNK_B = { content: 'fallback chunk B', similarity: 0.6, id: 2, documentId: 2, fileName: null, page: null, sectionTitle: null, source: null };
+
+  async function runPendingAfterCallbacks(): Promise<void> {
+    const pending = afterCallbacks.splice(0);
+    for (const task of pending) task();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  beforeEach(() => {
+    retrievalConfig.retrievalMode = 'agentic';
+    compositionMock.answerCache.get.mockReset();
+    compositionMock.answerCache.get.mockResolvedValue(null);
+    compositionMock.answerCache.set.mockReset();
+    compositionMock.answerCache.set.mockResolvedValue(undefined);
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+  });
+
+  afterEach(() => {
+    (Math.random as unknown as { mockRestore: () => void }).mockRestore();
+  });
+
+  it('emits the soft degraded banner (no ticket offer), skips the cache and records degraded meta', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(
+        agenticResult({
+          chunks: [CHUNK_A, CHUNK_B],
+          degraded: true,
+          fallbackReason: 'grader_unavailable',
+          resultState: 'degraded',
+          gradingUnavailable: true,
+        }),
+      ) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    const body = await runAgenticStreamAndRead('obscure question?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(body).toMatch(/degraded/);
+    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
+    expect(body).not.toMatch(/offerTicket":true/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event.outOfDomain).toBe(false);
+    expect(event.hallucinationBlocked).toBe(false);
+    expect(event.meta).toMatchObject({
+      degraded: true,
+      fallbackReason: 'grader_unavailable',
+      isEmpty: false,
+      resultState: 'degraded',
+    });
+    expect(JSON.stringify(event)).not.toMatch(/offerTicket":true/);
+  });
+
+  it('delivers §A4 fallback instructions through the degraded tool result (T1)', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(
+        agenticResult({
+          chunks: [CHUNK_A],
+          degraded: true,
+          fallbackReason: 'all_filtered',
+          resultState: 'degraded',
+        }),
+      ) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    const tools = await captureToolsFromStreamText<{
+      searchDocumentation: {
+        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
+      };
+    }>();
+    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+      content: string;
+      similarity: number;
+    }>;
+    expect(result[0]!.similarity).toBe(-1);
+    expect(result[0]!.content).toContain('# Fallback Context');
+    expect(result[0]!.content).toContain("Note: I couldn't find a strongly matching document");
+    expect(result).toHaveLength(2);
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    const tools2 = await captureToolsFromStreamText<{
+      searchDocumentation: {
+        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
+      };
+    }>();
+    const ok2 = (await tools2?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+      content: string;
+    }>;
+    expect(ok2[0]!.content.startsWith('<reference')).toBe(true);
+    expect(JSON.stringify(ok2)).not.toContain('# Fallback Context');
+  });
+
+  it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', async () => {
+    vi.stubEnv('CHAT_SOFT_DEADLINE_MS', '40');
+    vi.stubEnv('CHAT_JUDGE_MAX_WALL_MS', '1');
+    try {
+      authMock.mockResolvedValue({ userId: 'user_test' });
+      streamTextImpl.mockImplementation((opts: { abortSignal?: AbortSignal }) => {
+        return {
+          toUIMessageStream: () =>
+            new ReadableStream<{ type: string }>({
+              start(c) {
+                opts?.abortSignal?.addEventListener('abort', () => c.close(), { once: true });
+              },
+            }) as unknown as ReadableStream<Uint8Array>,
+          text: Promise.resolve(''),
+          usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+        };
+      });
+      const res = await appHandler.POST(
+        new Request('http://localhost/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3305',
+            messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
+          }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let body = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        body += decoder.decode(value);
+      }
+      expect(body).toContain('data-guardrail');
+      expect(body).toContain('took too long');
+      expect(body).toContain('Sorry — this answer took longer than allowed');
+      const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as {
+        meta: Record<string, unknown>;
+        hallucinationBlocked: boolean;
+      };
+      expect(event.meta).toMatchObject({
+        degraded: true,
+        fallbackReason: 'turn_deadline',
+        resultState: 'degraded',
+      });
+      expect(event.hallucinationBlocked).toBe(false);
+      expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+      expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    const body = await runAgenticStreamAndRead('where is my refund?');
+    expect(body).toMatch(/data-guardrail/);
+    expect(body).toMatch(/offerTicket":true/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('skips runHallucinationCheck entirely when hallucinationCheckEnabled is off', async () => {
+    retrievalConfig.hallucinationCheckEnabled = false;
+    try {
+      compositionMock.agenticSearch = vi.fn(async () =>
+        ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+      );
+      graderHolder.fn = vi.fn(async () => 'no' as const);
+      const body = await runAgenticStreamAndRead('what is the policy?');
+      expect(graderHolder.fn).not.toHaveBeenCalled();
+      expect(body).not.toMatch(/data-guardrail/);
+      expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+      const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(event.hallucinationBlocked).toBe(false);
+    } finally {
+      retrievalConfig.hallucinationCheckEnabled = true;
+    }
+  });
+
+  it('treats a hallucination grader infra failure as pass (fail-open): no banner, answer cached', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => {
+      throw new Error('grade model down');
+    });
+    const body = await runAgenticStreamAndRead('what is the policy?');
+    expect(body).not.toMatch(/data-guardrail/);
+    expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
+    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event.hallucinationBlocked).toBe(false);
+  });
+
+  it('still blocks on an explicit grounded:false even when the turn is degraded', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(
+        agenticResult({
+          chunks: [CHUNK_A],
+          degraded: true,
+          fallbackReason: 'all_filtered',
+          resultState: 'degraded',
+        }),
+      ) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'no' as const);
+    const body = await runAgenticStreamAndRead('what is the policy?');
+    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
+    expect(body).toMatch(/offerTicket":true/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event.hallucinationBlocked).toBe(true);
+  });
+
+  it('enqueues the quality judge via after when sampled (rate honored), persisting judgeScores', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(false);
+    await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' });
+    await runPendingAfterCallbacks();
+    expect(compositionMock.chatEventBatcher.updateEventMeta).toHaveBeenCalledTimes(1);
+    const [turnId, patch] = compositionMock.chatEventBatcher.updateEventMeta.mock.calls[0]! as [
+      string,
+      { judgeScores: Record<string, unknown> },
+    ];
+    expect(turnId).toEqual(expect.any(String));
+    expect(patch.judgeScores).toMatchObject({
+      retrievalRelevance: 0.8,
+      faithfulness: 0.9,
+      citationPrecision: 0.85,
+    });
+    expect(typeof patch.judgeScores.judgedAt).toBe('string');
+  });
+
+  it('persists judge scores buffered-first; SQL only when the buffer missed (F4)', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(true);
+    await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3302' });
+    await runPendingAfterCallbacks();
+    expect(compositionMock.chatEventBatcher.patchMeta).toHaveBeenCalledTimes(1);
+    expect(compositionMock.chatEventBatcher.patchMeta.mock.calls[0]![1]).toHaveProperty('judgeScores');
+    expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+  });
+
+  it('keeps partial judge verdicts when one dimension returns null (F3)', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    judgeRelevanceMock.mockResolvedValueOnce(null as unknown as { score: number; reason: string });
+    compositionMock.chatEventBatcher.patchMeta.mockReturnValue(false);
+    await runAgenticStreamAndRead('what is the policy?', { turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3303' });
+    await runPendingAfterCallbacks();
+    const [, patch] = compositionMock.chatEventBatcher.updateEventMeta.mock.calls.at(-1)! as [
+      string,
+      { judgeScores: Record<string, unknown> },
+    ];
+    expect(patch.judgeScores).not.toHaveProperty('retrievalRelevance');
+    expect(patch.judgeScores.faithfulness).toBe(0.9);
+    expect(patch.judgeScores.citationPrecision).toBe(0.85);
+    expect(patch.judgeScores.judgedAt).toEqual(expect.any(String));
+  });
+
+  it('never samples the judge above the rate, on cache hits or empty retrievals', async () => {
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    await runAgenticStreamAndRead('what is the policy?');
+    await runPendingAfterCallbacks();
+    expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+
+    (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+    );
+    await runAgenticStreamAndRead('where is my refund?');
+    await runPendingAfterCallbacks();
+    expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+  });
+
+  it('skips the judge entirely when captureQueryText is disabled (privacy)', async () => {
+    retrievalConfig.captureQueryText = false;
+    try {
+      compositionMock.agenticSearch = vi.fn(async () =>
+        ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+      );
+      graderHolder.fn = vi.fn(async () => 'yes' as const);
+      (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
+      await runAgenticStreamAndRead('what is the policy?');
+      await runPendingAfterCallbacks();
+      expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
+      expect(compositionMock.chatEventBatcher.patchMeta).not.toHaveBeenCalled();
+    } finally {
+      retrievalConfig.captureQueryText = true;
+    }
   });
 });

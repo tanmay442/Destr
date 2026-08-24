@@ -1,75 +1,72 @@
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
-import type { QueryRewriter, DocumentGrader } from '@app/domain';
+import { logger } from '@app/domain';
+import type { QueryRewriter, DocumentGrader, FallbackReason, AgenticResultState } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
 import {
-  OUT_OF_DOMAIN_THRESHOLD,
+  GRADE_MAX_ROWS,
   AGENTIC_RETRIEVE_LIMIT,
   AGENTIC_MAX_RETRIES,
   AGENT_STEP_BUDGET,
+  FALLBACK_CHUNK_COUNT,
 } from '@app/domain';
+
+function isLenientFallbackVerdicts(value: unknown): boolean {
+  return Array.isArray(value) && (value as unknown as { lenientFallbackUsed?: boolean }).lenientFallbackUsed === true;
+}
 
 export interface AgenticDeps {
   search: SearchDeps;
   queryRewriter: QueryRewriter;
   documentGrader: DocumentGrader;
-  /** Runtime knobs. Each falls back to its frozen constant. */
   retrieveLimit?: number;
   maxRetries?: number;
-  /** Absolute cap on total grader LLM calls this turn. */
   stepBudget?: number;
-  outOfDomainThreshold?: number;
+  rewriteEnabled?: boolean;
+  gradeEnabled?: boolean;
+  similarityThreshold?: number;
+  hybridEnabled?: boolean;
 }
 
-/** Outcome of one agentic retrieval pass. */
 export interface AgenticResult {
   chunks: RetrievedChunk[];
-  /** Rewritten query used for the final retrieval. */
   rewrittenQuery: string;
-  /** True when no chunk cleared the relevance grade and similarity was below threshold. */
   outOfDomain: boolean;
+  isEmpty: boolean;
+  degraded: boolean;
+  fallbackReason: FallbackReason | null;
+  resultState: AgenticResultState;
+  gradingUnavailable?: boolean;
 }
 
-const GRADER_CONCURRENCY = 3;
+type PassOutcome =
+  | { kind: 'empty' }
+  | { kind: 'kept'; chunks: RetrievedChunk[] }
+  | { kind: 'fallback'; reason: Exclude<FallbackReason, 'grading_disabled'>; pool: RetrievedChunk[] }
+  | { kind: 'grading_disabled'; pool: RetrievedChunk[] };
 
-async function gradeBounded(
-  query: string,
-  rows: RetrievedChunk[],
-  deps: AgenticDeps,
-): Promise<Array<'yes' | 'no'>> {
-  const grades: Array<'yes' | 'no'> = new Array(rows.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < rows.length) {
-      const i = next++;
-      try {
-        grades[i] = await deps.documentGrader.grade(query, rows[i]!.content);
-      } catch {
-        grades[i] = 'no';
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(GRADER_CONCURRENCY, rows.length) }, worker));
-  return grades;
-}
-
-/**
- * Agentic retrieval loop: 1. rewrite query, 2. retrieve + grade/drop irrelevant
- * chunks, 3. retry with a fresh rewrite of the previous rewrite if nothing kept
- * (bounded by retries, a hard total grader-call budget, and a grading
- * concurrency cap), 4. report out-of-domain when the final pool is empty and
- * below threshold. Generation + hallucination check happen in the route after
- * `streamText` returns.
- */
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,
 ): Promise<Result<AgenticResult>> {
   if (originalQuery.trim() === '') {
-    return ok({ chunks: [], rewrittenQuery: originalQuery, outOfDomain: true });
+    return ok({
+      chunks: [],
+      rewrittenQuery: originalQuery,
+      outOfDomain: true,
+      isEmpty: true,
+      degraded: false,
+      fallbackReason: null,
+      resultState: 'empty',
+      gradingUnavailable: false,
+    });
   }
 
   try {
+    const rewriteOn = deps.rewriteEnabled !== false;
+    const gradeOn = deps.gradeEnabled !== false;
+
     const tryRewrite = async (query: string): Promise<string> => {
+      if (!rewriteOn) return query;
       try {
         return await deps.queryRewriter.rewrite(query);
       } catch {
@@ -79,41 +76,113 @@ export async function agenticSearch(
 
     const stepBudget = Math.max(1, deps.stepBudget ?? AGENT_STEP_BUDGET);
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
-    // Share the budget across all passes so a dense first retrieval cannot starve the retry loop.
-    const perPassBudget = Math.max(1, Math.floor(stepBudget / (maxRetries + 1)));
-    let budget = stepBudget;
 
-    const runPass = async (query: string): Promise<{ chunks: RetrievedChunk[]; maxSimilarity: number }> => {
-      const found = await searchChunks(query, { limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT }, deps.search);
+    const runPass = async (query: string): Promise<PassOutcome> => {
+      const found = await searchChunks(
+        query,
+        {
+          limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT,
+          threshold: deps.similarityThreshold,
+          hybridEnabled: deps.hybridEnabled,
+        },
+        deps.search,
+      );
       if (!found.ok) {
         throw new ExternalServiceError('Agentic retrieval failed', found.error);
       }
       const rows = found.value;
-      const graded = rows.slice(0, Math.min(perPassBudget, budget));
-      budget -= graded.length;
-      const grades = await gradeBounded(query, graded, deps);
-      const kept = graded.filter((_, i) => grades[i] === 'yes');
-      const maxSimilarity = graded.reduce((m, r) => Math.max(m, r.similarity), 0);
-      return { chunks: kept, maxSimilarity };
+      if (rows.length === 0) return { kind: 'empty' };
+      if (!gradeOn) return { kind: 'grading_disabled', pool: rows };
+
+      const graded = rows.slice(0, GRADE_MAX_ROWS);
+      if (rows.length > GRADE_MAX_ROWS) {
+        logger.warn('agentic retrieval: ranked tail dropped due to GRADE_MAX_ROWS cap', {
+          severity: 'warn',
+          event: 'agentic.ranked_tail_dropped',
+          total: rows.length,
+          graded: graded.length,
+          droppedCount: rows.length - GRADE_MAX_ROWS,
+        });
+      }
+      let verdicts: Array<'yes' | 'no'> | null;
+      try {
+        verdicts = await deps.documentGrader.gradeAll(query, graded.map((r) => r.content));
+      } catch {
+        verdicts = null;
+      }
+      if (verdicts === null) return { kind: 'fallback', reason: 'grader_unavailable', pool: rows };
+      if (isLenientFallbackVerdicts(verdicts)) {
+        logger.warn('agentic retrieval degraded; lenient fallback used', {
+          severity: 'warn',
+          event: 'agentic.degraded_fallback',
+          fallbackReason: 'lenient_fallback' as FallbackReason,
+          chunks: Math.min(rows.length, FALLBACK_CHUNK_COUNT),
+        });
+        return { kind: 'fallback', reason: 'lenient_fallback', pool: rows };
+      }
+      const kept = graded.filter((_, i) => verdicts[i] === 'yes');
+      if (kept.length === 0) return { kind: 'fallback', reason: 'all_filtered', pool: rows };
+      return { kind: 'kept', chunks: kept };
     };
 
     let rewritten = await tryRewrite(originalQuery);
-    let pass = await runPass(rewritten);
+    let outcome = await runPass(rewritten);
 
-    for (let attempt = 0; attempt < maxRetries && pass.chunks.length === 0 && budget > 0; attempt++) {
+    for (
+      let attempt = 0;
+      attempt < maxRetries && gradeOn && outcome.kind === 'empty';
+      attempt++
+    ) {
       rewritten = await tryRewrite(rewritten);
-      pass = await runPass(rewritten);
+      outcome = await runPass(rewritten);
     }
 
-    const outOfDomain =
-      pass.chunks.length === 0 &&
-      pass.maxSimilarity < (deps.outOfDomainThreshold ?? OUT_OF_DOMAIN_THRESHOLD);
-
-    return ok({
-      chunks: pass.chunks,
-      rewrittenQuery: rewritten,
-      outOfDomain,
-    });
+    switch (outcome.kind) {
+      case 'kept':
+        return ok({
+          chunks: outcome.chunks,
+          rewrittenQuery: rewritten,
+          outOfDomain: false,
+          isEmpty: false,
+          degraded: false,
+          fallbackReason: null,
+          resultState: 'ok',
+          gradingUnavailable: false,
+        });
+      case 'fallback':
+      case 'grading_disabled': {
+        const fallbackChunks = outcome.pool.slice(0, FALLBACK_CHUNK_COUNT);
+        const fallbackReason: FallbackReason =
+          outcome.kind === 'grading_disabled' ? 'grading_disabled' : outcome.reason;
+        logger.warn('agentic retrieval degraded; serving ungraded fallback chunks', {
+          severity: 'warn',
+          event: 'agentic.degraded_fallback',
+          fallbackReason,
+          chunks: fallbackChunks.length,
+        });
+        return ok({
+          chunks: fallbackChunks,
+          rewrittenQuery: rewritten,
+          outOfDomain: false,
+          isEmpty: false,
+          degraded: true,
+          fallbackReason,
+          resultState: 'degraded',
+          gradingUnavailable: fallbackReason === 'grader_unavailable',
+        });
+      }
+      case 'empty':
+        return ok({
+          chunks: [],
+          rewrittenQuery: rewritten,
+          outOfDomain: true,
+          isEmpty: true,
+          degraded: false,
+          fallbackReason: null,
+          resultState: 'empty',
+          gradingUnavailable: false,
+        });
+    }
   } catch (e) {
     return err(new ExternalServiceError('Agentic search failed', e));
   }

@@ -14,6 +14,8 @@ export function cacheFingerprint(cfg: AppConfig, effectiveMode: 'agentic' | 'nor
     agentStepBudget: cfg.agentStepBudget,
     agenticRetrieveLimit: cfg.agenticRetrieveLimit,
     agenticMaxRetries: cfg.agenticMaxRetries,
+    agenticQueryRewriteEnabled: cfg.agenticQueryRewriteEnabled,
+    agenticChunkGradingEnabled: cfg.agenticChunkGradingEnabled,
     gradeModel: cfg.gradeModel,
     orgName: cfg.orgName,
     audience: cfg.audience,

@@ -70,6 +70,9 @@ const { retrievalConfig } = vi.hoisted(() => ({
     agenticMaxRetries: 1,
     similarityThreshold: 0.5,
     hybridEnabled: true,
+    agenticQueryRewriteEnabled: true,
+    agenticChunkGradingEnabled: true,
+    hallucinationCheckEnabled: true,
     rerankerProvider: 'cosine' as const,
     gradeModel: undefined as string | undefined,
     answerCacheEnabled: true,
@@ -116,7 +119,12 @@ type MockComposition = {
   getHallucinationGrader: (
     cfg: unknown,
   ) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
-  chatEventBatcher: { record: ReturnType<typeof vi.fn>; flush: ReturnType<typeof vi.fn> };
+  chatEventBatcher: {
+    record: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn>;
+    updateEventMeta: ReturnType<typeof vi.fn>;
+    patchMeta: ReturnType<typeof vi.fn>;
+  };
   appendChatTurn: ReturnType<typeof vi.fn>;
 };
 
@@ -138,9 +146,19 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     logTicketEvent: vi.fn(),
     agenticSearch: vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never),
     getHallucinationGrader: vi.fn(() => graderHolder.fn),
-    chatEventBatcher: { record: vi.fn(), flush: vi.fn(async () => undefined) },
+    chatEventBatcher: {
+      record: vi.fn(),
+      flush: vi.fn(async () => undefined),
+      updateEventMeta: vi.fn(async () => true),
+      patchMeta: vi.fn(),
+    },
     appendChatTurn: vi.fn(async () => ({ ok: true, value: { conversationId: 'conv-1' } }) as never),
   },
+}));
+
+const { judgeRelevanceMock, judgeFaithfulnessMock } = vi.hoisted(() => ({
+  judgeRelevanceMock: vi.fn(async () => ({ score: 0.8, reason: 'relevant' })),
+  judgeFaithfulnessMock: vi.fn(async () => ({ score: 0.9, citationPrecision: 0.85, reason: 'grounded' })),
 }));
 
 vi.mock('@/composition', () => ({
@@ -148,6 +166,8 @@ vi.mock('@/composition', () => ({
   appConfig: appConfigMock,
   assertSameOrigin: assertSameOriginMock,
   TRACE_ENABLED: false,
+  judgeRelevance: judgeRelevanceMock,
+  judgeFaithfulness: judgeFaithfulnessMock,
 }));
 
 vi.mock('ai', async () => {
@@ -159,7 +179,32 @@ vi.mock('ai', async () => {
   };
 });
 
+vi.mock('next/server', () => ({
+  NextResponse: {
+    json: (body: unknown, init?: ResponseInit) => Response.json(body, init),
+  },
+  after: (task: () => void) => {
+    task();
+  },
+}));
+
 import * as appHandler from './route';
+
+function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    chunks: [
+      { content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
+    ],
+    rewrittenQuery: 'rewritten',
+    outOfDomain: false,
+    isEmpty: false,
+    degraded: false,
+    fallbackReason: null,
+    resultState: 'ok',
+    gradingUnavailable: false,
+    ...overrides,
+  };
+}
 
 const BASIC_BODY = JSON.stringify({
   messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
@@ -306,7 +351,7 @@ beforeEach(() => {
   appConfigMock.prefetchFirstTurn = false;
   retrievalConfig.retrievalMode = 'normal';
   retrievalConfig.retrievalModeRolloutPercent = 100;
-  compositionMock.agenticSearch = vi.fn(async () => ok({ chunks: [], rewrittenQuery: '', outOfDomain: false }) as never);
+  compositionMock.agenticSearch = vi.fn(async () => ok(agenticResult({ chunks: [] })) as never);
   compositionMock.searchChunks.mockReset();
   compositionMock.searchChunks.mockResolvedValue(ok(searchValue) as never);
   compositionMock.answerCache.get.mockReset();
@@ -315,6 +360,8 @@ beforeEach(() => {
   graderHolder.fn = null;
   compositionMock.chatEventBatcher.record.mockClear();
   compositionMock.chatEventBatcher.flush.mockClear();
+  compositionMock.chatEventBatcher.updateEventMeta.mockClear();
+  compositionMock.chatEventBatcher.patchMeta.mockClear();
   compositionMock.appendChatTurn.mockClear();
   compositionMock.getChatModel.mockClear();
 });
@@ -605,5 +652,128 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
     expect(useCaseText).toBe(legacyText);
     expect(useCaseText).toContain('data-citation');
     expect(compositionMock.searchChunks).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge sampling', () => {
+  function scriptAgenticSearch(overrides: Record<string, unknown>): void {
+    compositionMock.agenticSearch = vi.fn(async () => ok(agenticResult(overrides)) as never);
+  }
+
+  it('degraded top-4 fallback: identical soft-banner streams, identical events, no cache write', async () => {
+    retrievalConfig.retrievalMode = 'agentic';
+    scriptAgenticSearch({ degraded: true, fallbackReason: 'grader_unavailable', resultState: 'degraded', gradingUnavailable: true });
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    scriptStream({
+      toolTrace: { toolCallId: 'search-deg', toolName: 'searchDocumentation', input: { query: 'obscure question' } },
+      drive: (tools) => tools?.searchDocumentation?.execute({ query: 'obscure question' }),
+    });
+    const legacy = await post(false);
+    const useCase = await post(true);
+    await finishScriptedStreams();
+    const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
+    expect(useCaseText).toBe(legacyText);
+    expect(useCaseText).toContain('data-guardrail');
+    expect(useCaseText).toMatch(/Based on best-effort matches \(\d+\)/);
+    expect(useCaseText).not.toContain('"offerTicket":true');
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+    const calls = compositionMock.chatEventBatcher.record.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(deterministicEvent(calls[1]![0] as Record<string, unknown>)).toEqual(
+      deterministicEvent(calls[0]![0] as Record<string, unknown>),
+    );
+    const meta = (calls[0]![0] as { meta: Record<string, unknown> }).meta;
+    expect(meta).toMatchObject({
+      degraded: true,
+      fallbackReason: 'grader_unavailable',
+      isEmpty: false,
+      resultState: 'degraded',
+    });
+  });
+
+  it('hallucinationCheckEnabled off: guardrail skipped and cache excluded identically on both paths', async () => {
+    retrievalConfig.retrievalMode = 'agentic';
+    retrievalConfig.hallucinationCheckEnabled = false;
+    try {
+      scriptAgenticSearch({});
+      graderHolder.fn = vi.fn(async () => 'no' as const);
+      scriptStream({
+        toolTrace: { toolCallId: 'search-off', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
+        drive: (tools) => tools?.searchDocumentation?.execute({ query: 'dental coverage' }),
+      });
+      const legacy = await post(false);
+      const useCase = await post(true);
+      await finishScriptedStreams();
+      const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
+      expect(useCaseText).toBe(legacyText);
+      expect(useCaseText).not.toContain('data-guardrail');
+      expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+      const calls = compositionMock.chatEventBatcher.record.mock.calls;
+      expect(deterministicEvent(calls[1]![0] as Record<string, unknown>)).toEqual(
+        deterministicEvent(calls[0]![0] as Record<string, unknown>),
+      );
+    } finally {
+      retrievalConfig.hallucinationCheckEnabled = true;
+    }
+  });
+
+  it('true empty retrieval keeps the blocking wall identically on both paths', async () => {
+    retrievalConfig.retrievalMode = 'agentic';
+    scriptAgenticSearch({ chunks: [], outOfDomain: true, isEmpty: true, resultState: 'empty' });
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    scriptStream({
+      toolTrace: { toolCallId: 'search-empty', toolName: 'searchDocumentation', input: { query: 'where is my refund?' } },
+      drive: (tools) => tools?.searchDocumentation?.execute({ query: 'where is my refund?' }),
+    });
+    const legacy = await post(false);
+    const useCase = await post(true);
+    await finishScriptedStreams();
+    const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
+    expect(useCaseText).toBe(legacyText);
+    expect(useCaseText).toContain('"offerTicket":true');
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+  });
+
+  it('sampled judges run with identical context and persist identical scores on both paths', async () => {
+    retrievalConfig.retrievalMode = 'agentic';
+    scriptAgenticSearch({});
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const judgeBody = JSON.stringify({
+      turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+    });
+    scriptStream({
+      toolTrace: { toolCallId: 'search-judge', toolName: 'searchDocumentation', input: { query: 'dental coverage' } },
+      drive: (tools) => tools?.searchDocumentation?.execute({ query: 'dental coverage' }),
+    });
+    try {
+      const legacy = await post(false, judgeBody);
+      const useCase = await post(true, judgeBody);
+      await finishScriptedStreams();
+      await Promise.all([drain(legacy), drain(useCase)]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const calls = compositionMock.chatEventBatcher.updateEventMeta.mock.calls;
+      expect(calls).toHaveLength(2);
+      const [legacyTurnId, legacyPatch] = calls[0]! as [string, { judgeScores: Record<string, unknown> }];
+      const [useCaseTurnId, useCasePatch] = calls[1]! as [string, { judgeScores: Record<string, unknown> }];
+      expect(useCaseTurnId).toBe(legacyTurnId);
+      const stripJudgedAt = (patch: { judgeScores: Record<string, unknown> }) => ({
+        retrievalRelevance: patch.judgeScores.retrievalRelevance,
+        faithfulness: patch.judgeScores.faithfulness,
+        citationPrecision: patch.judgeScores.citationPrecision,
+      });
+      expect(stripJudgedAt(useCasePatch)).toEqual(stripJudgedAt(legacyPatch));
+      expect(stripJudgedAt(legacyPatch)).toMatchObject({
+        retrievalRelevance: 0.8,
+        faithfulness: 0.9,
+        citationPrecision: 0.85,
+      });
+      expect(compositionMock.chatEventBatcher.patchMeta).toHaveBeenCalledTimes(2);
+      expect(compositionMock.chatEventBatcher.patchMeta.mock.calls[0]![1]).toHaveProperty('judgeScores');
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 });

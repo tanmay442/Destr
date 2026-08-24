@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { getComposition, requireAdminRoute } from '@/composition';
+import { logger } from '@app/domain';
 
 async function refresh() {
   try {
@@ -15,7 +16,10 @@ async function refresh() {
 
 function hasValidCronSecret(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
+  if (!secret) {
+    logger.warn('[cron.rollup] CRON_SECRET is not set — cron auth will fail until it is configured');
+    return false;
+  }
   const header = req.headers.get('authorization');
   if (!header?.startsWith('Bearer ')) return false;
   const provided = Buffer.from(header.slice('Bearer '.length));
@@ -26,7 +30,7 @@ function hasValidCronSecret(req: Request): boolean {
 
 export async function GET(req: Request) {
   if (!hasValidCronSecret(req)) {
-    return new Response('Method Not Allowed', { status: 405 });
+    return new Response('Unauthorized', { status: 401 });
   }
   return refresh();
 }

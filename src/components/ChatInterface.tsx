@@ -18,8 +18,13 @@ import remarkGfm from 'remark-gfm';
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import type { MyUIMessage } from '@/composition';
-import type { CitationData } from '@/chat/types';
-import { MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
+import type { CitationData, GuardrailData } from '@/chat/types';
+import {
+  MAX_CONVERSATIONS_PER_USER,
+  MAX_MESSAGES_PER_CONVERSATION,
+  MAX_RESUME_MESSAGES,
+  DEGRADED_BANNER_MESSAGE,
+} from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
@@ -34,9 +39,13 @@ import {
   ThumbsUp,
   ThumbsDown,
   AlertCircle,
+  AlertTriangle,
 } from 'lucide-react';
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
+
+/** Default copy for the soft degraded banner when the server sends no custom message. */
+const DEGRADED_BANNER_FALLBACK = DEGRADED_BANNER_MESSAGE;
 
 function uuidv4(): string {
   const c = globalThis.crypto;
@@ -165,6 +174,52 @@ function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
   );
 }
 
+/** Red blocking wall: retrieval found nothing or the answer was not grounded — offers a ticket. */
+function GuardrailWallBanner() {
+  return (
+    <Alert
+      variant="destructive"
+      className="border-destructive/30 bg-destructive/10 text-destructive"
+      data-testid="chat-guardrail-wall"
+    >
+      <AlertCircle aria-hidden />
+      <div className="flex flex-col gap-1">
+        <AlertTitle>I couldn&apos;t find this in the documentation</AlertTitle>
+        <AlertDescription className="text-xs text-destructive/80">
+          I couldn&apos;t find a reliable answer in the official docs. Want me to open a
+          knowledge ticket so a human can follow up?
+        </AlertDescription>
+      </div>
+    </Alert>
+  );
+}
+
+/** Yellow soft banner for degraded best-effort answers (top-4 fallback); never offers a ticket. */
+function DegradedBanner({ message }: { message?: string | undefined }) {
+  return (
+    <Alert
+      className="border-warning/40 bg-warning/10 text-warning"
+      data-testid="chat-guardrail-degraded"
+      role="status"
+    >
+      <AlertTriangle aria-hidden />
+      <div className="flex flex-col gap-1">
+        <AlertTitle>Best-effort answer</AlertTitle>
+        <AlertDescription className="text-xs text-warning/80">
+          {message || DEGRADED_BANNER_FALLBACK}
+        </AlertDescription>
+      </div>
+    </Alert>
+  );
+}
+
+function AssistantGuardrail({ data }: { data: GuardrailData }) {
+  const isWall = data.outOfDomain || data.offerTicket;
+  if (isWall) return <GuardrailWallBanner />;
+  if (data.degraded) return <DegradedBanner message={data.message} />;
+  return null;
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   turnId,
@@ -184,6 +239,12 @@ const MessageItem = memo(function MessageItem({
     type: 'data-citation';
     data: CitationData;
   }>;
+  const guardrails = isUser
+    ? []
+    : (message.parts.filter((p) => p.type === 'data-guardrail') as Array<{
+        type: 'data-guardrail';
+        data: GuardrailData;
+      }>);
 
   return (
     <div
@@ -287,6 +348,10 @@ const MessageItem = memo(function MessageItem({
         </div>
       ) : null}
 
+      {guardrails.map((g, i) => (
+        <AssistantGuardrail key={i} data={g.data} />
+      ))}
+
       {!isUser && turnId ? (
         <FeedbackControl
           vote={vote}
@@ -337,8 +402,6 @@ export function ChatInterface({
   const [messageCount, setMessageCount] = useState(
     initialMessageCount ?? initialMessages.length,
   );
-  // Pending turns keyed by the id of the user message that started them, so a
-  // late/failed stream can never steal the turn of a newer message.
   const pendingTurnIdRef = useRef<Map<string, string>>(new Map());
   const retriedMessageIdRef = useRef<string | null>(null);
   const messagesRef = useRef<MyUIMessage[]>([]);
@@ -481,7 +544,6 @@ export function ChatInterface({
         .join('\n')
     : '';
 
-  // Resend the existing user message instead of appending a duplicate.
   const retryLastMessage = () => {
     const target = lastUserMessage;
     if (!target || isStreaming) return;
@@ -618,6 +680,37 @@ export function ChatInterface({
                 </div>
               );
             })()}
+
+          {(() => {
+            if ((status !== 'ready' && status !== 'error') || messages.length === 0) return null;
+            const last = messages[messages.length - 1];
+            if (!last || last.role !== 'assistant') return null;
+            const hasVisibleParts = last.parts.some(
+              (p) =>
+                p.type === 'text'
+                  ? p.text.trim().length > 0
+                  : p.type === 'data-citation' ||
+                    p.type === 'data-guardrail' ||
+                    String(p.type).startsWith('tool') ||
+                    p.type === 'reasoning' ||
+                    p.type === 'file' ||
+                    p.type === 'dynamic-tool',
+            );
+            if (hasVisibleParts) return null;
+            return (
+              <div
+                className="flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-card/60 px-4 py-3 text-sm text-muted-foreground"
+                data-testid="chat-empty-fallback"
+              >
+                <span>I couldn&apos;t finish that answer. Please try again.</span>
+                {lastUserText ? (
+                  <Button variant="outline" size="xs" onClick={retryLastMessage} disabled={isStreaming}>
+                    Retry
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })()}
 
           <div ref={anchorRef} />
 

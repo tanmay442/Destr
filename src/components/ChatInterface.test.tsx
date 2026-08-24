@@ -37,6 +37,14 @@ type Msg = {
           source?: string | null;
         };
       }
+    | { type: 'data-guardrail'; data: {
+        outOfDomain: boolean;
+        offerTicket: boolean;
+        degraded?: boolean;
+        message?: string;
+        isEmpty?: boolean;
+        resultState?: string;
+      } }
   >;
 };
 
@@ -127,6 +135,38 @@ describe('ChatInterface', () => {
     expect(
       screen.getAllByTestId('chat-quick-prompt').length,
     ).toBeGreaterThan(0);
+  });
+
+  it('shows a fallback bubble with Retry when an assistant turn ends empty (§T7)', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'help' }] },
+        { id: 'a1', role: 'assistant', parts: [] },
+      ],
+      sendMessage: vi.fn(),
+      status: 'ready',
+      error: undefined,
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-test" />);
+    const bubble = screen.getByTestId('chat-empty-fallback');
+    expect(bubble).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it('does not show the empty-fallback bubble when the answer has visible content', () => {
+    useChatMock.mockReturnValue({
+      messages: [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'help' }] },
+        ASSISTANT_WITH_CITATIONS,
+      ],
+      sendMessage: vi.fn(),
+      status: 'ready',
+      error: undefined,
+      stop: vi.fn(),
+    });
+    render(<ChatInterface conversationId="conv-test" />);
+    expect(screen.queryByTestId('chat-empty-fallback')).not.toBeInTheDocument();
   });
 
   it('shows status stages while the assistant is generating with no text yet', () => {
@@ -280,6 +320,70 @@ describe('ChatInterface', () => {
     render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByText('Hello!')).toBeInTheDocument();
     expect(screen.getByText('Hi there.')).toBeInTheDocument();
+  });
+
+  it('renders a soft degraded banner without a ticket offer for degraded turns', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Best-effort answer.' },
+          {
+            type: 'data-guardrail',
+            data: {
+              outOfDomain: false,
+              degraded: true,
+              isEmpty: false,
+              offerTicket: false,
+              message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+            },
+          },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const banner = screen.getByTestId('chat-guardrail-degraded');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toContain(
+      'Based on best-effort matches (4) — may be incomplete. Please verify.',
+    );
+    expect(screen.queryByTestId('chat-guardrail-wall')).not.toBeInTheDocument();
+    expect(banner.textContent).not.toMatch(/ticket/i);
+  });
+
+  it('falls back to the default copy when the degraded banner has no message', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Answer.' },
+          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: false, degraded: true, isEmpty: false } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const banner = screen.getByTestId('chat-guardrail-degraded');
+    expect(banner.textContent).toContain('may be incomplete. Please verify.');
+  });
+
+  it('renders the red blocking wall with a ticket offer for out-of-domain turns', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'I could not find this.' },
+          { type: 'data-guardrail', data: { outOfDomain: true, offerTicket: true } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const wall = screen.getByTestId('chat-guardrail-wall');
+    expect(wall).toBeInTheDocument();
+    expect(wall.textContent).toMatch(/knowledge ticket/i);
+    expect(screen.queryByTestId('chat-guardrail-degraded')).not.toBeInTheDocument();
   });
 
   it('sends a message when the form is submitted', async () => {
@@ -520,7 +624,6 @@ describe('ChatInterface', () => {
     const msgA = (callA[0] as { id: string }).id;
     const turnA = (callA[1] as { body: { turnId: string } }).body.turnId;
 
-    // First stream errors, freeing the composer; the retry starts a new turn.
     setupChat(
       [{ id: msgA, role: 'user', parts: [{ type: 'text', text: 'A?' }] }],
       { send: sendMessage, status: 'error' },
@@ -550,7 +653,6 @@ describe('ChatInterface', () => {
     view.rerender(<ChatInterface conversationId="conv-test" />);
     const chatOptions = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
 
-    // B finishes first; A's error onFinish arrives afterwards. B must keep turnB.
     act(() =>
       chatOptions.onFinish({
         message: assistantB,

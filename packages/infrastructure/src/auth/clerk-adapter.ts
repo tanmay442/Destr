@@ -139,13 +139,11 @@ const isPublicRoute = createRouteMatcher([
   '/icon',
   '/apple-icon',
   '/opengraph-image',
-  // QStash-signed worker: gated solely by its own signature verification.
   '/api/admin/ingest-worker(.*)',
-  // QStash DLQ + cron-secret-gated sweeper: each route enforces its own
-  // signature/secret check before mutating anything.
   '/api/admin/ingest-dead-letter(.*)',
   '/api/admin/queue/sweep(.*)',
   '/api/admin/analytics/rollup',
+  '/api/cron/refresh-quality',
   '/api/health',
 ]);
 
