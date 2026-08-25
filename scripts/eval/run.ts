@@ -30,12 +30,12 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
     (process.env.RERANKER_PROVIDER as 'cosine' | 'local' | 'cohere') ?? 'cosine',
   );
   const searchDeps = { chunks: Db.createChunkRepo(Db.db), embeddings: embeddingService, reranker };
-  const graders = Llm.getGraders();
+  const aux = Llm.getAuxModels();
   const chat = Llm.getChatModel();
   {
     const agenticCount = goldenQuestions.filter((q) => q.mode === 'agentic').length;
-    if (agenticCount > 0 && (!graders.queryRewriter || !graders.documentGrader)) {
-      console.warn(`[eval] agentic coverage degraded at startup: ${agenticCount} agentic question(s) will run as plain searchChunks (AGENTIC_ENABLED=false or graders unavailable) (EVAL-M4)`);
+    if (agenticCount > 0 && !aux.queryRewriter) {
+      console.warn(`[eval] agentic coverage degraded at startup: ${agenticCount} agentic question(s) will run as plain searchChunks (AGENTIC_ENABLED=false or aux models unavailable) (EVAL-M4)`);
     }
   }
 
@@ -45,15 +45,14 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
       return r.ok ? r.value.map((c) => ({ content: c.content, documentId: c.documentId })) : [];
     },
     agenticSearch: async (query: string) => {
-      if (!graders.queryRewriter || !graders.documentGrader) {
-        console.warn('[eval] agenticSearch degraded to plain searchChunks: graders unavailable (AGENTIC_ENABLED=false)');
+      if (!aux.queryRewriter) {
+        console.warn('[eval] agenticSearch degraded to plain searchChunks: aux models unavailable (AGENTIC_ENABLED=false)');
         const r = await searchChunks(query, {}, searchDeps);
         return r.ok ? r.value.map((c) => ({ content: c.content, documentId: c.documentId })) : [];
       }
       const result = await agenticSearch(query, {
         search: searchDeps,
-        queryRewriter: graders.queryRewriter,
-        documentGrader: graders.documentGrader,
+        queryRewriter: aux.queryRewriter,
       });
       return result.ok ? result.value.chunks.map((c) => ({ content: c.content, documentId: c.documentId })) : [];
     },
@@ -68,11 +67,11 @@ async function buildDeps(useReal: boolean): Promise<EvalDeps> {
       return out.text;
     },
     gradeFaithfulness: async (documents: string, generation: string) => {
-      if (!graders.hallucinationGrader) {
+      if (!aux.hallucinationGrader) {
         console.warn('[eval] no hallucination grader configured; using lexical fallback.');
         return documents.trim() === '' ? 'no' : 'yes';
       }
-      return graders.hallucinationGrader.grade(documents, generation);
+      return aux.hallucinationGrader.grade(documents, generation);
     },
     judgeRelevance: (question, snippets) => Llm.judgeRelevance(question, snippets).then((v) => v?.score ?? null),
     judgeFaithfulness: (documents, answer) => Llm.judgeFaithfulness(documents, answer).then((v) => v?.score ?? null),
