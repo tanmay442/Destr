@@ -291,10 +291,10 @@ export function SettingsClient() {
     'agenticMaxRetries',
     'similarityThreshold',
     'agenticQueryRewriteEnabled',
-    'agenticChunkGradingEnabled',
     'hallucinationCheckEnabled',
     'rerankerProvider',
-    'gradeModel',
+    'auxModel',
+    'judgeSampleRate',
     'answerCacheEnabled',
     'answerCacheTtlSec',
     'retrievalModeRolloutPercent',
@@ -594,10 +594,10 @@ export function SettingsClient() {
               <Card className="gap-0">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-base">Search &amp; reranking</CardTitle>
-                  <CardDescription>Vector threshold, hybrid, reranker and grade model.</CardDescription>
+                  <CardDescription>Vector threshold, hybrid, reranker and aux model.</CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
-                  {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'gradeModel'].map((key) => {
+                  {['retrievalMode', 'hybridEnabled', 'similarityThreshold', 'rerankerProvider', 'auxModel'].map((key) => {
                     const field = fieldMap.get(key);
                     if (!field) return null;
                     return (
@@ -638,7 +638,7 @@ export function SettingsClient() {
                   <Separator />
                   <div className="flex flex-col gap-4">
                     <h4 className="text-sm font-medium text-foreground">Agentic pipeline steps</h4>
-                    {['agenticQueryRewriteEnabled', 'agenticChunkGradingEnabled', 'hallucinationCheckEnabled'].map((key) => {
+                    {['agenticQueryRewriteEnabled', 'hallucinationCheckEnabled'].map((key) => {
                       const field = fieldMap.get(key);
                       if (!field) return null;
                       return (
