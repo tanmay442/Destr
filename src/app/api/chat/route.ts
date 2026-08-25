@@ -18,7 +18,6 @@ import {
   shouldCache,
   type EmittedCitation,
 } from '@app/application/chat';
-import type { AgenticResult } from '@app/application';
 import { NextResponse, after } from 'next/server';
 import type { AgenticResultState, ChatEventInput } from '@app/domain';
 import { sanitizeText } from '@/lib/sanitize';
@@ -28,12 +27,6 @@ import {
   CHAT_RATE_LIMIT,
   CHAT_MAX_BODY_BYTES,
   TOOL_CONTENT_CAP,
-  JUDGE_SAMPLE_RATE,
-  DEGRADED_BANNER_MESSAGE,
-  degradedBannerMessage,
-  DEGRADED_HEDGE_MAX_SIMILARITY,
-  FALLBACK_CHUNK_COUNT,
-  fallbackBlock,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
 } from '@app/domain';
@@ -165,10 +158,7 @@ function buildChatTools(deps: {
   userId: string;
   outOfDomainRef: { value: boolean };
   isEmptyRef: { value: boolean };
-  degradedRef: { value: boolean };
-  fallbackReasonRef: { value: string | null };
   resultStateRef: { value: AgenticResultState | null };
-  fallbackCountRef?: { value: number | null };
   metrics: TurnMetrics;
 }) {
   const {
@@ -181,12 +171,9 @@ function buildChatTools(deps: {
     userId: uid,
     outOfDomainRef,
     isEmptyRef,
-    degradedRef,
-    fallbackReasonRef,
     resultStateRef,
     metrics,
   } = deps;
-  const fallbackCountRef = deps.fallbackCountRef;
   let ticketOpenedInTurn = false;
   return {
     searchDocumentation: tool({
@@ -222,10 +209,7 @@ function buildChatTools(deps: {
           if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           outOfDomainRef.value = r.value.outOfDomain;
           isEmptyRef.value = r.value.isEmpty;
-          degradedRef.value = r.value.degraded;
-          fallbackReasonRef.value = r.value.fallbackReason;
           resultStateRef.value = r.value.resultState;
-          if (fallbackCountRef) fallbackCountRef.value = r.value.chunks.length;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -256,15 +240,6 @@ function buildChatTools(deps: {
         });
         for (const citation of emitCitations(matches)) {
           citationTarget.push(citation);
-        }
-        if (effectiveMode === 'agentic' && degradedRef.value) {
-          // With decent matches, skip the hedge preamble — it biases the
-          // post-stream hallucination judge toward false "ungrounded" verdicts.
-          const bestSimilarity = matches.reduce((mx, m) => Math.max(mx, m.similarity), 0);
-          if (bestSimilarity < DEGRADED_HEDGE_MAX_SIMILARITY) {
-            const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
-            return [{ content: block, similarity: -1 }, ...capped];
-          }
         }
         return capped;
       },
@@ -445,12 +420,9 @@ async function runHallucinationCheck(opts: {
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   enabled: boolean;
   outOfDomain: boolean;
-  degraded: boolean;
-  degradedMessage?: string;
   timeoutMs?: number;
-}): Promise<{ blocked: boolean; timedOut: boolean; downgradedToDegraded?: boolean }> {
-  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
-  const degradedMessage = opts.degradedMessage ?? DEGRADED_BANNER_MESSAGE;
+}): Promise<{ blocked: boolean; timedOut: boolean }> {
+  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain } = opts;
   if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
   if (outOfDomain) {
@@ -459,13 +431,6 @@ async function runHallucinationCheck(opts: {
       data: { outOfDomain: true, offerTicket: true },
     } as InferUIMessageChunk<MyUIMessage>);
     return { blocked: true, timedOut: false };
-  }
-
-  if (degraded) {
-    controller.enqueue({
-      type: 'data-guardrail',
-      data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: degradedMessage },
-    } as InferUIMessageChunk<MyUIMessage>);
   }
 
   let ungrounded = false;
@@ -499,11 +464,6 @@ async function runHallucinationCheck(opts: {
   }
 
   if (ungrounded) {
-    if (degraded) {
-      // Already serving best-effort context; keep the soft banner instead of
-      // stacking a ticket wall on a cited answer.
-      return { blocked: true, timedOut, downgradedToDegraded: true };
-    }
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: false, offerTicket: true },
@@ -682,10 +642,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const outOfDomainRef = { value: false };
   const isEmptyRef = { value: false };
-  const degradedRef = { value: false };
-  const fallbackReasonRef = { value: null as string | null };
   const resultStateRef = { value: null as AgenticResultState | null };
-  const fallbackCountRef = { value: null as number | null };
 
   const rawSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
   const maxSoftDeadlineMs = maxDuration * 1000 - 5_000;
@@ -705,7 +662,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
 
   const result = streamText({
     model: comp.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
+    system: buildSystemPrompt(cfg, prefetch),
     messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: AbortSignal.any([req.signal, softDeadlineSignal]),
@@ -719,10 +676,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       userId,
       outOfDomainRef,
       isEmptyRef,
-      degradedRef,
-      fallbackReasonRef,
       resultStateRef,
-      fallbackCountRef,
       metrics,
     }),
   });
@@ -757,7 +711,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           if (timedOut) {
             controller.enqueue({
               type: 'data-guardrail',
-              data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+              data: { outOfDomain: false, notice: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
             } as InferUIMessageChunk<MyUIMessage>);
             const tid = `deadline-${turnId}`;
             controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<MyUIMessage>);
@@ -775,16 +729,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
-          const degradedMessage = degradedRef.value
-            ? degradedBannerMessage(fallbackCountRef.value ?? FALLBACK_CHUNK_COUNT)
-            : DEGRADED_BANNER_MESSAGE;
           const hallucinationStart = performance.now();
           const maxDurationMs = maxDuration * 1000;
           const remainingWallMs = maxDurationMs - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;
           let hallucinationTimedOut = false;
-          let hallucinationDowngraded = false;
           if (timedOut) {
           } else if (hallucinationBudgetMs <= 0) {
             hallucinationTimedOut = true;
@@ -797,13 +747,10 @@ async function streamChatResponse(req: Request): Promise<Response> {
               hallucinationGrader: comp.getHallucinationGrader(cfg),
               enabled: cfg.hallucinationCheckEnabled,
               outOfDomain: outOfDomainRef.value,
-              degraded: degradedRef.value,
-              degradedMessage,
               timeoutMs: hallucinationBudgetMs,
             });
             hallucinationBlocked = hallucinationResult.blocked;
             hallucinationTimedOut = hallucinationResult.timedOut;
-            hallucinationDowngraded = hallucinationResult.downgradedToDegraded === true;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
           const isEmpty = isEmptyRef.value || outOfDomainRef.value;
@@ -817,15 +764,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
               isEmpty,
               ticketCreated: metrics.ticketCreated,
               cfg,
-              agentic: {
-                chunks: [],
-                rewrittenQuery: '',
-                outOfDomain: outOfDomainRef.value,
-                isEmpty: isEmptyRef.value,
-                degraded: degradedRef.value,
-                fallbackReason: fallbackReasonRef.value as AgenticResult['fallbackReason'],
-                resultState: resultStateRef.value ?? 'ok',
-              },
             })
           ) {
             try {
@@ -864,14 +802,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
-              ...(resultStateRef.value || timedOut
-                ? {
-                    degraded: degradedRef.value || timedOut,
-                    fallbackReason: timedOut ? 'turn_deadline' : fallbackReasonRef.value ?? undefined,
-                    isEmpty,
-                    resultState: timedOut ? 'degraded' : resultStateRef.value ?? undefined,
-                  }
-                : {}),
+              isEmpty,
+              resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              ...(timedOut ? { fallbackReason: 'turn_deadline' as const } : {}),
             }),
           });
           logger.info('chat.turn.timings', {
@@ -894,29 +827,17 @@ async function streamChatResponse(req: Request): Promise<Response> {
               turnId,
               text: persistedText || partialText,
               citations: finalCitations,
-              guardrail: hallucinationBlocked && !hallucinationDowngraded
+              guardrail: hallucinationBlocked
                 ? {
                     outOfDomain: outOfDomainRef.value,
                     offerTicket: true,
-                    ...(degradedRef.value ? { degraded: true, message: degradedMessage } : {}),
                   }
                 : timedOut
                   ? {
                       outOfDomain: false,
                       offerTicket: false,
-                      degraded: true,
+                      notice: true,
                       message: TURN_DEADLINE_BANNER_MESSAGE,
-                      isEmpty: false,
-                      resultState: 'degraded',
-                    }
-                  : degradedRef.value
-                  ? {
-                      outOfDomain: false,
-                      offerTicket: false,
-                      degraded: true,
-                      message: degradedMessage,
-                      isEmpty: false,
-                      resultState: resultStateRef.value ?? 'degraded',
                     }
                   : null,
             }),
@@ -924,7 +845,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           if (
             turnId &&
             !timedOut &&
-            Math.random() < JUDGE_SAMPLE_RATE &&
+            Math.random() < cfg.judgeSampleRate &&
             finalCitations.length > 0 &&
             !isEmpty &&
             performance.now() - turnStart <= judgeMaxWallMs &&
@@ -960,8 +881,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
                 citationCount: dedupeCitations(capturedCitations).length,
                 meta: buildEventMeta({
                   ticketId: metrics.ticketId,
-                  degraded: degradedRef.value || undefined,
-                  fallbackReason: fallbackReasonRef.value ?? undefined,
                   resultState: resultStateRef.value ?? undefined,
                   isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
                 }),

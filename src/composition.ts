@@ -178,20 +178,17 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig): AgenticDeps {
-  const graders = Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel);
-  if ((cfg.agenticQueryRewriteEnabled && !graders.queryRewriter) ||
-    (cfg.agenticChunkGradingEnabled && !graders.documentGrader)) {
+  const aux = Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel);
+  if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
   return {
     search: getSearchDeps(cfg),
-    queryRewriter: graders.queryRewriter!,
-    documentGrader: graders.documentGrader!,
+    queryRewriter: aux.queryRewriter!,
     retrieveLimit: cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
-    gradeEnabled: cfg.agenticChunkGradingEnabled,
     similarityThreshold: cfg.similarityThreshold,
     hybridEnabled: cfg.hybridEnabled,
   };
@@ -248,10 +245,8 @@ function createComposition() {
           rewrittenQuery: query,
           outOfDomain: isEmpty,
           isEmpty,
-          degraded: false,
           fallbackReason: null,
           resultState: (isEmpty ? 'empty' : 'ok') as AgenticResultState,
-          gradingUnavailable: false,
         });
       }
       try {
@@ -260,7 +255,7 @@ function createComposition() {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
     },
-    getHallucinationGrader: (cfg: AppConfig) => Llm.getGraders(undefined, cfg.gradeModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
