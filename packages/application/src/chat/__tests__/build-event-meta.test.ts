@@ -30,20 +30,14 @@ describe('buildEventMeta', () => {
 });
 
 describe('buildEventMeta quality and agentic metadata', () => {
-  it('writes degraded when defined, including false', () => {
-    expect(buildEventMeta({ degraded: true })).toEqual({ degraded: true });
-    expect(buildEventMeta({ degraded: false })).toEqual({ degraded: false });
-    expect(buildEventMeta({ degraded: undefined })).toEqual({});
-  });
-
   it('writes fallbackReason / isEmpty / resultState only when defined', () => {
     expect(
       buildEventMeta({
-        fallbackReason: 'grader_unavailable',
+        fallbackReason: 'turn_deadline',
         isEmpty: false,
-        resultState: 'degraded',
+        resultState: 'ok',
       }),
-    ).toEqual({ fallbackReason: 'grader_unavailable', isEmpty: false, resultState: 'degraded' });
+    ).toEqual({ fallbackReason: 'turn_deadline', isEmpty: false, resultState: 'ok' });
     expect(
       buildEventMeta({
         fallbackReason: undefined,
@@ -51,6 +45,10 @@ describe('buildEventMeta quality and agentic metadata', () => {
         resultState: undefined,
       }),
     ).toEqual({});
+  });
+
+  it('never emits a degraded key', () => {
+    expect(Object.keys(buildEventMeta({}))).not.toContain('degraded');
   });
 
   it('stores judgeScores as a nested object carrying judgedAt', () => {
@@ -70,18 +68,16 @@ describe('buildEventMeta quality and agentic metadata', () => {
       buildEventMeta({
         rewritten: true,
         documentIds: [1, 2],
-        degraded: true,
-        fallbackReason: 'all_filtered',
+        fallbackReason: 'turn_deadline',
         isEmpty: false,
-        resultState: 'degraded',
+        resultState: 'empty',
       }),
     ).toEqual({
       rewritten: true,
       documentIds: [1, 2],
-      degraded: true,
-      fallbackReason: 'all_filtered',
+      fallbackReason: 'turn_deadline',
       isEmpty: false,
-      resultState: 'degraded',
+      resultState: 'empty',
     });
   });
 });

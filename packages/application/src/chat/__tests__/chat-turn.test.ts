@@ -12,10 +12,8 @@ function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
     rewrittenQuery: 'rewritten',
     outOfDomain: false,
     isEmpty: false,
-    degraded: false,
     fallbackReason: null,
     resultState: 'ok',
-    gradingUnavailable: false,
     ...overrides,
   };
 }
@@ -62,10 +60,10 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
     similarityThreshold: 0.5,
     hybridEnabled: true,
     agenticQueryRewriteEnabled: true,
-    agenticChunkGradingEnabled: true,
     hallucinationCheckEnabled: true,
+    judgeSampleRate: 0.02,
     rerankerProvider: 'cosine',
-    gradeModel: undefined,
+    auxModel: undefined,
     answerCacheEnabled: true,
     answerCacheTtlSec: 3600,
     captureQueryText: true,
@@ -367,7 +365,7 @@ describe('chatTurn', () => {
     expect(ctx.chatModel).toBe('gpt-4o-mini');
     expect(ctx.fingerprint).toContain('"mode":"agentic"');
     expect(ctx.fingerprint).toContain('"retrievalMode":"agentic"');
-    expect(ctx.fingerprint).toContain('"promptVersion":3');
+    expect(ctx.fingerprint).toContain('"promptVersion":4');
   });
 
   it('does not cache an out-of-domain answer', async () => {
@@ -841,48 +839,13 @@ describe('chat history persistence', () => {
   });
 });
 
-describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)', () => {
+describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
   function agenticBody(): Record<string, unknown> {
     return {
       turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
       messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'what is the policy?' }] }],
     };
   }
-
-  it('emits the soft degraded banner, skips the cache and records degraded meta', async () => {
-    const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () =>
-        ok(agenticOk({ degraded: true, fallbackReason: 'grader_unavailable', resultState: 'degraded', gradingUnavailable: true })),
-      ),
-      hallucinationGrader: () => async () => 'yes' as const,
-    });
-    const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
-    if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
-    const parts = await readParts(result.stream);
-    const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
-      data: Record<string, unknown>;
-    };
-    expect(guardrail.data).toMatchObject({
-      degraded: true,
-      isEmpty: false,
-      offerTicket: false,
-    });
-    expect(String(guardrail.data.message)).toMatch(/Based on best-effort matches \(\d+\)/);
-    expect(fakes.answerCache.set).not.toHaveBeenCalled();
-    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event.outOfDomain).toBe(false);
-    expect(event.hallucinationBlocked).toBe(false);
-    expect(event.meta).toMatchObject({
-      degraded: true,
-      fallbackReason: 'grader_unavailable',
-      isEmpty: false,
-      resultState: 'degraded',
-    });
-  });
 
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     const { deps, fakes } = makeDeps({
@@ -942,31 +905,7 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
   });
 
-  it('downgrades an explicit grounded:no to the soft banner when the turn is already degraded', async () => {
-    const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () =>
-        ok(agenticOk({ degraded: true, fallbackReason: 'all_filtered', resultState: 'degraded' })),
-      ),
-      hallucinationGrader: () => async () => 'no' as const,
-    });
-    const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
-    if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
-    const parts = await readParts(result.stream);
-    const guardrails = parts.filter((p) => (p as { type: string }).type === 'data-guardrail') as Array<{
-      data: Record<string, unknown>;
-    }>;
-    expect(guardrails).toHaveLength(1);
-    expect(guardrails[0]?.data).toMatchObject({ degraded: true, offerTicket: false });
-    expect(fakes.answerCache.set).not.toHaveBeenCalled();
-    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event.hallucinationBlocked).toBe(true);
-  });
-
-  it('still offers a ticket on grounded:no when the turn is not degraded', async () => {
+  it('still offers a ticket on an explicit grounded:no', async () => {
     const { deps } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       agenticSearch: vi.fn(async () => ok(agenticOk())),
@@ -992,93 +931,79 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
       },
     );
     const judgeScheduler = vi.fn((task: () => Promise<void>) => void task());
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      const { deps, fakes } = makeDeps({
-        cfg: makeCfg({ retrievalMode: 'agentic' }),
-        agenticSearch: vi.fn(async () => ok(agenticOk())),
-        hallucinationGrader: () => async () => 'yes' as const,
-        judgeScheduler,
-        qualityJudge,
-      });
-      const { captured, closeLlm } = captureTools();
-      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
-      if (result.kind !== 'stream') throw new Error('expected stream');
-      await captured.current?.searchDocumentation?.execute({ query: 'q' });
-      closeLlm();
-      await readParts(result.stream);
-      expect(judgeScheduler).toHaveBeenCalledTimes(1);
-      expect(qualityJudge).toHaveBeenCalledTimes(1);
-      expect(qualityJudge.mock.calls[0]![0]).toEqual({
-        question: 'what is the policy?',
-        snippets: ['The dental plan covers two cleanings per year.'],
-        documents: 'The dental plan covers two cleanings per year.',
-        answer: 'Hello world',
-        turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
-      });
-      expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
-    } finally {
-      randomSpy.mockRestore();
-    }
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1 }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      hallucinationGrader: () => async () => 'yes' as const,
+      judgeScheduler,
+      qualityJudge,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(judgeScheduler).toHaveBeenCalledTimes(1);
+    expect(qualityJudge).toHaveBeenCalledTimes(1);
+    expect(qualityJudge.mock.calls[0]![0]).toEqual({
+      question: 'what is the policy?',
+      snippets: ['The dental plan covers two cleanings per year.'],
+      documents: 'The dental plan covers two cleanings per year.',
+      answer: 'Hello world',
+      turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+    });
+    expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
   });
 
-  it('never enqueues the judge above the sample rate or without citations', async () => {
+  it('never enqueues the judge when the sample rate suppresses it or citations are absent', async () => {
     const qualityJudge = vi.fn(async () => undefined);
     const judgeScheduler = vi.fn();
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
-    try {
-      const { deps } = makeDeps({
-        cfg: makeCfg({ retrievalMode: 'agentic' }),
-        agenticSearch: vi.fn(async () => ok(agenticOk())),
-        judgeScheduler,
-        qualityJudge,
-      });
-      const { captured, closeLlm } = captureTools();
-      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
-      if (result.kind !== 'stream') throw new Error('expected stream');
-      await captured.current?.searchDocumentation?.execute({ query: 'q' });
-      closeLlm();
-      await readParts(result.stream);
-      expect(judgeScheduler).not.toHaveBeenCalled();
+    const { deps } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 0 }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      hallucinationGrader: () => async () => 'yes' as const,
+      judgeScheduler,
+      qualityJudge,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(judgeScheduler).not.toHaveBeenCalled();
 
-      randomSpy.mockReturnValue(0);
-      const deps2 = makeDeps({
-        cfg: makeCfg({ retrievalMode: 'agentic' }),
-        judgeScheduler,
-        qualityJudge,
-      }).deps;
-      const result2 = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps2);
-      if (result2.kind !== 'stream') throw new Error('expected stream');
-      closeLlm();
-      await readParts(result2.stream);
-      expect(judgeScheduler).not.toHaveBeenCalled();
-    } finally {
-      randomSpy.mockRestore();
-    }
+    const deps2 = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1 }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      judgeScheduler,
+      qualityJudge,
+    }).deps;
+    const result2 = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps2);
+    if (result2.kind !== 'stream') throw new Error('expected stream');
+    closeLlm();
+    await readParts(result2.stream);
+    expect(judgeScheduler).not.toHaveBeenCalled();
   });
 
   it('skips the judge when captureQueryText is disabled (privacy)', async () => {
     const qualityJudge = vi.fn(async () => undefined);
     const judgeScheduler = vi.fn();
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      const { deps } = makeDeps({
-        cfg: makeCfg({ retrievalMode: 'agentic', captureQueryText: false }),
-        agenticSearch: vi.fn(async () => ok(agenticOk())),
-        judgeScheduler,
-        qualityJudge,
-      });
-      const { captured, closeLlm } = captureTools();
-      const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
-      if (result.kind !== 'stream') throw new Error('expected stream');
-      await captured.current?.searchDocumentation?.execute({ query: 'q' });
-      closeLlm();
-      await readParts(result.stream);
-      expect(judgeScheduler).not.toHaveBeenCalled();
-      expect(qualityJudge).not.toHaveBeenCalled();
-    } finally {
-      randomSpy.mockRestore();
-    }
+    const { deps } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1, captureQueryText: false }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      judgeScheduler,
+      qualityJudge,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(judgeScheduler).not.toHaveBeenCalled();
+    expect(qualityJudge).not.toHaveBeenCalled();
   });
 });
 
@@ -1110,9 +1035,9 @@ describe('§T6 soft turn deadline', () => {
 
     const guardrail = parts.find(
       (p) => (p as { type?: string }).type === 'data-guardrail',
-    ) as { data: { message: string; degraded: boolean; offerTicket: boolean } } | undefined;
+    ) as { data: { message: string; notice: boolean; offerTicket: boolean } } | undefined;
     expect(guardrail?.data.message).toContain('took too long');
-    expect(guardrail?.data.degraded).toBe(true);
+    expect(guardrail?.data.notice).toBe(true);
     expect(guardrail?.data.offerTicket).toBe(false);
     expect(
       parts.some(
@@ -1126,10 +1051,10 @@ describe('§T6 soft turn deadline', () => {
       hallucinationBlocked: boolean;
     };
     expect(event.meta).toMatchObject({
-      degraded: true,
       fallbackReason: 'turn_deadline',
-      resultState: 'degraded',
     });
+    expect(event.meta).not.toHaveProperty('resultState');
+    expect(event.meta).not.toHaveProperty('degraded');
     expect(event.hallucinationBlocked).toBe(false);
     expect(deps.answerCache.set).not.toHaveBeenCalled();
   });

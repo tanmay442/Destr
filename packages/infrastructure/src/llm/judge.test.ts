@@ -196,7 +196,7 @@ describe('dependency injection', () => {
     ) as unknown as ChatModelProvider;
     generateTextMock.mockResolvedValue({ text: '{"score":1,"reason":"r"}' });
     await judgeRelevance('q', ['d'], { auxModelId: 'custom-aux-model', modelProvider });
-    expect(modelProvider).toHaveBeenCalledWith('custom-grade-model');
+    expect(modelProvider).toHaveBeenCalledWith('custom-aux-model');
     expect(getChatModelMock).not.toHaveBeenCalled();
   });
 

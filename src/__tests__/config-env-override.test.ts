@@ -10,7 +10,7 @@ const ENV_KEYS = [
   'AGENTIC_MAX_RETRIES',
   'HYBRID_ENABLED',
   'RERANKER_PROVIDER',
-  'GRADE_MODEL',
+  'AUX_MODEL',
   'ANSWER_CACHE_ENABLED',
   'ANSWER_CACHE_TTL_SEC',
   'AGENTIC_ENABLED',
@@ -39,7 +39,7 @@ describe('config/app.config env overrides', () => {
     vi.stubEnv('PARENT_CHILD_MODE', 'window');
     vi.stubEnv('PARENT_CHILD_WINDOW', '4');
     vi.stubEnv('HYBRID_ENABLED', 'false');
-    vi.stubEnv('GRADE_MODEL', 'gpt-4o-mini');
+    vi.stubEnv('AUX_MODEL', 'gpt-4o-mini');
     vi.resetModules();
     const { default: appConfig } = await import('../../config/app.config');
     expect(appConfig.retrievalMode).toBe('normal');
@@ -54,7 +54,7 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.parentChildMode).toBe('window');
     expect(appConfig.parentChildWindow).toBe(4);
     expect(appConfig.hybridEnabled).toBe(false);
-    expect(appConfig.gradeModel).toBe('gpt-4o-mini');
+    expect(appConfig.auxModel).toBe('gpt-4o-mini');
   });
 
   it('falls back to domain defaults when env vars are unset', async () => {
@@ -73,6 +73,6 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.parentChildMode).toBe('parent');
     expect(appConfig.parentChildWindow).toBe(2);
     expect(appConfig.hybridEnabled).toBe(true);
-    expect(appConfig.gradeModel).toBeUndefined();
+    expect(appConfig.auxModel).toBeUndefined();
   });
 });
