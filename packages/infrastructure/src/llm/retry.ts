@@ -5,7 +5,7 @@ const BASE_DELAY_MS = 200;
 const MAX_DELAY_MS = 5_000;
 
 export const EMBED_REQUEST_TIMEOUT_MS = 120_000;
-export const GRADE_REQUEST_TIMEOUT_MS = 60_000;
+export const AUX_REQUEST_TIMEOUT_MS = 60_000;
 
 export function isDeadlineAbort(err: unknown): boolean {
   const name = (err as { name?: string } | null)?.name;
