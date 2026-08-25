@@ -99,12 +99,12 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 Five tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
 1. **Statistics**: turns, hallucination blocks, out-of-domain refusals, self-serve rate; 12-week SVG `LineChart` with 5% hallucination threshold; token-cost estimate; 7-day `ActivityBars`.
 2. **Performance**: cache-hit rate + trend; p50/p95 latency (`retrieve`, `generate`, `total`); Agentic vs Vector avg tokens/query; top-5 cache-buster queries; agentic retry rate.
-3. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) and the degraded-answer rate over a trailing 7-day window — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
+3. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) over a trailing 7-day window (a `judgeSampleRate` fraction of answered turns is scored) — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
 4. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
 5. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
 
 ### Quality Review Queue (`/admin/quality`)
-- Lists up to 20 recent **degraded** (top-4 fallback) and **guardrail-blocked** turns each, showing the query, retrieved chunk ids, judge scores when sampled, and any fallback reason from `chat_events.meta`.
+- Lists up to 20 recent **guardrail-blocked** turns (hallucination-check refusals), showing the query, retrieved chunk ids, and judge scores when sampled.
 - Reviewers record a verdict — `good`, `bad`, or `docs_missing` — with an optional note; one verdict per turn per reviewer (unique index), stored in `quality_reviews`.
 - Reviews feed the analytics quality trends; the daily `/api/cron/refresh-quality` job snapshots judge averages (see §8.6).
 
@@ -135,7 +135,7 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 | `app_settings` | Single-row dynamic runtime config | `id` (fixed 1), `overrides` (JSONB), `version`, `updated_at`, `updated_by` |
 | `audit_events` | Central audit trail | `id`, `kind`, `action`, `actor_id`, `target_type`, `target_id`, `details` (JSONB), `source_ref`, `at` |
 | `audit_dead_letter` | Fallback store for failed audit writes | `id`, `kind`, `payload` (JSONB), `error`, `attempted_at`, `replayed` |
-| `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB — quality flags `degraded`/`fallbackReason`/`isEmpty`/`resultState`, sampled `judgeScores`, `turn_deadline`) |
+| `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB — quality flags `fallbackReason`/`isEmpty`/`resultState`, sampled `judgeScores`; `fallbackReason` is written only for turn-deadline notices) |
 | `chat_feedback` | Sentiment votes | `turn_id` (PK, FK→`chat_events`), `feedback` (±1), `document_ids`, `chunk_ids`, `created_at` |
 | `quality_reviews` | Human verdicts on judge-flagged turns | `id` (serial PK), `turn_id` (FK→`chat_events.turn_id`, ON DELETE CASCADE), `reviewer_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `verdict` (`good`/`bad`/`docs_missing`), `note`, `created_at`; unique `(turn_id, reviewer_id)` |
 | `chat_conversations` | Persisted user chats (one row per conversation) | `id` (uuid PK), `user_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `title`, `message_count`, `created_at`, `updated_at` (last activity; retention key) |
@@ -160,7 +160,7 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 ### Turn Answer Cache
 - **Deterministic keying**: normalizes whitespace/casing/punctuation; incorporates embedding + chat model identifiers and the runtime retrieval fingerprint (mode, similarity threshold, hybrid flag, reranker). Keys are `rag:answer:<sha256>`, namespaced per user — a cached answer is never served cross-user.
 - **Providers**: `InMemoryAnswerCache` (LRU + TTL, 5,000-key sweep) for local dev; `UpstashAnswerCache` (Redis, TTL in **seconds** per `ANSWER_CACHE_TTL_SEC`, default 3600; value base64-wrapped) when Upstash is configured. Cache read/write failures are swallowed so caching never breaks the request path.
-- **Cache exclusion (`shouldCache`)**: turns that were guardrail-blocked, produced empty output, or returned a degraded top-4 fallback are never cached, so a retrieval outage can't poison answers for later identical queries.
+- **Cache exclusion (`shouldCache`)**: turns that were guardrail-blocked, hit the empty/out-of-domain wall, created a ticket, or whose hallucination check timed out are never cached, so a failed turn can't poison answers for later identical queries.
 
 ---
 
@@ -170,13 +170,13 @@ Located in `scripts/eval/` (`run.ts`, `harness.ts`, `golden.ts`):
 
 ```bash
 pnpm eval          # local mock evaluation (deterministic deps)
-EVAL_REAL=1 pnpm eval   # live model evaluation with LLM grading (scheduled weekly in CI)
+EVAL_REAL=1 pnpm eval   # live model evaluation against keyed providers (scheduled weekly in CI)
 ```
 
 - **Golden dataset (`golden.ts`)**: phrase-based — `{id, question, mustMention, forbidden?, refusalExpected?}`, plus agentic-mode entries (`mode: 'agentic'`) with optional `expectedDocIds` reference chunk ids; runs lacking `expectedDocIds` are flagged via a doc-hit gate warning.
 - **Metrics (0–1)**:
-  - **Faithfulness**: LLM hallucination grader per response.
-  - **Correctness**: lexical `mustMention` match ratio (not LLM-graded).
+  - **Faithfulness**: hallucination-checker verdict per response.
+  - **Correctness**: lexical `mustMention` match ratio (not model-judged).
   - **ContextRelevancy**: approximation of retrieval recall (`mustMention` present in retrieved context).
   - A query passes when `faithfulness === 1`, no `forbiddenHit` in the answer, and `correctness >= 0.5`; refusal-expected queries are scored separately.
 - **Thresholds**: `EVAL_FAITHFULNESS_THRESHOLD` (default 0.7) gates live runs; CI (`.github/workflows/eval.yml`) runs weekly and auto-opens/closes failure issues. Every PR to `master` additionally runs a **mock eval gate** (`eval-mock` job) that uploads the deterministic `eval/golden-report.json` as a build artifact.
@@ -254,4 +254,4 @@ Uploads are processed asynchronously through QStash (`POST /api/admin/ingest-wor
 
 ### 8.6 Quality refresh cron (`/api/cron/refresh-quality`)
 
-Daily Vercel cron (02:15 UTC, after the 02:00 analytics rollup) that refreshes quality aggregates: it re-runs `refreshDailyStats()` and snapshots the trailing 7-day judge averages (faithfulness, retrieval relevance, degraded rate), logging a structured `cron.refresh_quality` event with the results. Auth mirrors `/api/admin/analytics/rollup`: `GET` requires `Authorization: Bearer <CRON_SECRET>` (401 otherwise, warn-once when `CRON_SECRET` is unset); there is no admin `POST` variant. The route is middleware-exempt for the same reason as §8.5's cron routes — it enforces its own secret.
+Daily Vercel cron (02:15 UTC, after the 02:00 analytics rollup) that refreshes quality aggregates: it re-runs `refreshDailyStats()` and snapshots the trailing 7-day judge averages (faithfulness, retrieval relevance), logging a structured `cron.refresh_quality` event with the results. Auth mirrors `/api/admin/analytics/rollup`: `GET` requires `Authorization: Bearer <CRON_SECRET>` (401 otherwise, warn-once when `CRON_SECRET` is unset); there is no admin `POST` variant. The route is middleware-exempt for the same reason as §8.5's cron routes — it enforces its own secret.
