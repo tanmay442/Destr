@@ -231,7 +231,7 @@ describe('toStoredMessage whitelisting', () => {
     expect(stored.metadata.guardrail).toEqual({ outOfDomain: false, offerTicket: true });
   });
 
-  it('stores the degraded soft-banner fields from a data-guardrail part', () => {
+  it('stores the notice soft-banner fields from a data-guardrail part', () => {
     const stored = toStoredMessage({
       id: 'm4',
       role: 'assistant',
@@ -242,10 +242,10 @@ describe('toStoredMessage whitelisting', () => {
           data: {
             outOfDomain: false,
             offerTicket: false,
-            degraded: true,
+            notice: true,
             message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
             isEmpty: false,
-            resultState: 'degraded',
+            resultState: 'ok',
           },
         },
       ],
@@ -253,10 +253,10 @@ describe('toStoredMessage whitelisting', () => {
     expect(stored.metadata.guardrail).toEqual({
       outOfDomain: false,
       offerTicket: false,
-      degraded: true,
+      notice: true,
       message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
       isEmpty: false,
-      resultState: 'degraded',
+      resultState: 'ok',
     });
   });
 });

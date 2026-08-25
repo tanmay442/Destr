@@ -17,7 +17,7 @@ import {
   RERANK_TOP_N as DEFAULT_RERANK_TOP_N,
   RRF_K as DEFAULT_RRF_K,
   LEXICAL_WEIGHT as DEFAULT_LEXICAL_WEIGHT,
-  GRADE_MODEL as DEFAULT_GRADE_MODEL,
+  AUX_MODEL as DEFAULT_AUX_MODEL,
   OUT_OF_DOMAIN_THRESHOLD as DEFAULT_OUT_OF_DOMAIN_THRESHOLD,
   AGENT_STEP_BUDGET as DEFAULT_AGENT_STEP_BUDGET,
   AGENTIC_RETRIEVE_LIMIT as DEFAULT_AGENTIC_RETRIEVE_LIMIT,
@@ -64,7 +64,7 @@ function resolveRuntimeConfig(env: EnvSource) {
   const RRF_K = finiteOrDefault(env.get('RRF_K'), DEFAULT_RRF_K);
   const LEXICAL_WEIGHT = finiteOrDefault(env.get('LEXICAL_WEIGHT'), DEFAULT_LEXICAL_WEIGHT);
   const AGENTIC_ENABLED = env.get('AGENTIC_ENABLED') !== 'false';
-  const GRADE_MODEL = env.get('GRADE_MODEL') ?? DEFAULT_GRADE_MODEL;
+  const AUX_MODEL = env.get('AUX_MODEL') ?? DEFAULT_AUX_MODEL;
   const OUT_OF_DOMAIN_THRESHOLD = finiteOrDefault(env.get('OUT_OF_DOMAIN_THRESHOLD'), DEFAULT_OUT_OF_DOMAIN_THRESHOLD);
   const AGENT_STEP_BUDGET = finiteOrDefault(env.get('AGENT_STEP_BUDGET'), DEFAULT_AGENT_STEP_BUDGET);
   const AGENTIC_RETRIEVE_LIMIT = finiteOrDefault(env.get('AGENTIC_RETRIEVE_LIMIT'), DEFAULT_AGENTIC_RETRIEVE_LIMIT);
@@ -99,7 +99,7 @@ function resolveRuntimeConfig(env: EnvSource) {
     RRF_K,
     LEXICAL_WEIGHT,
     AGENTIC_ENABLED,
-    GRADE_MODEL,
+    AUX_MODEL,
     OUT_OF_DOMAIN_THRESHOLD,
     AGENT_STEP_BUDGET,
     AGENTIC_RETRIEVE_LIMIT,
@@ -156,7 +156,7 @@ export const HYBRID_ENABLED: boolean = defaultConfig.HYBRID_ENABLED as boolean;
 export const RRF_K: number = defaultConfig.RRF_K as number;
 export const LEXICAL_WEIGHT: number = defaultConfig.LEXICAL_WEIGHT as number;
 export const AGENTIC_ENABLED: boolean = defaultConfig.AGENTIC_ENABLED as boolean;
-export const GRADE_MODEL: string = defaultConfig.GRADE_MODEL as string;
+export const AUX_MODEL: string = defaultConfig.AUX_MODEL as string;
 export const OUT_OF_DOMAIN_THRESHOLD: number = defaultConfig.OUT_OF_DOMAIN_THRESHOLD as number;
 export const AGENT_STEP_BUDGET: number = defaultConfig.AGENT_STEP_BUDGET as number;
 export const AGENTIC_RETRIEVE_LIMIT: number = defaultConfig.AGENTIC_RETRIEVE_LIMIT as number;

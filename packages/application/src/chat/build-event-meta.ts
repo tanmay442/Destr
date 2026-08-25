@@ -4,11 +4,10 @@ export interface EventMetaInput {
   rewritten?: boolean | undefined;
   documentIds?: number[] | undefined;
   ticketId?: string | null | undefined;
-  degraded?: boolean | undefined;
   fallbackReason?: string | undefined;
   isEmpty?: boolean | undefined;
   resultState?: string | undefined;
-  
+
   judgeScores?: (JudgeScores & { judgedAt: string }) | undefined;
 }
 
@@ -23,7 +22,6 @@ export function buildEventMeta(input: EventMetaInput): Record<string, unknown> {
     meta.documentIds = [...new Set(input.documentIds.filter((id) => typeof id === 'number' && id > 0))];
   }
   if (input.ticketId) meta.ticketId = input.ticketId;
-  if (input.degraded !== undefined) meta.degraded = input.degraded;
   if (input.fallbackReason !== undefined) meta.fallbackReason = input.fallbackReason;
   if (input.isEmpty !== undefined) meta.isEmpty = input.isEmpty;
   if (input.resultState !== undefined) meta.resultState = input.resultState;

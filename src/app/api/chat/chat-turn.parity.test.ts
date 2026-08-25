@@ -71,10 +71,10 @@ const { retrievalConfig } = vi.hoisted(() => ({
     similarityThreshold: 0.5,
     hybridEnabled: true,
     agenticQueryRewriteEnabled: true,
-    agenticChunkGradingEnabled: true,
     hallucinationCheckEnabled: true,
+    judgeSampleRate: 0.02,
     rerankerProvider: 'cosine' as const,
-    gradeModel: undefined as string | undefined,
+    auxModel: undefined as string | undefined,
     answerCacheEnabled: true,
     answerCacheTtlSec: 3600,
     captureQueryText: true,
@@ -198,10 +198,8 @@ function agenticResult(overrides: Record<string, unknown> = {}): Record<string, 
     rewrittenQuery: 'rewritten',
     outOfDomain: false,
     isEmpty: false,
-    degraded: false,
     fallbackReason: null,
     resultState: 'ok',
-    gradingUnavailable: false,
     ...overrides,
   };
 }
@@ -655,41 +653,10 @@ describe('/api/chat R4 side-by-side parity (legacy inline vs chatTurn use case)'
   });
 });
 
-describe('/api/chat P4 parity — degraded fallback, guardrail toggle and judge sampling', () => {
+describe('/api/chat P4 parity — guardrail toggle and judge sampling', () => {
   function scriptAgenticSearch(overrides: Record<string, unknown>): void {
     compositionMock.agenticSearch = vi.fn(async () => ok(agenticResult(overrides)) as never);
   }
-
-  it('degraded top-4 fallback: identical soft-banner streams, identical events, no cache write', async () => {
-    retrievalConfig.retrievalMode = 'agentic';
-    scriptAgenticSearch({ degraded: true, fallbackReason: 'grader_unavailable', resultState: 'degraded', gradingUnavailable: true });
-    graderHolder.fn = vi.fn(async () => 'yes' as const);
-    scriptStream({
-      toolTrace: { toolCallId: 'search-deg', toolName: 'searchDocumentation', input: { query: 'obscure question' } },
-      drive: (tools) => tools?.searchDocumentation?.execute({ query: 'obscure question' }),
-    });
-    const legacy = await post(false);
-    const useCase = await post(true);
-    await finishScriptedStreams();
-    const [legacyText, useCaseText] = await Promise.all([drain(legacy), drain(useCase)]);
-    expect(useCaseText).toBe(legacyText);
-    expect(useCaseText).toContain('data-guardrail');
-    expect(useCaseText).toMatch(/Based on best-effort matches \(\d+\)/);
-    expect(useCaseText).not.toContain('"offerTicket":true');
-    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
-    const calls = compositionMock.chatEventBatcher.record.mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(deterministicEvent(calls[1]![0] as Record<string, unknown>)).toEqual(
-      deterministicEvent(calls[0]![0] as Record<string, unknown>),
-    );
-    const meta = (calls[0]![0] as { meta: Record<string, unknown> }).meta;
-    expect(meta).toMatchObject({
-      degraded: true,
-      fallbackReason: 'grader_unavailable',
-      isEmpty: false,
-      resultState: 'degraded',
-    });
-  });
 
   it('hallucinationCheckEnabled off: guardrail skipped and cache excluded identically on both paths', async () => {
     retrievalConfig.retrievalMode = 'agentic';

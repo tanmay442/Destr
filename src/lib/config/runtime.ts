@@ -158,5 +158,9 @@ async function refreshCache(): Promise<AppConfig> {
 }
 
 export function invalidateRuntimeConfig(): void {
-  if (cache) cache.softExpiry = 0;
+  // Drop both TTLs so the next read takes the blocking cold path and
+  // observably serves the saved overrides (no one-request stale window).
+  if (!cache) return;
+  cache.softExpiry = 0;
+  cache.hardExpiry = 0;
 }

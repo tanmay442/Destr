@@ -50,12 +50,11 @@ describe('partialAppConfigSchema', () => {
 });
 
 describe('agentic pipeline toggles', () => {
-  it('defaults all three toggles to true in a full parse', () => {
+  it('defaults both toggles to true in a full parse', () => {
     const result = appConfigSchema.safeParse({});
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.agenticQueryRewriteEnabled).toBe(true);
-      expect(result.data.agenticChunkGradingEnabled).toBe(true);
       expect(result.data.hallucinationCheckEnabled).toBe(true);
     }
   });
@@ -63,29 +62,57 @@ describe('agentic pipeline toggles', () => {
   it('round-trips explicit false values', () => {
     const result = appConfigSchema.safeParse({
       agenticQueryRewriteEnabled: false,
-      agenticChunkGradingEnabled: false,
       hallucinationCheckEnabled: false,
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.agenticQueryRewriteEnabled).toBe(false);
-      expect(result.data.agenticChunkGradingEnabled).toBe(false);
       expect(result.data.hallucinationCheckEnabled).toBe(false);
     }
   });
 
   it('booleans are strict — no coercion of strings', () => {
-    for (const key of ['agenticQueryRewriteEnabled', 'agenticChunkGradingEnabled', 'hallucinationCheckEnabled']) {
+    for (const key of ['agenticQueryRewriteEnabled', 'hallucinationCheckEnabled']) {
       expect(appConfigSchema.safeParse({ [key]: 'true' }).success).toBe(false);
       expect(appConfigSchema.safeParse({ [key]: 1 }).success).toBe(false);
     }
   });
 
   it('accepts a deepPartial override for each toggle', () => {
-    const result = parse({ agenticChunkGradingEnabled: false });
+    const result = parse({ agenticQueryRewriteEnabled: false });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toEqual({ agenticChunkGradingEnabled: false });
+      expect(result.data).toEqual({ agenticQueryRewriteEnabled: false });
+    }
+  });
+});
+
+describe('judgeSampleRate and auxModel', () => {
+  it('defaults judgeSampleRate to 0.02 and auxModel to undefined', () => {
+    const result = appConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.judgeSampleRate).toBe(0.02);
+      expect(result.data.auxModel).toBeUndefined();
+    }
+  });
+
+  it('rejects judgeSampleRate outside [0,1] and non-numeric auxModel', () => {
+    expect(appConfigSchema.safeParse({ judgeSampleRate: 1.5 }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ judgeSampleRate: -0.1 }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ auxModel: 42 }).success).toBe(false);
+  });
+
+  it('coerces numeric strings for judgeSampleRate and accepts deepPartial overrides', () => {
+    const coerced = appConfigSchema.safeParse({ judgeSampleRate: '0.1' });
+    expect(coerced.success).toBe(true);
+    if (coerced.success) {
+      expect(coerced.data.judgeSampleRate).toBe(0.1);
+    }
+    const partial = parse({ auxModel: 'gemini-2.0-flash' });
+    expect(partial.success).toBe(true);
+    if (partial.success) {
+      expect(partial.data).toEqual({ auxModel: 'gemini-2.0-flash' });
     }
   });
 });

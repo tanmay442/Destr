@@ -37,7 +37,6 @@ import {
   Coins,
   ChevronDown,
   TrendingUp,
-  ShieldAlert,
 } from 'lucide-react';
 import type { AnalyticsTrendPoint } from '@app/application';
 import type { ChatDailyQualityRow, ModeComparison } from '@app/domain';
@@ -51,7 +50,6 @@ const ms = (n: number) => `${Math.round(n).toLocaleString()} ms`;
 const score = (n: number) => n.toFixed(2);
 const FAITHFULNESS_TARGET = 0.85;
 const RETRIEVAL_TARGET = 0.75;
-const DEGRADED_TARGET = 0.1;
 const MODE_LABELS: Record<ModeComparison['mode'], string> = {
   agentic: 'Agentic',
   vector: 'Vector',
@@ -154,7 +152,7 @@ function padDailyQuality(rows: ChatDailyQualityRow[], days: number): ChatDailyQu
     const d = new Date(today);
     d.setUTCDate(today.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
-    out.push(map.get(key) ?? { day: key, avgFaithfulness: 0, avgRetrievalRelevance: 0, degradedCount: 0 });
+    out.push(map.get(key) ?? { day: key, avgFaithfulness: 0, avgRetrievalRelevance: 0 });
   }
   return out;
 }
@@ -321,7 +319,7 @@ export default async function AnalyticsPage() {
               description="Sampled LLM-judge scores and thumbs feedback — real quality, not banners."
               icon={<Sparkles className="size-4" />}
             />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="analytics-true-quality-cards">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="analytics-true-quality-cards">
               <MetricCard
                 label={`True faithfulness · target > ${FAITHFULNESS_TARGET}`}
                 value={judges ? score(judges.avgFaithfulness) : '—'}
@@ -358,15 +356,8 @@ export default async function AnalyticsPage() {
                 icon={<ThumbsUp className="size-3.5" />}
                 hint={feedback ? `${num(feedback.summary.up + feedback.summary.down)} votes` : undefined}
               />
-              <MetricCard
-                label={`Degraded rate · target < ${DEGRADED_TARGET * 100}%`}
-                value={judges ? pct(judges.degradedRate) : '—'}
-                icon={<ShieldAlert className="size-3.5" />}
-                tone={judges ? (judges.degradedRate >= DEGRADED_TARGET ? 'warning' : 'success') : 'default'}
-                hint={judges ? 'fallback answers' : undefined}
-              />
             </div>
-            {!judges || (judges.avgFaithfulness === 0 && judges.avgRetrievalRelevance === 0 && judges.degradedRate === 0) ? (
+            {!judges || (judges.avgFaithfulness === 0 && judges.avgRetrievalRelevance === 0) ? (
               <p className="text-xs text-muted-foreground">Judge scores appear once live sampling has judged turns in the last 7 days.</p>
             ) : null}
           </div>
@@ -421,10 +412,10 @@ export default async function AnalyticsPage() {
             <div className="flex flex-col gap-3" data-testid="analytics-daily-quality-trends">
               <SectionHeading
                 title="True quality trends"
-                description="Daily judge scores and degraded turns over the last 84 days."
+                description="Daily judge scores over the last 84 days."
                 icon={<TrendingUp className="size-4" />}
               />
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Card className="gap-0">
                   <CardHeader className="gap-1 pb-4">
                     <CardTitle className="text-sm">Faithfulness</CardTitle>
@@ -454,16 +445,6 @@ export default async function AnalyticsPage() {
                       className="text-destructive"
                       thresholdClassName="text-primary"
                     />
-                  </CardContent>
-                </Card>
-
-                <Card className="gap-0">
-                  <CardHeader className="gap-1 pb-4">
-                    <CardTitle className="text-sm">Degraded turns</CardTitle>
-                    <CardDescription>Daily count of degraded-fallback answers.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <LineChart data={dailyQualityPadded.map((d) => ({ label: d.day.slice(5), value: d.degradedCount }))} />
                   </CardContent>
                 </Card>
               </div>

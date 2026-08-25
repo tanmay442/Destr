@@ -18,8 +18,7 @@ interface Fixture {
     | 'agenticRetrieveLimit'
     | 'agenticMaxRetries'
     | 'agenticQueryRewriteEnabled'
-    | 'agenticChunkGradingEnabled'
-    | 'gradeModel'
+    | 'auxModel'
     | 'orgName'
     | 'audience'
     | 'agentPersona'
@@ -43,8 +42,7 @@ const baseCfg = {
   agenticRetrieveLimit: 10,
   agenticMaxRetries: 1,
   agenticQueryRewriteEnabled: true,
-  agenticChunkGradingEnabled: true,
-  gradeModel: undefined as string | undefined,
+  auxModel: undefined as string | undefined,
   orgName: 'Test Corp',
   audience: 'test customers',
   agentPersona: { name: 'Destr', tone: 'friendly' } as const,
@@ -53,7 +51,7 @@ const baseCfg = {
 } as const;
 
 const FINGERPRINT_BASE =
-  '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
+  '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
 
 const FIXTURES: Fixture[] = [
   {
@@ -65,7 +63,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:e34bf6f8d1604f2f22bdb1e3b13260b4',
+    key: 'rag:answer:df0e9d16800f072717a944273aa5d872',
   },
   {
     name: 'query-normalization',
@@ -76,7 +74,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:d0c8fc0df3c773acd05ad6a306ae81db',
+    key: 'rag:answer:ad7450732bd9cc90380f87d1d3f144ff',
   },
   {
     name: 'punct-space',
@@ -87,7 +85,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:4e990fc610249d20eb1a07688b0693af',
+    key: 'rag:answer:94a68777f93f2145aee08ea8b396fb88',
   },
   {
     name: 'agentic-mode',
@@ -97,8 +95,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:45e1a54b67c2362a4ab14caee8497e99',
+    fingerprint: '{"promptVersion":4,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:cec121281727b41be77eb9e28a2edde2',
   },
   {
     name: 'agentic-inverted-rollout',
@@ -108,8 +106,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:26ac59f4a8527628c88f145463321869',
+    fingerprint: '{"promptVersion":4,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:c169a6478e39aec3c407598a44d9b8de',
   },
   {
     name: 'different-user',
@@ -120,7 +118,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:37b3a5da0a97518e564f974681a4c966',
+    key: 'rag:answer:57adcd99b2c9d7a6736a2410df9c1596',
   },
   {
     name: 'different-chat-model',
@@ -131,7 +129,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:2fe6eecbfd779dc83af65819efb07e36',
+    key: 'rag:answer:e6c4807d649415667e23dcf15d1b58ae',
   },
   {
     name: 'different-embedding',
@@ -142,7 +140,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-large',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:25eee611b71351bb20b76352a1d695aa',
+    key: 'rag:answer:84e8baea01defa13ee0c04d6ddfbd33e',
   },
   {
     name: 'reranker-cohere',
@@ -152,8 +150,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:dd7867ab245cf470f2bfd3111f110b78',
+    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:b536e254c931f08282d2fec67992576d',
   },
   {
     name: 'hybrid-off',
@@ -163,8 +161,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:98625ada8c456f2598d0dbe25a5b5205',
+    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:0dab443908a2c6208d4bede27f20b15b',
   },
   {
     name: 'threshold-diff',
@@ -174,8 +172,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:1898baf4e294de68bd379bd113d4be3c',
+    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:45d5a03310979f341c6d414089354c28',
   },
   {
     name: 'prefetch-on',
@@ -185,8 +183,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:c9d8955dfd773cbeeaab3ec639705f92',
+    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:29a6b3601d17856c9f725fc6b56bf38c',
   },
   {
     name: 'prompt-config-sensitive',
@@ -195,13 +193,13 @@ const FIXTURES: Fixture[] = [
     cfg: {
       ...baseCfg,
       customInstructions: 'Always answer in Spanish.',
-      gradeModel: 'gemini-2.0-flash-grade',
+      auxModel: 'gemini-2.0-flash-grade',
     },
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":3,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"agenticChunkGradingEnabled":true,"gradeModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
-    key: 'rag:answer:8595366827c2a68976ce183d5b933140',
+    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"auxModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
+    key: 'rag:answer:fe2677c09c15ced7082b3b19c1285bb4',
   },
 ];
 

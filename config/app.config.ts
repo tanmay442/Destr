@@ -1,5 +1,5 @@
 import type { AppConfig } from '@app/domain/app-config';
-import { SIMILARITY_THRESHOLD } from '@app/domain';
+import { SIMILARITY_THRESHOLD, JUDGE_SAMPLE_RATE } from '@app/domain';
 import {
   PARENT_CHUNK_SIZE,
   CHILD_CHUNK_SIZE,
@@ -10,7 +10,7 @@ import {
   AGENTIC_MAX_RETRIES,
   HYBRID_ENABLED,
   RERANKER_PROVIDER,
-  GRADE_MODEL,
+  AUX_MODEL,
   ANSWER_CACHE_ENABLED,
   ANSWER_CACHE_TTL_SEC,
   AGENTIC_ENABLED,
@@ -81,10 +81,10 @@ const config: AppConfig = {
   similarityThreshold: SIMILARITY_THRESHOLD,
   hybridEnabled: HYBRID_ENABLED,
   agenticQueryRewriteEnabled: true,
-  agenticChunkGradingEnabled: true,
   hallucinationCheckEnabled: true,
+  judgeSampleRate: JUDGE_SAMPLE_RATE,
   rerankerProvider: RERANKER_PROVIDER,
-  gradeModel: GRADE_MODEL || undefined,
+  auxModel: AUX_MODEL || undefined,
   answerCacheEnabled: ANSWER_CACHE_ENABLED,
   answerCacheTtlSec: ANSWER_CACHE_TTL_SEC,
   captureQueryText: true,

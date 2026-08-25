@@ -30,7 +30,7 @@ vi.mock('./retry', async () => {
 
 import { judgeRelevance, judgeFaithfulness } from './judge';
 import type { ChatModelProvider } from './registries';
-import { GRADE_MODEL } from '@app/infrastructure/config';
+import { AUX_MODEL } from '@app/infrastructure/config';
 
 let consoleWarn: ReturnType<typeof vi.spyOn>;
 
@@ -78,10 +78,10 @@ describe('judgeRelevance', () => {
     expect((await judgeRelevance('q', ['d']))!.score).toBe(0);
   });
 
-  it('uses GRADE_MODEL through getChatModel by default', async () => {
+  it('uses AUX_MODEL through getChatModel by default', async () => {
     generateTextMock.mockResolvedValue({ text: '{"score":1,"reason":"r"}' });
     await judgeRelevance('q', ['d']);
-    expect(getChatModelMock).toHaveBeenCalledWith(GRADE_MODEL || undefined);
+    expect(getChatModelMock).toHaveBeenCalledWith(AUX_MODEL || undefined);
   });
 });
 
@@ -190,13 +190,13 @@ describe('failure containment', () => {
 });
 
 describe('dependency injection', () => {
-  it('forwards gradeModelId to an injected provider instead of getChatModel', async () => {
+  it('forwards auxModelId to an injected provider instead of getChatModel', async () => {
     const modelProvider = vi.fn(
       () => ({ modelId: 'injected' }),
     ) as unknown as ChatModelProvider;
     generateTextMock.mockResolvedValue({ text: '{"score":1,"reason":"r"}' });
-    await judgeRelevance('q', ['d'], { gradeModelId: 'custom-grade-model', modelProvider });
-    expect(modelProvider).toHaveBeenCalledWith('custom-grade-model');
+    await judgeRelevance('q', ['d'], { auxModelId: 'custom-aux-model', modelProvider });
+    expect(modelProvider).toHaveBeenCalledWith('custom-aux-model');
     expect(getChatModelMock).not.toHaveBeenCalled();
   });
 
@@ -209,7 +209,7 @@ describe('dependency injection', () => {
     });
     await judgeFaithfulness('docs', 'answer', { modelProvider });
     expect(modelProvider).toHaveBeenCalledTimes(1);
-    expect(modelProvider).toHaveBeenCalledWith(GRADE_MODEL || undefined);
+    expect(modelProvider).toHaveBeenCalledWith(AUX_MODEL || undefined);
     expect(getChatModelMock).not.toHaveBeenCalled();
   });
 });

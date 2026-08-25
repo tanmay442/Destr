@@ -34,19 +34,18 @@ export interface MessagePartLike {
 export interface GuardrailMeta {
   outOfDomain: boolean;
   offerTicket: boolean;
-  degraded?: boolean | undefined;
+  notice?: boolean | undefined;
   message?: string | undefined;
   isEmpty?: boolean | undefined;
   resultState?: string | undefined;
 }
 
-/** Copy the optional degraded soft-banner fields when present and well-typed. */
 function readGuardrailMeta(data: Record<string, unknown>): GuardrailMeta {
   const guardrail: GuardrailMeta = {
     outOfDomain: Boolean(data.outOfDomain),
     offerTicket: Boolean(data.offerTicket),
   };
-  if (typeof data.degraded === 'boolean') guardrail.degraded = data.degraded;
+  if (typeof data.notice === 'boolean') guardrail.notice = data.notice;
   if (typeof data.message === 'string' && data.message !== '') guardrail.message = data.message;
   if (typeof data.isEmpty === 'boolean') guardrail.isEmpty = data.isEmpty;
   if (typeof data.resultState === 'string' && data.resultState !== '') {

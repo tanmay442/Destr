@@ -157,13 +157,9 @@ export class ChatEventBatcher implements ChatEventsRepo {
   }
 
   
-  async getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean } = {}): Promise<ChatEvent[]> {
+  async getQualitySamples(limit: number, filter: { blocked?: boolean } = {}): Promise<ChatEvent[]> {
     const capped = Math.min(Math.max(limit, 1), 100);
     const parts: SQL[] = [];
-    if (filter.degraded === true) {
-      parts.push(sql`${chatEvents.meta} ->> 'degraded' = 'true'`);
-      parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
-    }
     if (filter.blocked === true) {
       parts.push(sql`${chatEvents.hallucinationBlocked}`);
       parts.push(sql`${chatEvents.createdAt} >= now() - interval '7 days'`);
@@ -184,8 +180,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
       select
         to_char(date_trunc('day', ${chatEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD') as day,
         coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
-        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
-        count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::int as degraded_count
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance
       from ${chatEvents}
       where ${chatEvents.createdAt} >= ${since}
       group by day
@@ -200,7 +195,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
           day: String(r.day),
           avgFaithfulness: Number(r.avg_faithfulness) || 0,
           avgRetrievalRelevance: Number(r.avg_retrieval_relevance) || 0,
-          degradedCount: Number(r.degraded_count) || 0,
         } as ChatDailyQualityRow,
       ]),
     );
@@ -216,7 +210,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
           day: key,
           avgFaithfulness: 0,
           avgRetrievalRelevance: 0,
-          degradedCount: 0,
         },
       );
     }
@@ -227,15 +220,13 @@ export class ChatEventBatcher implements ChatEventsRepo {
   async getJudgeAverages(days?: number): Promise<{
     avgFaithfulness: number;
     avgRetrievalRelevance: number;
-    degradedRate: number;
   }> {
     const windowDays = Math.min(Math.max(Math.floor(days ?? 7), 1), 365);
     const since = sinceStartUtc(windowDays);
     const result = await this.client.execute(sql`
       select
         coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'faithfulness')::numeric), 0) as avg_faithfulness,
-        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance,
-        coalesce(count(*) filter (where ${chatEvents.meta} ->> 'degraded' = 'true')::numeric / nullif(count(*), 0), 0) as degraded_rate
+        coalesce(avg((${chatEvents.meta} -> 'judgeScores' ->> 'retrievalRelevance')::numeric), 0) as avg_retrieval_relevance
       from ${chatEvents}
       where ${chatEvents.createdAt} >= ${since}
     `);
@@ -243,7 +234,6 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return {
       avgFaithfulness: Number(row?.avg_faithfulness) || 0,
       avgRetrievalRelevance: Number(row?.avg_retrieval_relevance) || 0,
-      degradedRate: Number(row?.degraded_rate) || 0,
     };
   }
 

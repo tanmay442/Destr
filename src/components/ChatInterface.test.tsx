@@ -40,7 +40,7 @@ type Msg = {
     | { type: 'data-guardrail'; data: {
         outOfDomain: boolean;
         offerTicket: boolean;
-        degraded?: boolean;
+        notice?: boolean;
         message?: string;
         isEmpty?: boolean;
         resultState?: string;
@@ -322,7 +322,7 @@ describe('ChatInterface', () => {
     expect(screen.getByText('Hi there.')).toBeInTheDocument();
   });
 
-  it('renders a soft degraded banner without a ticket offer for degraded turns', () => {
+  it('renders a soft notice banner without a ticket offer for noticed turns', () => {
     setupChat([
       {
         id: 'a1',
@@ -333,7 +333,7 @@ describe('ChatInterface', () => {
             type: 'data-guardrail',
             data: {
               outOfDomain: false,
-              degraded: true,
+              notice: true,
               isEmpty: false,
               offerTicket: false,
               message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
@@ -343,7 +343,7 @@ describe('ChatInterface', () => {
       },
     ]);
     render(<ChatInterface conversationId="conv-test" />);
-    const banner = screen.getByTestId('chat-guardrail-degraded');
+    const banner = screen.getByTestId('chat-guardrail-notice');
     expect(banner).toBeInTheDocument();
     expect(banner.textContent).toContain(
       'Based on best-effort matches (4) — may be incomplete. Please verify.',
@@ -352,20 +352,20 @@ describe('ChatInterface', () => {
     expect(banner.textContent).not.toMatch(/ticket/i);
   });
 
-  it('falls back to the default copy when the degraded banner has no message', () => {
+  it('shows the Notice title on the soft banner even without a message', () => {
     setupChat([
       {
         id: 'a1',
         role: 'assistant',
         parts: [
           { type: 'text', text: 'Answer.' },
-          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: false, degraded: true, isEmpty: false } },
+          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: false, notice: true, isEmpty: false } },
         ],
       },
     ]);
     render(<ChatInterface conversationId="conv-test" />);
-    const banner = screen.getByTestId('chat-guardrail-degraded');
-    expect(banner.textContent).toContain('may be incomplete. Please verify.');
+    const banner = screen.getByTestId('chat-guardrail-notice');
+    expect(within(banner).getByText('Notice')).toBeInTheDocument();
   });
 
   it('renders the red blocking wall with a ticket offer for out-of-domain turns', () => {
@@ -383,7 +383,33 @@ describe('ChatInterface', () => {
     const wall = screen.getByTestId('chat-guardrail-wall');
     expect(wall).toBeInTheDocument();
     expect(wall.textContent).toMatch(/knowledge ticket/i);
-    expect(screen.queryByTestId('chat-guardrail-degraded')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-guardrail-notice')).not.toBeInTheDocument();
+  });
+
+  it('collapses stacked notice + wall guardrail parts into a single wall banner', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Answer with two guardrails.' },
+          {
+            type: 'data-guardrail',
+            data: {
+              outOfDomain: false,
+              offerTicket: false,
+              notice: true,
+              isEmpty: false,
+              message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+            },
+          },
+          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: true } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    expect(screen.getAllByTestId('chat-guardrail-wall')).toHaveLength(1);
+    expect(screen.queryByTestId('chat-guardrail-notice')).not.toBeInTheDocument();
   });
 
   it('sends a message when the form is submitted', async () => {

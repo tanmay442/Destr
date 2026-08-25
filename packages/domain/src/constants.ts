@@ -33,30 +33,17 @@ export const LEXICAL_WEIGHT = 1;
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;
 export const AGENTIC_ENABLED = true;
-export const GRADE_MODEL = '';
+export const AUX_MODEL = '';
 export const OUT_OF_DOMAIN_THRESHOLD = 0.3;
 export const AGENT_STEP_BUDGET = 8;
 export const AGENTIC_RETRIEVE_LIMIT = 10;
 export const AGENTIC_MAX_RETRIES = 1;
-export const GRADE_MAX_ROWS = 10;
-export const GRADE_DOC_CHAR_CAP = 3_000;
-export const GRADE_PROMPT_CHAR_BUDGET = 24_000;
-export const GRADE_BATCH_DOCS = 3;
-export const FALLBACK_CHUNK_COUNT = 4;
-export const DEGRADED_BANNER_MESSAGE = `Based on best-effort matches (${FALLBACK_CHUNK_COUNT}) — may be incomplete. Please verify.`;
-export function degradedBannerMessage(count: number): string {
-  return `Based on best-effort matches (${count}) — may be incomplete. Please verify.`;
-}
-export function fallbackBlock(count: number): string {
-  return `# Fallback Context
-The following ${count} reference chunks did NOT pass relevance grading (grader unavailable or no strong match). Use them only if they clearly support the answer. Prefix the answer with: "Note: I couldn't find a strongly matching document, so this is my best guess from related pages — please verify." Cite normally. If they do not support the answer, say so and offer to open a ticket.`;
-}
 
 export const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
 export const TURN_DEADLINE_TEXT =
   'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';
 
-export const JUDGE_SAMPLE_RATE = 0.05;
+export const JUDGE_SAMPLE_RATE = 0.02;
 export const ANSWER_CACHE_ENABLED = true;
 export const ANSWER_CACHE_TTL_SEC = 3600;
 export const TRACE_ENABLED = false;

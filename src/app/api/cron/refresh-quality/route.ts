@@ -28,7 +28,6 @@ export async function GET(req: Request) {
       event: 'cron.refresh_quality',
       avgFaithfulness: averages.avgFaithfulness,
       avgRetrievalRelevance: averages.avgRetrievalRelevance,
-      degradedRate: averages.degradedRate,
     });
     return Response.json({ ok: true, ...averages });
   } catch (e) {

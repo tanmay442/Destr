@@ -40,7 +40,7 @@ describe('toResumedConversation', () => {
     expect(guardrail.data).toEqual({ outOfDomain: true, offerTicket: true });
   });
 
-  it('rebuilds the degraded soft guardrail (no ticket offer) from metadata', () => {
+  it('rebuilds the notice soft guardrail (no ticket offer) from metadata', () => {
     const res = toResumedConversation({
       messages: [
         stored({
@@ -53,10 +53,10 @@ describe('toResumedConversation', () => {
               guardrail: {
                 outOfDomain: false,
                 offerTicket: false,
-                degraded: true,
+                notice: true,
                 message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
                 isEmpty: false,
-                resultState: 'degraded',
+                resultState: 'ok',
               },
             },
           },
@@ -67,7 +67,7 @@ describe('toResumedConversation', () => {
       data: {
         outOfDomain: boolean;
         offerTicket: boolean;
-        degraded?: boolean;
+        notice?: boolean;
         message?: string;
         isEmpty?: boolean;
         resultState?: string;
@@ -76,10 +76,10 @@ describe('toResumedConversation', () => {
     expect(guardrail.data).toEqual({
       outOfDomain: false,
       offerTicket: false,
-      degraded: true,
+      notice: true,
       message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
       isEmpty: false,
-      resultState: 'degraded',
+      resultState: 'ok',
     });
   });
 

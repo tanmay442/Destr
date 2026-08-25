@@ -12,14 +12,9 @@ import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
-  JUDGE_SAMPLE_RATE,
   logger,
   sanitizeText,
   TOOL_CONTENT_CAP,
-  DEGRADED_BANNER_MESSAGE,
-  degradedBannerMessage,
-  FALLBACK_CHUNK_COUNT,
-  fallbackBlock,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
   type AgenticResultState,
@@ -246,10 +241,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   capturedCitations: EmittedCitation[];
   outOfDomainRef: { value: boolean };
   isEmptyRef: { value: boolean };
-  degradedRef: { value: boolean };
-  fallbackReasonRef: { value: string | null };
   resultStateRef: { value: AgenticResultState | null };
-  fallbackCountRef: { value: number | null };
   metrics: TurnMetrics;
 }) {
   const {
@@ -260,10 +252,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     capturedCitations,
     outOfDomainRef,
     isEmptyRef,
-    degradedRef,
-    fallbackReasonRef,
     resultStateRef,
-    fallbackCountRef,
     metrics,
   } = opts;
   let ticketOpenedInTurn = false;
@@ -303,10 +292,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           }
           outOfDomainRef.value = r.value.outOfDomain;
           isEmptyRef.value = r.value.isEmpty;
-          degradedRef.value = r.value.degraded;
-          fallbackReasonRef.value = r.value.fallbackReason;
           resultStateRef.value = r.value.resultState;
-          fallbackCountRef.value = r.value.chunks.length;
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -339,10 +325,6 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         });
         for (const citation of emitCitations(matches)) {
           capturedCitations.push(citation);
-        }
-        if (effectiveMode === 'agentic' && degradedRef.value) {
-          const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
-          return [{ content: block, similarity: -1 }, ...capped];
         }
         return capped;
       },
@@ -544,10 +526,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const outOfDomainRef = { value: false };
   const isEmptyRef = { value: false };
-  const degradedRef = { value: false };
-  const fallbackReasonRef = { value: null as string | null };
   const resultStateRef = { value: null as AgenticResultState | null };
-  const fallbackCountRef = { value: null as number | null };
 
   const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
   const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
@@ -567,7 +546,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch, degradedRef.value),
+    system: buildSystemPrompt(cfg, prefetch),
     messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
@@ -579,10 +558,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       capturedCitations,
       outOfDomainRef,
       isEmptyRef,
-      degradedRef,
-      fallbackReasonRef,
       resultStateRef,
-      fallbackCountRef,
       metrics,
     }),
   });
@@ -617,7 +593,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           if (timedOut) {
             controller.enqueue({
               type: 'data-guardrail',
-              data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
+              data: { outOfDomain: false, notice: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
             } as InferUIMessageChunk<UIMessage>);
             const tid = `deadline-${turnId}`;
             controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<UIMessage>);
@@ -636,9 +612,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             } as InferUIMessageChunk<UIMessage>);
           }
           const hallucinationStart = performance.now();
-          const degradedMessage = degradedRef.value
-            ? degradedBannerMessage(fallbackCountRef.value ?? FALLBACK_CHUNK_COUNT)
-            : DEGRADED_BANNER_MESSAGE;
           const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;
@@ -655,8 +628,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               hallucinationGrader: deps.hallucinationGrader(cfg),
               enabled: cfg.hallucinationCheckEnabled,
               outOfDomain: outOfDomainRef.value,
-              degraded: degradedRef.value,
-              degradedMessage,
               timeoutMs: hallucinationBudgetMs,
             });
             hallucinationBlocked = hallucinationResult.blocked;
@@ -674,15 +645,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               isEmpty,
               ticketCreated: metrics.ticketCreated,
               cfg,
-              agentic: {
-                chunks: [],
-                rewrittenQuery: '',
-                outOfDomain: outOfDomainRef.value,
-                isEmpty: isEmptyRef.value,
-                degraded: degradedRef.value,
-                fallbackReason: fallbackReasonRef.value as AgenticResult['fallbackReason'],
-                resultState: resultStateRef.value ?? 'ok',
-              },
             })
           ) {
             try {
@@ -723,14 +685,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
-              ...(resultStateRef.value || timedOut
-                ? {
-                    degraded: degradedRef.value || timedOut,
-                    fallbackReason: timedOut ? 'turn_deadline' : fallbackReasonRef.value ?? undefined,
-                    isEmpty,
-                    resultState: timedOut ? 'degraded' : resultStateRef.value ?? undefined,
-                  }
-                : {}),
+              isEmpty,
+              resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              ...(timedOut ? { fallbackReason: 'turn_deadline' as const } : {}),
             }),
           });
           logger.info('chat.turn.timings', {
@@ -757,25 +714,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 ? {
                     outOfDomain: outOfDomainRef.value,
                     offerTicket: true,
-                    ...(degradedRef.value ? { degraded: true, message: degradedMessage } : {}),
                   }
                 : timedOut
                   ? {
                       outOfDomain: false,
                       offerTicket: false,
-                      degraded: true,
+                      notice: true,
                       message: TURN_DEADLINE_BANNER_MESSAGE,
-                      isEmpty: false,
-                      resultState: 'degraded',
-                    }
-                  : degradedRef.value
-                  ? {
-                      outOfDomain: false,
-                      offerTicket: false,
-                      degraded: true,
-                      message: degradedMessage,
-                      isEmpty: false,
-                      resultState: resultStateRef.value ?? 'degraded',
                     }
                   : null,
             }),
@@ -785,7 +730,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             deps.judgeScheduler &&
             deps.qualityJudge &&
             !timedOut &&
-            Math.random() < JUDGE_SAMPLE_RATE &&
+            Math.random() < cfg.judgeSampleRate &&
             finalCitations.length > 0 &&
             !isEmpty &&
             performance.now() - turnStart <= judgeMaxWallMs &&
@@ -819,8 +764,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 citationCount: dedupeCitations(capturedCitations).length,
                 meta: buildEventMeta({
                   ticketId: metrics.ticketId,
-                  degraded: degradedRef.value || undefined,
-                  fallbackReason: fallbackReasonRef.value ?? undefined,
                   resultState: resultStateRef.value ?? undefined,
                   isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
                 }),
@@ -853,12 +796,9 @@ async function runHallucinationCheck(opts: {
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   enabled: boolean;
   outOfDomain: boolean;
-  degraded: boolean;
-  degradedMessage?: string;
   timeoutMs?: number;
 }): Promise<{ blocked: boolean; timedOut: boolean }> {
-  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
-  const degradedMessage = opts.degradedMessage ?? DEGRADED_BANNER_MESSAGE;
+  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain } = opts;
   if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
   if (outOfDomain) {
@@ -867,13 +807,6 @@ async function runHallucinationCheck(opts: {
       data: { outOfDomain: true, offerTicket: true },
     } as InferUIMessageChunk<UIMessage>);
     return { blocked: true, timedOut: false };
-  }
-
-  if (degraded) {
-    controller.enqueue({
-      type: 'data-guardrail',
-      data: { outOfDomain: false, degraded: true, isEmpty: false, offerTicket: false, message: degradedMessage },
-    } as InferUIMessageChunk<UIMessage>);
   }
 
   let ungrounded = false;

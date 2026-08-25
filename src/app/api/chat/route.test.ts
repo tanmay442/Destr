@@ -86,10 +86,10 @@ const { retrievalConfig } = vi.hoisted(() => ({
     similarityThreshold: 0.5,
     hybridEnabled: true,
     agenticQueryRewriteEnabled: true,
-    agenticChunkGradingEnabled: true,
     hallucinationCheckEnabled: true,
+    judgeSampleRate: 0.02,
     rerankerProvider: 'cosine' as const,
-    gradeModel: undefined as string | undefined,
+    auxModel: undefined as string | undefined,
     answerCacheEnabled: true,
     answerCacheTtlSec: 3600,
     captureQueryText: true,
@@ -185,10 +185,8 @@ function agenticResult(overrides: Record<string, unknown> = {}): Record<string, 
     rewrittenQuery: 'rewritten',
     outOfDomain: false,
     isEmpty: false,
-    degraded: false,
     fallbackReason: null,
     resultState: 'ok',
-    gradingUnavailable: false,
     ...overrides,
   };
 }
@@ -1142,9 +1140,8 @@ describe('/api/chat answer cache (Session 10)', () => {
   });
 });
 
-describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)', () => {
+describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   const CHUNK_A = { content: 'fallback chunk A', similarity: 0.7, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
-  const CHUNK_B = { content: 'fallback chunk B', similarity: 0.6, id: 2, documentId: 2, fileName: null, page: null, sectionTitle: null, source: null };
 
   async function runPendingAfterCallbacks(): Promise<void> {
     const pending = afterCallbacks.splice(0);
@@ -1164,77 +1161,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
 
   afterEach(() => {
     (Math.random as unknown as { mockRestore: () => void }).mockRestore();
-  });
-
-  it('emits the soft degraded banner (no ticket offer), skips the cache and records degraded meta', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(
-        agenticResult({
-          chunks: [CHUNK_A, CHUNK_B],
-          degraded: true,
-          fallbackReason: 'grader_unavailable',
-          resultState: 'degraded',
-          gradingUnavailable: true,
-        }),
-      ) as never,
-    );
-    graderHolder.fn = vi.fn(async () => 'yes' as const);
-    const body = await runAgenticStreamAndRead('obscure question?');
-    expect(body).toMatch(/data-guardrail/);
-    expect(body).toMatch(/degraded/);
-    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
-    expect(body).not.toMatch(/offerTicket":true/);
-    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
-    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event.outOfDomain).toBe(false);
-    expect(event.hallucinationBlocked).toBe(false);
-    expect(event.meta).toMatchObject({
-      degraded: true,
-      fallbackReason: 'grader_unavailable',
-      isEmpty: false,
-      resultState: 'degraded',
-    });
-    expect(JSON.stringify(event)).not.toMatch(/offerTicket":true/);
-  });
-
-  it('delivers §A4 fallback instructions through the degraded tool result (T1)', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(
-        agenticResult({
-          chunks: [CHUNK_A],
-          degraded: true,
-          fallbackReason: 'all_filtered',
-          resultState: 'degraded',
-        }),
-      ) as never,
-    );
-    graderHolder.fn = vi.fn(async () => 'yes' as const);
-    const tools = await captureToolsFromStreamText<{
-      searchDocumentation: {
-        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
-      };
-    }>();
-    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
-      content: string;
-      similarity: number;
-    }>;
-    expect(result[0]!.similarity).toBe(-1);
-    expect(result[0]!.content).toContain('# Fallback Context');
-    expect(result[0]!.content).toContain("Note: I couldn't find a strongly matching document");
-    expect(result).toHaveLength(2);
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
-    );
-    const tools2 = await captureToolsFromStreamText<{
-      searchDocumentation: {
-        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
-      };
-    }>();
-    const ok2 = (await tools2?.searchDocumentation?.execute({ query: 'q' })) as Array<{
-      content: string;
-    }>;
-    expect(ok2[0]!.content.startsWith('<reference')).toBe(true);
-    expect(JSON.stringify(ok2)).not.toContain('# Fallback Context');
   });
 
   it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', async () => {
@@ -1282,10 +1208,10 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
         hallucinationBlocked: boolean;
       };
       expect(event.meta).toMatchObject({
-        degraded: true,
         fallbackReason: 'turn_deadline',
-        resultState: 'degraded',
       });
+      expect(event.meta).not.toHaveProperty('resultState');
+      expect(event.meta).not.toHaveProperty('degraded');
       expect(event.hallucinationBlocked).toBe(false);
       expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
       expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
@@ -1335,26 +1261,6 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
     const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event.hallucinationBlocked).toBe(false);
-  });
-
-  it('still blocks on an explicit grounded:false even when the turn is degraded', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(
-        agenticResult({
-          chunks: [CHUNK_A],
-          degraded: true,
-          fallbackReason: 'all_filtered',
-          resultState: 'degraded',
-        }),
-      ) as never,
-    );
-    graderHolder.fn = vi.fn(async () => 'no' as const);
-    const body = await runAgenticStreamAndRead('what is the policy?');
-    expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
-    expect(body).toMatch(/offerTicket":true/);
-    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
-    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event.hallucinationBlocked).toBe(true);
   });
 
   it('enqueues the quality judge via after when sampled (rate honored), persisting judgeScores', async () => {

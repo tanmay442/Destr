@@ -93,11 +93,11 @@ Multi-implementation ports are validated through **shared contract-assertion har
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
   Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, first-turn prefetching, and answer cache hit/miss semantics.
 - **Agentic Retrieval (`packages/application/src/rag/agentic-search.test.ts`)**:
-  Query rewriter -> document grader -> hallucination check loop, step budget enforcement, out-of-domain detection, and degraded top-4 fallback (grader outage / all-filtered / grading-disabled reasons, `GRADE_MAX_ROWS` batching cap, rewrite & grading step toggles).
+  Query rewrite -> hybrid retrieve + rerank pass loop, step budget enforcement, out-of-domain detection, one fresh-rewrite retry when a pass retrieves nothing (`agenticMaxRetries`) before the empty/out-of-domain wall, empty-query short-circuit, similarity/hybrid option forwarding, and the query-rewrite toggle (retrieved chunks are passed through unfiltered to the reranker-ordered generator).
 - **True Quality Checks (PR #60 suites)**:
-  - **LLM Judges (`packages/infrastructure/src/llm/judge.test.ts`, `graders.test.ts`)**: relevance/faithfulness judging with 10s timeout -> null, retry + lenient parse, untrusted-prompt fencing; batched `gradeAll` null-on-outage contract.
-  - **Cache gating (`packages/application/src/chat/__tests__/should-cache.test.ts`)**: blocked, empty, and degraded turns are excluded from the answer cache.
-  - **Event meta (`packages/application/src/chat/__tests__/build-event-meta.test.ts`)**: `degraded` / `fallbackReason` / `isEmpty` / `resultState` / `judgeScores` quality fields on `chat_events.meta`.
+  - **LLM Judges & Aux Models (`packages/infrastructure/src/llm/judge.test.ts`, `aux.test.ts`)**: relevance/faithfulness judging with 10s timeout -> null, retry with plain-text parse recovery, untrusted-prompt fencing; `aux.test.ts` also covers the query rewriter (echo-on-failure, turn-budget exhaustion) and the hallucination checker's fail-open contract (throws rather than flipping to grounded on malformed output or persistent outage), plus the `getAuxModels` selector and `createAuxModels` dependency-injection behavior.
+  - **Cache gating (`packages/application/src/chat/__tests__/should-cache.test.ts`)**: guardrail-blocked, empty-wall, ticket-creating, and hallucination-timeout turns are excluded from the answer cache.
+  - **Event meta (`packages/application/src/chat/__tests__/build-event-meta.test.ts`)**: `rewritten` / `fallbackReason` (turn deadline only) / `isEmpty` / `resultState` / `judgeScores` quality fields on `chat_events.meta`.
   - **Quality review queue (`packages/infrastructure/src/db/__tests__/quality-reviews-repo.test.ts`)**: verdicts (`good`/`bad`/`docs_missing`), one review per turn per reviewer, sampled-turn listing.
 - **Admin Document & Ingestion (`packages/application/src/admin/__tests__/`)**:
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.

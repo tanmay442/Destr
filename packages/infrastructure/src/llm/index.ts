@@ -2,7 +2,6 @@ import type {
   EmbeddingService,
   Reranker,
   QueryRewriter,
-  DocumentGrader,
   HallucinationGrader,
 } from '@app/domain';
 import './openai-chat-service';
@@ -15,9 +14,7 @@ import './ollama-embedding-service';
 import { docSummarizer, createDocSummarizer } from './doc-summarizer';
 import { localReranker, checkLocalRerankerAvailable } from './local-reranker';
 import { cohereReranker } from './cohere-reranker';
-import {
-  createGraders,
-} from './graders';
+import { createAuxModels } from './aux';
 import {
   embeddingProviderRegistry,
   rerankerProviderRegistry,
@@ -90,31 +87,28 @@ export function updateRerankerAvailability(provider: string, availability: Reran
 }
 
 /**
- * Return the agentic-loop graders, or `undefined` for each when the loop is
+ * Return the agentic-loop aux models, or `undefined` for each when the loop is
  * disabled (`AGENTIC_ENABLED=false`).
  */
-export function getGraders(
+export function getAuxModels(
   enabled?: boolean,
-  gradeModelId?: string,
+  auxModelId?: string,
   modelProvider: ChatModelProvider = getChatModel,
 ): {
   queryRewriter: QueryRewriter | undefined;
-  documentGrader: DocumentGrader | undefined;
   hallucinationGrader: HallucinationGrader | undefined;
 } {
   const on = enabled ?? process.env.AGENTIC_ENABLED !== 'false';
   if (!on) {
     return {
       queryRewriter: undefined,
-      documentGrader: undefined,
       hallucinationGrader: undefined,
     };
   }
-  const graders = createGraders(gradeModelId, modelProvider);
+  const aux = createAuxModels(auxModelId, modelProvider);
   return {
-    queryRewriter: graders.queryRewriter,
-    documentGrader: graders.documentGrader,
-    hallucinationGrader: graders.hallucinationGrader,
+    queryRewriter: aux.queryRewriter,
+    hallucinationGrader: aux.hallucinationGrader,
   };
 }
 
@@ -125,7 +119,7 @@ export {
   localReranker,
   checkLocalRerankerAvailable,
   cohereReranker,
-  createGraders,
+  createAuxModels,
 };
 export { judgeRelevance, judgeFaithfulness } from './judge';
 
