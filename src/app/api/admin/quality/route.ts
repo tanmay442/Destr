@@ -23,11 +23,8 @@ export async function GET(req: Request) {
   if (!auth.ok) return auth.response;
   const { comp } = auth;
   try {
-    const [degraded, blocked] = await Promise.all([
-      comp.chatEventBatcher.getQualitySamples(SAMPLES_LIMIT, { degraded: true }),
-      comp.chatEventBatcher.getQualitySamples(SAMPLES_LIMIT, { blocked: true }),
-    ]);
-    return Response.json({ degraded, blocked });
+    const blocked = await comp.chatEventBatcher.getQualitySamples(SAMPLES_LIMIT, { blocked: true });
+    return Response.json({ blocked });
   } catch (e) {
     return respond(new ExternalServiceError('Failed to load quality samples', e));
   }

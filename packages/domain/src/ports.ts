@@ -499,7 +499,6 @@ export interface ChatDailyQualityRow {
   day: string;
   avgFaithfulness: number;
   avgRetrievalRelevance: number;
-  degradedCount: number;
 }
 
 export interface FeedbackSummary {
@@ -531,7 +530,7 @@ export interface ChatEventsRepo {
   
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
   
-  getQualitySamples(limit: number, filter: { degraded?: boolean; blocked?: boolean }): Promise<ChatEvent[]>;
+  getQualitySamples(limit: number, filter: { blocked?: boolean }): Promise<ChatEvent[]>;
   getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
   
   getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
@@ -539,7 +538,6 @@ export interface ChatEventsRepo {
   getJudgeAverages(days?: number): Promise<{
     avgFaithfulness: number;
     avgRetrievalRelevance: number;
-    degradedRate: number;
   }>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;

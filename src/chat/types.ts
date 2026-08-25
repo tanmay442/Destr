@@ -14,8 +14,8 @@ export interface CitationData {
 export interface GuardrailData {
   outOfDomain: boolean;
   offerTicket: boolean;
-  /** Soft best-effort banner (top-4 fallback); no ticket offer. */
-  degraded?: boolean;
+  /** Soft informational banner; no ticket offer. */
+  notice?: boolean;
   message?: string;
   isEmpty?: boolean;
   resultState?: string;

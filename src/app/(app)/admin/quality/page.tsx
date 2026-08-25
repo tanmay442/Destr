@@ -15,7 +15,7 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { ShieldAlert, ShieldQuestion } from 'lucide-react';
+import { ShieldQuestion } from 'lucide-react';
 import type { ChatEvent } from '@app/domain';
 import { ReviewButtons } from './review-buttons';
 
@@ -50,7 +50,7 @@ function SampleTable({ events, testId }: { events: ChatEvent[]; testId: string }
   if (events.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No sampled turns yet. Rows appear once judged or degraded traffic accumulates.
+        No sampled turns yet. Rows appear once blocked traffic accumulates.
       </p>
     );
   }
@@ -83,11 +83,6 @@ function SampleTable({ events, testId }: { events: ChatEvent[]; testId: string }
                       doc #{id}
                     </Badge>
                   ))}
-                  {readString(e.meta, 'fallbackReason') ? (
-                    <Badge variant="outline" className="border-warning/40 text-[10px] text-warning">
-                      {readString(e.meta, 'fallbackReason')}
-                    </Badge>
-                  ) : null}
                   {judges ? (
                     <span className="text-xs text-muted-foreground tabular-nums">
                       faith {judges.faithfulness.toFixed(2)} · rel {judges.retrievalRelevance.toFixed(2)}
@@ -119,10 +114,7 @@ function SampleTable({ events, testId }: { events: ChatEvent[]; testId: string }
 
 export default async function QualityPage() {
   const comp = getComposition();
-  const [degraded, blocked] = await Promise.all([
-    comp.chatEventBatcher.getQualitySamples(SAMPLE_LIMIT, { degraded: true }),
-    comp.chatEventBatcher.getQualitySamples(SAMPLE_LIMIT, { blocked: true }),
-  ]);
+  const blocked = await comp.chatEventBatcher.getQualitySamples(SAMPLE_LIMIT, { blocked: true });
 
   return (
     <section className="flex flex-col gap-6">
@@ -133,21 +125,6 @@ export default async function QualityPage() {
           lacking. Verdicts feed the document improvement loop.
         </p>
       </div>
-
-      <Card className="gap-0" data-testid="quality-degraded-sample">
-        <CardHeader className="gap-1 pb-4">
-          <CardTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-4 text-warning" />
-            Degraded answers
-          </CardTitle>
-          <CardDescription>
-            Turns served from ungraded fallback context (grader outage, all filtered, or grading off).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-0">
-          <SampleTable events={degraded} testId="quality-degraded-row" />
-        </CardContent>
-      </Card>
 
       <Card className="gap-0" data-testid="quality-blocked-sample">
         <CardHeader className="gap-1 pb-4">

@@ -80,7 +80,7 @@ export function toResumedConversation(input: {
         data: {
           outOfDomain: Boolean(guardrail.outOfDomain),
           offerTicket: Boolean(guardrail.offerTicket),
-          ...(typeof guardrail.degraded === 'boolean' ? { degraded: guardrail.degraded } : {}),
+          ...(typeof guardrail.notice === 'boolean' ? { notice: guardrail.notice } : {}),
           ...(typeof guardrail.message === 'string' && guardrail.message !== ''
             ? { message: guardrail.message }
             : {}),

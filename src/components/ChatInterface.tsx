@@ -23,7 +23,6 @@ import {
   MAX_CONVERSATIONS_PER_USER,
   MAX_MESSAGES_PER_CONVERSATION,
   MAX_RESUME_MESSAGES,
-  DEGRADED_BANNER_MESSAGE,
 } from '@app/domain';
 import { notifyConversationsChanged } from '@/chat/events';
 import { Button } from '@/components/ui/button';
@@ -43,9 +42,6 @@ import {
 } from 'lucide-react';
 
 const FEEDBACK_RETRY_DELAY_MS = 1500;
-
-/** Default copy for the soft degraded banner when the server sends no custom message. */
-const DEGRADED_BANNER_FALLBACK = DEGRADED_BANNER_MESSAGE;
 
 function uuidv4(): string {
   const c = globalThis.crypto;
@@ -194,30 +190,30 @@ function GuardrailWallBanner() {
   );
 }
 
-/** Yellow soft banner for degraded best-effort answers (top-4 fallback); never offers a ticket. */
-function DegradedBanner({ message }: { message?: string | undefined }) {
+/** Yellow soft banner for server notices (e.g. turn deadline); never offers a ticket. */
+function NoticeBanner({ message }: { message?: string | undefined }) {
   return (
     <Alert
       className="border-warning/40 bg-warning/10 text-warning"
-      data-testid="chat-guardrail-degraded"
+      data-testid="chat-guardrail-notice"
       role="status"
     >
       <AlertTriangle aria-hidden />
       <div className="flex flex-col gap-1">
-        <AlertTitle>Best-effort answer</AlertTitle>
+        <AlertTitle>Notice</AlertTitle>
         <AlertDescription className="text-xs text-warning/80">
-          {message || DEGRADED_BANNER_FALLBACK}
+          {message}
         </AlertDescription>
       </div>
     </Alert>
   );
 }
 
-/** Collapse stacked guardrail parts into a single banner: ticket wall > degraded > last part. */
+/** Collapse stacked guardrail parts into a single banner: ticket wall > notice > last part. */
 function highestSeverityGuardrail(parts: Array<{ data: GuardrailData }>): GuardrailData | undefined {
   return (
     parts.find((p) => p.data.outOfDomain || p.data.offerTicket)?.data ??
-    parts.find((p) => p.data.degraded)?.data ??
+    parts.find((p) => p.data.notice)?.data ??
     parts[parts.length - 1]?.data
   );
 }
@@ -225,7 +221,7 @@ function highestSeverityGuardrail(parts: Array<{ data: GuardrailData }>): Guardr
 function AssistantGuardrail({ data }: { data: GuardrailData }) {
   const isWall = data.outOfDomain || data.offerTicket;
   if (isWall) return <GuardrailWallBanner />;
-  if (data.degraded) return <DegradedBanner message={data.message} />;
+  if (data.notice) return <NoticeBanner message={data.message} />;
   return null;
 }
 
