@@ -1145,6 +1145,7 @@ describe('/api/chat answer cache (Session 10)', () => {
 describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)', () => {
   const CHUNK_A = { content: 'fallback chunk A', similarity: 0.7, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
   const CHUNK_B = { content: 'fallback chunk B', similarity: 0.6, id: 2, documentId: 2, fileName: null, page: null, sectionTitle: null, source: null };
+  const CHUNK_WEAK = { content: 'weak chunk', similarity: 0.42, id: 3, documentId: 3, fileName: null, page: null, sectionTitle: null, source: null };
 
   async function runPendingAfterCallbacks(): Promise<void> {
     const pending = afterCallbacks.splice(0);
@@ -1197,11 +1198,11 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(JSON.stringify(event)).not.toMatch(/offerTicket":true/);
   });
 
-  it('delivers §A4 fallback instructions through the degraded tool result (T1)', async () => {
+  it('delivers §A4 fallback instructions through the degraded tool result only for weak matches (T1)', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(
         agenticResult({
-          chunks: [CHUNK_A],
+          chunks: [CHUNK_WEAK],
           degraded: true,
           fallbackReason: 'all_filtered',
           resultState: 'degraded',
@@ -1222,19 +1223,41 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(result[0]!.content).toContain('# Fallback Context');
     expect(result[0]!.content).toContain("Note: I couldn't find a strongly matching document");
     expect(result).toHaveLength(2);
+
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+      ok(
+        agenticResult({
+          chunks: [CHUNK_A],
+          degraded: true,
+          fallbackReason: 'all_filtered',
+          resultState: 'degraded',
+        }),
+      ) as never,
     );
     const tools2 = await captureToolsFromStreamText<{
       searchDocumentation: {
         execute: (args: { query: string; limit?: number }) => Promise<unknown>;
       };
     }>();
-    const ok2 = (await tools2?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+    const strongDegraded = (await tools2?.searchDocumentation?.execute({ query: 'q' })) as Array<{
       content: string;
     }>;
-    expect(ok2[0]!.content.startsWith('<reference')).toBe(true);
-    expect(JSON.stringify(ok2)).not.toContain('# Fallback Context');
+    expect(strongDegraded[0]!.content.startsWith('<reference')).toBe(true);
+    expect(JSON.stringify(strongDegraded)).not.toContain('# Fallback Context');
+
+    compositionMock.agenticSearch = vi.fn(async () =>
+      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    );
+    const tools3 = await captureToolsFromStreamText<{
+      searchDocumentation: {
+        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
+      };
+    }>();
+    const ok3 = (await tools3?.searchDocumentation?.execute({ query: 'q' })) as Array<{
+      content: string;
+    }>;
+    expect(ok3[0]!.content.startsWith('<reference')).toBe(true);
+    expect(JSON.stringify(ok3)).not.toContain('# Fallback Context');
   });
 
   it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', async () => {
@@ -1337,7 +1360,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     expect(event.hallucinationBlocked).toBe(false);
   });
 
-  it('still blocks on an explicit grounded:false even when the turn is degraded', async () => {
+  it('downgrades an explicit grounded:no to the soft banner when the turn is degraded', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(
         agenticResult({
@@ -1351,7 +1374,7 @@ describe('/api/chat degraded fallback, guardrail toggle and judge sampling (P4)'
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).toMatch(/Based on best-effort matches \(\d+\)/);
-    expect(body).toMatch(/offerTicket":true/);
+    expect(body).not.toMatch(/offerTicket":true/);
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
     const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event.hallucinationBlocked).toBe(true);

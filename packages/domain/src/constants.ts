@@ -52,6 +52,9 @@ export function fallbackBlock(count: number): string {
 The following ${count} reference chunks did NOT pass relevance grading (grader unavailable or no strong match). Use them only if they clearly support the answer. Prefix the answer with: "Note: I couldn't find a strongly matching document, so this is my best guess from related pages — please verify." Cite normally. If they do not support the answer, say so and offer to open a ticket.`;
 }
 
+/** Top-chunk similarity under which degraded turns inject the forced hedge preamble. */
+export const DEGRADED_HEDGE_MAX_SIMILARITY = 0.5;
+
 export const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
 export const TURN_DEADLINE_TEXT =
   'Sorry — this answer took longer than allowed, so I stopped rather than keep you waiting. Please try again, or open a ticket if it keeps happening.';

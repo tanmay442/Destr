@@ -214,13 +214,31 @@ describe('agenticSearch', () => {
     expect(unwrap(res).fallbackReason).toBe('grader_unavailable');
   });
 
-  it('all-no also ends the retry loop after a single pass', async () => {
+  it('retries an all_filtered pass and ends degraded with that reason when grading stays all-no', async () => {
+    rewriterMock.mockImplementation(async (q: string) => `${q} refined`);
     searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.4)]));
     graderMock.mockResolvedValue(['no']);
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 2 });
     expect(res.ok).toBe(true);
-    expect(searchChunksMock).toHaveBeenCalledTimes(1);
-    expect(unwrap(res).fallbackReason).toBe('all_filtered');
+    expect(searchChunksMock).toHaveBeenCalledTimes(3);
+    expect(rewriterMock).toHaveBeenCalledTimes(3);
+    expect(rewriterMock).toHaveBeenNthCalledWith(1, 'q');
+    const r = unwrap(res);
+    expect(r.degraded).toBe(true);
+    expect(r.fallbackReason).toBe('all_filtered');
+  });
+
+  it('recovers to ok when a retried pass grades chunks relevant after an all_filtered first pass', async () => {
+    rewriterMock.mockImplementation(async (q: string) => `${q} refined`);
+    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.4)]));
+    graderMock.mockResolvedValueOnce(['no']).mockResolvedValueOnce(['yes']);
+    const res = await agenticSearch('q', makeDeps());
+    expect(res.ok).toBe(true);
+    expect(searchChunksMock).toHaveBeenCalledTimes(2);
+    const r = unwrap(res);
+    expect(r.resultState).toBe('ok');
+    expect(r.degraded).toBe(false);
+    expect(r.chunks[0]!.content).toBe('doc');
   });
 
   it('does not retry when grading is disabled even if search came back empty', async () => {

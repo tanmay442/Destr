@@ -18,6 +18,7 @@ import {
   TOOL_CONTENT_CAP,
   DEGRADED_BANNER_MESSAGE,
   degradedBannerMessage,
+  DEGRADED_HEDGE_MAX_SIMILARITY,
   FALLBACK_CHUNK_COUNT,
   fallbackBlock,
   TURN_DEADLINE_BANNER_MESSAGE,
@@ -341,8 +342,13 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           capturedCitations.push(citation);
         }
         if (effectiveMode === 'agentic' && degradedRef.value) {
-          const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
-          return [{ content: block, similarity: -1 }, ...capped];
+          // With decent matches, skip the hedge preamble — it biases the
+          // post-stream hallucination judge toward false "ungrounded" verdicts.
+          const bestSimilarity = matches.reduce((mx, m) => Math.max(mx, m.similarity), 0);
+          if (bestSimilarity < DEGRADED_HEDGE_MAX_SIMILARITY) {
+            const block = fallbackBlock(matches.length || FALLBACK_CHUNK_COUNT);
+            return [{ content: block, similarity: -1 }, ...capped];
+          }
         }
         return capped;
       },
@@ -643,6 +649,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;
           let hallucinationTimedOut = false;
+          let hallucinationDowngraded = false;
           if (timedOut) {
           } else if (hallucinationBudgetMs <= 0) {
             hallucinationTimedOut = true;
@@ -661,6 +668,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             });
             hallucinationBlocked = hallucinationResult.blocked;
             hallucinationTimedOut = hallucinationResult.timedOut;
+            hallucinationDowngraded = hallucinationResult.downgradedToDegraded === true;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
           const isEmpty = isEmptyRef.value || outOfDomainRef.value;
@@ -753,7 +761,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               turnId,
               text: persistedText || partialText,
               citations: finalCitations,
-              guardrail: hallucinationBlocked
+              guardrail: hallucinationBlocked && !hallucinationDowngraded
                 ? {
                     outOfDomain: outOfDomainRef.value,
                     offerTicket: true,
@@ -856,7 +864,7 @@ async function runHallucinationCheck(opts: {
   degraded: boolean;
   degradedMessage?: string;
   timeoutMs?: number;
-}): Promise<{ blocked: boolean; timedOut: boolean }> {
+}): Promise<{ blocked: boolean; timedOut: boolean; downgradedToDegraded?: boolean }> {
   const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain, degraded } = opts;
   const degradedMessage = opts.degradedMessage ?? DEGRADED_BANNER_MESSAGE;
   if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
@@ -907,6 +915,11 @@ async function runHallucinationCheck(opts: {
   }
 
   if (ungrounded) {
+    if (degraded) {
+      // Already serving best-effort context; keep the soft banner instead of
+      // stacking a ticket wall on a cited answer.
+      return { blocked: true, timedOut, downgradedToDegraded: true };
+    }
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: false, offerTicket: true },

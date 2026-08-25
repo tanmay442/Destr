@@ -125,14 +125,14 @@ export async function agenticSearch(
       return { kind: 'kept', chunks: kept };
     };
 
+    /** Retry the pass (fresh rewrite + search) while the outcome is retryable. */
+    const shouldRetryPass = (o: PassOutcome): boolean =>
+      gradeOn && (o.kind === 'empty' || (o.kind === 'fallback' && o.reason === 'all_filtered'));
+
     let rewritten = await tryRewrite(originalQuery);
     let outcome = await runPass(rewritten);
 
-    for (
-      let attempt = 0;
-      attempt < maxRetries && gradeOn && outcome.kind === 'empty';
-      attempt++
-    ) {
+    for (let attempt = 0; attempt < maxRetries && shouldRetryPass(outcome); attempt++) {
       rewritten = await tryRewrite(rewritten);
       outcome = await runPass(rewritten);
     }

@@ -386,6 +386,32 @@ describe('ChatInterface', () => {
     expect(screen.queryByTestId('chat-guardrail-degraded')).not.toBeInTheDocument();
   });
 
+  it('collapses stacked degraded + wall guardrail parts into a single wall banner', () => {
+    setupChat([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Answer with two guardrails.' },
+          {
+            type: 'data-guardrail',
+            data: {
+              outOfDomain: false,
+              offerTicket: false,
+              degraded: true,
+              isEmpty: false,
+              message: 'Based on best-effort matches (4) — may be incomplete. Please verify.',
+            },
+          },
+          { type: 'data-guardrail', data: { outOfDomain: false, offerTicket: true } },
+        ],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    expect(screen.getAllByTestId('chat-guardrail-wall')).toHaveLength(1);
+    expect(screen.queryByTestId('chat-guardrail-degraded')).not.toBeInTheDocument();
+  });
+
   it('sends a message when the form is submitted', async () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });

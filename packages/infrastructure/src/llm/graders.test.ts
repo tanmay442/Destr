@@ -495,24 +495,17 @@ describe('shared ~25s turn deadline', () => {
     expect(warnOutput()).toContain('grading_deadline_hit');
   });
 
-  it('stops between sub-batches, logs subBatches attempted, and returns null', async () => {
+  it('dispatches sub-batches concurrently and fails the grade open when the deadline expires mid-grading', async () => {
     const start = new Date('2026-08-01T00:00:00Z');
     vi.useFakeTimers();
     vi.setSystemTime(start);
     const graders = createGraders();
 
-    let call = 0;
+    // Every batch launches before any resolves past the deadline; the
+    // deadline abort is non-retryable so each batch calls the LLM exactly once.
     generateTextMock.mockImplementation(async () => {
-      call += 1;
-      if (call === 1) {
-        return rateChunksResult([
-          { index: 0, relevant: true },
-          { index: 1, relevant: false },
-          { index: 2, relevant: true },
-        ]);
-      }
       vi.setSystemTime(start.getTime() + 26_000);
-      return rateChunksResult([]);
+      throw Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' });
     });
 
     const docs = Array.from(
@@ -520,9 +513,8 @@ describe('shared ~25s turn deadline', () => {
       (_, i) => `${i}${'x'.repeat(GRADE_DOC_CHAR_CAP - 1)}`,
     );
     expect(await graders.documentGrader.gradeAll('q', docs)).toBeNull();
-    expect(call).toBe(2);
-    expect(warnOutput()).toContain('grading_deadline_hit');
-    expect(warnOutput()).toContain('"subBatches":2');
+    expect(generateTextMock).toHaveBeenCalledTimes(3);
+    expect(warnOutput()).toContain('graders.document_grader.failed');
   });
 });
 

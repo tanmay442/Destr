@@ -213,6 +213,15 @@ function DegradedBanner({ message }: { message?: string | undefined }) {
   );
 }
 
+/** Collapse stacked guardrail parts into a single banner: ticket wall > degraded > last part. */
+function highestSeverityGuardrail(parts: Array<{ data: GuardrailData }>): GuardrailData | undefined {
+  return (
+    parts.find((p) => p.data.outOfDomain || p.data.offerTicket)?.data ??
+    parts.find((p) => p.data.degraded)?.data ??
+    parts[parts.length - 1]?.data
+  );
+}
+
 function AssistantGuardrail({ data }: { data: GuardrailData }) {
   const isWall = data.outOfDomain || data.offerTicket;
   if (isWall) return <GuardrailWallBanner />;
@@ -348,9 +357,10 @@ const MessageItem = memo(function MessageItem({
         </div>
       ) : null}
 
-      {guardrails.map((g, i) => (
-        <AssistantGuardrail key={i} data={g.data} />
-      ))}
+      {(() => {
+        const guardrail = highestSeverityGuardrail(guardrails);
+        return guardrail ? <AssistantGuardrail data={guardrail} /> : null;
+      })()}
 
       {!isUser && turnId ? (
         <FeedbackControl

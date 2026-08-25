@@ -942,7 +942,7 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
   });
 
-  it('still blocks on an explicit grounded:false even when the turn is degraded', async () => {
+  it('downgrades an explicit grounded:no to the soft banner when the turn is already degraded', async () => {
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       agenticSearch: vi.fn(async () =>
@@ -959,11 +959,29 @@ describe('chatTurn degraded fallback, guardrail toggle and judge sampling (P4)',
     const guardrails = parts.filter((p) => (p as { type: string }).type === 'data-guardrail') as Array<{
       data: Record<string, unknown>;
     }>;
+    expect(guardrails).toHaveLength(1);
     expect(guardrails[0]?.data).toMatchObject({ degraded: true, offerTicket: false });
-    expect(guardrails.at(-1)?.data).toEqual({ outOfDomain: false, offerTicket: true });
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event.hallucinationBlocked).toBe(true);
+  });
+
+  it('still offers a ticket on grounded:no when the turn is not degraded', async () => {
+    const { deps } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      hallucinationGrader: () => async () => 'no' as const,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    const guardrails = parts.filter((p) => (p as { type: string }).type === 'data-guardrail') as Array<{
+      data: Record<string, unknown>;
+    }>;
+    expect(guardrails.at(-1)?.data).toEqual({ outOfDomain: false, offerTicket: true });
   });
 
   it('enqueues the quality judge through the injected scheduler when sampled', async () => {
