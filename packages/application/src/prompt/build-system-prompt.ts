@@ -1,10 +1,5 @@
 import type { AppConfig } from '@app/domain';
-import {
-  CITATION_SNIPPET_MAX,
-  TOOL_CONTENT_CAP,
-  FALLBACK_CHUNK_COUNT,
-  fallbackBlock,
-} from '@app/domain';
+import { CITATION_SNIPPET_MAX, TOOL_CONTENT_CAP } from '@app/domain';
 import type { RetrievedChunk } from '../rag/search';
 
 const TOOL_CONTRACT_BLOCK = `# Interaction Guidelines
@@ -30,13 +25,8 @@ Keep the \`issue\` field under 4,000 characters (truncate with \`…\` if exceed
 
 const GUARDRAIL_BLOCK = `# Guardrails
 - Optimize the search query with specific terms (keywords, error codes) before calling the tool.
-- Grade chunks: use only highly relevant information and ignore off-topic chunks.
+- Use only highly relevant information and ignore off-topic chunks.
 - Never answer using information outside the provided reference documentation. If unsure, offer to open a ticket.`;
-
-export const FALLBACK_BLOCK = fallbackBlock(FALLBACK_CHUNK_COUNT);
-export function buildFallbackBlock(count: number): string {
-  return fallbackBlock(count);
-}
 
 const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
   friendly: 'Friendly, calm, and direct. Keep replies to a few sentences unless a detailed explanation is requested.',
@@ -105,15 +95,9 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
 export function buildSystemPrompt(
   config: AppConfig,
   preFetched: RetrievedChunk[] | null,
-  
-  degraded?: boolean | number,
 ): string {
   const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config), GUARDRAIL_BLOCK];
-  if (degraded) {
-    const count = typeof degraded === 'number' ? degraded : FALLBACK_CHUNK_COUNT;
-    blocks.push(fallbackBlock(count));
-  }
-  
+
   const outOfScope = buildOutOfScopeBlock(config);
   if (outOfScope) blocks.push(outOfScope);
   
