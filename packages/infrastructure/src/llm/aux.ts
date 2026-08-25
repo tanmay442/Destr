@@ -88,8 +88,6 @@ export function createAuxModels(
     return AbortSignal.timeout(Math.max(Math.min(AUX_REQUEST_TIMEOUT_MS, remainingMs), 1));
   };
 
-  void z;
-
   return {
     queryRewriter: {
       async rewrite(query: string): Promise<string> {

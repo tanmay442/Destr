@@ -127,7 +127,7 @@ describe('agenticSearch', () => {
     searchChunksMock.mockResolvedValue(ok([]));
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 2 });
     expect(res.ok).toBe(true);
-    expect(searchChunksMock).toHaveBeenCalledTimes(3); // initial pass + 2 retries
+    expect(searchChunksMock).toHaveBeenCalledTimes(3);
     expect(rewriterMock).toHaveBeenCalledTimes(3);
     const r = unwrap(res);
     expect(r.chunks).toEqual([]);
@@ -149,7 +149,7 @@ describe('agenticSearch', () => {
     searchChunksMock.mockResolvedValue(ok([]));
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 5, stepBudget: 3 });
     expect(res.ok).toBe(true);
-    expect(searchChunksMock).toHaveBeenCalledTimes(3); // 1 initial pass + min(maxRetries, budget - 1) retries
+    expect(searchChunksMock).toHaveBeenCalledTimes(3);
     expect(unwrap(res).resultState).toBe('empty');
   });
 
