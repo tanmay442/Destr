@@ -1,5 +1,5 @@
 import type { AppConfig } from '@app/domain/app-config';
-import { SIMILARITY_THRESHOLD } from '@app/domain';
+import { SIMILARITY_THRESHOLD, JUDGE_SAMPLE_RATE } from '@app/domain';
 import {
   PARENT_CHUNK_SIZE,
   CHILD_CHUNK_SIZE,
@@ -11,7 +11,6 @@ import {
   HYBRID_ENABLED,
   RERANKER_PROVIDER,
   AUX_MODEL,
-  JUDGE_SAMPLE_RATE,
   ANSWER_CACHE_ENABLED,
   ANSWER_CACHE_TTL_SEC,
   AGENTIC_ENABLED,
