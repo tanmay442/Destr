@@ -670,25 +670,11 @@ export interface QueryRewriter {
   rewrite(query: string): Promise<string>;
 }
 
-/**
- * Binary relevance grading for a batch of documents.
- * Returns one verdict per input index, or null when grading could not run
- * (callers must return top-4 fallback chunks as degraded, not empty).
- */
-export interface DocumentGrader {
-  gradeAll(question: string, documents: string[]): Promise<Array<'yes' | 'no'> | null>;
-}
-
-/** Why an agentic turn fell back to ungraded context chunks. */
-export type FallbackReason =
-  | 'grader_unavailable'
-  | 'all_filtered'
-  | 'grading_disabled'
-  | 'turn_deadline'
-  | 'lenient_fallback';
+/** Why an answered turn was cut short by the turn deadline. */
+export type FallbackReason = 'turn_deadline';
 
 /** Final state of an agentic retrieval turn. */
-export type AgenticResultState = 'ok' | 'degraded' | 'empty';
+export type AgenticResultState = 'ok' | 'empty';
 
 /** Live quality-judge scores for one answered turn (0-1 each). */
 export interface JudgeScores {
