@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { appConfig } from '@/lib/config';
 import { partialAppConfigSchema } from '@app/domain/app-config';
+import type { SettingsRepo } from '@app/domain';
 
 type FakeRepo = {
   getOverrides: ReturnType<typeof vi.fn>;
@@ -23,7 +24,9 @@ async function loadRuntime(repo: FakeRepo, envLock = '') {
   vi.doMock('@/composition', () => ({
     getComposition: () => ({ settingsRepo: repo, db: { execute: async () => ({}) } }),
   }));
-  return import('@/lib/config/runtime');
+  const mod = await import('@/lib/config/runtime');
+  mod.registerSettingsRepoProvider(() => repo as unknown as SettingsRepo);
+  return mod;
 }
 
 let nowValue = 1_000_000;

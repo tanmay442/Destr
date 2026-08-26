@@ -1,6 +1,6 @@
-import { getComposition } from '@/composition';
 import { appConfig } from '@/lib/config';
 import { appConfigSchema, type AppConfig } from '@app/domain/app-config';
+import type { SettingsRepo } from '@app/domain';
 import { logger } from '@/lib/logger';
 
 interface CacheEntry {
@@ -102,6 +102,12 @@ let cache: CacheEntry | null = null;
 let refreshInFlight: Promise<AppConfig> | null = null;
 let degraded = false;
 
+let settingsRepoProvider: (() => SettingsRepo) | null = null;
+
+export function registerSettingsRepoProvider(provider: () => SettingsRepo): void {
+  settingsRepoProvider = provider;
+}
+
 export function isRuntimeConfigDegraded(): boolean {
   return degraded;
 }
@@ -125,7 +131,8 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
 
 async function refreshCache(): Promise<AppConfig> {
   try {
-    const { overrides, version } = await getComposition().settingsRepo.getOverrides();
+    if (!settingsRepoProvider) throw new Error('Settings repo provider not registered');
+    const { overrides, version } = await settingsRepoProvider().getOverrides();
     const merged = deepMerge(appConfig, overrides);
     let validated = appConfigSchema.parse(merged);
     validated = enforceAgenticKillSwitch(validated);
