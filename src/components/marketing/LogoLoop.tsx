@@ -168,7 +168,7 @@ const useAnimationLoop = (
   }, [targetVelocity, seqWidth, seqHeight, isHovered, hoverSpeed, isVertical, trackRef]);
 };
 
-export const LogoLoop = memo(
+const LogoLoop = memo(
   ({
     logos,
     speed = 120,
