@@ -39,7 +39,7 @@ function subscribe(onChange: () => void): () => void {
 }
 
 /** Sidebar visibility: expanded by default, persisted across visits. */
-export function useSidebarOpen(): [boolean, () => void] {
+function useSidebarOpen(): [boolean, () => void] {
   const open = useSyncExternalStore(subscribe, readOpen, () => true);
   const toggle = useCallback(() => writeOpen(!readOpen()), []);
   return [open, toggle];

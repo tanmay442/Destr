@@ -19,13 +19,6 @@ export const FEATURES = [
   },
 ];
 
-export const TECH = [
-  'Next.js', 'React', 'Clerk', 'Vercel AI SDK', 'Drizzle', 'Neon Postgres',
-  'pgvector', 'Docker', 'Ollama', 'Google AI Studio', 'OpenAI-compatible',
-  'Cloudflare R2', 'Upstash Redis', 'Upstash QStash', 'Tailwind CSS', 'Vitest',
-  'TypeScript',
-];
-
 export const QUICK_START = {
   commands: [
     'git clone https://github.com/tanmay442/rag_agent.git && cd rag_agent',
