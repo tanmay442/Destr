@@ -177,11 +177,11 @@ describe('graceful degradation', () => {
     const { getRuntimeConfig } = await loadRuntime(repo);
     const first = await getRuntimeConfig();
     expect(first).toEqual(appConfig);
-    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+    expect(repo.getOverrides).toHaveBeenCalledTimes(2);
     advance(10_000);
     const second = await getRuntimeConfig();
     expect(second).toEqual(appConfig);
-    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+    expect(repo.getOverrides).toHaveBeenCalledTimes(2);
   });
 
   it('retries the DB after the degraded cache hard-expires', async () => {
@@ -193,9 +193,33 @@ describe('graceful degradation', () => {
     };
     const { getRuntimeConfig } = await loadRuntime(repo);
     await getRuntimeConfig();
-    expect(repo.getOverrides).toHaveBeenCalledTimes(1);
+    expect(repo.getOverrides).toHaveBeenCalledTimes(2);
     advance(301_000);
     await getRuntimeConfig();
+    expect(repo.getOverrides).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('settings read hardening', () => {
+  it('recovers without entering degraded mode when a transient cold-read failure succeeds on retry', async () => {
+    const repo = makeRepo({ retrievalMode: 'normal' });
+    repo.getOverrides.mockRejectedValueOnce(new Error('connection terminated'));
+    const { getRuntimeConfig, isRuntimeConfigDegraded } = await loadRuntime(repo);
+    const cfg = await getRuntimeConfig();
+    expect(cfg.retrievalMode).toBe('normal');
+    expect(isRuntimeConfigDegraded()).toBe(false);
     expect(repo.getOverrides).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns and serves static defaults when no provider is registered', async () => {
+    vi.resetModules();
+    delete process.env.APP_SETTINGS_LOCK;
+    vi.doMock('@/composition', () => ({
+      getComposition: () => ({ settingsRepo: makeRepo({}), db: { execute: async () => ({}) } }),
+    }));
+    const mod = await import('@/lib/config/runtime');
+    const cfg = await mod.getRuntimeConfig();
+    expect(cfg).toEqual(appConfig);
+    expect(mod.isRuntimeConfigDegraded()).toBe(true);
   });
 });
