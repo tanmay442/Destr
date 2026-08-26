@@ -5,7 +5,7 @@ import { fieldConfig, type FieldMeta } from './field-config';
 
 export const NON_EDITABLE_FIELDS = ['adminEmails', 'seedDocsDir', 'prefetchFirstTurn'] as const;
 
-export const IMMUTABLE_FIELDS = ['embeddingModel', ...NON_EDITABLE_FIELDS] as const;
+const IMMUTABLE_FIELDS = ['embeddingModel', ...NON_EDITABLE_FIELDS] as const;
 
 export type FieldSource = 'default' | 'db' | 'env-locked';
 
@@ -97,7 +97,7 @@ export function deepGet(obj: unknown, path: string): unknown {
   return cur;
 }
 
-export function computeSource(
+function computeSource(
   path: string,
   overrides: Partial<AppConfig>,
   lockedPaths: readonly string[],

@@ -40,6 +40,20 @@ async function requireAdminOrError(): Promise<
   }
 }
 
+async function requireDocumentAdmin(
+  documentId: number,
+): Promise<
+  | { user: { id: string; email: string; name: string; imageUrl: string | null; role: 'admin' | 'user' } }
+  | { error: string }
+> {
+  const session = await requireAdminOrError();
+  if ('error' in session) return session;
+  if (!isValidDocumentId(documentId)) {
+    return { error: 'Invalid document id' };
+  }
+  return session;
+}
+
 export interface UploadState {
   error?: string;
   status?: 'inserted' | 'updated' | 'unchanged' | 'queued';
@@ -97,11 +111,8 @@ export async function uploadPdfAction(
 export async function deleteDocumentAction(
   documentId: number,
 ): Promise<{ error?: string }> {
-  const session = await requireAdminOrError();
+  const session = await requireDocumentAdmin(documentId);
   if ('error' in session) return session;
-  if (!isValidDocumentId(documentId)) {
-    return { error: 'Invalid document id' };
-  }
   try {
     const result = await getComposition().softDeleteDocument({ documentId, actorId: session.user.id });
     if (!result.ok) return toSafeError(result.error);
@@ -116,11 +127,8 @@ export async function deleteDocumentAction(
 export async function restoreDocumentAction(
   documentId: number,
 ): Promise<{ error?: string }> {
-  const session = await requireAdminOrError();
+  const session = await requireDocumentAdmin(documentId);
   if ('error' in session) return session;
-  if (!isValidDocumentId(documentId)) {
-    return { error: 'Invalid document id' };
-  }
   try {
     const result = await getComposition().restoreDocument(documentId, session.user.id);
     if (!result.ok) return toSafeError(result.error);
@@ -135,11 +143,8 @@ export async function restoreDocumentAction(
 export async function hardDeleteDocumentAction(
   documentId: number,
 ): Promise<{ error?: string }> {
-  const session = await requireAdminOrError();
+  const session = await requireDocumentAdmin(documentId);
   if ('error' in session) return session;
-  if (!isValidDocumentId(documentId)) {
-    return { error: 'Invalid document id' };
-  }
   try {
     const result = await getComposition().hardDeleteDocument({ documentId, actorId: session.user.id });
     if (!result.ok) return toSafeError(result.error);
@@ -222,11 +227,8 @@ export interface RecountChunksResult {
 export async function recountChunksAction(
   documentId: number,
 ): Promise<RecountChunksResult> {
-  const session = await requireAdminOrError();
+  const session = await requireDocumentAdmin(documentId);
   if ('error' in session) return session;
-  if (!isValidDocumentId(documentId)) {
-    return { error: 'Invalid document id' };
-  }
   try {
     const result = await getComposition().recountChunksForDocument(documentId);
     if (!result.ok) return toSafeError(result.error);

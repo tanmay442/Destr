@@ -1,6 +1,6 @@
-import { getComposition } from '@/composition';
 import { appConfig } from '@/lib/config';
 import { appConfigSchema, type AppConfig } from '@app/domain/app-config';
+import type { SettingsRepo } from '@app/domain';
 import { logger } from '@/lib/logger';
 
 interface CacheEntry {
@@ -12,6 +12,7 @@ interface CacheEntry {
 
 const SOFT_TTL_MS = 30_000;
 const HARD_TTL_MS = 300_000;
+const SETTINGS_READ_RETRY_DELAY_MS = 200;
 
 const ENV_LOCK = (process.env.APP_SETTINGS_LOCK ?? '')
   .split(',')
@@ -102,6 +103,12 @@ let cache: CacheEntry | null = null;
 let refreshInFlight: Promise<AppConfig> | null = null;
 let degraded = false;
 
+let settingsRepoProvider: (() => SettingsRepo) | null = null;
+
+export function registerSettingsRepoProvider(provider: () => SettingsRepo): void {
+  settingsRepoProvider = provider;
+}
+
 export function isRuntimeConfigDegraded(): boolean {
   return degraded;
 }
@@ -123,9 +130,42 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
   return enforceAgenticKillSwitch(applyEnvLock(await refreshCache()));
 }
 
-async function refreshCache(): Promise<AppConfig> {
+async function enterDegradedMode(err?: unknown): Promise<AppConfig> {
+  if (err === undefined) {
+    logger.warn('[runtime-config] settings provider unavailable; using static defaults');
+  } else {
+    logger.error('[runtime-config] DB read failed, entering degraded mode', { error: err });
+  }
+  degraded = true;
+  const now = Date.now();
+  const fallback = cache ? cache.value : appConfig;
+  const enforced = enforceAgenticKillSwitch(fallback);
+  cache = {
+    value: enforced,
+    softExpiry: now + SOFT_TTL_MS,
+    hardExpiry: now + HARD_TTL_MS,
+    version: cache ? cache.version : 0,
+  };
+  return cache.value;
+}
+
+async function readOverridesWithRetry(): Promise<{
+  overrides: Partial<AppConfig>;
+  version: number;
+}> {
   try {
-    const { overrides, version } = await getComposition().settingsRepo.getOverrides();
+    return await settingsRepoProvider!().getOverrides();
+  } catch (err) {
+    logger.warn('[runtime-config] settings override read failed; retrying once', { error: err });
+    await new Promise((resolve) => setTimeout(resolve, SETTINGS_READ_RETRY_DELAY_MS));
+    return await settingsRepoProvider!().getOverrides();
+  }
+}
+
+async function refreshCache(): Promise<AppConfig> {
+  if (!settingsRepoProvider) return enterDegradedMode();
+  try {
+    const { overrides, version } = await readOverridesWithRetry();
     const merged = deepMerge(appConfig, overrides);
     let validated = appConfigSchema.parse(merged);
     validated = enforceAgenticKillSwitch(validated);
@@ -142,18 +182,7 @@ async function refreshCache(): Promise<AppConfig> {
     degraded = false;
     return validated;
   } catch (err) {
-    logger.error('[runtime-config] DB read failed, entering degraded mode', { error: err });
-    degraded = true;
-    const now = Date.now();
-    const fallback = cache ? cache.value : appConfig;
-    const enforced = enforceAgenticKillSwitch(fallback);
-    cache = {
-      value: enforced,
-      softExpiry: now + SOFT_TTL_MS,
-      hardExpiry: now + HARD_TTL_MS,
-      version: cache ? cache.version : 0,
-    };
-    return cache.value;
+    return enterDegradedMode(err);
   }
 }
 

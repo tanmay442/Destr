@@ -1,23 +1,9 @@
-import { timingSafeEqual } from 'node:crypto';
 import { getComposition } from '@/composition';
 import { logger } from '@app/domain';
-
-function hasValidCronSecret(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    logger.warn('[cron.refresh-quality] CRON_SECRET is not set — cron auth will fail until it is configured');
-    return false;
-  }
-  const header = req.headers.get('authorization');
-  if (!header?.startsWith('Bearer ')) return false;
-  const provided = Buffer.from(header.slice('Bearer '.length));
-  const expected = Buffer.from(secret);
-  if (provided.length !== expected.length) return false;
-  return timingSafeEqual(provided, expected);
-}
+import { hasValidCronSecret } from '@/lib/cron-auth';
 
 export async function GET(req: Request) {
-  if (!hasValidCronSecret(req)) {
+  if (!hasValidCronSecret(req, 'cron.refresh-quality')) {
     return new Response('Unauthorized', { status: 401 });
   }
   try {

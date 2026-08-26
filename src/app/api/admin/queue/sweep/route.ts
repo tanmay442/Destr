@@ -1,5 +1,5 @@
-import { timingSafeEqual } from 'node:crypto';
 import { getComposition, requireAdminRoute } from '@/composition';
+import { hasValidCronSecret } from '@/lib/cron-auth';
 
 async function sweep() {
   try {
@@ -11,17 +11,6 @@ async function sweep() {
       { status: 503 },
     );
   }
-}
-
-function hasValidCronSecret(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const header = req.headers.get('authorization');
-  if (!header?.startsWith('Bearer ')) return false;
-  const provided = Buffer.from(header.slice('Bearer '.length));
-  const expected = Buffer.from(secret);
-  if (provided.length !== expected.length) return false;
-  return timingSafeEqual(provided, expected);
 }
 
 export async function GET(req: Request) {

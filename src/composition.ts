@@ -36,8 +36,7 @@ const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
 import { createHash } from 'node:crypto';
-import { appConfig } from './lib/config';
-import { getRuntimeConfig } from './lib/config/runtime';
+import { getRuntimeConfig, registerSettingsRepoProvider } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LIST_LIMIT } from '@app/domain';
@@ -385,7 +384,7 @@ function createComposition() {
   };
 }
 
-export { appConfig, isTicketStatus, TICKET_STATUSES, type MyUIMessage };
+export { isTicketStatus, TICKET_STATUSES, type MyUIMessage };
 export { requireAdmin, requireSession, getAppSession, ForbiddenError, unwrap };
 export { respond, respondResult };
 export { TRACE_ENABLED, MD_CHUNK_DELIMITER, UPLOAD_CHUNKED_MAX_MD_BYTES, UPLOAD_CHUNKED_MAX_PDF_BYTES } from '@app/infrastructure/config';
@@ -399,6 +398,8 @@ export function getComposition(): Composition {
   if (!_composition) _composition = createComposition();
   return _composition;
 }
+
+registerSettingsRepoProvider(() => getComposition().settingsRepo);
 
 let _vectorCheckStarted = false;
 export function startVectorDimensionCheck(): void {

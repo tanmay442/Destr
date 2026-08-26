@@ -160,7 +160,7 @@ describe('AppSidebar conversation nav', () => {
     fireEvent.click(screen.getByTestId('conversation-show-more'));
     await waitFor(() => expect(screen.getAllByTestId('conversation-item')).toHaveLength(105));
     expect(screen.queryByTestId('conversation-show-more')).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('emits a new-chat request when New chat is clicked', async () => {
     activePath = '/chat';

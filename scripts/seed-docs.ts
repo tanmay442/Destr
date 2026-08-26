@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 loadDotEnv();
 
 export { parseSeedArgs as parseArgs } from '../packages/cli/src/commands/seed.js';
-export type { SeedParseResult, SeedOptions } from '../packages/cli/src/commands/seed.js';
 
 const { runSeed } = await import('../packages/cli/src/commands/seed.js');
 
