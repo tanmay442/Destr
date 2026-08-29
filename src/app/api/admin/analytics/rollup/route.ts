@@ -1,13 +1,15 @@
 import { getComposition, requireAdminRoute } from '@/composition';
 import { hasValidCronSecret } from '@/lib/cron-auth';
+import { logger } from '@app/domain';
 
 async function refresh() {
   try {
     await getComposition().chatEventBatcher.refreshDailyStats();
     return Response.json({ ok: true });
   } catch (e) {
+    logger.error('[rollup] refresh failed', { error: e });
     return Response.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e) },
+      { ok: false, error: 'Internal error', code: 'internal_error' },
       { status: 503 },
     );
   }

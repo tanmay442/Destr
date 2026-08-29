@@ -2,16 +2,26 @@ import { customType } from 'drizzle-orm/pg-core';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 
+const clientVectorDimensions = new WeakMap<object, number>();
+
 export function resolveVectorDim(env?: EnvSource): number {
-  const raw = (env ?? defaultProcessEnv).get('EMBEDDING_DIMENSION');
-  const parsedDim = parseInt(raw || '768', 10);
-  if (!Number.isFinite(parsedDim) || parsedDim <= 0) {
+  const raw = (env ?? defaultProcessEnv).get('EMBEDDING_DIMENSION') ?? '768';
+  const parsedDim = Number(raw);
+  if (!Number.isInteger(parsedDim) || parsedDim <= 0) {
     throw new Error(
       `Invalid EMBEDDING_DIMENSION: "${raw}". ` +
         'Expected a positive integer (default 768).',
     );
   }
   return parsedDim;
+}
+
+export function registerVectorDim(client: object, vectorDim: number): void {
+  clientVectorDimensions.set(client, vectorDim);
+}
+
+export function resolveVectorDimForClient(client: object, env?: EnvSource): number {
+  return clientVectorDimensions.get(client) ?? resolveVectorDim(env);
 }
 
 /** @deprecated Module-load evaluation kept for compat (same semantics as before E2); resolve at call time via resolveVectorDim(env?). */

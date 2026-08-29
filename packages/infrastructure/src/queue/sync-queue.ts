@@ -2,7 +2,7 @@ import { logger, type IngestQueue } from '@app/domain';
 import { registerIngestQueueProvider } from './ingest-queue-registry';
 
 export interface SyncQueueOptions {
-  ingest?: (documentId: number) => Promise<void>;
+  ingest?: (documentId: number, fileHash?: string) => Promise<void>;
 }
 
 export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
@@ -16,9 +16,10 @@ export function createSyncQueue(opts: SyncQueueOptions = {}): IngestQueue {
     );
   }
   return {
-    async enqueue({ documentId }) {
+    async enqueue({ documentId, fileHash }: { documentId: number; fileHash?: string; attemptId?: string }) {
       if (opts.ingest) {
-        await opts.ingest(documentId);
+        if (fileHash === undefined) await opts.ingest(documentId);
+        else await opts.ingest(documentId, fileHash);
         return;
       }
       logger.warn(

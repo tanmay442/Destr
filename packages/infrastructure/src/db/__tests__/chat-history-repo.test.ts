@@ -73,10 +73,9 @@ suite('ChatHistoryRepository.appendTurn', () => {
       await repo.appendTurn({
         conversationId: CONV_B, userId: 'hist-other', turnId: crypto.randomUUID(), title: 'x', ...turn('m1'),
       });
-      const result = await repo.appendTurn({
+      await expect(repo.appendTurn({
         conversationId: CONV_B, userId: OWNER, turnId: crypto.randomUUID(), title: 'y', ...turn('m9'),
-      });
-      expect(result.conversationId).toBe(CONV_B);
+      })).rejects.toMatchObject({ code: 'forbidden', status: 403 });
       const msgs = await tx.select().from(chatMessages);
       expect(msgs).toHaveLength(2);
       const conv = (await tx.select().from(chatConversations))[0];
@@ -203,14 +202,14 @@ suite('ChatHistoryRepository storage caps (H1/M3)', () => {
     });
   });
 
-  it('blocks appends at 500 stored messages and allows 499 to grow', async () => {
+  it('blocks appends when the stored message cap cannot fit both turn messages', async () => {
     await withRollback(async (tx) => {
       await tx.insert(users).values({ clerkUserId: CAP_OWNER, email: 'hist-cap2@test.local' });
       await tx
         .insert(chatConversations)
         .values({ id: CONV_A, userId: CAP_OWNER, title: 'full' });
       await tx.insert(chatMessages).values(
-        Array.from({ length: 499 }, (_, i) => ({
+        Array.from({ length: 498 }, (_, i) => ({
           conversationId: CONV_A,
           turnId: null,
           role: i % 2 === 0 ? 'user' : 'assistant',
@@ -220,7 +219,7 @@ suite('ChatHistoryRepository storage caps (H1/M3)', () => {
       const repo = new ChatHistoryRepository(tx);
       await repo.appendTurn({ conversationId: CONV_A, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m1') });
       const rows = await tx.select().from(chatMessages).where(eq(chatMessages.conversationId, CONV_A));
-      expect(rows).toHaveLength(501);
+      expect(rows).toHaveLength(500);
       await expect(
         repo.appendTurn({ conversationId: CONV_A, userId: CAP_OWNER, turnId: crypto.randomUUID(), title: 'T', ...turn('m2') }),
       ).rejects.toBeInstanceOf(ConflictError);

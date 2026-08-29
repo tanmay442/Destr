@@ -8,10 +8,10 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **142 files** | 136 passed, 6 skipped (live-DB gated) |
-| **Total Test Cases** | **1,463 tests** | 1,387 passed, 76 skipped (live-DB / external network gated) |
-| **Architecture Modules** | **535 modules** | 1,410 dependencies checked with **0 violations** |
-| **Suite Run Duration** | **~37s** | Full suite execution including transform, setup, import, and runner |
+| **Total Test Files** | **142 files** | Full local run against Docker Postgres: all passed, no skips |
+| **Total Test Cases** | **1,418 tests** | Full local run against Docker Postgres: all passed, no skips |
+| **Architecture Modules** | **536 modules** | 1,400 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~26s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
@@ -32,6 +32,9 @@ pnpm gate
 
 # Run full gate + Next.js production build verification:
 pnpm gate:build
+
+# Run migrations before a production build when needed:
+pnpm build:with-db
 
 # Run interactive Vitest UI:
 pnpm test:ui
@@ -141,10 +144,10 @@ DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-re
 pnpm dev:db                 # docker compose up -d db (pgvector on 127.0.0.1:5432)
 export DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent
 MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate   # apply drizzle/ migrations
-pnpm vitest run             # DB-gated suites now execute instead of skipping
+DATABASE_URL=$DATABASE_URL pnpm test  # DB-gated suites now execute instead of skipping
 ```
 
-Vitest itself does not load `.env.local`, so `DATABASE_URL` must be present in the shell environment (the password matches `.env.example` / `docker-compose.yml`). Migration tooling prefers `MIGRATION_DATABASE_URL` and falls back to `DATABASE_URL`; against a fresh local volume either works, since the compose user owns the database.
+Vitest loads `.env.test` when present, and its values take precedence over inherited shell variables so the branch created by `test:ci` is tested. Remove `.env.test` to use the local shell URL above. The password matches `.env.example` / `docker-compose.yml`. Migration tooling prefers `MIGRATION_DATABASE_URL` and falls back to `DATABASE_URL`; against a fresh local volume either works, since the compose user owns the database.
 
 `setup-test-db` refuses to use an ambient `DATABASE_URL` when
 `NEON_PROJECT_ID`/`NEON_API_KEY` are missing unless `--use-existing` is passed.
@@ -160,4 +163,4 @@ CI executes the complete test suite and quality gate on every Pull Request to `m
 1. **Service Container**: Provisions a `pgvector/pgvector:pg16` Docker container.
 2. **Migrations**: Applies Drizzle database migrations (`pnpm db:migrate`).
 3. **Quality Gate Steps**: Runs the `pnpm gate` checks as individual steps — `tsc --noEmit` -> `eslint` -> `dependency-cruiser` -> `pnpm test`.
-4. **Build Verification**: Executes `pnpm build` (`next build`).
+4. **Build Verification**: Executes `pnpm build` (`next build` without migrations).

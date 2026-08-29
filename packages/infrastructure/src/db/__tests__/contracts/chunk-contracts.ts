@@ -5,7 +5,7 @@ import { VECTOR_DIM } from '../../schema-vector';
 import { insertDocument, softDeleteDocument, deleteDocumentById } from '../../repositories';
 import { ValidationError } from '@app/domain';
 import type { ChunkRepository, ChunkStore, VectorSearch, LexicalSearch } from '@app/domain';
-import type { Client } from '../../chunk-store';
+import type { Client } from '../../client';
 
 export interface ChunkContractFactories {
   makeVector: (client: Client) => VectorSearch;

@@ -1,13 +1,15 @@
 import { getComposition, requireAdminRoute } from '@/composition';
 import { hasValidCronSecret } from '@/lib/cron-auth';
+import { logger } from '@app/domain';
 
 async function sweep() {
   try {
     const result = await getComposition().sweepStaleQueued();
     return Response.json({ ok: true, failed: result.failed });
   } catch (e) {
+    logger.error('[sweep] sweep failed', { error: e });
     return Response.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e) },
+      { ok: false, error: 'Internal error', code: 'internal_error' },
       { status: 503 },
     );
   }

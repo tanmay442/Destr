@@ -22,6 +22,7 @@ describe('openai embedding service contract', () => {
   beforeEach(() => {
     vi.stubEnv('OPENAI_EMBEDDING_API_KEY', 'test-key');
     vi.stubEnv('OPENAI_EMBEDDING_BASE_URL', 'https://api.example.com');
+    vi.stubEnv('EMBEDDING_DIMENSION', String(DIMENSION));
     embedMock.mockImplementation(async ({ value }: { value: string }) => ({
       embedding: vectorFor(value, 0),
     }));

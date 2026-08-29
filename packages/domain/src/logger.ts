@@ -10,6 +10,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 let configuredLevel: LogLevel = 'info';
 
 const MAX_CAUSE_DEPTH = 10;
+const SENSITIVE_META_KEY = /(?:api[_-]?key|authorization|cookie|password|passwd|secret|token|private[_-]?key|access[_-]?key)/i;
 
 export function configureLogger(level: LogLevel): void {
   configuredLevel = level;
@@ -21,7 +22,6 @@ const SECRET_PATTERNS = [
   /\bsk-[A-Za-z0-9-]+\b/g,
   /\bpk_[A-Za-z0-9_-]+\b/g,
   /\bAuthorization:\s*\S+(?:\s+\S+)?/gi,
-  /\b[A-Za-z0-9_-]{32,}\b/g,
 ];
 
 export function scrubSecrets(input: string): string {
@@ -49,28 +49,54 @@ function serializeError(value: Error, depth = 0): Record<string, unknown> {
   return out;
 }
 
+function serializeMetaValue(
+  value: unknown,
+  key: string | undefined,
+  seen: Set<object>,
+): unknown {
+  if (key && SENSITIVE_META_KEY.test(key)) return '[REDACTED]';
+  if (value instanceof Error) return serializeError(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value.toISOString();
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const serializedArray = value.map((entry) => serializeMetaValue(entry, undefined, seen));
+    seen.delete(value);
+    return serializedArray;
+  }
+  const serialized: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    serialized[childKey] = serializeMetaValue(childValue, childKey, seen);
+  }
+  seen.delete(value);
+  return serialized;
+}
+
 function serializeMeta(meta: Record<string, unknown>): Record<string, unknown> {
+  const seen = new Set<object>();
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {
-    out[key] = value instanceof Error ? serializeError(value) : value;
+    out[key] = serializeMetaValue(value, key, seen);
   }
   return out;
 }
 
 function log(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
   if (LEVEL_PRIORITY[level] > LEVEL_PRIORITY[configuredLevel]) return;
-  const entry = {
-    level,
-    time: new Date().toISOString(),
-    msg: message,
-    ...(meta ? serializeMeta(meta) : {}),
-  };
+  const time = new Date().toISOString();
   let line: string;
   try {
+    const entry = {
+      level,
+      time,
+      msg: message,
+      ...(meta ? serializeMeta(meta) : {}),
+    };
     line = scrubSecrets(JSON.stringify(entry));
   } catch {
     line = scrubSecrets(
-      JSON.stringify({ level, time: entry.time, msg: message, meta: '[unserializable]' }),
+      JSON.stringify({ level, time, msg: message, meta: '[unserializable]' }),
     );
   }
   if (level === 'error') console.error(line);

@@ -22,7 +22,8 @@ export async function GET(req: Request) {
     const raw = url.searchParams.get(key);
     if (raw === null || raw === '') return undefined;
     const value = Number(raw);
-    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+    if (!Number.isSafeInteger(value) || value < 0) return undefined;
+    return Math.min(value, 100);
   }
   const limitParam = intParam('limit');
   const offsetParam = intParam('offset');

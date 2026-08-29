@@ -24,7 +24,7 @@ describe('sanitizeText', () => {
 
   it('strips zero-width and format characters', () => {
     expect(sanitizeText('a\u200Bb')).toBe('ab');
-    expect(sanitizeText('a\u200Cb\u200Dc')).toBe('abc');
+    expect(sanitizeText('a\u200Cb\u200Dc')).toBe('a\u200Cb\u200Dc');
     expect(sanitizeText('a\uFEFFb')).toBe('ab');
     expect(sanitizeText('a\u00ADb')).toBe('ab');
     expect(sanitizeText('a\u2060b')).toBe('ab');

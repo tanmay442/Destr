@@ -1,14 +1,15 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client';
-import { VECTOR_DIM } from './schema-vector';
+import { resolveVectorDimForClient } from './schema-vector';
 import type { VectorSearch } from '@app/domain';
 
-export type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function searchChunksByVector(
   embedding: number[],
   opts: { threshold: number; limit: number; filter?: { documentId?: number } },
   client: Client = db,
+  vectorDim?: number,
 ): Promise<
   Array<{
     id: number;
@@ -27,11 +28,15 @@ export async function searchChunksByVector(
   if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every((v) => Number.isFinite(v))) {
     throw new Error('Invalid embedding: must be a non-empty array of finite numbers');
   }
-  if (embedding.length !== VECTOR_DIM) {
-    throw new Error(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${embedding.length}`);
+  const expectedDimension = vectorDim ?? resolveVectorDimForClient(client);
+  if (embedding.length !== expectedDimension) {
+    throw new Error(`Invalid embedding: expected ${expectedDimension} dimensions, got ${embedding.length}`);
   }
   const vectorLiteral = `[${embedding.join(',')}]`;
   const candidatePool = Math.max(opts.limit * 10, 50);
+  await client.execute(
+    sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`,
+  );
   const result = await client.execute(sql`
     WITH candidates AS (
       SELECT ch.id
@@ -93,8 +98,9 @@ export async function searchChunksByVector(
   }));
 }
 
-export function createVectorSearch(client: Client): VectorSearch {
+export function createVectorSearch(client: Client, vectorDim?: number): VectorSearch {
+  const expectedDimension = vectorDim ?? resolveVectorDimForClient(client);
   return {
-    searchByVector: (embedding, opts) => searchChunksByVector(embedding, opts, client),
+    searchByVector: (embedding, opts) => searchChunksByVector(embedding, opts, client, expectedDimension),
   };
 }

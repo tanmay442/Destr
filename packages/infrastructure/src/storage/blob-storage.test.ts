@@ -76,6 +76,14 @@ describe('filesystem blob storage', () => {
     await expect(store.get('../../etc/passwd')).rejects.toThrow(/path traversal/);
   });
 
+  it('rejects symlinked path components', async () => {
+    const store = createFilesystemBlobStorage();
+    await fs.mkdir(join(dir, 'target'));
+    await fs.symlink(join(dir, 'target'), join(dir, 'link'));
+    await expect(store.put('link/escape.bin', Buffer.from('x'), 'application/octet-stream')).rejects.toThrow(/symlink/);
+    await expect(store.get('link/escape.bin')).rejects.toThrow(/symlink/);
+  });
+
   it('logs delete failures instead of swallowing them', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = createFilesystemBlobStorage();

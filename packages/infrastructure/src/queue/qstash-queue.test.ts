@@ -83,8 +83,24 @@ describe('createQstashQueue', () => {
       url: 'https://worker.example.com/api/admin/ingest-worker',
       body: { documentId: 42 },
       retries: 3,
+      deduplicationId: 'document:42',
       dlq: 'https://dlq.example.com',
     });
+  });
+
+  it('uses a new attempt id for each logical enqueue', async () => {
+    process.env.QSTASH_TOKEN = 'test-token';
+    process.env.QSTASH_INGEST_WORKER_URL = 'https://worker.example.com';
+    process.env.QSTASH_DLQ_URL = 'https://dlq.example.com';
+    publishJSONMock.mockResolvedValue({ messageId: 'm1' });
+
+    const queue = createQstashQueue();
+    await queue.enqueue({ documentId: 42, fileHash: 'a'.repeat(64), attemptId: 'attempt-1' });
+
+    expect(publishJSONMock).toHaveBeenCalledWith(expect.objectContaining({
+      body: { documentId: 42, fileHash: 'a'.repeat(64), attemptId: 'attempt-1' },
+      deduplicationId: 'document:42:attempt:attempt-1',
+    }));
   });
 
   it('warns loudly when no DLQ or failure callback is configured', async () => {
@@ -134,6 +150,22 @@ describe('createQueuedSweeper', () => {
     expect(listStaleQueued).toHaveBeenCalledWith(new Date('2026-01-01T00:09:00Z'));
     expect(failed).toEqual([1, 2, 3]);
     expect(result).toEqual({ failed: 3 });
+  });
+
+  it('counts only documents still stale when the conditional fail is available', async () => {
+    const listStaleQueued = vi.fn().mockResolvedValue([1, 2]);
+    const failDocumentIfStale = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const failDocument = vi.fn();
+    const sweeper = createQueuedSweeper({ listStaleQueued, failDocumentIfStale, failDocument }, { ttlMs: 60_000 });
+
+    const result = await sweeper.sweep(new Date('2026-01-01T00:10:00Z'));
+
+    expect(failDocumentIfStale).toHaveBeenCalledWith(1, new Date('2026-01-01T00:09:00Z'));
+    expect(failDocumentIfStale).toHaveBeenCalledWith(2, new Date('2026-01-01T00:09:00Z'));
+    expect(failDocument).not.toHaveBeenCalled();
+    expect(result).toEqual({ failed: 1 });
   });
 
   it('uses a default TTL when none is provided', async () => {

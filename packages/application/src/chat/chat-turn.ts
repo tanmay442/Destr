@@ -8,6 +8,7 @@ import type {
   UIMessage,
 } from 'ai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
@@ -178,21 +179,31 @@ export function persistHistory(
       userMessage: input.userMessage,
       assistantMessage: input.assistantMessage,
     })
-    .catch(() =>
-      logger.warn('chat.history.persist_failed', {
+    .catch((cause: unknown) =>
+      logger.error('chat.history.persist_failed', {
         conversationId: input.conversationId,
         turnId: input.turnId,
+        error: String(cause),
       }),
     );
 }
 
 async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
   if (!request.body) return { value: null, tooLarge: false };
+  const abortedBeforeRead = request.signal.aborted;
   const reader = request.body.getReader();
+  const abortHandler = (): void => {
+    reader.cancel().catch(() => undefined);
+  };
+  request.signal.addEventListener('abort', abortHandler, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {
+      if (!abortedBeforeRead && request.signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+        return { value: null, tooLarge: false };
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
@@ -206,6 +217,7 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
   } catch {
     return { value: null, tooLarge: false };
   } finally {
+    request.signal.removeEventListener('abort', abortHandler);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);
@@ -768,6 +780,29 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
                 }),
               });
+              if (cfg.captureQueryText && deps.historySink && parsed.data.conversationId) {
+                const orphanTurnId = turnId ?? randomUUID();
+                void deps.historySink
+                  .appendTurn({
+                    userId,
+                    conversationId: parsed.data.conversationId,
+                    turnId: orphanTurnId,
+                    title: lastUserText,
+                    userMessage: lastUserMessage ?? { role: 'user', parts: [{ type: 'text', text: lastUserText }] },
+                    assistantMessage: buildAssistantMessageLike({
+                      turnId: orphanTurnId,
+                      text: 'ticket_created_but_stream_failed',
+                      citations: dedupeCitations(capturedCitations),
+                      guardrail: null,
+                    }),
+                  })
+                  .catch((cause: unknown) =>
+                    logger.error('chat.turn.orphan_history_failed', {
+                      turnId,
+                      error: String(cause),
+                    }),
+                  );
+              }
             }
           } catch {}
           controller.error(new Error('Chat stream interrupted'));

@@ -12,6 +12,7 @@ export interface DocumentRow {
   uploadedAt: Date;
   storageKey: string | null;
   ingestStatus: IngestStatus;
+  ingestUpdatedAt?: Date | null;
   deletedAt: Date | null;
 }
 
@@ -42,11 +43,29 @@ export interface DocumentRepository {
   findByName(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   findByNameForUpdate?(fileName: string, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
   findById(id: number, opts?: { includeDeleted?: boolean | undefined }): Promise<DocumentRow | null>;
-  setStorageKey(id: number, key: string): Promise<void>;
+  setStorageKey(id: number, key: string | null): Promise<void>;
   updateIngestStatus(id: number, status: IngestStatus): Promise<void>;
   /** Atomically flip `queued`→`ingesting`; returns true iff this caller won the claim. */
-  claimIngest(id: number): Promise<boolean>;
-  insert(input: { fileName: string; fileHash: string; uploadedBy: string }): Promise<DocumentRow>;
+  claimIngest(id: number, expectedFileHash?: string): Promise<boolean>;
+  /** Change an ingest status only while the row still has the expected hash and status. */
+  updateIngestStatusIfCurrent?(
+    id: number,
+    expectedFileHash: string,
+    expectedStatus: IngestStatus,
+    nextStatus: IngestStatus,
+  ): Promise<boolean>;
+  /** Mark an ingest failed only when its hash and current status still match. */
+  failDocumentIfCurrent?(id: number, expectedFileHash: string): Promise<boolean>;
+  /** Restore or remove a queued upload only when its hash and blob key still match. */
+  restoreAfterQueueFailure?(
+    id: number,
+    expected: { fileHash: string; storageKey: string },
+    previous: { fileHash: string | null; ingestStatus: IngestStatus | null; storageKey: string | null },
+  ): Promise<boolean>;
+  insert(
+    input: { fileName: string; fileHash: string; uploadedBy: string },
+    opts?: { resurrectDeleted?: boolean | undefined },
+  ): Promise<DocumentRow>;
   /** Update mutable metadata of an existing row in place (keeps its id). */
   update(
     id: number,
@@ -58,6 +77,18 @@ export interface DocumentRepository {
       storageKey?: string | null;
     },
   ): Promise<DocumentRow>;
+  /** Update only when the document still has the expected version hash. */
+  updateIfCurrent?(
+    id: number,
+    expectedFileHash: string,
+    patch: {
+      fileName?: string;
+      fileHash?: string;
+      uploadedBy?: string;
+      ingestStatus?: IngestStatus;
+      storageKey?: string | null;
+    },
+  ): Promise<DocumentRow | null>;
   deleteById(id: number): Promise<void>;
   softDelete(id: number, at: Date): Promise<DocumentRow | null>;
   restore(id: number): Promise<DocumentRow | null>;
@@ -71,6 +102,8 @@ export interface DocumentRepository {
   countChunksForAll(): Promise<number>;
   countPendingIngest(): Promise<number>;
   listStaleQueued(olderThan: Date): Promise<number[]>;
+  /** Mark a queued/ingesting document failed only if it is still stale. */
+  failDocumentIfStale?(id: number, olderThan: Date): Promise<boolean>;
   failDocument(id: number): Promise<void>;
 }
 
@@ -249,10 +282,17 @@ export interface UserRepository {
     name?: string | null;
     imageUrl?: string | null;
     role: 'admin' | 'user';
+    emailVerified?: boolean | undefined;
   }): Promise<UserRow>;
   findByClerkId(clerkUserId: string): Promise<UserRow | null>;
   findByIds(clerkUserIds: string[]): Promise<UserRow[]>;
   setRole(clerkUserId: string, role: 'admin' | 'user'): Promise<UserRow | null>;
+  /** Change a role only when the row still has the expected role. */
+  setRoleIfCurrent?(
+    clerkUserId: string,
+    expectedRole: 'admin' | 'user',
+    role: 'admin' | 'user',
+  ): Promise<boolean>;
   touchLastSeen(clerkUserId: string): Promise<void>;
   list(opts: {
     search?: string | undefined;
@@ -700,7 +740,7 @@ export interface BlobStorage {
 }
 
 export interface IngestQueue {
-  enqueue(payload: { documentId: number }): Promise<void>;
+  enqueue(payload: { documentId: number; fileHash?: string; attemptId?: string }): Promise<void>;
   isNoOp(): boolean;
 }
 

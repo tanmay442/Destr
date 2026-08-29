@@ -240,7 +240,7 @@ GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 **Skipping this step makes the app see zero rows silently** — RLS is default-deny, so without a policy (and grants) for `rag_app` every history query returns nothing. Verify afterwards that `rag_app` reads and writes normally while a role without a policy sees zero rows.
 
 **Migration flow (where DDL runs):**
-1. **Local dev** — `pnpm db:migrate` or `pnpm build` (build runs `tsx scripts/migrate.ts` first); uses `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
+1. **Local dev** — `pnpm db:migrate` applies DDL; `pnpm build` runs only the production build, while `pnpm build:with-db` applies migrations first. All migration commands use `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
 2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates a fresh Neon test branch (the setup script writes an owner-grade `DATABASE_URL` into `.env.test`); the "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
 3. **Vercel production builds** — `vercel.json` runs `next build` only; it never applies migrations. Production DDL runs in the approval-gated `deploy` job in `.github/workflows/ci.yml` with `MIGRATION_DATABASE_URL`. Vercel still needs `DATABASE_URL` at runtime.
 

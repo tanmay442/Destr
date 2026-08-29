@@ -128,7 +128,7 @@ describe('ingestPrechunked', () => {
     const depsNoPdf = makeDeps();
     await ingestPrechunked({ fileName: 'doc2.md', chunks: CHUNKS, uploadedBy: 'user' }, depsNoPdf);
     expect(depsNoPdf.blobStorage!.put).not.toHaveBeenCalled();
-    expect(depsNoPdf.documents.setStorageKey).not.toHaveBeenCalled();
+    expect(depsNoPdf.documents.setStorageKey).toHaveBeenCalledWith(1, null);
   });
 
   it('deletes the companion PDF blob when the transaction/writeChunks fails (M5)', async () => {

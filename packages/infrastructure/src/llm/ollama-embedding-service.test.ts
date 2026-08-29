@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const embedBatchWithModelMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../db/schema-vector', () => ({ VECTOR_DIM: 2 }));
+vi.mock('../db/schema-vector', () => ({ resolveVectorDim: () => 2 }));
 vi.mock('./embedding-batch-helper', () => ({ embedBatchWithModel: embedBatchWithModelMock }));
 vi.mock('@ai-sdk/openai', () => ({
   createOpenAI: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'ollama-embed' })) })),

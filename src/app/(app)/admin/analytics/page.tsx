@@ -292,24 +292,27 @@ export default async function AnalyticsPage() {
       </div>
 
       <Tabs defaultValue="quality" className="flex w-full flex-col gap-6">
-        <TabsList className="h-auto w-full justify-start gap-1 bg-muted p-1 sm:h-10">
-          <TabsTrigger value="quality" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <BarChart3 data-icon="inline-start" />
-            Statistics
-          </TabsTrigger>
-          <TabsTrigger value="performance" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Gauge data-icon="inline-start" />
-            Performance
-          </TabsTrigger>
-          <TabsTrigger value="tickets" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Ticket data-icon="inline-start" />
-            Tickets
-          </TabsTrigger>
-          <TabsTrigger value="feedback" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Sparkles data-icon="inline-start" />
-            Feedback
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex w-full scrollbar-none justify-start overflow-x-auto">
+          <TabsList className="inline-flex h-auto w-auto max-w-full items-center gap-1 rounded-full border border-border-subtle bg-card p-1 shadow-sm">
+            <TabsTrigger value="quality" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <BarChart3 className="size-3.5" data-icon="inline-start" />
+              Statistics
+            </TabsTrigger>
+            <TabsTrigger value="performance" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Gauge className="size-3.5" data-icon="inline-start" />
+              Performance
+            </TabsTrigger>
+            <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border-subtle" />
+            <TabsTrigger value="tickets" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Ticket className="size-3.5" data-icon="inline-start" />
+              Tickets
+            </TabsTrigger>
+            <TabsTrigger value="feedback" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Sparkles className="size-3.5" data-icon="inline-start" />
+              Feedback
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="quality" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden" data-testid="analytics-quality">
           

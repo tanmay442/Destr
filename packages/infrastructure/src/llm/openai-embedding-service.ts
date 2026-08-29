@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
 import type { EmbeddingService } from '@app/domain';
+import { resolveVectorDim } from '../db/schema-vector';
 import { embedBatchWithModel } from './embedding-batch-helper';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
 import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
@@ -18,28 +19,49 @@ function getOpenAIEmbeddingModel(): EmbeddingModelV3 {
   return provider.textEmbedding(modelId) as EmbeddingModelV3;
 }
 
-function getOpenAIEmbeddingOptions() {
+function getOpenAIEmbeddingOptions(vectorDim?: number) {
   return {
     openai: {
-      dimensions: Number(process.env.EMBEDDING_DIMENSION) || 768,
+      dimensions: vectorDim ?? resolveVectorDim(),
     },
   } as const;
 }
 
-export const openAIEmbeddingService: EmbeddingService = {
-  async embed(value: string): Promise<number[]> {
-    const embeddings = await embedBatchWithModel(
-      [value],
-      getOpenAIEmbeddingModel(),
-      getOpenAIEmbeddingOptions(),
-    );
-    return embeddings[0] ?? [];
-  },
+function assertDimension(modelId: string, embeddings: number[][], vectorDim?: number): void {
+  const expected = vectorDim ?? resolveVectorDim();
+  for (const embedding of embeddings) {
+    if (embedding.length !== expected) {
+      throw new Error(
+        `OpenAI embedding model "${modelId}" returned ${embedding.length}-dimension vectors, but ` +
+          `EMBEDDING_DIMENSION=${expected} (vector column width). Set EMBEDDING_DIMENSION=${embedding.length} ` +
+          'or switch to a model that emits vectors of the expected width.',
+      );
+    }
+  }
+}
 
-  async embedBatch(values: string[]): Promise<number[][]> {
-    return embedBatchWithModel(values, getOpenAIEmbeddingModel(), getOpenAIEmbeddingOptions());
-  },
-};
+function createOpenAIEmbeddingService(vectorDim?: number): EmbeddingService {
+  const getProviderOptions = () => getOpenAIEmbeddingOptions(vectorDim);
+  return {
+    async embed(value: string): Promise<number[]> {
+      const model = getOpenAIEmbeddingModel();
+      const embeddings = await embedBatchWithModel([value], model, getProviderOptions());
+      assertDimension(model.modelId, embeddings, vectorDim);
+      return embeddings[0] ?? [];
+    },
 
-registerEmbeddingProvider('openai', openAIEmbeddingService);
+    async embedBatch(values: string[]): Promise<number[][]> {
+      const model = getOpenAIEmbeddingModel();
+      const embeddings = await embedBatchWithModel(values, model, getProviderOptions());
+      assertDimension(model.modelId, embeddings, vectorDim);
+      return embeddings;
+    },
+  };
+}
+
+export const openAIEmbeddingService = createOpenAIEmbeddingService();
+
+registerEmbeddingProvider('openai', (vectorDim) =>
+  vectorDim === undefined ? openAIEmbeddingService : createOpenAIEmbeddingService(vectorDim),
+);
 registerEmbeddingModelIdProvider('openai', () => process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small');

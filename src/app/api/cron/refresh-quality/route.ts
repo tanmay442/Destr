@@ -17,8 +17,9 @@ export async function GET(req: Request) {
     });
     return Response.json({ ok: true, ...averages });
   } catch (e) {
+    logger.error('[refresh-quality] failed', { error: e });
     return Response.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e) },
+      { ok: false, error: 'Internal error', code: 'internal_error' },
       { status: 503 },
     );
   }

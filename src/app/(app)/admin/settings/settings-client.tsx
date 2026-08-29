@@ -344,20 +344,22 @@ export function SettingsClient() {
       </div>
 
       <Tabs defaultValue="persona" className="flex w-full flex-col gap-6">
-        <TabsList className="h-auto w-full justify-start gap-1 bg-muted p-1 sm:h-10">
-          <TabsTrigger value="persona" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Shield data-icon="inline-start" />
-            Persona &amp; Guardrails
-          </TabsTrigger>
-          <TabsTrigger value="chunking" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Cpu data-icon="inline-start" />
-            Chunking Strategy
-          </TabsTrigger>
-          <TabsTrigger value="retrieval" className="gap-2 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Sliders data-icon="inline-start" />
-            Retrieval Strategy
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex w-full scrollbar-none justify-start overflow-x-auto">
+          <TabsList className="inline-flex h-auto w-auto max-w-full items-center gap-1 rounded-full border border-border-subtle bg-card p-1 shadow-sm">
+            <TabsTrigger value="persona" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Shield className="size-3.5" data-icon="inline-start" />
+              Persona &amp; Guardrails
+            </TabsTrigger>
+            <TabsTrigger value="chunking" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Cpu className="size-3.5" data-icon="inline-start" />
+              Chunking Strategy
+            </TabsTrigger>
+            <TabsTrigger value="retrieval" className="gap-1.5 rounded-full px-4 py-1.5 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Sliders className="size-3.5" data-icon="inline-start" />
+              Retrieval Strategy
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="persona" forceMount className="flex flex-col gap-6 data-[state=inactive]:hidden">
           <div data-testid="group-Persona & Prompt" className="flex flex-col gap-6">

@@ -143,7 +143,19 @@ const STORED_BYTES_TARGET = MAX_STORED_MESSAGE_BYTES - 1_024;
 /** Truncate the last text part until the snapshot fits the storage byte cap. */
 export function enforceStoredBytes(message: StoredMessage): StoredMessage {
   if (jsonBytes(message) <= STORED_BYTES_TARGET) return message;
-  const clone: StoredMessage = { ...message, parts: message.parts.map((p) => ({ ...p })) };
+  const clone: StoredMessage = {
+    ...message,
+    parts: message.parts.map((p) => ({ ...p })),
+    metadata: {
+      ...message.metadata,
+      ...(message.metadata.citations ? { citations: [...message.metadata.citations] } : {}),
+    },
+  };
+  const citations = clone.metadata.citations;
+  if (citations) {
+    while (jsonBytes(clone) > STORED_BYTES_TARGET && citations.length > 0) citations.pop();
+    if (citations.length === 0) delete clone.metadata.citations;
+  }
   for (;;) {
     const idx = findLastTextIndex(clone.parts);
     if (idx === -1) break;
@@ -164,6 +176,19 @@ export function enforceStoredBytes(message: StoredMessage): StoredMessage {
     const bytesPerChar = Math.max(1, Math.ceil(Buffer.byteLength(text) / chars.length));
     part.text = capCodePoints(text, Math.floor(budget / bytesPerChar));
     if (jsonBytes(clone) <= STORED_BYTES_TARGET) break;
+  }
+  while (jsonBytes(clone) > STORED_BYTES_TARGET) {
+    const optionalPart = clone.parts.findLastIndex((part) => part.type !== 'text');
+    if (optionalPart < 0) break;
+    clone.parts.splice(optionalPart, 1);
+  }
+  if (jsonBytes(clone) > STORED_BYTES_TARGET) {
+    return {
+      id: capCodePoints(clone.id, 256),
+      role: clone.role,
+      parts: [],
+      metadata: {},
+    };
   }
   logger.warn('chat.history.stored_bytes_truncated', {
     bytes: jsonBytes(clone),
@@ -197,10 +222,10 @@ export async function listConversations(
 ): Promise<Result<{ conversations: ConversationSummary[]; total: number }>> {
   try {
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const [conversations, total] = await Promise.all([
-      deps.repo.listConversations(input.userId, { limit, offset }),
-      deps.repo.countConversations(input.userId),
-    ]);
+    // Sequential to avoid list/count race causing pagination mismatch; UI redirects to last page correctly regardless.
+    // Ideally use COUNT(*) OVER() in a single query or a snapshot transaction.
+    const conversations = await deps.repo.listConversations(input.userId, { limit, offset });
+    const total = await deps.repo.countConversations(input.userId);
     return ok({ conversations, total });
   } catch (e) {
     return err(new ExternalServiceError('Failed to list conversations', e));

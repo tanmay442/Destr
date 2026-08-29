@@ -65,6 +65,9 @@ function applyEnvLock(cfg: AppConfig): AppConfig {
     if (reachable) {
       const leaf = parts[parts.length - 1];
       if (leaf !== undefined && leaf in cursor) cursor[leaf] = defaultValue;
+      else logger.warn(`[runtime-config] APP_SETTINGS_LOCK path not found: ${path}`);
+    } else {
+      logger.warn(`[runtime-config] APP_SETTINGS_LOCK path not found: ${path}`);
     }
   }
   return locked as unknown as AppConfig;

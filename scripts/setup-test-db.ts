@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadDotEnv } from '../packages/infrastructure/src/config/dotenv-bootstrap';
 import {
@@ -177,12 +177,14 @@ export async function main() {
 
   const envPath = resolve(process.cwd(), '.env.test');
   let envText = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
-  if (/^DATABASE_URL=.*$/m.test(envText)) {
-    envText = envText.replace(/^DATABASE_URL=.*$/m, `DATABASE_URL="${connectionString}"`);
+  const databaseLine = `DATABASE_URL=${JSON.stringify(connectionString)}`;
+  if (/^(?:export\s+)?DATABASE_URL\s*=.*$/m.test(envText)) {
+    envText = envText.replace(/^(?:export\s+)?DATABASE_URL\s*=.*$/m, databaseLine);
   } else {
-    envText += `\nDATABASE_URL="${connectionString}"\n`;
+    envText += `${envText.length > 0 && !envText.endsWith('\n') ? '\n' : ''}${databaseLine}\n`;
   }
-  writeFileSync(envPath, envText, 'utf8');
+  writeFileSync(envPath, envText, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(envPath, 0o600);
   console.log(`[setup-test-db] Wrote DATABASE_URL to ${envPath}`);
 
   try {
@@ -193,14 +195,18 @@ export async function main() {
     // automatically as part of test-DB provisioning.
     execFileSync('node', ['scripts/apply-migration.mjs'], {
       stdio: 'inherit',
-      env: { ...process.env, DATABASE_URL: connectionString },
+      env: {
+        ...process.env,
+        DATABASE_URL: connectionString,
+        MIGRATION_DATABASE_URL: connectionString,
+      },
     });
   } catch (err) {
     console.error('[setup-test-db] migration failed', err);
     process.exit(1);
   }
 
-  const seed = spawnSync('pnpm', ['seed'], {
+  const seed = spawnSync('pnpm', ['seed', '--yes'], {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: connectionString },
   });

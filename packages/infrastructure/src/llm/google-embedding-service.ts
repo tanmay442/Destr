@@ -1,6 +1,6 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
-import { VECTOR_DIM } from '../db/schema-vector';
+import { resolveVectorDim } from '../db/schema-vector';
 import { registerEmbeddingModelIdProvider } from './registries';
 
 export function getGoogleEmbeddingModelId(): string {
@@ -16,8 +16,16 @@ export function getEmbeddingModel(): EmbeddingModelV3 {
   return google.textEmbedding(getGoogleEmbeddingModelId()) as EmbeddingModelV3;
 }
 
+export function getGoogleEmbeddingOptions(vectorDim?: number) {
+  return {
+    outputDimensionality: vectorDim ?? resolveVectorDim(),
+  } as const;
+}
+
 export const EMBEDDING_OPTIONS = {
-  outputDimensionality: VECTOR_DIM,
-} as const;
+  get outputDimensionality(): number {
+    return resolveVectorDim();
+  },
+};
 
 registerEmbeddingModelIdProvider('google', getGoogleEmbeddingModelId);

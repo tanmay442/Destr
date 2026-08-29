@@ -7,6 +7,7 @@ import type {
 } from '@app/domain';
 import {
   writeChunks,
+  claimDocumentByName,
   nameStillClaimed,
   UPLOAD_CONFLICT_MESSAGE,
   type IngestResult,
@@ -50,6 +51,12 @@ export interface PrechunkedIngestDeps {
 
 /** Ingest pre-chunked Markdown. An optional companion PDF is stored as
  *  the document blob for preview/download. */
+function isDocumentNameConflict(error: unknown): boolean {
+  const wrapped = error as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
+  const pgError = wrapped.code ? wrapped : wrapped.cause;
+  return pgError?.code === '23505' && (pgError.constraint === 'documents_name_key' || pgError.constraint === 'documents_file_name_unique');
+}
+
 export async function ingestPrechunked(
   input: PrechunkedIngestInput,
   deps: PrechunkedIngestDeps,
@@ -64,7 +71,7 @@ export async function ingestPrechunked(
 
   // Dedup hash covers the markdown AND any companion PDF, so re-uploading one
   // with different content for the other is never treated as unchanged.
-  const markdownSource = Buffer.from(chunks.map((c) => c.content).join('\n'));
+  const markdownSource = Buffer.from(chunks.map((chunk) => chunk.content).join('\n'));
   const fileHash = pdfBuffer
     ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
     : deps.hasher.sha256(markdownSource);
@@ -110,31 +117,46 @@ export async function ingestPrechunked(
     ? `docs/${randomUUID()}/${safeBlobName(pdfFileName ?? fileName)}`
     : undefined;
   if (pdfBuffer && deps.blobStorage && blobKey) {
-    await deps.blobStorage.put(blobKey, pdfBuffer, 'application/pdf');
+    try {
+      await deps.blobStorage.put(blobKey, pdfBuffer, 'application/pdf');
+    } catch (cause) {
+      await deps.blobStorage.delete(blobKey).catch(() => {});
+      throw cause;
+    }
   }
 
+  let oldStorageKey: string | null = null;
   const write = async (
     documents: DocumentRepository,
     repoChunks: ChunkRepository,
   ): Promise<Result<IngestResult>> => {
-    const existing = await documents.findByName(fileName, { includeDeleted: true });
-    const live = existing && !existing.deletedAt ? existing : null;
-    if (live && live.fileHash === fileHash) {
-      return ok({ documentId: live.id, chunks: 0, status: 'unchanged' });
+    const claim = await claimDocumentByName(fileName, fileHash, documents);
+    if (claim.kind === 'unchanged') {
+      if (claim.restore) await documents.restore(claim.documentId);
+      return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
     }
+    oldStorageKey = claim.kind === 'replace' || claim.kind === 'resurrect'
+      ? claim.previous.storageKey
+      : claim.oldStorageKey;
     const outcome = await writeChunks(
       documents,
       repoChunks,
-      { fileName, fileHash, uploadedBy, storageKey: blobKey },
+      {
+        fileName,
+        fileHash,
+        uploadedBy,
+        storageKey: blobKey ?? null,
+        resurrectDeleted: claim.kind === 'resurrect',
+      },
       rows,
     );
     if (!(await nameStillClaimed(fileName, fileHash, documents))) {
-      return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+      throw new ConflictError(UPLOAD_CONFLICT_MESSAGE);
     }
     return ok({
       documentId: outcome.documentId,
       chunks: chunks.length,
-      status: live ? 'updated' : 'inserted',
+      status: claim.kind === 'replace' ? 'updated' : 'inserted',
     });
   };
 
@@ -145,10 +167,14 @@ export async function ingestPrechunked(
       : await write(deps.documents, deps.chunks);
   } catch (cause) {
     if (blobKey) await deps.blobStorage?.delete(blobKey).catch(() => {});
+    if (isDocumentNameConflict(cause)) return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+    if (cause instanceof ConflictError) return err(cause);
     throw cause;
   }
   if (!result.ok || result.value.status === 'unchanged') {
     if (blobKey) await deps.blobStorage?.delete(blobKey).catch(() => {});
+  } else if (oldStorageKey && oldStorageKey !== blobKey) {
+    await deps.blobStorage?.delete(oldStorageKey).catch(() => {});
   }
   return result;
 }

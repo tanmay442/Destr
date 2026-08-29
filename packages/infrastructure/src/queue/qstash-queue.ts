@@ -39,22 +39,37 @@ export function resolveIngestWorkerUrl(): string {
 
 /** Trim the trailing slash and refuse unreachable localhost worker URLs. */
 function normalizeWorkerUrl(raw: string): string {
-  const url = raw.replace(/\/$/, '');
-  let hostname = '';
+  let parsed: URL;
   try {
-    hostname = new URL(url).hostname;
+    parsed = new URL(raw);
   } catch {
-    hostname = '';
+    const message = `[ingest-queue] Refusing invalid worker URL: ${raw}`;
+    if (process.env.NODE_ENV === 'production') throw new Error(message);
+    logger.warn(message);
+    return '';
   }
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+    parsed.username !== '' ||
+    parsed.password !== '' ||
+    parsed.search !== '' ||
+    parsed.hash !== ''
+  ) {
+    const message = `[ingest-queue] Refusing unsafe worker URL: ${raw}`;
+    if (process.env.NODE_ENV === 'production') throw new Error(message);
+    logger.warn(message);
+    return '';
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
     const message =
-      `[ingest-queue] Refusing worker URL ${url}: QStash cannot reach a localhost address. ` +
+      `[ingest-queue] Refusing worker URL ${raw}: QStash cannot reach a localhost address. ` +
       'Set QSTASH_INGEST_WORKER_URL to a publicly reachable URL.';
     if (process.env.NODE_ENV === 'production') throw new Error(message);
     logger.warn(message);
     return '';
   }
-  return url;
+  return parsed.toString().replace(/\/+$/, '');
 }
 
 /**
@@ -79,13 +94,19 @@ export function createQstashQueue(): IngestQueue {
     );
   }
   return {
-    async enqueue({ documentId }) {
+    async enqueue({ documentId, fileHash, attemptId }: { documentId: number; fileHash?: string; attemptId?: string }) {
       if (!baseUrl) throw new Error('QSTASH_INGEST_WORKER_URL is not set.');
+      const deduplicationId = attemptId
+        ? `document:${documentId}:attempt:${attemptId}`
+        : fileHash
+          ? `document:${documentId}:${fileHash}`
+          : `document:${documentId}`;
       try {
         await client.publishJSON({
           url: `${baseUrl}/api/admin/ingest-worker`,
-          body: { documentId },
+          body: { documentId, ...(fileHash ? { fileHash } : {}), ...(attemptId ? { attemptId } : {}) },
           retries: 3,
+          deduplicationId,
           ...(dlqUrl ? { dlq: dlqUrl } : {}),
           ...(failureCallbackUrl ? { failureCallback: failureCallbackUrl } : {}),
         });

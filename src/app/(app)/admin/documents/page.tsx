@@ -188,7 +188,7 @@ export default async function DocumentsPage({
         totalPages={totalPages}
         total={result.total}
         pathname="/admin/documents"
-        query={{ search }}
+        query={Object.fromEntries(Object.entries(params).filter(([k, v]) => k !== 'page' && v !== undefined)) as Record<string, string>}
       />
       <IngestStatusPoller hasPending={hasPendingIngest} />
     </section>

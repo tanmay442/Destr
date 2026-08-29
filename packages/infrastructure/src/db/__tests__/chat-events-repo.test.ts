@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { eq, isNull, sql, SQL } from 'drizzle-orm';
+import { eq, isNull, or, sql, SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
 import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter } from '../schema';
 import { db } from '../client';
@@ -601,7 +601,16 @@ suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
         expect(result.deletedCount).toBe(1);
         expect(await tx.select().from(tickets).where(eq(tickets.userId, 'purge-u2'))).toHaveLength(0);
         expect(await tx.select().from(users).where(eq(users.clerkUserId, 'purge-u2'))).toHaveLength(0);
-        const auditLeft = await tx.select({ id: auditEvents.id }).from(auditEvents);
+        const auditLeft = await tx
+          .select({ id: auditEvents.id })
+          .from(auditEvents)
+          .where(
+            or(
+              eq(auditEvents.actorId, 'purge-u2'),
+              eq(auditEvents.targetId, 'purge-u2'),
+              eq(auditEvents.targetId, 'TKT-purge'),
+            ),
+          );
         expect(auditLeft).toHaveLength(0);
         throw ROLLBACK;
       });

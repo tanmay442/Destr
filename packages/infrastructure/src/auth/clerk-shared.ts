@@ -1,4 +1,7 @@
 import { currentUser } from '@clerk/nextjs/server';
+import { createTtlCache } from '../cache/ttl-cache';
+
+export { createTtlCache } from '../cache/ttl-cache';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -25,6 +28,17 @@ function emailVerified(email: ClerkEmailAddress | undefined): boolean {
   return v?.status === 'verified';
 }
 
+export function isEmailVerified(
+  emailAddresses: ClerkEmailAddress[] | undefined,
+  emailAddress: string,
+): boolean {
+  if (!emailAddresses || !emailAddress) return false;
+  const normalizedAddress = emailAddress.toLowerCase();
+  return emailAddresses.some(
+    (entry) => entry.emailAddress?.toLowerCase() === normalizedAddress && emailVerified(entry),
+  );
+}
+
 export function isVerifiedAdminEmail(
   emailAddresses: ClerkEmailAddress[] | undefined,
 ): string | null {
@@ -46,41 +60,6 @@ export function primaryEmailAddress(
     ? emailAddresses.find((e) => e.id === primaryId)
     : undefined;
   return primary?.emailAddress ?? emailAddresses[0]?.emailAddress ?? '';
-}
-
-export function createTtlCache<V>(ttlMs: number, maxEntries: number) {
-  const entries = new Map<string, { value: V; expiresAt: number }>();
-  return {
-    get(key: string): V | undefined {
-      const entry = entries.get(key);
-      if (!entry) return undefined;
-      if (entry.expiresAt <= Date.now()) {
-        entries.delete(key);
-        return undefined;
-      }
-      return entry.value;
-    },
-    set(key: string, value: V): void {
-      if (entries.size >= maxEntries) {
-        const now = Date.now();
-        for (const [k, entry] of entries) {
-          if (entry.expiresAt <= now) entries.delete(k);
-        }
-        while (entries.size >= maxEntries) {
-          const oldest = entries.keys().next().value;
-          if (oldest === undefined) break;
-          entries.delete(oldest);
-        }
-      }
-      entries.set(key, { value, expiresAt: Date.now() + ttlMs });
-    },
-    remove(key: string): void {
-      entries.delete(key);
-    },
-    size(): number {
-      return entries.size;
-    },
-  };
 }
 
 const USER_TTL_MS = 30_000;

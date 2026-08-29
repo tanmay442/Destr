@@ -45,6 +45,8 @@ afterEach(() => {
   process.env.QSTASH_NEXT_SIGNING_KEY = ORIGINAL_ENV.QSTASH_NEXT_SIGNING_KEY;
 });
 
+const FILE_HASH = 'a'.repeat(64);
+
 describe('POST /api/admin/ingest-dead-letter', () => {
   it('returns 401 when signing keys are not configured', async () => {
     delete process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -107,11 +109,12 @@ describe('POST /api/admin/ingest-dead-letter', () => {
   it('records a DLQ delivery and marks the document failed on the happy path', async () => {
     verifyMock.mockResolvedValue(true);
     ingestDeadLetterMock.mockResolvedValue(undefined);
-    const res = await route.POST(signedPost(JSON.stringify({ documentId: 5 })));
+    const res = await route.POST(signedPost(JSON.stringify({ documentId: 5, fileHash: FILE_HASH })));
     expect(res.status).toBe(200);
     expect(ingestDeadLetterMock).toHaveBeenCalledWith({
       documentId: 5,
-      payload: { documentId: 5 },
+      fileHash: FILE_HASH,
+      payload: { documentId: 5, fileHash: FILE_HASH },
       error: 'QStash ingest delivery failed after retry budget exhausted',
     });
   });
@@ -119,10 +122,17 @@ describe('POST /api/admin/ingest-dead-letter', () => {
   it('accepts the wrapped { body: { documentId } } DLQ delivery shape', async () => {
     verifyMock.mockResolvedValue(true);
     ingestDeadLetterMock.mockResolvedValue(undefined);
-    const res = await route.POST(signedPost(JSON.stringify({ messageId: 'm1', body: { documentId: 9 } })));
+    const res = await route.POST(signedPost(JSON.stringify({ messageId: 'm1', body: { documentId: 9, fileHash: FILE_HASH } })));
     expect(res.status).toBe(200);
     expect(ingestDeadLetterMock).toHaveBeenCalledWith(
-      expect.objectContaining({ documentId: 9, payload: { messageId: 'm1', body: { documentId: 9 } } }),
+      expect.objectContaining({ documentId: 9, fileHash: FILE_HASH, payload: { messageId: 'm1', body: { documentId: 9, fileHash: FILE_HASH } } }),
     );
+  });
+
+  it('rejects a DLQ payload without a hash because it cannot safely identify the failed upload', async () => {
+    verifyMock.mockResolvedValue(true);
+    const res = await route.POST(signedPost(JSON.stringify({ documentId: 5 })));
+    expect(res.status).toBe(400);
+    expect(ingestDeadLetterMock).not.toHaveBeenCalled();
   });
 });

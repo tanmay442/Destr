@@ -253,15 +253,16 @@ describe('insertDocument', () => {
     expect(state.deletes).toBe(0);
   });
 
-  it('retries once on a unique-violation and resolves via the update path', async () => {
+  it('does not retry a unique violation on the same client', async () => {
     const { client, state } = makeDocClient();
     state.existing = null;
     state.uniqueViolationOnce = true;
-    const row = await insertDocument({ fileName: 'x.pdf', fileHash: 'h2', uploadedBy: 'u2' }, client);
-    expect(row.id).toBe(42);
-    expect(state.findFirsts).toBe(2);
+    await expect(
+      insertDocument({ fileName: 'x.pdf', fileHash: 'h2', uploadedBy: 'u2' }, client),
+    ).rejects.toThrow('duplicate key value violates unique constraint');
+    expect(state.findFirsts).toBe(1);
     expect(state.inserts).toBe(0);
-    expect(state.updates).toBe(1);
+    expect(state.updates).toBe(0);
     expect(state.deletes).toBe(0);
   });
 });
@@ -466,6 +467,8 @@ describe('userRepo.upsertFromClerk email-conflict handling', () => {
     documents: false,
     tickets: false,
     chatEvents: false,
+    chatConversations: false,
+    qualityReviews: false,
     auditEvents: false,
     appSettings: false,
   } as const;
@@ -486,6 +489,8 @@ describe('userRepo.upsertFromClerk email-conflict handling', () => {
         documents: { findFirst: async () => (state.history.documents ? {} : null) },
         tickets: { findFirst: async () => (state.history.tickets ? {} : null) },
         chatEvents: { findFirst: async () => (state.history.chatEvents ? {} : null) },
+        chatConversations: { findFirst: async () => (state.history.chatConversations ? {} : null) },
+        qualityReviews: { findFirst: async () => (state.history.qualityReviews ? {} : null) },
         auditEvents: { findFirst: async () => (state.history.auditEvents ? {} : null) },
         appSettings: { findFirst: async () => (state.history.appSettings ? {} : null) },
       },

@@ -26,11 +26,11 @@ import { getChatModel } from './model';
 
 export { getChatModel } from './model';
 
-export function getEmbeddingService(): EmbeddingService {
+export function getEmbeddingService(vectorDim?: number): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';
-  const service = embeddingProviderRegistry.get(provider);
-  if (!service) throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
-  return service;
+  const factory = embeddingProviderRegistry.get(provider);
+  if (!factory) throw new Error(`Unknown EMBEDDING_PROVIDER: ${provider}`);
+  return factory(vectorDim);
 }
 
 /**
@@ -58,32 +58,38 @@ export interface RerankerAvailability {
   status: RerankerStatus;
 }
 
-const rerankerRegistry = new Map<string, RerankerAvailability>([
-  ['cosine', { reranker: undefined, status: { ok: true } }],
-  [
-    'cohere',
-    process.env.COHERE_API_KEY
-      ? { reranker: getReranker('cohere'), status: { ok: true } }
-      : { reranker: undefined, status: { ok: false, reason: 'COHERE_API_KEY not set' } },
-  ],
-  [
-    'local',
-    process.env.VERCEL
-      ? { reranker: undefined, status: { ok: false, reason: 'local reranker unavailable on Vercel serverless' } }
-      : { reranker: getReranker('local'), status: { ok: true } },
-  ],
-]);
+const rerankerOverrides = new Map<string, RerankerAvailability>();
+
+function getRerankerRegistry(): Map<string, RerankerAvailability> {
+  const base = new Map<string, RerankerAvailability>([
+    ['cosine', { reranker: undefined, status: { ok: true } }],
+    [
+      'cohere',
+      process.env.COHERE_API_KEY
+        ? { reranker: getReranker('cohere'), status: { ok: true } }
+        : { reranker: undefined, status: { ok: false, reason: 'COHERE_API_KEY not set' } },
+    ],
+    [
+      'local',
+      process.env.VERCEL
+        ? { reranker: undefined, status: { ok: false, reason: 'local reranker unavailable on Vercel serverless' } }
+        : { reranker: getReranker('local'), status: { ok: true } },
+    ],
+  ]);
+  for (const [k, v] of rerankerOverrides) base.set(k, v);
+  return base;
+}
 
 export function availableRerankers(): Map<string, RerankerStatus> {
-  return new Map([...rerankerRegistry].map(([name, entry]) => [name, entry.status]));
+  return new Map([...getRerankerRegistry()].map(([name, entry]) => [name, entry.status]));
 }
 
 export function resolveReranker(provider: string): Reranker | undefined {
-  return rerankerRegistry.get(provider)?.reranker;
+  return getRerankerRegistry().get(provider)?.reranker;
 }
 
 export function updateRerankerAvailability(provider: string, availability: RerankerAvailability): void {
-  rerankerRegistry.set(provider, availability);
+  rerankerOverrides.set(provider, availability);
 }
 
 /**
@@ -112,7 +118,7 @@ export function getAuxModels(
   };
 }
 
-export { getEmbeddingModel, EMBEDDING_OPTIONS, getGoogleEmbeddingModelId } from './google-embedding-service';
+export { getEmbeddingModel, getGoogleEmbeddingOptions, EMBEDDING_OPTIONS, getGoogleEmbeddingModelId } from './google-embedding-service';
 export {
   docSummarizer,
   createDocSummarizer,

@@ -11,12 +11,13 @@ import { db } from '../db/client';
 import { users } from '../db/schema';
 import { userRepo } from '../db/repositories';
 import {
-  createTtlCache,
   getClerkUserCached,
   isAdminEmail,
+  isEmailVerified,
   isVerifiedAdminEmail,
   primaryEmailAddress,
 } from './clerk-shared';
+import { invalidateRoleCache, resolveRoleCached } from './role-cache';
 import type { AuthAdapter } from './auth-factory';
 
 export type AppRole = 'admin' | 'user';
@@ -53,25 +54,7 @@ function parseClerkRole(value: unknown): AppRole | null {
   return null;
 }
 
-const ROLE_TTL_MS = 30_000;
-const roleCache = createTtlCache<'admin' | 'user'>(ROLE_TTL_MS, 2_000);
 
-export function invalidateRoleCache(clerkUserId: string): void {
-  roleCache.remove(clerkUserId);
-}
-
-async function resolveRoleCached(
-  userId: string,
-  sessionClaims: Record<string, unknown> | null | undefined,
-  email?: string,
-  emailVerified?: boolean,
-): Promise<'admin' | 'user'> {
-  const cached = roleCache.get(userId);
-  if (cached) return cached;
-  const role = await resolveRole(userId, sessionClaims, email, emailVerified);
-  roleCache.set(userId, role);
-  return role;
-}
 
 export async function getAppSession(): Promise<AppSessionFull | null> {
   const { userId } = await auth();
@@ -91,6 +74,7 @@ export async function getAppSession(): Promise<AppSessionFull | null> {
       name: user.fullName ?? user.firstName ?? user.username ?? null,
       imageUrl: user.imageUrl ?? null,
       role: clerkRole ?? (verifiedAdminEmail ? 'admin' : 'user'),
+      emailVerified: isEmailVerified(user.emailAddresses, email),
     });
   } else if (verifiedAdminEmail && local.role !== 'admin') {
     local = await userRepo.upsertFromClerk({
@@ -183,7 +167,7 @@ function createMiddleware(): AuthAdapter['middleware'] {
         const claims = sessionClaims as { email?: unknown; email_verified?: unknown } | undefined;
         const email = typeof claims?.email === 'string' ? claims.email : undefined;
         const verified = claims?.email_verified === true;
-        const role = await resolveRoleCached(userId, sessionClaims, email, verified);
+        const role = await resolveRoleCached(userId, () => resolveRole(userId, sessionClaims, email, verified));
         if (role !== 'admin') {
           if (req.nextUrl.pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

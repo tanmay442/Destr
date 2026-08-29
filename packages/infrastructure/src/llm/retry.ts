@@ -17,9 +17,9 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /** Exponential backoff with full jitter so concurrent retries don't align. */
-export function retryDelay(attempt: number): number {
-  const cap = Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
-  return Math.random() * cap;
+export function retryDelay(attempt: number, cap?: number, rng: () => number = Math.random): number {
+  const effectiveCap = cap ?? Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
+  return rng() * effectiveCap;
 }
 
 /** Transient failures are worth retrying: 429/5xx, timeouts, and network errors. */
@@ -32,6 +32,12 @@ export function isRetryableError(err: unknown): boolean {
     if (err.statusCode === undefined) return true;
     return err.statusCode === 429 || err.statusCode >= 500;
   }
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND/i.test(code)) {
+    return true;
+  }
+  const name = (err as { name?: unknown } | null)?.name;
+  if (typeof name === 'string' && (name === 'TimeoutError' || name === 'AbortError')) return true;
   if (err instanceof Error) {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') return true;
     if (/timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(err.message)) {

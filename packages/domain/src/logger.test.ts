@@ -26,9 +26,7 @@ describe('logger', () => {
 
   it('emits a fallback line when meta is unserializable', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-    logger.error('oops', { circular });
+    logger.error('oops', { value: 1n });
     const line = errorSpy.mock.calls[0]?.[0] as string;
     expect(line).toContain('"msg":"oops"');
     expect(line).toContain('[unserializable]');
