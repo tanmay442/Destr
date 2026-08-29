@@ -16,15 +16,21 @@ vi.mock('@/components/ChatInterface', () => ({
     initialTurnIds?: Record<string, string>;
     conversationLimitReached?: boolean;
     truncated?: boolean;
+    onConversationPersisted?: () => void;
   }) => (
-    <div
-      data-testid="chat-interface-stub"
-      data-conversation={props.conversationId}
-      data-messages={props.initialMessages.length}
-      data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
-      data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
-      data-truncated={props.truncated ? 'true' : 'false'}
-    />
+    <>
+      <div
+        data-testid="chat-interface-stub"
+        data-conversation={props.conversationId}
+        data-messages={props.initialMessages.length}
+        data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
+        data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
+        data-truncated={props.truncated ? 'true' : 'false'}
+      />
+      {props.onConversationPersisted ? (
+        <button type="button" data-testid="conversation-persisted" onClick={props.onConversationPersisted} />
+      ) : null}
+    </>
   ),
 }));
 
@@ -107,7 +113,7 @@ describe('ChatConversationLoader', () => {
     expect(screen.queryByTestId('chat-resume-error')).not.toBeInTheDocument();
   });
 
-  it('mints a new chat for /chat and syncs the id into the URL without navigation', async () => {
+  it('keeps a fresh draft on /chat until its first turn is persisted', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
@@ -117,18 +123,17 @@ describe('ChatConversationLoader', () => {
     expect(stub.getAttribute('data-conversation')).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    await waitFor(() =>
-      expect(replaceMock).toHaveBeenCalledWith(`/chat/${stub.getAttribute('data-conversation')}`),
-    );
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('preserves existing Next router history state when syncing the URL', async () => {
+  it('syncs a fresh draft into the URL after persistence is confirmed', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
     );
     render(<ChatConversationLoader routeId={null} />);
     const stub = await screen.findByTestId('chat-interface-stub');
+    fireEvent.click(screen.getByTestId('conversation-persisted'));
     await waitFor(() =>
       expect(replaceMock).toHaveBeenCalledWith(`/chat/${stub.getAttribute('data-conversation')}`),
     );
@@ -146,8 +151,7 @@ describe('ChatConversationLoader', () => {
     await waitFor(() =>
       expect(screen.getByTestId('chat-interface-stub').getAttribute('data-conversation')).not.toBe(firstId),
     );
-    const newId = screen.getByTestId('chat-interface-stub').getAttribute('data-conversation');
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith(`/chat/${newId}`));
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it('shows an error state with retry when the resume fetch fails', async () => {

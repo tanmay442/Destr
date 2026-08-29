@@ -45,6 +45,7 @@ type Msg = {
         isEmpty?: boolean;
         resultState?: string;
       } }
+    | { type: 'data-conversation-persisted'; data: { conversationId: string } }
   >;
 };
 
@@ -719,6 +720,42 @@ describe('ChatInterface', () => {
 });
 
 describe('ChatInterface history integration', () => {
+  it('syncs a fresh conversation only after the server confirms persistence', async () => {
+    const sendMessage = vi.fn();
+    const onConversationPersisted = vi.fn();
+    setupChat([], { send: sendMessage });
+    const view = render(
+      <ChatInterface conversationId="conv-fresh" onConversationPersisted={onConversationPersisted} />,
+    );
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const userMessage = sendMessage.mock.calls[0]![0] as Msg;
+    const assistant: Msg = {
+      id: 'assistant-fresh',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'answer' },
+        { type: 'data-conversation-persisted', data: { conversationId: 'conv-fresh' } },
+      ],
+    };
+    setupChat([userMessage, assistant], { send: sendMessage });
+    view.rerender(
+      <ChatInterface conversationId="conv-fresh" onConversationPersisted={onConversationPersisted} />,
+    );
+    const options = useChatMock.mock.calls.at(-1)![0] as { onFinish: OnFinish };
+    act(() =>
+      options.onFinish({
+        message: assistant,
+        messages: [userMessage],
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      }),
+    );
+    expect(onConversationPersisted).toHaveBeenCalledTimes(1);
+  });
+
   it('sends the conversation id with every message', async () => {
     const sendMessage = vi.fn();
     setupChat([], { send: sendMessage });

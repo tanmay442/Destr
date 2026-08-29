@@ -580,19 +580,6 @@ async function streamChatResponse(req: Request): Promise<Response> {
     if (cached) {
       if (TRACE_ENABLED) logger.info('rag.cache.hit', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
-      const stream = createUIMessageStream<MyUIMessage>({
-        execute: ({ writer }) => {
-          writer.write({ type: 'text-start', id: 'cached' });
-          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
-          writer.write({ type: 'text-end', id: 'cached' });
-          for (const src of dedupeCitations(cachedAnswer.citations)) {
-            writer.write({
-              type: 'data-citation',
-              data: src,
-            } as InferUIMessageChunk<MyUIMessage>);
-          }
-        },
-      });
       comp.chatEventBatcher.record({
         turnId,
         userId,
@@ -607,7 +594,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             }
           : {}),
       });
-      persistHistory(historySink, cfg, userId, {
+      const historyPersisted = await persistHistory(historySink, cfg, userId, {
         conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -619,6 +606,25 @@ async function streamChatResponse(req: Request): Promise<Response> {
           citations: dedupeCitations(cachedAnswer.citations),
           guardrail: null,
         }),
+      });
+      const stream = createUIMessageStream<MyUIMessage>({
+        execute: ({ writer }) => {
+          writer.write({ type: 'text-start', id: 'cached' });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
+          writer.write({ type: 'text-end', id: 'cached' });
+          for (const src of dedupeCitations(cachedAnswer.citations)) {
+            writer.write({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<MyUIMessage>);
+          }
+          if (historyPersisted && parsed.data.conversationId) {
+            writer.write({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<MyUIMessage>);
+          }
+        },
       });
       scheduleFlush(comp);
       return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream }), release);
@@ -817,7 +823,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             totalMs,
           });
           const persistedText = await Promise.resolve(result.text).catch(() => partialText);
-          persistHistory(historySink, cfg, userId, {
+          const historyPersisted = await persistHistory(historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
             retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -842,6 +848,12 @@ async function streamChatResponse(req: Request): Promise<Response> {
                   : null,
             }),
           });
+          if (historyPersisted && parsed.data.conversationId) {
+            controller.enqueue({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<MyUIMessage>);
+          }
           if (
             turnId &&
             !timedOut &&

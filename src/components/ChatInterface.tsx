@@ -402,6 +402,7 @@ export function ChatInterface({
   initialMessageCount,
   conversationLimitReached = false,
   truncated = false,
+  onConversationPersisted,
 }: {
   conversationId: string;
   initialMessages?: MyUIMessage[];
@@ -409,6 +410,7 @@ export function ChatInterface({
   initialMessageCount?: number;
   conversationLimitReached?: boolean;
   truncated?: boolean;
+  onConversationPersisted?: () => void;
 }) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
@@ -440,6 +442,12 @@ export function ChatInterface({
       if (!isRetry) setMessageCount((prev) => prev + 2);
       if (!notifiedConversationRef.current) {
         notifiedConversationRef.current = true;
+        const persistedPart = message.parts.find(
+          (part) =>
+            part.type === 'data-conversation-persisted' &&
+            part.data.conversationId === conversationId,
+        );
+        if (persistedPart) onConversationPersisted?.();
         notifyConversationsChanged(conversationId);
       }
     },

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChatInterface } from '@/components/ChatInterface';
 import { toResumedConversation, type StoredMessagePayload } from '@/chat/resume';
@@ -96,6 +96,9 @@ function ResumeErrorPanel({
 export function ChatConversationLoader({ routeId }: { routeId: string | null }) {
   const router = useRouter();
   const [conversationId, setConversationId] = useState<string>(() => routeId ?? uuidv4());
+  const syncPersistedConversation = useCallback(() => {
+    if (routeId === null) router.replace(`/chat/${conversationId}`);
+  }, [conversationId, routeId, router]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync route param to internal id when navigation changes the route
@@ -193,12 +196,6 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
   }, [routeId, attempt, router]);
 
   useEffect(() => {
-    if (routeId === null && loaded) {
-      router.replace(`/chat/${conversationId}`);
-    }
-  }, [routeId, loaded, conversationId, router]);
-
-  useEffect(() => {
     if (routeId !== null) return;
     return onNewChatRequested(() => {
       setConversationId(uuidv4());
@@ -233,6 +230,7 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       {...(resume?.messageCount !== undefined ? { initialMessageCount: resume.messageCount } : {})}
       conversationLimitReached={limitReached}
       truncated={resume !== null && resume.messageCount > resume.messages.length}
+      {...(routeId === null ? { onConversationPersisted: syncPersistedConversation } : {})}
     />
   );
 }

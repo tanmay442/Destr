@@ -150,8 +150,8 @@ export type ChatTurnResult =
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
 
-/** Best-effort history persistence; never blocks or fails the chat stream. */
-export function persistHistory(
+/** Best-effort history persistence; callers wait before closing a completed stream. */
+export async function persistHistory(
   sink: ChatTurnDeps['historySink'],
   cfg: AppConfig,
   userId: string,
@@ -163,14 +163,14 @@ export function persistHistory(
     userMessage: MessageLike | undefined;
     assistantMessage: MessageLike;
   },
-): void {
-  if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return;
+): Promise<boolean> {
+  if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return false;
   if (!input.conversationId) {
     logger.debug('chat.history.persist_skipped', { turnId: input.turnId });
-    return;
+    return false;
   }
-  void sink
-    .appendTurn({
+  try {
+    await sink.appendTurn({
       userId,
       conversationId: input.conversationId,
       turnId: input.turnId,
@@ -178,14 +178,16 @@ export function persistHistory(
       title: input.title,
       userMessage: input.userMessage,
       assistantMessage: input.assistantMessage,
-    })
-    .catch((cause: unknown) =>
-      logger.error('chat.history.persist_failed', {
-        conversationId: input.conversationId,
-        turnId: input.turnId,
-        error: String(cause),
-      }),
-    );
+    });
+    return true;
+  } catch (cause: unknown) {
+    logger.error('chat.history.persist_failed', {
+      conversationId: input.conversationId,
+      turnId: input.turnId,
+      error: String(cause),
+    });
+    return false;
+  }
 }
 
 async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
@@ -473,19 +475,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
-      const stream = deps.ai.createUIMessageStream({
-        execute: ({ writer }) => {
-          writer.write({ type: 'text-start', id: 'cached' });
-          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
-          writer.write({ type: 'text-end', id: 'cached' });
-          for (const src of dedupeCitations(cachedAnswer.citations)) {
-            writer.write({
-              type: 'data-citation',
-              data: src,
-            } as InferUIMessageChunk<UIMessage>);
-          }
-        },
-      });
       deps.eventSink.record({
         turnId,
         userId,
@@ -500,7 +489,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }
           : {}),
       });
-      persistHistory(deps.historySink, cfg, userId, {
+      const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
         conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -512,6 +501,25 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           citations: dedupeCitations(cachedAnswer.citations),
           guardrail: null,
         }),
+      });
+      const stream = deps.ai.createUIMessageStream({
+        execute: ({ writer }) => {
+          writer.write({ type: 'text-start', id: 'cached' });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
+          writer.write({ type: 'text-end', id: 'cached' });
+          for (const src of dedupeCitations(cachedAnswer.citations)) {
+            writer.write({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<UIMessage>);
+          }
+          if (historyPersisted && parsed.data.conversationId) {
+            writer.write({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<UIMessage>);
+          }
+        },
       });
       return {
         kind: 'stream',
@@ -712,7 +720,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             totalMs,
           });
           const persistedText = await Promise.resolve(result.text).catch(() => partialText);
-          persistHistory(deps.historySink, cfg, userId, {
+          const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
             retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -737,6 +745,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   : null,
             }),
           });
+          if (historyPersisted && parsed.data.conversationId) {
+            controller.enqueue({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<UIMessage>);
+          }
           if (
             turnId &&
             deps.judgeScheduler &&
