@@ -157,6 +157,11 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 - **In-Memory LRU (`LruRateLimiter`)**: single-instance sliding-window limiter keyed per user/operation (`chat:${userId}`, `feedback:${userId}`). Default budget: 30 req / 60s with 5,000 active-key capacity.
 - **Distributed (`UpstashRateLimiter`)**: production drop-in when `UPSTASH_REDIS_REST_URL` is set; Lua-scripted sorted sets (`ZADD`/`ZREMRANGEBYSCORE`) with keys `ratelimit:<key>` + per-key `:seq` counter.
 
+### Chat Grounding Evidence
+- Retrieval evidence is accumulated for the full turn across first-turn prefetch and repeated `searchDocumentation` calls. A later empty search does not erase evidence already found.
+- Chunks are deduplicated by chunk id, with a content-and-source-metadata fallback when an id is unavailable. At most 30 unique chunks are retained per turn.
+- The model, citations, and hallucination checker use the same bounded chunk content. UI citation snippets remain shorter for display.
+
 ### Turn Answer Cache
 - **Deterministic keying**: normalizes whitespace/casing/punctuation; incorporates embedding + chat model identifiers and the runtime retrieval fingerprint (mode, similarity threshold, hybrid flag, reranker). Keys are `rag:answer:<sha256>`, namespaced per user — a cached answer is never served cross-user.
 - **Providers**: `InMemoryAnswerCache` (LRU + TTL, 5,000-key sweep) for local dev; `UpstashAnswerCache` (Redis, TTL in **seconds** per `ANSWER_CACHE_TTL_SEC`, default 3600; value base64-wrapped) when Upstash is configured. Cache read/write failures are swallowed so caching never breaks the request path.

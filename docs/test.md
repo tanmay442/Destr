@@ -94,7 +94,9 @@ Multi-implementation ports are validated through **shared contract-assertion har
 ## Application Use-Case & Route Test Catalog
 
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
-  Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, first-turn prefetching, and answer cache hit/miss semantics.
+  Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, duplicate-result filtering across repeated searches, first-turn prefetching, and answer cache hit/miss semantics.
+- **Grounding Evidence (`packages/application/src/chat/__tests__/grounding-evidence.test.ts`)**:
+  Per-turn chunk identity deduplication, fallback identity for incomplete test data, bounded model/grader context, and citation aggregation.
 - **Agentic Retrieval (`packages/application/src/rag/agentic-search.test.ts`)**:
   Query rewrite -> hybrid retrieve + rerank pass loop, step budget enforcement, out-of-domain detection, one fresh-rewrite retry when a pass retrieves nothing (`agenticMaxRetries`) before the empty/out-of-domain wall, empty-query short-circuit, similarity/hybrid option forwarding, and the query-rewrite toggle (retrieved chunks are passed through unfiltered to the reranker-ordered generator).
 - **True Quality Checks (PR #60 suites)**:
