@@ -201,10 +201,6 @@ async function uploadPdfSync(
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
   const fileHash = deps.hasher.sha256(input.buffer);
-  const existingCheck = await deps.documents.findByName(input.fileName).catch(() => null);
-  if (existingCheck && !existingCheck.deletedAt && existingCheck.fileHash === fileHash) {
-    return ok({ documentId: existingCheck.id, chunks: 0, status: 'unchanged' });
-  }
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
   let parsed: Awaited<ReturnType<typeof parseAndEmbed>>;

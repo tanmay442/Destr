@@ -36,7 +36,7 @@ import {
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
 
-export const maxDuration = MAX_DURATION_MS / 1000;
+export const maxDuration = 60;
 
 function positiveIntEnv(name: string): number | null {
   const v = Number(process.env[name]);
