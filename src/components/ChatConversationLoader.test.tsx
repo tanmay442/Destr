@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
+const historyReplaceStateMock = vi.spyOn(window.history, 'replaceState');
 const routerStub = { push: pushMock, replace: replaceMock };
 
 vi.mock('next/navigation', () => ({
@@ -60,6 +61,7 @@ function conversationPayload(messageCount = 2) {
 beforeEach(() => {
   pushMock.mockClear();
   replaceMock.mockClear();
+  historyReplaceStateMock.mockClear();
 });
 
 describe('ChatConversationLoader', () => {
@@ -126,17 +128,23 @@ describe('ChatConversationLoader', () => {
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('syncs a fresh draft into the URL after persistence is confirmed', async () => {
+  it('updates the URL without navigating after persistence is confirmed', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
     );
     render(<ChatConversationLoader routeId={null} />);
     const stub = await screen.findByTestId('chat-interface-stub');
+    const historyState = window.history.state;
     fireEvent.click(screen.getByTestId('conversation-persisted'));
     await waitFor(() =>
-      expect(replaceMock).toHaveBeenCalledWith(`/chat/${stub.getAttribute('data-conversation')}`),
+      expect(historyReplaceStateMock).toHaveBeenCalledWith(
+        historyState,
+        '',
+        `/chat/${stub.getAttribute('data-conversation')}`,
+      ),
     );
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it('resets its own state when a new-chat request arrives while already on /chat', async () => {

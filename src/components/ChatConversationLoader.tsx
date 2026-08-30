@@ -97,8 +97,9 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
   const router = useRouter();
   const [conversationId, setConversationId] = useState<string>(() => routeId ?? uuidv4());
   const syncPersistedConversation = useCallback(() => {
-    if (routeId === null) router.replace(`/chat/${conversationId}`);
-  }, [conversationId, routeId, router]);
+    if (routeId !== null) return;
+    window.history.replaceState(window.history.state, '', `/chat/${conversationId}`);
+  }, [conversationId, routeId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync route param to internal id when navigation changes the route
