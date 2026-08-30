@@ -61,7 +61,7 @@ function normalizeWorkerUrl(raw: string): string {
     return '';
   }
   const hostname = parsed.hostname.toLowerCase();
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
     const message =
       `[ingest-queue] Refusing worker URL ${raw}: QStash cannot reach a localhost address. ` +
       'Set QSTASH_INGEST_WORKER_URL to a publicly reachable URL.';

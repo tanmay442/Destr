@@ -5,10 +5,6 @@ export function sanitizeText(input: string): string {
     .replace(/\r/g, '\n')
     .replace(/[\u2028\u2029]/g, '\n')
     .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
-    .replace(/\u200C/g, '\uE000')
-    .replace(/\u200D/g, '\uE001')
-    .replace(/\p{Cf}/gu, '')
-    .replace(/\uE000/g, '\u200C')
-    .replace(/\uE001/g, '\u200D')
+    .replace(/(?![\u200C\u200D])\p{Cf}/gu, '')
     .trim();
 }

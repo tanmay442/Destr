@@ -77,7 +77,7 @@ function buildCustomInstructionsBlock(config: AppConfig): string | null {
 }
 
 function escapeXml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 function buildPrefetchBlock(chunks: RetrievedChunk[]): string {

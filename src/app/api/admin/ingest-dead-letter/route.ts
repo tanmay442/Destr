@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { Receiver } from '@upstash/qstash';
 import { getComposition } from '@/composition';
 import { readBoundedText } from '@/lib/http';
+import { logger } from '@app/domain';
 
 const MAX_DLQ_BODY_BYTES = 1024 * 1024;
 const REPLAY_MAX_AGE_MS = 5 * 60 * 1000;
@@ -95,9 +96,26 @@ export async function POST(req: Request) {
   if (typeof documentId !== 'number' || !Number.isInteger(documentId) || documentId <= 0) {
     return NextResponse.json({ error: 'Invalid documentId' }, { status: 400 });
   }
-  const fileHash = parsed.fileHash ?? message.fileHash;
+  let fileHash: unknown = parsed.fileHash ?? message.fileHash;
   if (!isSha256(fileHash)) {
-    return NextResponse.json({ error: 'Invalid fileHash' }, { status: 400 });
+    logger.warn('[ingest-dlq] missing or invalid fileHash, falling back to current document hash', { documentId, fileHash });
+    try {
+      const lookup = await getComposition().getDocumentById(documentId, { includeDeleted: true });
+      if (lookup.ok && lookup.value.document?.fileHash && isSha256(lookup.value.document.fileHash)) {
+        fileHash = lookup.value.document.fileHash;
+      } else {
+        logger.warn('[ingest-dlq] cannot resolve fileHash for DLQ, recording dead-letter without hash-conditional fail', { documentId });
+        const error =
+          req.headers.get('upstash-error-code') ??
+          req.headers.get('upstash-error') ??
+          'QStash ingest delivery failed after retry budget exhausted';
+        await getComposition().ingestDeadLetter({ documentId, fileHash: '0'.repeat(64), payload: parsed, error });
+        return NextResponse.json({ ok: true, documentId, warning: 'fileHash missing, dead-letter recorded without fail' }, { status: 200 });
+      }
+    } catch (e) {
+      logger.warn('[ingest-dlq] fileHash fallback lookup failed', { documentId, error: e });
+      return NextResponse.json({ error: 'Invalid fileHash' }, { status: 400 });
+    }
   }
 
   const error =
@@ -105,6 +123,6 @@ export async function POST(req: Request) {
     req.headers.get('upstash-error') ??
     'QStash ingest delivery failed after retry budget exhausted';
 
-  await getComposition().ingestDeadLetter({ documentId, fileHash, payload: parsed, error });
+  await getComposition().ingestDeadLetter({ documentId, fileHash: fileHash as string, payload: parsed, error });
   return NextResponse.json({ ok: true, documentId }, { status: 200 });
 }

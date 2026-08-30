@@ -74,12 +74,24 @@ export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTE
       throw new PayloadTooLargeError(`Blob ${key} is ${actual} bytes (> ${boundedMaxBytes})`, actual, boundedMaxBytes);
     }
   };
+  const assertRealpathWithinBaseDir = async (full: string): Promise<void> => {
+    try {
+      const real = await fs.realpath(full);
+      if (real !== baseDir && !real.startsWith(baseDir + sep)) {
+        throw new Error(`Blob path escapes baseDir via symlink: ${full} -> ${real}`);
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      throw e;
+    }
+  };
   const openReadable = async (key: string) => {
     const full = assertSafeKey(key);
     await assertNoSymlinkComponents(full);
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
       handle = await fs.open(full, constants.O_RDONLY | constants.O_NOFOLLOW);
+      await assertRealpathWithinBaseDir(full);
       const size = (await handle.stat()).size;
       // Fail closed on empty/stale reads: an empty file is never a valid blob.
       if (size === 0) throw new NotFoundError(`Blob ${key} is empty`);
@@ -107,6 +119,7 @@ export function createFilesystemBlobStorage(maxBytes: number = BLOB_GET_MAX_BYTE
         0o600,
       );
       try {
+        await assertRealpathWithinBaseDir(path);
         await handle.writeFile(body);
       } finally {
         await handle.close();

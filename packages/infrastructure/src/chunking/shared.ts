@@ -158,10 +158,10 @@ export function splitSentences(
   maxLen = 600,
 ): Array<{ text: string; start: number }> {
   const maybeSegmenter = (): Array<{ text: string; start: number }> | null => {
-    const Seg = (Intl as unknown as { Segmenter?: new (locale: string, opts: { granularity: string }) => { segment(s: string): Iterable<{ segment: string; index: number }> } }).Segmenter;
+    const Seg = (Intl as unknown as { Segmenter?: new (locale: string | undefined, opts: { granularity: string }) => { segment(s: string): Iterable<{ segment: string; index: number }> } }).Segmenter;
     if (!Seg) return null;
     try {
-      const segmenter = new Seg('en', { granularity: 'sentence' });
+      const segmenter = new Seg(undefined, { granularity: 'sentence' });
       const raw = [...segmenter.segment(text)];
       const out: Array<{ text: string; start: number }> = raw
         .map((segment) => {

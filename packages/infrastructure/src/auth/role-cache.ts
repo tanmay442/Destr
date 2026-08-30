@@ -8,6 +8,7 @@ const pendingRoleResolves = new Map<string, Promise<CachedRole>>();
 
 export function invalidateRoleCache(clerkUserId: string): void {
   roleCache.remove(clerkUserId);
+  pendingRoleResolves.delete(clerkUserId);
 }
 
 export function resolveRoleCached(
