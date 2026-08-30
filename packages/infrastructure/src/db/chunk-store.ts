@@ -65,7 +65,7 @@ export async function insertChunks(
       throw new ValidationError(`Invalid embedding: chunk ${r.chunkIndex} contains non-finite values`);
     }
   }
-  const BATCH_SIZE = 500;
+  const BATCH_SIZE = 100;
 
   async function runInserts(tx: Client): Promise<void> {
     const parents = rows.filter((r) => r.kind === 'parent');

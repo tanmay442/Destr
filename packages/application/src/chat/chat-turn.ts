@@ -14,6 +14,7 @@ import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
   logger,
+  MAX_DURATION_MS,
   sanitizeText,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
@@ -834,7 +835,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
 const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
 const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
-const MAX_DURATION_MS = 60_000;
 
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;

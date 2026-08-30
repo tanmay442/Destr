@@ -82,6 +82,7 @@ export const tickets = pgTable('tickets', {
   index('tickets_status_idx').on(table.status),
   check('tickets_status_check', sql`${table.status} IN ('created','in_progress','closed')`),
   index('tickets_assigned_to_idx').on(table.assignedTo),
+  index('tickets_created_at_idx').on(table.createdAt.desc()),
 ]);
 
 export const users = pgTable('users', {
@@ -90,8 +91,8 @@ export const users = pgTable('users', {
   name: text('name'),
   imageUrl: text('image_url'),
   role: text('role').notNull().default('user'),
-  lastSeenAt: timestamp('last_seen_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   check('users_role_check', sql`${table.role} IN ('admin','user')`),
 ]);
@@ -128,7 +129,7 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
   kind: text('kind').notNull(),
   payload: jsonb('payload').notNull(),
   error: text('error').notNull(),
-  attemptedAt: timestamp('attempted_at').defaultNow().notNull(),
+  attemptedAt: timestamp('attempted_at', { withTimezone: true }).defaultNow().notNull(),
   replayed: boolean('replayed').notNull().default(false),
 });
 
@@ -158,6 +159,7 @@ export const chatEvents = pgTable('chat_events', {
   index('chat_events_created_at_idx').on(table.createdAt.desc()),
   index('chat_events_mode_idx').on(table.mode),
   index('chat_events_user_id_idx').on(table.userId),
+  index('idx_chat_events_meta_document_ids').using('gin', sql`((${table.meta} -> 'documentIds'))`),
 ]);
 
 export const chatFeedback = pgTable('chat_feedback', {
@@ -234,5 +236,5 @@ export const appSettings = pgTable('app_settings', {
   overrides: jsonb('overrides').notNull().$type<Partial<AppConfig>>().default({}),
   version: integer('version').notNull().default(0),
   updatedBy: text('updated_by'),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });

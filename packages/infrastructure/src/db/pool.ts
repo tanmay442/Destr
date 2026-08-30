@@ -1,12 +1,6 @@
 import { Pool as NeonPool } from '@neondatabase/serverless';
 import pg from 'pg';
 
-const POOL_OPTS = {
-  max: 20,
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 10_000,
-} as const;
-
 export function redactDatabaseUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -29,6 +23,27 @@ export function isNeonUrl(url: string): boolean {
   const host = parsed.hostname;
   return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
 }
+
+function positiveIntEnv(name: string): number | null {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    console.warn(`[pool] Invalid ${name}="${raw}" — using default`);
+    return null;
+  }
+  return n;
+}
+function resolvePoolMax(): number {
+  const v = positiveIntEnv('DATABASE_POOL_MAX');
+  if (v != null) {
+    if (v > 20) { console.warn(`[pool] DATABASE_POOL_MAX=${v} clamped to 20`); return 20; }
+    return v;
+  }
+  if (process.env.NODE_ENV === 'production' && isNeonUrl(process.env.DATABASE_URL ?? '')) return 5;
+  return 20;
+}
+const POOL_OPTS = { max: resolvePoolMax(), idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 } as const;
 
 function buildNeonPool(url: string): NeonPool {
   return new NeonPool({

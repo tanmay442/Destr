@@ -54,3 +54,4 @@ export const MAX_STORED_MESSAGE_BYTES = 256_000;
 export const MAX_CONVERSATION_TITLE_LENGTH = 120;
 export const MAX_RESUME_MESSAGES = 200;
 export const CHAT_HISTORY_RATE_LIMIT = { limit: 60, windowMs: 60_000 };
+export const MAX_DURATION_MS = 60_000;

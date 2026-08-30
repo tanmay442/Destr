@@ -31,11 +31,12 @@ import {
   CHAT_MAX_BODY_BYTES,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
+  MAX_DURATION_MS,
 } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
 
-export const maxDuration = 60;
+export const maxDuration = MAX_DURATION_MS / 1000;
 
 function positiveIntEnv(name: string): number | null {
   const v = Number(process.env[name]);
@@ -649,7 +650,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const resultStateRef = { value: null as AgenticResultState | null };
 
   const rawSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
-  const maxSoftDeadlineMs = maxDuration * 1000 - 5_000;
+  const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
   let turnSoftDeadlineMs = rawSoftDeadlineMs;
   if (turnSoftDeadlineMs > maxSoftDeadlineMs) {
     logger.warn('CHAT_SOFT_DEADLINE_MS clamped', { requested: rawSoftDeadlineMs, clamped: maxSoftDeadlineMs });
@@ -736,7 +737,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
           const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
           const hallucinationStart = performance.now();
-          const maxDurationMs = maxDuration * 1000;
+          const maxDurationMs = MAX_DURATION_MS;
           const remainingWallMs = maxDurationMs - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;

@@ -1,6 +1,6 @@
 import { APICallError } from 'ai';
 
-const RETRY_ATTEMPTS = 5;
+const RETRY_ATTEMPTS = 3;
 const BASE_DELAY_MS = 200;
 const MAX_DELAY_MS = 5_000;
 

@@ -201,8 +201,23 @@ async function uploadPdfSync(
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
   const fileHash = deps.hasher.sha256(input.buffer);
+  const existingCheck = await deps.documents.findByName(input.fileName).catch(() => null);
+  if (existingCheck && !existingCheck.deletedAt && existingCheck.fileHash === fileHash) {
+    return ok({ documentId: existingCheck.id, chunks: 0, status: 'unchanged' });
+  }
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
+  let parsed: Awaited<ReturnType<typeof parseAndEmbed>>;
+  try {
+    parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer }, deps);
+  } catch (cause) {
+    await cleanupUncommittedBlob(key, deps);
+    throw cause;
+  }
+  if (!parsed.ok) {
+    await cleanupUncommittedBlob(key, deps);
+    return parsed;
+  }
   let oldStorageKey: string | null = null;
   let result: Result<IngestResult>;
   try {
@@ -220,8 +235,6 @@ async function uploadPdfSync(
       } else {
         oldStorageKey = claim.oldStorageKey;
       }
-      const parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer }, deps);
-      if (!parsed.ok) return parsed;
       const outcome = await writeChunks(
         tx.documents,
         tx.chunks,

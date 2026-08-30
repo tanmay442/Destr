@@ -96,12 +96,11 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 - **Filters**: assignee and text search beyond status.
 
 ### Analytics & Telemetry Engine (`/admin/analytics`)
-Five tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
-1. **Statistics**: turns, hallucination blocks, out-of-domain refusals, self-serve rate; 12-week SVG `LineChart` with 5% hallucination threshold; token-cost estimate; 7-day `ActivityBars`.
+Four tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
+1. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) over a trailing 7-day window (a `judgeSampleRate` fraction of answered turns is scored) — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
 2. **Performance**: cache-hit rate + trend; p50/p95 latency (`retrieve`, `generate`, `total`); Agentic vs Vector avg tokens/query; top-5 cache-buster queries; agentic retry rate.
-3. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) over a trailing 7-day window (a `judgeSampleRate` fraction of answered turns is scored) — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
-4. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
-5. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
+3. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
+4. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
 
 ### Quality Review Queue (`/admin/quality`)
 - Lists up to 20 recent **guardrail-blocked** turns (hallucination-check refusals), showing the query, retrieved chunk ids, and judge scores when sampled.
@@ -205,7 +204,7 @@ When the Clerk instance runs behind a custom proxy domain (e.g. `clerk.example.c
 ### 8.2 CSP baseline (static directives)
 
 Regardless of the proxy mode, the CSP in `next.config.ts` always allows, in addition to `'self'`:
-- `'unsafe-inline' 'unsafe-eval'` (required by the Clerk JS bundle) in `script-src`
+- `'unsafe-inline'` (required by Next.js/Clerk) in `script-src` and `style-src` — `unsafe-eval` is not allowed
 - `https://challenges.cloudflare.com` in `script-src` / `connect-src` / `frame-src` (Cloudflare Turnstile bot protection)
 - `https://*.clerk.services` in `connect-src`
 - `https://vercel.live`, `https://*.clerk.accounts.dev`, Google OAuth and R2 preview origins in the directives where they were already present
@@ -246,7 +245,7 @@ GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 
 **Migration flow (where DDL runs):**
 1. **Local dev** — `pnpm db:migrate` applies DDL; `pnpm build` runs only the production build, while `pnpm build:with-db` applies migrations first. All migration commands use `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
-2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates a fresh Neon test branch (the setup script writes an owner-grade `DATABASE_URL` into `.env.test`); the "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
+2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates the pinned `pgvector/pgvector:pg16` service container via `DATABASE_URL` (`postgres://postgres:ragagent_ci@127.0.0.1:5432/ragagent`); the Neon test-branch flow that would write an owner-grade `DATABASE_URL` into `.env.test` is disabled/commented (E2E disabled). The "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
 3. **Vercel production builds** — `vercel.json` runs `next build` only; it never applies migrations. Production DDL runs in the approval-gated `deploy` job in `.github/workflows/ci.yml` with `MIGRATION_DATABASE_URL`. Vercel still needs `DATABASE_URL` at runtime.
 
 ### 8.5 QStash ingest queue reliability (DLQ + sweeper)

@@ -158,7 +158,7 @@ export async function createTicket(
   const MAX_CREATE_ATTEMPTS = 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-    const ticketId = `TKT-${randomUUID().slice(0, 8)}`;
+    const ticketId = `TKT-${randomUUID().slice(0, 12)}`;
     try {
       const row = await deps.tickets.insert({
         ticketId,
