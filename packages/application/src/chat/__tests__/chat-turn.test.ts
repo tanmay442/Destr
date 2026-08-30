@@ -390,6 +390,33 @@ describe('chatTurn', () => {
     expect(event?.hallucinationBlocked).toBe(true);
   });
 
+  it('does not turn a later empty search into an out-of-domain wall after evidence was found', async () => {
+    const longChunk = { ...CHUNK, content: `${'x'.repeat(300)} supported detail` };
+    const grader = vi.fn(async () => 'yes' as const);
+    const { deps, fakes } = makeDeps({
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      agenticSearch: vi
+        .fn()
+        .mockResolvedValueOnce(ok(agenticOk({ chunks: [longChunk] })))
+        .mockResolvedValueOnce(ok(agenticOk({ chunks: [], outOfDomain: true, isEmpty: true, resultState: 'empty' }))),
+      hallucinationGrader: () => grader,
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+    const firstOutput = await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    const secondOutput = await captured.current?.searchDocumentation?.execute({ query: 'q again' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+    expect(firstOutput).toHaveLength(1);
+    expect(secondOutput).toEqual([]);
+    expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
+    expect(grader).toHaveBeenCalledWith(expect.stringContaining('supported detail'), 'Hello world');
+    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event?.outOfDomain).toBe(false);
+    expect(event?.hitCount).toBe(1);
+  });
+
   it('emits a guardrail and skips the cache when the hallucination grader blocks', async () => {
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
@@ -449,16 +476,18 @@ describe('chatTurn', () => {
     expect((event?.meta as Record<string, unknown>)?.documentIds).toEqual([10]);
   });
 
-  it('dedupes citations that share a chunk id', async () => {
+  it('does not pass duplicate chunks to the model or citation stream', async () => {
     const { deps, fakes } = makeDeps();
     fakes.searchChunks.mockResolvedValue(ok([CHUNK]) as never);
     const { captured, closeLlm } = captureTools();
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    await captured.current?.searchDocumentation?.execute({ query: 'q again' });
+    const firstOutput = await captured.current?.searchDocumentation?.execute({ query: 'q' });
+    const secondOutput = await captured.current?.searchDocumentation?.execute({ query: 'q again' });
     closeLlm();
+    expect(firstOutput).toHaveLength(1);
+    expect(secondOutput).toEqual([]);
     const parts = await readParts(result.stream);
     const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
     expect(citations).toHaveLength(1);

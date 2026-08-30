@@ -9,7 +9,10 @@ import {
   cacheFingerprint,
   ChatRequestSchema,
   dedupeCitations,
-  emitCitations,
+  addGroundingEvidence,
+  createGroundingEvidence,
+  formatGroundingReference,
+  type GroundingEvidence,
   citationDocumentIds,
   resolveTurnId,
   buildEventMeta,
@@ -26,7 +29,6 @@ import { readBoundedText, respond } from '@/lib/http';
 import {
   CHAT_RATE_LIMIT,
   CHAT_MAX_BODY_BYTES,
-  TOOL_CONTENT_CAP,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
 } from '@app/domain';
@@ -152,7 +154,7 @@ function buildChatTools(deps: {
   effectiveMode: 'agentic' | 'normal';
   searchChunks: (query: string, opts: { limit?: number | undefined }) => ReturnType<Composition['searchChunks']>;
   agenticSearch: (query: string) => ReturnType<Composition['agenticSearch']>;
-  capturedCitations: EmittedCitation[];
+  groundingEvidence: GroundingEvidence;
   createTicket: Composition['createTicket'];
   rateLimit: (key: string, opts: { limit: number; windowMs: number }) => ReturnType<Composition['rateLimit']>;
   userId: string;
@@ -165,7 +167,7 @@ function buildChatTools(deps: {
     effectiveMode,
     searchChunks: searchFn,
     agenticSearch: agenticFn,
-    capturedCitations: citationTarget,
+    groundingEvidence,
     createTicket: createTicketFn,
     rateLimit: rateLimitFn,
     userId: uid,
@@ -178,7 +180,7 @@ function buildChatTools(deps: {
   return {
     searchDocumentation: tool({
       description:
-        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity, documentTitle, section } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; the full chunk is still available, but only the top chunks are returned by default. Do NOT call this for non-documentation questions (medical, legal, personal).",
+        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity, documentTitle, section } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; duplicate chunks are omitted across this turn. Do NOT call this for non-documentation questions (medical, legal, personal).",
       inputSchema: z.object({
         query: z
           .string()
@@ -207,9 +209,16 @@ function buildChatTools(deps: {
             return [];
           }
           if (TRACE_ENABLED) logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
-          outOfDomainRef.value = r.value.outOfDomain;
-          isEmptyRef.value = r.value.isEmpty;
-          resultStateRef.value = r.value.resultState;
+          const hadEvidence = groundingEvidence.documents.length > 0;
+          if (r.value.chunks.length > 0 || hadEvidence) {
+            outOfDomainRef.value = false;
+            isEmptyRef.value = false;
+            resultStateRef.value = 'ok';
+          } else {
+            outOfDomainRef.value = r.value.outOfDomain;
+            isEmptyRef.value = r.value.isEmpty;
+            resultStateRef.value = r.value.resultState;
+          }
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -222,26 +231,17 @@ function buildChatTools(deps: {
           matches = r.value;
         }
         metrics.retrieveMs += Math.round(performance.now() - t0);
-        metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
         for (const m of matches) {
           if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
-        const capped = matches.map((m) => {
-          const content =
-            m.content.length > TOOL_CONTENT_CAP
-              ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
-              : m.content;
-          return {
-            content: `<reference source="${m.source}">\n${content}\n</reference>`,
-            similarity: m.similarity,
-            documentTitle: m.title ?? undefined,
-            section: m.sectionTitle ?? undefined,
-          };
-        });
-        for (const citation of emitCitations(matches)) {
-          citationTarget.push(citation);
-        }
-        return capped;
+        const uniqueMatches = addGroundingEvidence(groundingEvidence, matches);
+        metrics.hitCount = (metrics.hitCount ?? 0) + uniqueMatches.length;
+        return uniqueMatches.map((m) => ({
+          content: formatGroundingReference(m),
+          similarity: m.similarity,
+          documentTitle: m.title ?? undefined,
+          section: m.sectionTitle ?? undefined,
+        }));
       },
     }),
     createKnowledgeTicket: tool({
@@ -416,16 +416,16 @@ function scheduleAfter(task: () => void): void {
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<MyUIMessage>>;
   result: { text: PromiseLike<string> };
-  capturedCitations: EmittedCitation[];
+  groundingDocuments: string[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   enabled: boolean;
   outOfDomain: boolean;
   timeoutMs?: number;
 }): Promise<{ blocked: boolean; timedOut: boolean }> {
-  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain } = opts;
+  const { controller, result, groundingDocuments, hallucinationGrader, enabled, outOfDomain } = opts;
   if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
-  if (outOfDomain) {
+  if (outOfDomain && groundingDocuments.length === 0) {
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: true, offerTicket: true },
@@ -435,10 +435,10 @@ async function runHallucinationCheck(opts: {
 
   let ungrounded = false;
   let timedOut = false;
-  if (capturedCitations.length > 0) {
+  if (groundingDocuments.length > 0) {
     try {
       const generation = await result.text;
-      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
+      const documents = groundingDocuments.join('\n\n');
       let verdict: 'yes' | 'no';
       if (opts.timeoutMs !== undefined && opts.timeoutMs <= 0) {
         throw Object.assign(new Error('Hallucination verification skipped: no wall-time budget'), { name: 'TimeoutError' });
@@ -547,7 +547,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
     },
   };
 
-  const capturedCitations: EmittedCitation[] = [];
+  const groundingEvidence = createGroundingEvidence();
+  const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
 
@@ -639,10 +640,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
     } else {
-      prefetch = prefetchResult.value;
-      for (const citation of emitCitations(prefetch)) {
-        capturedCitations.push(citation);
-      }
+      prefetch = addGroundingEvidence(groundingEvidence, prefetchResult.value);
     }
   }
 
@@ -676,7 +674,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
       effectiveMode,
       searchChunks: (query, opts) => comp.searchChunks(cfg, query, opts),
       agenticSearch: (query) => comp.agenticSearch(cfg, query),
-      capturedCitations,
+      groundingEvidence,
       createTicket: comp.createTicket,
       rateLimit: (key, opts) => comp.rateLimit(key, opts),
       userId,
@@ -735,6 +733,8 @@ async function streamChatResponse(req: Request): Promise<Response> {
               data: src,
             } as InferUIMessageChunk<MyUIMessage>);
           }
+          const hasGroundingEvidence = groundingEvidence.documents.length > 0;
+          const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
           const hallucinationStart = performance.now();
           const maxDurationMs = maxDuration * 1000;
           const remainingWallMs = maxDurationMs - (Date.now() - requestStartedAt);
@@ -749,17 +749,17 @@ async function streamChatResponse(req: Request): Promise<Response> {
             const hallucinationResult = await runHallucinationCheck({
               controller,
               result,
-              capturedCitations: finalCitations,
+              groundingDocuments: groundingEvidence.documents,
               hallucinationGrader: comp.getHallucinationGrader(cfg),
               enabled: cfg.hallucinationCheckEnabled,
-              outOfDomain: outOfDomainRef.value,
+              outOfDomain: finalOutOfDomain,
               timeoutMs: hallucinationBudgetMs,
             });
             hallucinationBlocked = hallucinationResult.blocked;
             hallucinationTimedOut = hallucinationResult.timedOut;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
-          const isEmpty = isEmptyRef.value || outOfDomainRef.value;
+          const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
           if (
             cacheKey &&
             !timedOut &&
@@ -798,7 +798,7 @@ async function streamChatResponse(req: Request): Promise<Response> {
             totalMs,
             hitCount: metrics.hitCount,
             maxSimilarity: metrics.maxSimilarity,
-            outOfDomain: outOfDomainRef.value,
+            outOfDomain: finalOutOfDomain,
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
             citationCount: finalCitations.length,
