@@ -1,17 +1,22 @@
 import { NextResponse } from 'next/server';
 import { Receiver } from '@upstash/qstash';
 import { getComposition } from '@/composition';
+import { readBoundedText } from '@/lib/http';
 import { NotFoundError } from '@app/domain';
 
 const MAX_INGEST_BODY_BYTES = 1024 * 1024;
 const REPLAY_MAX_AGE_MS = 5 * 60 * 1000;
 
-const processedSignatures = new Map<string, number>();
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
 
-function pruneProcessedSignatures(now: number): void {
-  for (const [signature, seenAt] of processedSignatures) {
-    if (now - seenAt > REPLAY_MAX_AGE_MS) processedSignatures.delete(signature);
-  }
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value);
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value);
 }
 
 function signatureTimestamp(signature: string): number | null {
@@ -41,10 +46,14 @@ export async function POST(req: Request) {
   if (Number.isFinite(contentLength) && contentLength > MAX_INGEST_BODY_BYTES) {
     return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
   }
-  const body = await req.text();
-  if (body.length > MAX_INGEST_BODY_BYTES) {
-    return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+  const bounded = await readBoundedText(req, MAX_INGEST_BODY_BYTES);
+  if (!bounded.ok) {
+    return NextResponse.json(
+      { error: bounded.reason === 'too-large' ? 'Payload too large' : 'Invalid request body' },
+      { status: bounded.reason === 'too-large' ? 413 : 400 },
+    );
   }
+  const body = bounded.text;
   const signature = req.headers.get('upstash-signature') ?? '';
   const receiver = new Receiver({ currentSigningKey, nextSigningKey });
   let isValid: boolean;
@@ -64,33 +73,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Signature expired' }, { status: 401 });
   }
 
-  const now = Date.now();
-  pruneProcessedSignatures(now);
-  const seenAt = processedSignatures.get(signature);
-  if (seenAt !== undefined && now - seenAt <= REPLAY_MAX_AGE_MS) {
-    return NextResponse.json({ ok: true, status: 'already-processed', chunks: 0 }, { status: 200 });
-  }
 
-  let documentId: unknown;
+  let payload: unknown;
   try {
-    documentId = JSON.parse(body).documentId;
+    payload = JSON.parse(body);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
-  if (!Number.isInteger(documentId)) {
+  if (!isRecord(payload)) {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const documentId = payload.documentId;
+  if (!isInteger(documentId) || documentId <= 0) {
     return NextResponse.json({ error: 'Invalid documentId' }, { status: 400 });
   }
-
-  processedSignatures.set(signature, now);
-  let result;
-  try {
-    result = await getComposition().ingestQueuedDocument(documentId as number);
-  } catch (error) {
-    processedSignatures.delete(signature);
-    throw error;
+  const rawFileHash = payload.fileHash;
+  if (rawFileHash !== undefined && !isSha256(rawFileHash)) {
+    return NextResponse.json({ error: 'Invalid fileHash' }, { status: 400 });
   }
+
+  const result = rawFileHash === undefined
+    ? await getComposition().ingestQueuedDocument(documentId)
+    : await getComposition().ingestQueuedDocument(documentId, rawFileHash);
   if (!result.ok) {
-    processedSignatures.delete(signature);
     if (result.error instanceof NotFoundError) {
       return NextResponse.json(
         { error: 'Document not found' },
@@ -100,7 +105,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Ingest failed' }, { status: 500 });
   }
   if (result.value.status === 'busy') {
-    processedSignatures.delete(signature);
     return NextResponse.json({ error: 'Ingest in progress' }, { status: 409 });
   }
   return NextResponse.json({ ok: true, status: result.value.status, chunks: result.value.chunks }, { status: 200 });

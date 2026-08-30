@@ -150,17 +150,19 @@ describe('POST /api/admin/ingest-worker', () => {
     expect(res.status).toBe(500);
   });
 
-  it('returns 200 already-processed for a replayed successful signature without re-ingesting', async () => {
+  it('passes replay handling to the database idempotency guard', async () => {
     verifyMock.mockResolvedValue(true);
-    ingestQueuedDocumentMock.mockResolvedValue(ok({ status: 'done', chunks: 7 }));
+    ingestQueuedDocumentMock
+      .mockResolvedValueOnce(ok({ status: 'done', chunks: 7 }))
+      .mockResolvedValueOnce(ok({ status: 'already-done', chunks: 0 }));
     const signature = signedToken();
     const first = await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signature));
     expect(first.status).toBe(200);
     const second = await route.POST(signedPost(JSON.stringify({ documentId: 5 }), signature));
     expect(second.status).toBe(200);
     const json = await second.json();
-    expect(json).toMatchObject({ ok: true, status: 'already-processed', chunks: 0 });
-    expect(ingestQueuedDocumentMock).toHaveBeenCalledTimes(1);
+    expect(json).toMatchObject({ ok: true, status: 'already-done', chunks: 0 });
+    expect(ingestQueuedDocumentMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not dedupe across different signatures', async () => {

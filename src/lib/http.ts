@@ -98,11 +98,20 @@ export type BoundedReadResult =
 export async function readBoundedBytes(req: Request, maxBytes: number): Promise<BoundedReadResult> {
   const body = req.body;
   if (!body) return { ok: true, bytes: new Uint8Array(0) };
+  if (req.signal.aborted) return { ok: false, reason: 'error' };
   const reader = body.getReader();
+  const abortHandler = (): void => {
+    reader.cancel().catch(() => undefined);
+  };
+  req.signal.addEventListener('abort', abortHandler, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {
+      if (req.signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false, reason: 'error' };
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (value && value.byteLength > 0) {
@@ -117,6 +126,7 @@ export async function readBoundedBytes(req: Request, maxBytes: number): Promise<
   } catch {
     return { ok: false, reason: 'error' };
   } finally {
+    req.signal.removeEventListener('abort', abortHandler);
     reader.releaseLock();
   }
   const merged = new Uint8Array(size);

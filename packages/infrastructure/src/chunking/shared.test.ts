@@ -59,6 +59,12 @@ describe('splitSentences', () => {
     }
   });
 
+  it('hard-splits an unbroken token without exceeding the maximum', () => {
+    const s = splitSentences('x'.repeat(25), 10);
+    expect(s.map((part) => part.text)).toEqual(['xxxxxxxxxx', 'xxxxxxxxxx', 'xxxxx']);
+    expect(s.every((part) => Array.from(part.text).length <= 10)).toBe(true);
+  });
+
   it('caps abbreviation-dense accumulation without dropping text', () => {
     const input = 'Dr. '.repeat(15_000).trim();
     const s = splitSentences(input, 100_000);
@@ -108,6 +114,11 @@ describe('chunkBySentences', () => {
     const chunks = chunkBySentences(text, 120, 0, 'text-embedding-3-small', 400);
     expect(chunks.every((c) => c.length <= 120)).toBe(true);
     expect(chunks.every((c) => estimateTokens(c, 'text-embedding-3-small') <= 400)).toBe(true);
+  });
+
+  it('applies a small token cap to a single long sentence', () => {
+    const chunks = chunkBySentences('x'.repeat(100), 120, 0, 'unknown-model', 10);
+    expect(chunks.every((chunk) => estimateTokens(chunk, 'unknown-model') <= 10)).toBe(true);
   });
 });
 

@@ -30,8 +30,13 @@ function parseArgs(argv: string[]): CliArgs {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === '--out') {
-      out = resolve(argv[++i] ?? out);
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --out');
+      const resolved = resolve(argv[++i]!);
+      const repoRoot = resolve(__dirname, '..');
+      if (!resolved.startsWith(repoRoot + '/') && resolved !== repoRoot) throw new Error('--out must be inside repo');
+      out = resolved;
     } else if (arg === '--strategies') {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --strategies');
       const val = argv[++i] ?? '';
       const picked = val.split(',').map((s) => s.trim()).filter(Boolean) as ChunkingStrategyName[];
       if (picked.length > 0) {
@@ -39,7 +44,7 @@ function parseArgs(argv: string[]): CliArgs {
         strategies.push(...picked);
       }
     } else if (arg.startsWith('--')) {
-      console.warn(`Unknown flag: ${arg} — ignoring.`);
+      throw new Error(`Unknown flag: ${arg}`);
     } else if (!file) {
       file = arg;
     }

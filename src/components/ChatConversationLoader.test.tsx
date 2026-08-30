@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
+const historyReplaceStateMock = vi.spyOn(window.history, 'replaceState');
 const routerStub = { push: pushMock, replace: replaceMock };
 
 vi.mock('next/navigation', () => ({
@@ -16,15 +17,21 @@ vi.mock('@/components/ChatInterface', () => ({
     initialTurnIds?: Record<string, string>;
     conversationLimitReached?: boolean;
     truncated?: boolean;
+    onConversationPersisted?: () => void;
   }) => (
-    <div
-      data-testid="chat-interface-stub"
-      data-conversation={props.conversationId}
-      data-messages={props.initialMessages.length}
-      data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
-      data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
-      data-truncated={props.truncated ? 'true' : 'false'}
-    />
+    <>
+      <div
+        data-testid="chat-interface-stub"
+        data-conversation={props.conversationId}
+        data-messages={props.initialMessages.length}
+        data-turn-ids={JSON.stringify(props.initialTurnIds ?? {})}
+        data-limit-reached={props.conversationLimitReached ? 'true' : 'false'}
+        data-truncated={props.truncated ? 'true' : 'false'}
+      />
+      {props.onConversationPersisted ? (
+        <button type="button" data-testid="conversation-persisted" onClick={props.onConversationPersisted} />
+      ) : null}
+    </>
   ),
 }));
 
@@ -54,6 +61,7 @@ function conversationPayload(messageCount = 2) {
 beforeEach(() => {
   pushMock.mockClear();
   replaceMock.mockClear();
+  historyReplaceStateMock.mockClear();
 });
 
 describe('ChatConversationLoader', () => {
@@ -107,42 +115,36 @@ describe('ChatConversationLoader', () => {
     expect(screen.queryByTestId('chat-resume-error')).not.toBeInTheDocument();
   });
 
-  it('mints a new chat for /chat and syncs the id into the URL without navigation', async () => {
+  it('keeps a fresh draft on /chat until its first turn is persisted', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
     );
-    const replaceState = vi.fn();
-    vi.stubGlobal('history', { replaceState });
     render(<ChatConversationLoader routeId={null} />);
     const stub = await screen.findByTestId('chat-interface-stub');
     expect(stub.getAttribute('data-conversation')).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    await waitFor(() =>
-      expect(replaceState).toHaveBeenCalledWith({}, '', `/chat/${stub.getAttribute('data-conversation')}`),
-    );
-    expect(replaceState.mock.calls.every((call) => call[0] !== null)).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('preserves existing Next router history state when syncing the URL', async () => {
+  it('updates the URL without navigating after persistence is confirmed', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
     );
-    const replaceState = vi.fn();
-    const routerState = { __NA: true, __PRIVATE_TREE: [1, 2] };
-    vi.stubGlobal('history', { replaceState, state: routerState });
     render(<ChatConversationLoader routeId={null} />);
     const stub = await screen.findByTestId('chat-interface-stub');
+    const historyState = window.history.state;
+    fireEvent.click(screen.getByTestId('conversation-persisted'));
     await waitFor(() =>
-      expect(replaceState).toHaveBeenCalledWith(
-        routerState,
+      expect(historyReplaceStateMock).toHaveBeenCalledWith(
+        historyState,
         '',
         `/chat/${stub.getAttribute('data-conversation')}`,
       ),
     );
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it('resets its own state when a new-chat request arrives while already on /chat', async () => {
@@ -150,8 +152,6 @@ describe('ChatConversationLoader', () => {
       'fetch',
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ conversations: [], total: 0 }) }) as Response),
     );
-    const replaceState = vi.fn();
-    vi.stubGlobal('history', { replaceState });
     render(<ChatConversationLoader routeId={null} />);
     const stub = await screen.findByTestId('chat-interface-stub');
     const firstId = stub.getAttribute('data-conversation');
@@ -159,8 +159,7 @@ describe('ChatConversationLoader', () => {
     await waitFor(() =>
       expect(screen.getByTestId('chat-interface-stub').getAttribute('data-conversation')).not.toBe(firstId),
     );
-    const newId = screen.getByTestId('chat-interface-stub').getAttribute('data-conversation');
-    await waitFor(() => expect(replaceState).toHaveBeenCalledWith({}, '', `/chat/${newId}`));
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it('shows an error state with retry when the resume fetch fails', async () => {

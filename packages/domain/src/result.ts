@@ -31,7 +31,7 @@ export function mapErr<T, E, F>(r: Result<T, E>, fn: (e: E) => F): Result<T, F> 
 
 export function unwrap<T, E>(r: Result<T, E>): T {
   if (r.ok) return r.value;
-  throw r.error;
+  throw r.error instanceof Error ? r.error : new Error(String(r.error));
 }
 
 export function unwrapOr<T, E>(r: Result<T, E>, fallback: T): T {

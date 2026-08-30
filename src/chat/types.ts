@@ -28,5 +28,6 @@ export type MyUIMessage = UIMessage<
   {
     citation: CitationData;
     guardrail: GuardrailData;
+    'conversation-persisted': { conversationId: string };
   }
 >;

@@ -40,9 +40,9 @@ describe('reingestAll', () => {
     expect(result.value.enqueued).toBe(3);
     expect(result.value.documentIds).toEqual([1, 2, 3]);
     expect(enqueue).toHaveBeenCalledTimes(3);
-    expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
-    expect(enqueue).toHaveBeenCalledWith({ documentId: 2 });
-    expect(enqueue).toHaveBeenCalledWith({ documentId: 3 });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'h1', attemptId: expect.any(String) }));
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 2, fileHash: 'h2', attemptId: expect.any(String) }));
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 3, fileHash: 'h3', attemptId: expect.any(String) }));
   });
 
   it('paginates across multiple pages using the repository total', async () => {
@@ -99,7 +99,7 @@ describe('reingestAll', () => {
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
     expect(documents.update).toHaveBeenCalledWith(1, { ingestStatus: 'queued' });
-    expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'h1', attemptId: expect.any(String) }));
   });
 
   it('does not re-reset an already-queued document', async () => {
@@ -114,10 +114,10 @@ describe('reingestAll', () => {
     const result = await reingestAll({ documents, queue });
     expect(result.ok).toBe(true);
     expect(documents.update).not.toHaveBeenCalled();
-    expect(enqueue).toHaveBeenCalledWith({ documentId: 1 });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'h1', attemptId: expect.any(String) }));
   });
 
-  it('deletes chunks only after enqueueing when a chunk repo is provided', async () => {
+  it('leaves existing chunks for the worker to replace atomically', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2])));
     const chunks = { deleteByDocumentId: vi.fn().mockResolvedValue(undefined) };
@@ -125,12 +125,7 @@ describe('reingestAll', () => {
 
     const result = await reingestAll({ documents, queue, chunks } as never);
     expect(result.ok).toBe(true);
-    expect(chunks.deleteByDocumentId).toHaveBeenCalledTimes(2);
-    expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(1);
-    expect(chunks.deleteByDocumentId).toHaveBeenCalledWith(2);
-    expect(chunks.deleteByDocumentId.mock.invocationCallOrder[0]!).toBeGreaterThan(
-      enqueue.mock.invocationCallOrder[0]!,
-    );
+    expect(chunks.deleteByDocumentId).not.toHaveBeenCalled();
   });
 
   it('refuses to re-ingest when the queue is a no-op (no worker wired)', async () => {

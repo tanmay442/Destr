@@ -11,7 +11,7 @@ vi.mock('@ai-sdk/openai', () => ({
   createOpenAI: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'test-embed' })) })),
 }));
 
-vi.mock('../../../db/schema-vector', () => ({ VECTOR_DIM: 3 }));
+vi.mock('../../../db/schema-vector', () => ({ resolveVectorDim: () => 3 }));
 
 import { ollamaEmbeddingService } from '../../ollama-embedding-service';
 import { runEmbeddingServiceContract } from './embedding-service-contract';

@@ -1,6 +1,6 @@
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
-import { chatConversations, chatMessages } from './schema';
+import { chatConversations, chatMessages, users } from './schema';
 import type {
   AppendChatTurnInput,
   ChatHistoryRepo,
@@ -9,6 +9,7 @@ import type {
 } from '@app/domain';
 import {
   ConflictError,
+  ForbiddenError,
   MAX_CONVERSATIONS_PER_USER,
   MAX_MESSAGES_PER_CONVERSATION,
   MAX_RESUME_MESSAGES,
@@ -29,6 +30,11 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
         .onConflictDoNothing({ target: chatConversations.id })
         .returning({ id: chatConversations.id });
       if (inserted.length > 0) {
+        await tx
+          .select({ clerkUserId: users.clerkUserId })
+          .from(users)
+          .where(eq(users.clerkUserId, input.userId))
+          .for('update');
         if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
           throw new ConflictError('Conversation limit reached');
         }
@@ -37,25 +43,20 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
           .select({ userId: chatConversations.userId })
           .from(chatConversations)
           .where(eq(chatConversations.id, conversationId))
-          .limit(1);
-        if (!owner || owner.userId !== input.userId) return { conversationId };
+          .limit(1)
+          .for('update');
+        if (!owner || owner.userId !== input.userId) throw new ForbiddenError('conversation access denied');
       }
+
+      const [existingTurn] = await tx
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.turnId, input.turnId)))
+        .limit(1);
+      if (existingTurn) return { conversationId };
 
       let removedByReplace = 0;
       if (input.retryOfMessageId !== undefined) {
-        await tx
-          .select({ id: chatConversations.id })
-          .from(chatConversations)
-          .where(eq(chatConversations.id, conversationId))
-          .for('update');
-
-        const [existingTurn] = await tx
-          .select({ id: chatMessages.id })
-          .from(chatMessages)
-          .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.turnId, input.turnId)))
-          .limit(1);
-        if (existingTurn) return { conversationId };
-
         const [prevUser] = await tx
           .select({ id: chatMessages.id })
           .from(chatMessages)
@@ -118,7 +119,7 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
         .select({ total: sql<number>`count(*)::int` })
         .from(chatMessages)
         .where(eq(chatMessages.conversationId, conversationId));
-      if (Number(messageCountRow?.total ?? 0) >= MAX_MESSAGES_PER_CONVERSATION) {
+      if (Number(messageCountRow?.total ?? 0) + 2 > MAX_MESSAGES_PER_CONVERSATION) {
         throw new ConflictError('This chat is full — start a new one');
       }
 

@@ -44,12 +44,13 @@ describe('logger redaction', () => {
     expect(line).toContain('[REDACTED]');
   });
 
-  it('redacts a 32+ char token nested in non-Error meta', () => {
+  it('preserves ordinary identifiers and redacts nested secret keys', () => {
     const s = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const token = '0123456789abcdef0123456789abcdef';
-    logger.error('write failed', { body: { auth: { token } } });
+    const identifier = '0123456789abcdef0123456789abcdef';
+    logger.error('write failed', { body: { identifier, auth: { token: 'secret-token' } } });
     const line = capturedLine(s);
-    expect(line).not.toContain(token);
+    expect(line).toContain(identifier);
+    expect(line).not.toContain('secret-token');
     expect(line).toContain('[REDACTED]');
   });
 

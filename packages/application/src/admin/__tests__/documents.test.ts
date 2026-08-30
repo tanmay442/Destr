@@ -336,7 +336,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       expect(result.value.documentId).toBe(7);
     }
     expect(mocks.documents.insert).toHaveBeenCalled();
-    expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith({ documentId: 7 });
+    expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 7, fileHash: 'newhash', attemptId: expect.any(String) }));
     expect(mocks.documents.updateIngestStatus).toHaveBeenCalledWith(7, 'queued');
   });
 
@@ -438,7 +438,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       expect(result.value.status).toBe('queued');
       expect(result.value.chunks).toBe(0);
     }
-    expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith({ documentId: 1 });
+    expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'newhash', attemptId: expect.any(String) }));
     expect(mocks.chunks.deleteByDocumentId).not.toHaveBeenCalled();
   });
 

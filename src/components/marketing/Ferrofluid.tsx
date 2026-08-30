@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Renderer, Program, Mesh, Triangle, Geometry } from 'ogl';
 
-export interface FerrofluidProps {
+interface FerrofluidProps {
   className?: string;
   dpr?: number;
   paused?: boolean;

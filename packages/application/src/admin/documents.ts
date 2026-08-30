@@ -120,25 +120,46 @@ export async function listDocuments(
 const ASYNC_INGEST_THRESHOLD = 4 * 1024 * 1024;
 
 async function rollbackEnqueueFailure(
-  row: { id: number; storageKey: string | null },
+  row: { id: number; fileHash: string; storageKey: string },
   previous: RowPrevious,
   deps: { documents: DocumentRepository; blobStorage: BlobStorage },
 ): Promise<void> {
-  if (previous.fileHash) {
-    // Point the row back at the old blob so it never references the deleted key.
-    await deps.documents
+  let rolledBack = false;
+  if (deps.documents.restoreAfterQueueFailure) {
+    rolledBack = await deps.documents
+      .restoreAfterQueueFailure(
+        row.id,
+        { fileHash: row.fileHash, storageKey: row.storageKey },
+        {
+          fileHash: previous.fileHash,
+          ingestStatus: previous.status,
+          storageKey: previous.storageKey,
+        },
+      )
+      .catch(() => false);
+  } else if (previous.fileHash) {
+    rolledBack = await deps.documents
       .update(row.id, {
         fileHash: previous.fileHash,
         ingestStatus: previous.status ?? 'failed',
         storageKey: previous.storageKey,
       })
-      .catch(() => {});
-    if (row.storageKey) await deps.blobStorage.delete(row.storageKey).catch(() => {});
+      .then(() => true)
+      .catch(() => false);
+  } else {
+    rolledBack = await deps.documents
+      .deleteById(row.id)
+      .then(() => true)
+      .catch(() => false);
+  }
+  if (rolledBack) {
+    await deps.blobStorage.delete(row.storageKey).catch(() => {});
     return;
   }
-  const key = row.storageKey;
-  await deps.documents.deleteById(row.id).catch(() => {});
-  if (key) await deps.blobStorage.delete(key).catch(() => {});
+  const current = await deps.documents.findById(row.id, { includeDeleted: true }).catch(() => null);
+  if (!current || current.storageKey !== row.storageKey) {
+    await deps.blobStorage.delete(row.storageKey).catch(() => {});
+  }
 }
 
 async function cleanupUncommittedBlob(
@@ -146,6 +167,19 @@ async function cleanupUncommittedBlob(
   deps: { blobStorage: BlobStorage },
 ): Promise<void> {
   await deps.blobStorage.delete(key).catch(() => {});
+}
+
+async function putUncommittedBlob(
+  key: string,
+  body: Buffer,
+  deps: { blobStorage: BlobStorage },
+): Promise<void> {
+  try {
+    await deps.blobStorage.put(key, body, 'application/pdf');
+  } catch (cause) {
+    await cleanupUncommittedBlob(key, deps);
+    throw cause;
+  }
 }
 
 export async function uploadPdf(
@@ -168,7 +202,7 @@ async function uploadPdfSync(
 ): Promise<Result<IngestResult>> {
   const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
-  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+  await putUncommittedBlob(key, input.buffer, deps);
   let oldStorageKey: string | null = null;
   let result: Result<IngestResult>;
   try {
@@ -191,11 +225,16 @@ async function uploadPdfSync(
       const outcome = await writeChunks(
         tx.documents,
         tx.chunks,
-        { fileName: input.fileName, fileHash, uploadedBy: input.actorId },
+        {
+          fileName: input.fileName,
+          fileHash,
+          uploadedBy: input.actorId,
+          resurrectDeleted: claim.kind === 'resurrect',
+        },
         parsed.value.rows,
       );
       if (!(await nameStillClaimed(input.fileName, fileHash, tx.documents))) {
-        return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+        throw new ConflictError(UPLOAD_CONFLICT_MESSAGE);
       }
       await tx.documents.setStorageKey(outcome.documentId, key);
       await tx.audit.logDocumentEvent({
@@ -218,6 +257,10 @@ async function uploadPdfSync(
     await cleanupUncommittedBlob(key, deps);
     return result;
   }
+  if (result.value.status === 'unchanged') {
+    await cleanupUncommittedBlob(key, deps);
+    return result;
+  }
   if (oldStorageKey) {
     // Best-effort cleanup: orphaned blob beats failing the upload.
     await deps.blobStorage.delete(oldStorageKey).catch(() => {});
@@ -232,7 +275,7 @@ async function queuePdfForIngest(
 ): Promise<Result<IngestResult>> {
   const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
-  await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+  await putUncommittedBlob(key, input.buffer, deps);
   let previous: RowPrevious = { fileHash: null, status: null, storageKey: null };
   let oldStorageKey: string | null = null;
   let result: Result<IngestResult>;
@@ -252,12 +295,16 @@ async function queuePdfForIngest(
       } else {
         oldStorageKey = claim.oldStorageKey;
       }
+      if (claim.kind === 'resurrect') await tx.documents.restore(claim.documentId);
       const doc =
         claim.kind === 'insert'
-          ? await tx.documents.insert({ fileName: input.fileName, fileHash, uploadedBy: input.actorId })
+          ? await tx.documents.insert(
+              { fileName: input.fileName, fileHash, uploadedBy: input.actorId },
+              { resurrectDeleted: false },
+            )
           : await tx.documents.update(claim.documentId, { fileName: input.fileName, fileHash, uploadedBy: input.actorId });
       if (!(await nameStillClaimed(input.fileName, fileHash, tx.documents))) {
-        return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+        throw new ConflictError(UPLOAD_CONFLICT_MESSAGE);
       }
       await tx.documents.setStorageKey(doc.id, key);
       await tx.documents.updateIngestStatus(doc.id, 'queued');
@@ -274,11 +321,19 @@ async function queuePdfForIngest(
     await cleanupUncommittedBlob(key, deps);
     return result;
   }
+  if (result.value.status === 'unchanged') {
+    await cleanupUncommittedBlob(key, deps);
+    return result;
+  }
   if (result.value.status === 'queued') {
     try {
-      await deps.ingestQueue.enqueue({ documentId: result.value.documentId });
+      await deps.ingestQueue.enqueue({ documentId: result.value.documentId, fileHash, attemptId: randomUUID() });
     } catch (e) {
-      await rollbackEnqueueFailure({ id: result.value.documentId, storageKey: key }, previous, deps);
+      await rollbackEnqueueFailure(
+        { id: result.value.documentId, fileHash, storageKey: key },
+        previous,
+        deps,
+      );
       throw e;
     }
   }
@@ -384,7 +439,7 @@ export async function replacePdf(
 
     const oldStorageKey = existing.storageKey;
     const key = newBlobKey(input.fileName);
-    await deps.blobStorage.put(key, input.buffer, 'application/pdf');
+    await putUncommittedBlob(key, input.buffer, deps);
 
     const useAsync = input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest;
     const previous = {
@@ -394,10 +449,15 @@ export async function replacePdf(
     };
     let parsed: Awaited<ReturnType<typeof parseAndEmbed>> | null = null;
     if (!useAsync) {
-      parsed = await parseAndEmbed(
-        { fileName: input.fileName, buffer: input.buffer },
-        deps,
-      );
+      try {
+        parsed = await parseAndEmbed(
+          { fileName: input.fileName, buffer: input.buffer },
+          deps,
+        );
+      } catch (cause) {
+        await cleanupUncommittedBlob(key, deps);
+        throw cause;
+      }
       if (!parsed.ok) {
         await cleanupUncommittedBlob(key, deps);
         return parsed;
@@ -407,11 +467,17 @@ export async function replacePdf(
     let rowId: number;
     try {
       rowId = await deps.runner.run(async (tx) => {
-        await tx.documents.update(input.documentId, {
+        const patch = {
           fileName: input.fileName,
           fileHash,
           uploadedBy: input.actorId,
-        });
+        };
+        if (tx.documents.updateIfCurrent) {
+          const updated = await tx.documents.updateIfCurrent(input.documentId, existing.fileHash, patch);
+          if (!updated) throw new ConflictError('The document changed while it was being replaced; retry the operation');
+        } else {
+          await tx.documents.update(input.documentId, patch);
+        }
         if (parsed) {
           await tx.chunks.deleteByDocumentId(input.documentId);
           await tx.chunks.insertMany(
@@ -446,9 +512,9 @@ export async function replacePdf(
 
     if (useAsync) {
       try {
-        await deps.ingestQueue.enqueue({ documentId: rowId });
+        await deps.ingestQueue.enqueue({ documentId: rowId, fileHash, attemptId: randomUUID() });
       } catch (e) {
-        await rollbackEnqueueFailure({ id: rowId, storageKey: key }, previous, deps);
+        await rollbackEnqueueFailure({ id: rowId, fileHash, storageKey: key }, previous, deps);
         throw e;
       }
     }

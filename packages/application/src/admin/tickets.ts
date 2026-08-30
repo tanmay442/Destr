@@ -122,6 +122,7 @@ export async function updateTicket(
     if (input.status && input.status !== existing.status) auditActions.push('status_change');
     if (input.assignedTo !== undefined) auditActions.push('assign');
     if (note) auditActions.push('note');
+    // Audit writes use the transaction-scoped audit repo (ctx.audit) so they commit/rollback atomically with the ticket update.
     for (const action of auditActions) {
       const event = { action, ticketId: input.ticketId, actorId: input.actorId };
       await audit.logTicketEvent(event);
@@ -137,7 +138,7 @@ export async function updateTicket(
     }
     return deps.runner
       ? deps.runner.run((ctx) => run(ctx.tickets, ctx.audit, 0))
-      : run(deps.tickets, deps.audit, 0);
+      : run(deps.tickets, deps.audit, 0); // no runner: audit outside tx is best-effort
   } catch (e) {
     return err(new ExternalServiceError('Failed to update ticket', e));
   }

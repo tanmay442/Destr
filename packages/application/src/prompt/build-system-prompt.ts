@@ -76,12 +76,18 @@ function buildCustomInstructionsBlock(config: AppConfig): string | null {
   ].join('\n');
 }
 
+function escapeXml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   const header = `# Pre-fetched Reference Data`;
   const bullets = chunks
     .map((c) => {
-      const content = c.content.length > TOOL_CONTENT_CAP ? c.content.slice(0, TOOL_CONTENT_CAP) + '…' : c.content;
-      return `<reference source="${c.source}">\n${content}\n</reference>`;
+      const raw = c.content.length > TOOL_CONTENT_CAP ? c.content.slice(0, TOOL_CONTENT_CAP) + '…' : c.content;
+      const content = escapeXml(raw);
+      const source = escapeXml(c.source ?? '');
+      return `~~~ BEGIN UNTRUSTED REFERENCE source="${source}" ~~~\n<reference source="${source}">\n${content}\n</reference>\n~~~ END UNTRUSTED REFERENCE ~~~`;
     })
     .join('\n\n');
   

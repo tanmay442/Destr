@@ -101,16 +101,16 @@ describe('agenticSearch', () => {
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
     expect(rewriterMock).toHaveBeenNthCalledWith(1, 'the question');
-    expect(rewriterMock).toHaveBeenNthCalledWith(2, 'the question refined');
+    expect(rewriterMock).toHaveBeenNthCalledWith(2, 'the question');
     expect(searchChunksMock).toHaveBeenNthCalledWith(
       2,
-      'the question refined refined',
+      'the question refined',
       expect.anything(),
       expect.anything(),
     );
     const r = unwrap(res);
     expect(r.chunks[0]!.content).toBe('strong match');
-    expect(r.rewrittenQuery).toBe('the question refined refined');
+    expect(r.rewrittenQuery).toBe('the question refined');
     expect(r.resultState).toBe('ok');
   });
 

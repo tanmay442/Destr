@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChatInterface } from '@/components/ChatInterface';
 import { toResumedConversation, type StoredMessagePayload } from '@/chat/resume';
@@ -96,6 +96,15 @@ function ResumeErrorPanel({
 export function ChatConversationLoader({ routeId }: { routeId: string | null }) {
   const router = useRouter();
   const [conversationId, setConversationId] = useState<string>(() => routeId ?? uuidv4());
+  const syncPersistedConversation = useCallback(() => {
+    if (routeId !== null) return;
+    window.history.replaceState(window.history.state, '', `/chat/${conversationId}`);
+  }, [conversationId, routeId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync route param to internal id when navigation changes the route
+    if (routeId !== null) setConversationId(routeId);
+  }, [routeId]);
   const [resume, setResume] = useState<ResumeState | null>(null);
   const [loaded, setLoaded] = useState(routeId === null);
   const [error, setError] = useState<ResumeError | null>(null);
@@ -187,14 +196,6 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
     };
   }, [routeId, attempt, router]);
 
-  // Sync freshly-minted ids into the URL without triggering a remount,
-  // preserving Next's router history state on the entry.
-  useEffect(() => {
-    if (routeId === null && loaded) {
-      window.history.replaceState(window.history.state ?? {}, '', `/chat/${conversationId}`);
-    }
-  }, [routeId, loaded, conversationId]);
-
   useEffect(() => {
     if (routeId !== null) return;
     return onNewChatRequested(() => {
@@ -230,6 +231,7 @@ export function ChatConversationLoader({ routeId }: { routeId: string | null }) 
       {...(resume?.messageCount !== undefined ? { initialMessageCount: resume.messageCount } : {})}
       conversationLimitReached={limitReached}
       truncated={resume !== null && resume.messageCount > resume.messages.length}
+      {...(routeId === null ? { onConversationPersisted: syncPersistedConversation } : {})}
     />
   );
 }

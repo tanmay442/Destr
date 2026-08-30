@@ -4,7 +4,7 @@ import { db } from '../db/client';
 import { users } from '../db/schema';
 import type { SessionStore } from '@app/domain';
 import { getClerkUserCached, isVerifiedAdminEmail, primaryEmailAddress } from './clerk-shared';
-import { invalidateRoleCache } from './clerk-adapter';
+import { invalidateRoleCache } from './role-cache';
 
 export const clerkSessionStore: SessionStore = {
   async getSession() {

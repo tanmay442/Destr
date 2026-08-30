@@ -98,6 +98,9 @@ importers:
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
+      tailwindcss:
+        specifier: ^4.3.2
+        version: 4.3.2
       unpdf:
         specifier: ^1.6.2
         version: 1.6.2
@@ -156,9 +159,6 @@ importers:
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
-      tailwindcss:
-        specifier: ^4.3.2
-        version: 4.3.2
       tsx:
         specifier: ^4.23.0
         version: 4.23.0

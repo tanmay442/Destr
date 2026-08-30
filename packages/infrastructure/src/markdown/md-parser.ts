@@ -54,12 +54,15 @@ function extractMetaAndContent(segment: string): { meta: ChunkMeta; content: str
   return { meta, content };
 }
 
-const FENCE_RE = /^( {0,3})(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE_RE = /^( {0,3})(`{3,}|~{3,})[ \t]*$/;
 
-function isFenceOpener(line: string): { marker: string } | null {
-  const m = line.match(FENCE_RE);
-  if (!m) return null;
-  return { marker: m[2]! };
+function isFenceOpener(line: string): { character: string; length: number } | null {
+  const match = line.match(FENCE_OPEN_RE);
+  if (!match) return null;
+  const marker = match[2]!;
+  if (marker.startsWith('`') && match[3]!.includes('`')) return null;
+  return { character: marker[0]!, length: marker.length };
 }
 
 /** Split text at delimiter lines, ignoring lines that appear inside fenced
@@ -69,12 +72,12 @@ function splitOutsideFences(text: string, delimiter: string): string[] {
   const lines = text.split(/\r?\n/);
   const segments: string[] = [];
   let buf: string[] = [];
-  let fence: string | null = null;
+  let fence: { character: string; length: number } | null = null;
   for (const line of lines) {
     if (fence === null) {
       const open = isFenceOpener(line);
       if (open) {
-        fence = open.marker[0]!.repeat(3);
+        fence = open;
         buf.push(line);
         continue;
       }
@@ -86,8 +89,14 @@ function splitOutsideFences(text: string, delimiter: string): string[] {
       buf.push(line);
     } else {
       buf.push(line);
-      const close = line.match(FENCE_RE);
-      if (close && close[2]![0] === fence[0]) fence = null;
+      const close = line.match(FENCE_CLOSE_RE);
+      if (
+        close &&
+        close[2]![0] === fence.character &&
+        close[2]!.length >= fence.length
+      ) {
+        fence = null;
+      }
     }
   }
   // Unclosed fence: fall back to naive splitting so delimiters still act as segment separators.

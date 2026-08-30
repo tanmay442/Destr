@@ -59,13 +59,15 @@ export async function setUserRole(
       return err(new NotFoundError(`User not found: ${input.clerkUserId}`));
     }
 
+    // Clerk sync is outside the TX that serialized concurrent demotes via countAdminsForUpdate; rollback is best-effort with version check where available.
     try {
       await deps.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {
       let rollbackOk = false;
       try {
-        await deps.users.setRole(input.clerkUserId, target.role);
-        rollbackOk = true;
+        rollbackOk = deps.users.setRoleIfCurrent
+          ? await deps.users.setRoleIfCurrent(input.clerkUserId, input.role, target.role)
+          : (await deps.users.setRole(input.clerkUserId, target.role)) !== null;
       } catch (rollbackErr) {
         logger.error('setUserRole: Clerk sync failed and DB rollback also failed', {
           clerkUserId: input.clerkUserId,

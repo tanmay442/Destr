@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ok, err, type Result, ExternalServiceError } from '@app/domain';
 import type { DocumentRepository, ChunkRepository, IngestQueue } from '@app/domain';
 import { MAX_LIST_LIMIT } from '@app/domain';
@@ -5,9 +6,7 @@ import { MAX_LIST_LIMIT } from '@app/domain';
 export interface ReingestDeps {
   documents: DocumentRepository;
   queue: IngestQueue;
-  /** Optional: when provided, chunks are dropped before re-enqueue so the
-   *  worker's insert cannot double the index (worker-side delete is the primary
-   *  guard; this is defense-in-depth for callers that own a chunk repo). */
+  /** Retained for compatibility with callers that pass a chunk repository. */
   chunks?: ChunkRepository;
 }
 
@@ -43,18 +42,34 @@ export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSu
         offset,
       });
       for (const doc of documents) {
+        if (doc.ingestStatus === 'ingesting') continue;
+        const attemptId = randomUUID();
+        let statusChanged = false;
         try {
-          if (doc.ingestStatus !== 'queued') {
+          if (deps.documents.updateIngestStatusIfCurrent) {
+            const changed = await deps.documents.updateIngestStatusIfCurrent(
+              doc.id,
+              doc.fileHash,
+              doc.ingestStatus,
+              'queued',
+            );
+            if (!changed) continue;
+            statusChanged = true;
+          } else if (doc.ingestStatus !== 'queued') {
             await deps.documents.update(doc.id, { ingestStatus: 'queued' });
+            statusChanged = true;
           }
-          await deps.queue.enqueue({ documentId: doc.id });
-          // Drop chunks only after the message is safely queued so an enqueue
-          // failure never leaves a `queued` doc without an index to search.
-          if (deps.chunks) await deps.chunks.deleteByDocumentId(doc.id);
+          await deps.queue.enqueue({ documentId: doc.id, fileHash: doc.fileHash, attemptId });
         } catch (e) {
-          // doc.ingestStatus is still the pre-update status here; restore it so a
-          // failed enqueue never strands the doc in `queued` without a message.
-          await deps.documents.update(doc.id, { ingestStatus: doc.ingestStatus }).catch(() => {});
+          if (statusChanged) {
+            if (deps.documents.updateIngestStatusIfCurrent) {
+              await deps.documents
+                .updateIngestStatusIfCurrent(doc.id, doc.fileHash, 'queued', doc.ingestStatus)
+                .catch(() => {});
+            } else {
+              await deps.documents.update(doc.id, { ingestStatus: doc.ingestStatus }).catch(() => {});
+            }
+          }
           return err(new ExternalServiceError(`Failed to enqueue document ${doc.id}`, e));
         }
         documentIds.push(doc.id);

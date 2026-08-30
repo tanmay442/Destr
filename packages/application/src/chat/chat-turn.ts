@@ -8,13 +8,13 @@ import type {
   UIMessage,
 } from 'ai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
   logger,
   sanitizeText,
-  TOOL_CONTENT_CAP,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
   type AgenticResultState,
@@ -32,7 +32,8 @@ import { buildEventMeta } from './build-event-meta';
 import { shouldCache } from './should-cache';
 import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
-import { citationDocumentIds, emitCitations, type EmittedCitation } from './emit-citations';
+import { citationDocumentIds, type EmittedCitation } from './emit-citations';
+import { addGroundingEvidence, createGroundingEvidence, formatGroundingReference, type GroundingEvidence } from './grounding-evidence';
 import { ChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
 
@@ -149,8 +150,8 @@ export type ChatTurnResult =
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
 
-/** Best-effort history persistence; never blocks or fails the chat stream. */
-export function persistHistory(
+/** Best-effort history persistence; callers wait before closing a completed stream. */
+export async function persistHistory(
   sink: ChatTurnDeps['historySink'],
   cfg: AppConfig,
   userId: string,
@@ -162,14 +163,14 @@ export function persistHistory(
     userMessage: MessageLike | undefined;
     assistantMessage: MessageLike;
   },
-): void {
-  if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return;
+): Promise<boolean> {
+  if (!cfg.captureQueryText || !sink || !input.turnId || !input.userMessage) return false;
   if (!input.conversationId) {
     logger.debug('chat.history.persist_skipped', { turnId: input.turnId });
-    return;
+    return false;
   }
-  void sink
-    .appendTurn({
+  try {
+    await sink.appendTurn({
       userId,
       conversationId: input.conversationId,
       turnId: input.turnId,
@@ -177,22 +178,34 @@ export function persistHistory(
       title: input.title,
       userMessage: input.userMessage,
       assistantMessage: input.assistantMessage,
-    })
-    .catch(() =>
-      logger.warn('chat.history.persist_failed', {
-        conversationId: input.conversationId,
-        turnId: input.turnId,
-      }),
-    );
+    });
+    return true;
+  } catch (cause: unknown) {
+    logger.error('chat.history.persist_failed', {
+      conversationId: input.conversationId,
+      turnId: input.turnId,
+      error: String(cause),
+    });
+    return false;
+  }
 }
 
 async function readBoundedJson(request: Request): Promise<{ value: unknown; tooLarge: boolean }> {
   if (!request.body) return { value: null, tooLarge: false };
+  const abortedBeforeRead = request.signal.aborted;
   const reader = request.body.getReader();
+  const abortHandler = (): void => {
+    reader.cancel().catch(() => undefined);
+  };
+  request.signal.addEventListener('abort', abortHandler, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {
+      if (!abortedBeforeRead && request.signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+        return { value: null, tooLarge: false };
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
@@ -206,6 +219,7 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
   } catch {
     return { value: null, tooLarge: false };
   } finally {
+    request.signal.removeEventListener('abort', abortHandler);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);
@@ -238,7 +252,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   effectiveMode: 'agentic' | 'normal';
   userId: string;
   request: Request;
-  capturedCitations: EmittedCitation[];
+  groundingEvidence: GroundingEvidence;
   outOfDomainRef: { value: boolean };
   isEmptyRef: { value: boolean };
   resultStateRef: { value: AgenticResultState | null };
@@ -249,7 +263,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     effectiveMode,
     userId,
     request,
-    capturedCitations,
+    groundingEvidence,
     outOfDomainRef,
     isEmptyRef,
     resultStateRef,
@@ -259,7 +273,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   return {
     searchDocumentation: deps.ai.tool({
       description:
-        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity, documentTitle, section } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; the full chunk is still available, but only the top chunks are returned by default. Do NOT call this for non-documentation questions (medical, legal, personal).",
+        "Search the org documentation for chunks relevant to the user's question. Returns an array of { content, similarity, documentTitle, section } objects, ordered by similarity (highest first). Call this tool whenever you need to ground an answer in the official docs. You may call it more than once with a reformulated query if the first call returns nothing useful. Each `content` is capped at 800 characters; duplicate chunks are omitted across this turn. Do NOT call this for non-documentation questions (medical, legal, personal).",
       inputSchema: z.object({
         query: z
           .string()
@@ -290,9 +304,16 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           if (deps.traceEnabled) {
             logger.info('rag.retrieve', { mode: 'agentic', query, ms: performance.now() - t0, hits: r.value.chunks.length });
           }
-          outOfDomainRef.value = r.value.outOfDomain;
-          isEmptyRef.value = r.value.isEmpty;
-          resultStateRef.value = r.value.resultState;
+          const hadEvidence = groundingEvidence.documents.length > 0;
+          if (r.value.chunks.length > 0 || hadEvidence) {
+            outOfDomainRef.value = false;
+            isEmptyRef.value = false;
+            resultStateRef.value = 'ok';
+          } else {
+            outOfDomainRef.value = r.value.outOfDomain;
+            isEmptyRef.value = r.value.isEmpty;
+            resultStateRef.value = r.value.resultState;
+          }
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
@@ -307,26 +328,17 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           matches = r.value;
         }
         metrics.retrieveMs += Math.round(performance.now() - t0);
-        metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
         for (const m of matches) {
           if (metrics.maxSimilarity === null || m.similarity > metrics.maxSimilarity) metrics.maxSimilarity = m.similarity;
         }
-        const capped = matches.map((m) => {
-          const content =
-            m.content.length > TOOL_CONTENT_CAP
-              ? m.content.slice(0, TOOL_CONTENT_CAP) + '\u2026'
-              : m.content;
-          return {
-            content: `<reference source="${m.source}">\n${content}\n</reference>`,
-            similarity: m.similarity,
-            documentTitle: m.title ?? undefined,
-            section: m.sectionTitle ?? undefined,
-          };
-        });
-        for (const citation of emitCitations(matches)) {
-          capturedCitations.push(citation);
-        }
-        return capped;
+        const uniqueMatches = addGroundingEvidence(groundingEvidence, matches);
+        metrics.hitCount = (metrics.hitCount ?? 0) + uniqueMatches.length;
+        return uniqueMatches.map((m) => ({
+          content: formatGroundingReference(m),
+          similarity: m.similarity,
+          documentTitle: m.title ?? undefined,
+          section: m.sectionTitle ?? undefined,
+        }));
       },
     }),
     createKnowledgeTicket: deps.ai.tool({
@@ -428,7 +440,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         .join('\n')
     : '';
 
-  const capturedCitations: EmittedCitation[] = [];
+  const groundingEvidence = createGroundingEvidence();
+  const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
 
@@ -461,19 +474,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
-      const stream = deps.ai.createUIMessageStream({
-        execute: ({ writer }) => {
-          writer.write({ type: 'text-start', id: 'cached' });
-          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
-          writer.write({ type: 'text-end', id: 'cached' });
-          for (const src of dedupeCitations(cachedAnswer.citations)) {
-            writer.write({
-              type: 'data-citation',
-              data: src,
-            } as InferUIMessageChunk<UIMessage>);
-          }
-        },
-      });
       deps.eventSink.record({
         turnId,
         userId,
@@ -488,7 +488,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }
           : {}),
       });
-      persistHistory(deps.historySink, cfg, userId, {
+      const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
         conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -500,6 +500,25 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           citations: dedupeCitations(cachedAnswer.citations),
           guardrail: null,
         }),
+      });
+      const stream = deps.ai.createUIMessageStream({
+        execute: ({ writer }) => {
+          writer.write({ type: 'text-start', id: 'cached' });
+          writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
+          writer.write({ type: 'text-end', id: 'cached' });
+          for (const src of dedupeCitations(cachedAnswer.citations)) {
+            writer.write({
+              type: 'data-citation',
+              data: src,
+            } as InferUIMessageChunk<UIMessage>);
+          }
+          if (historyPersisted && parsed.data.conversationId) {
+            writer.write({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<UIMessage>);
+          }
+        },
       });
       return {
         kind: 'stream',
@@ -517,10 +536,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
     } else {
-      prefetch = prefetchResult.value;
-      for (const citation of emitCitations(prefetch)) {
-        capturedCitations.push(citation);
-      }
+      prefetch = addGroundingEvidence(groundingEvidence, prefetchResult.value);
     }
   }
 
@@ -555,7 +571,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       effectiveMode,
       userId,
       request,
-      capturedCitations,
+      groundingEvidence,
       outOfDomainRef,
       isEmptyRef,
       resultStateRef,
@@ -611,6 +627,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               data: src,
             } as InferUIMessageChunk<UIMessage>);
           }
+          const hasGroundingEvidence = groundingEvidence.documents.length > 0;
+          const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
           const hallucinationStart = performance.now();
           const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
@@ -624,17 +642,17 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             const hallucinationResult = await runHallucinationCheck({
               controller,
               result,
-              capturedCitations: finalCitations,
+              groundingDocuments: groundingEvidence.documents,
               hallucinationGrader: deps.hallucinationGrader(cfg),
               enabled: cfg.hallucinationCheckEnabled,
-              outOfDomain: outOfDomainRef.value,
+              outOfDomain: finalOutOfDomain,
               timeoutMs: hallucinationBudgetMs,
             });
             hallucinationBlocked = hallucinationResult.blocked;
             hallucinationTimedOut = hallucinationResult.timedOut;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
-          const isEmpty = isEmptyRef.value || outOfDomainRef.value;
+          const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
           if (
             cacheKey &&
             !timedOut &&
@@ -675,7 +693,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             totalMs,
             hitCount: metrics.hitCount,
             maxSimilarity: metrics.maxSimilarity,
-            outOfDomain: outOfDomainRef.value,
+            outOfDomain: finalOutOfDomain,
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
             citationCount: finalCitations.length,
@@ -700,7 +718,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             totalMs,
           });
           const persistedText = await Promise.resolve(result.text).catch(() => partialText);
-          persistHistory(deps.historySink, cfg, userId, {
+          const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
             retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -725,6 +743,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   : null,
             }),
           });
+          if (historyPersisted && parsed.data.conversationId) {
+            controller.enqueue({
+              type: 'data-conversation-persisted',
+              data: { conversationId: parsed.data.conversationId },
+            } as InferUIMessageChunk<UIMessage>);
+          }
           if (
             turnId &&
             deps.judgeScheduler &&
@@ -768,6 +792,29 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
                 }),
               });
+              if (cfg.captureQueryText && deps.historySink && parsed.data.conversationId) {
+                const orphanTurnId = turnId ?? randomUUID();
+                void deps.historySink
+                  .appendTurn({
+                    userId,
+                    conversationId: parsed.data.conversationId,
+                    turnId: orphanTurnId,
+                    title: lastUserText,
+                    userMessage: lastUserMessage ?? { role: 'user', parts: [{ type: 'text', text: lastUserText }] },
+                    assistantMessage: buildAssistantMessageLike({
+                      turnId: orphanTurnId,
+                      text: 'ticket_created_but_stream_failed',
+                      citations: dedupeCitations(capturedCitations),
+                      guardrail: null,
+                    }),
+                  })
+                  .catch((cause: unknown) =>
+                    logger.error('chat.turn.orphan_history_failed', {
+                      turnId,
+                      error: String(cause),
+                    }),
+                  );
+              }
             }
           } catch {}
           controller.error(new Error('Chat stream interrupted'));
@@ -792,16 +839,16 @@ const MAX_DURATION_MS = 60_000;
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
   result: { text: PromiseLike<string> };
-  capturedCitations: EmittedCitation[];
+  groundingDocuments: string[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   enabled: boolean;
   outOfDomain: boolean;
   timeoutMs?: number;
 }): Promise<{ blocked: boolean; timedOut: boolean }> {
-  const { controller, result, capturedCitations, hallucinationGrader, enabled, outOfDomain } = opts;
+  const { controller, result, groundingDocuments, hallucinationGrader, enabled, outOfDomain } = opts;
   if (!enabled || !hallucinationGrader) return { blocked: false, timedOut: false };
 
-  if (outOfDomain) {
+  if (outOfDomain && groundingDocuments.length === 0) {
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: true, offerTicket: true },
@@ -811,10 +858,10 @@ async function runHallucinationCheck(opts: {
 
   let ungrounded = false;
   let timedOut = false;
-  if (capturedCitations.length > 0) {
+  if (groundingDocuments.length > 0) {
     try {
       const generation = await result.text;
-      const documents = capturedCitations.map((c) => c.snippet).join('\n\n');
+      const documents = groundingDocuments.join('\n\n');
       let verdict: 'yes' | 'no';
       if (opts.timeoutMs !== undefined && opts.timeoutMs <= 0) {
         throw Object.assign(new Error('Hallucination verification skipped: no wall-time budget'), { name: 'TimeoutError' });

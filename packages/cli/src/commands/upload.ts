@@ -29,27 +29,30 @@ export function parseUploadArgs(argv: string[]): UploadParseResult {
     } else if (a.startsWith('--md=')) {
       md = a.slice('--md='.length);
     } else if (a === '--md') {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --md');
       md = argv[++i];
     } else if (a.startsWith('--pdf=')) {
       pdf = a.slice('--pdf='.length);
     } else if (a === '--pdf') {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --pdf');
       pdf = argv[++i];
     } else if (a.startsWith('--name=')) {
       name = a.slice('--name='.length);
     } else if (a === '--name') {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --name');
       name = argv[++i];
     } else if (a.startsWith('--user=')) {
       user = a.slice('--user='.length);
     } else if (a === '--user') {
-      const v = argv[i + 1];
-      if (v && !v.startsWith('--')) {
-        user = v;
-        i++;
-      }
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --user');
+      user = argv[++i]!;
     } else if (a.startsWith('--delimiter=')) {
       delimiter = a.slice('--delimiter='.length);
     } else if (a === '--delimiter') {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith('--')) throw new Error('Missing value for --delimiter');
       delimiter = argv[++i];
+    } else if (a.startsWith('--')) {
+      throw new Error(`Unknown flag: ${a}`);
     }
   }
   if (!md && process.env.UPLOAD_MD) md = process.env.UPLOAD_MD;

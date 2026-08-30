@@ -106,41 +106,29 @@ export const appConfigSchema = z.object({
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
-type SchemaDef = {
-  type?: string;
-  shape?: Record<string, z.ZodTypeAny>;
-  innerType?: z.ZodTypeAny;
-  element?: z.ZodTypeAny;
-};
-
-function deepPartial(schema: z.ZodTypeAny): z.ZodTypeAny {
-  const def: SchemaDef | undefined = (schema as { _def?: SchemaDef })._def;
-  switch (def?.type) {
-    case 'object': {
-      const shape = def.shape ?? {};
-      const out: Record<string, z.ZodTypeAny> = {};
-      for (const key of Object.keys(shape)) {
-        const field = shape[key];
-        if (field) out[key] = deepPartial(field);
-      }
-      return z.object(out);
+function deepPartial(schema: typeof appConfigSchema): z.ZodType<Partial<AppConfig>>;
+function deepPartial(schema: z.core.SomeType): z.core.SomeType;
+function deepPartial(schema: z.core.SomeType): z.core.SomeType {
+  if (schema instanceof z.ZodObject) {
+    const out: Record<string, z.core.SomeType> = {};
+    for (const [key, field] of Object.entries(schema.shape)) {
+      out[key] = deepPartial(field);
     }
-    case 'default':
-    case 'optional': {
-      const inner = def.innerType;
-      return (inner ? deepPartial(inner) : schema).optional();
-    }
-    case 'array': {
-      const el = def.element;
-      return (el ? deepPartial(el) : z.unknown()).array().optional();
-    }
-    case 'nullable': {
-      const inner = def.innerType;
-      return (inner ? deepPartial(inner) : z.unknown()).nullable().optional();
-    }
-    default:
-      return schema.optional();
+    return z.object(out);
   }
+  if (schema instanceof z.ZodArray) {
+    return z.optional(z.array(deepPartial(schema.element)));
+  }
+  if (schema instanceof z.ZodOptional) {
+    return z.optional(deepPartial(schema.unwrap()));
+  }
+  if (schema instanceof z.ZodNullable) {
+    return z.optional(z.nullable(deepPartial(schema.unwrap())));
+  }
+  if (schema instanceof z.ZodDefault) {
+    return z.optional(deepPartial(schema.unwrap()));
+  }
+  return z.optional(schema);
 }
 
-export const partialAppConfigSchema = deepPartial(appConfigSchema) as unknown as z.ZodType<Partial<AppConfig>>;
+export const partialAppConfigSchema = deepPartial(appConfigSchema) satisfies z.ZodType<Partial<AppConfig>>;

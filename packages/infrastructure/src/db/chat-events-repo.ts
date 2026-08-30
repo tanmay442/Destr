@@ -611,7 +611,10 @@ export class ChatEventBatcher implements ChatEventsRepo {
 
   async purgeUserData(userId: string): Promise<{ deletedCount: number }> {
     const result = await this.client.execute(sql`
-      with removed_reviews_by_turn as (
+      with affected_ticket_ids as materialized (
+        select ${tickets.ticketId} from ${tickets} where ${tickets.userId} = ${userId}
+      ),
+      removed_reviews_by_turn as (
         delete from ${qualityReviews}
         where ${qualityReviews.turnId} in (
           select ${chatEvents.turnId} from ${chatEvents}
@@ -647,7 +650,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
         where ${auditEvents.actorId} = ${userId}
           or ${auditEvents.targetId} = ${userId}
           or (${auditEvents.kind} = 'ticket' and ${auditEvents.targetId} in (
-            select ${tickets.ticketId} from ${tickets} where ${tickets.userId} = ${userId}
+            select ticket_id from affected_ticket_ids
           ))
         returning ${auditEvents.id}
       ),
@@ -657,8 +660,14 @@ export class ChatEventBatcher implements ChatEventsRepo {
         returning ${users.clerkUserId}
       )
       select id from removed_events
+      where (select count(*) from removed_reviews_by_turn) >= 0
+        and (select count(*) from removed_reviews_by_reviewer) >= 0
+        and (select count(*) from removed_feedback) >= 0
+        and (select count(*) from removed_tickets) >= 0
+        and (select count(*) from removed_audit) >= 0
+        and (select count(*) from removed_user) >= 0
     `);
-    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+    const rows = (result as unknown as { rows: Array<{ id?: number }> }).rows ?? [];
     return { deletedCount: rows.length };
   }
 

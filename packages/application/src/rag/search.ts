@@ -13,6 +13,16 @@ import {
 import { sanitizePagination } from '../service-result';
 
 const MAX_SEARCH_LIMIT = 50;
+const MAX_CANDIDATE_LIMIT = 500;
+
+function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
+  const candidate = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.min(Math.max(candidate, 1), maximum);
+}
+
+function boundedNonnegativeNumber(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(value, 0) : fallback;
+}
 
 export interface RetrievedChunk {
   id: number;
@@ -131,7 +141,7 @@ async function resolveParents(
   }
 
   return entries
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || String(a.chunk.id).localeCompare(String(b.chunk.id)))
     .slice(0, topN)
     .map((entry) => entry.chunk);
 }
@@ -141,26 +151,28 @@ async function resolveWindow(
   deps: SearchDeps,
   radius: number,
 ): Promise<RetrievedChunk[]> {
-  const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - radius, end: h.chunkIndex + radius }));
+  const boundedRadius = Math.max(0, Math.floor(radius));
+  const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - boundedRadius, end: h.chunkIndex + boundedRadius }));
   const ranged = await deps.chunks.getByDocAndRanges(ranges);
   const seen = new Set<number>();
   const resolved: RetrievedChunk[] = [];
   for (const h of hits) {
-    const key = `${h.documentId}:${h.chunkIndex - radius}:${h.chunkIndex + radius}`;
+    const key = `${h.documentId}:${h.chunkIndex - boundedRadius}:${h.chunkIndex + boundedRadius}`;
     const neighbours = ranged.get(key) ?? [];
-    const ordered = [...neighbours].sort((a, b) => a.chunkIndex - b.chunkIndex);
+    const ordered = [...new Map(neighbours.map((neighbour) => [neighbour.id, neighbour])).values()]
+      .sort((a, b) => a.chunkIndex - b.chunkIndex);
     const windowed = ordered.filter((n) => !seen.has(n.id));
     for (const n of ordered) seen.add(n.id);
+    const content =
+      windowed.length > 0
+        ? windowed.map((n) => n.content).join('\n\n')
+        : seen.has(h.id)
+          ? ''
+          : h.content;
+    if (content === '') continue;
     resolved.push({
       ...toRetrievedChunk(h),
-      // A fully subsumed hit is still emitted, but its content was already
-      // included in a sibling window, so do not duplicate the tokens.
-      content:
-        windowed.length > 0
-          ? windowed.map((n) => n.content).join('\n\n')
-          : seen.has(h.id)
-            ? ''
-            : h.content,
+      content,
     });
   }
   return resolved;
@@ -173,6 +185,9 @@ function filterByThreshold(
 ): RetrievedChunkRow[] {
   // The cosine threshold only applies to vector-retrieved rows; lexical-only
   // rows carry ts_rank scores, which are not comparable to cosine similarity.
+  // When a reranker is present, lexical rows are gated by reranker relevance
+  // via rerankRows; without a reranker there is no comparable lexical
+  // threshold — TODO: add lexicalThreshold or ts_rank cutoff when needed.
   return rows.filter((r) => !vectorIds.has(r.id) || r.similarity >= threshold);
 }
 
@@ -218,7 +233,7 @@ function reciprocalRankFusion(
   add(vectorRows, 1);
   add(lexicalRows, lexicalWeight);
   return [...fused.values()]
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || String(a.row.id).localeCompare(String(b.row.id)))
     .slice(0, limit)
     .map((entry) => ({ ...entry.row, fusedScore: entry.score }));
 }
@@ -233,8 +248,11 @@ export async function searchChunks(
   }
   const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, opts.rerankTopN ?? RERANK_TOP_N);
   const rerankerEnabled = deps.reranker != null;
-  const preThreshold = rerankerEnabled ? 0 : (opts.threshold ?? SIMILARITY_THRESHOLD);
-  const candidateLimit = rerankerEnabled ? (opts.candidateLimit ?? CANDIDATE_POOL) : topN;
+  const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
+  const preThreshold = rerankerEnabled ? 0 : threshold;
+  const candidateLimit = rerankerEnabled
+    ? boundedPositiveInteger(opts.candidateLimit, CANDIDATE_POOL, MAX_CANDIDATE_LIMIT)
+    : topN;
 
   let embedding: number[];
   try {
@@ -292,8 +310,10 @@ export async function searchChunks(
     return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
   }
 
-  const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, opts.rrfK ?? RRF_K, opts.lexicalWeight ?? LEXICAL_WEIGHT);
-  return capAndResolve(fused, query, topN, opts, deps, vectorIds);
+  const rrfK = boundedPositiveInteger(opts.rrfK, RRF_K, Number.MAX_SAFE_INTEGER);
+  const lexicalWeight = boundedNonnegativeNumber(opts.lexicalWeight, LEXICAL_WEIGHT);
+  const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, rrfK, lexicalWeight);
+  return capAndResolve(fused, query, topN, { ...opts, threshold }, deps, vectorIds);
 }
 
 async function capAndResolve(
@@ -304,14 +324,14 @@ async function capAndResolve(
   deps: SearchDeps,
   vectorIds: Set<number>,
 ): Promise<Result<RetrievedChunk[]>> {
-  const threshold = opts.threshold ?? SIMILARITY_THRESHOLD;
+  const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
   const capped = deps.reranker
     ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds)
     : sortByRelevance(rows).slice(0, topN);
 
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'
-      ? await resolveWindow(capped, deps, opts.parentChildWindow ?? PARENT_CHILD_WINDOW)
+      ? await resolveWindow(capped, deps, boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT))
       : await resolveParents(capped, deps, topN);
   return ok(resolved);
 }

@@ -21,6 +21,7 @@ const vectorFor = (value: string, index: number) => [index, value.length % 10, 0
 describe('google embedding service contract', () => {
   beforeEach(() => {
     vi.stubEnv('AI_STUDIO_KEY', 'test-key');
+    vi.stubEnv('EMBEDDING_DIMENSION', String(DIMENSION));
     embedMock.mockImplementation(async ({ value }: { value: string }) => ({
       embedding: vectorFor(value, 0),
     }));

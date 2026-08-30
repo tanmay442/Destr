@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client';
-import { VECTOR_DIM } from './schema-vector';
+import { resolveVectorDim } from './schema-vector';
 
 export async function validateVectorDimension(): Promise<void> {
   const result = (await db.execute(sql`
@@ -15,11 +15,12 @@ export async function validateVectorDimension(): Promise<void> {
   const match = /vector\((\d+)\)/.exec(typ);
   if (!match) return;
   const dbDim = Number(match[1]);
-  if (dbDim !== VECTOR_DIM) {
+  const expectedDimension = resolveVectorDim();
+  if (dbDim !== expectedDimension) {
     throw new Error(
-      `Embedding dimension mismatch: schema expects ${VECTOR_DIM} (EMBEDDING_DIMENSION) ` +
+      `Embedding dimension mismatch: schema expects ${expectedDimension} (EMBEDDING_DIMENSION) ` +
         `but the live "chunks.embedding" column is vector(${dbDim}). ` +
-        `Update EMBEDDING_DIMENSION or run a migration to ALTER COLUMN embedding TYPE vector(${VECTOR_DIM}).`,
+        `Update EMBEDDING_DIMENSION or run a migration to ALTER COLUMN embedding TYPE vector(${expectedDimension}).`,
     );
   }
 }

@@ -1,4 +1,4 @@
-import { ok, err, type Result, ExternalServiceError } from '@app/domain';
+import { ok, err, type Result, ExternalServiceError, logger } from '@app/domain';
 import type { QueryRewriter, FallbackReason, AgenticResultState } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
 import { AGENTIC_RETRIEVE_LIMIT, AGENTIC_MAX_RETRIES, AGENT_STEP_BUDGET } from '@app/domain';
@@ -49,7 +49,8 @@ export async function agenticSearch(
       if (!rewriteOn) return query;
       try {
         return await deps.queryRewriter.rewrite(query);
-      } catch {
+      } catch (cause) {
+        logger.debug('agentic rewrite failed', { error: String(cause), query });
         return query;
       }
     };
@@ -79,7 +80,7 @@ export async function agenticSearch(
     let outcome = await runPass(rewritten);
 
     for (let attempt = 0; attempt < maxRetries && outcome.kind === 'empty'; attempt++) {
-      rewritten = await tryRewrite(rewritten);
+      rewritten = await tryRewrite(originalQuery);
       outcome = await runPass(rewritten);
     }
 

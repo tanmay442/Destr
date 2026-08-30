@@ -71,7 +71,7 @@ export async function nameStillClaimed(
   fileHash: string,
   documents: DocumentRepository,
 ): Promise<boolean> {
-  const row = await documents.findByName(fileName, { includeDeleted: true });
+  const row = await documents.findByName(fileName);
   return row !== null && row.fileHash === fileHash;
 }
 
@@ -245,11 +245,20 @@ export async function parseAndEmbed(
 export async function writeChunks(
   documents: DocumentRepository,
   chunks: ChunkRepository,
-  input: { fileName: string; fileHash: string; uploadedBy: string; storageKey?: string | null | undefined },
+  input: {
+    fileName: string;
+    fileHash: string;
+    uploadedBy: string;
+    storageKey?: string | null | undefined;
+    resurrectDeleted?: boolean | undefined;
+  },
   rows: PreparedChunk[],
 ): Promise<{ documentId: number }> {
-  const row = await documents.insert({ fileName: input.fileName, fileHash: input.fileHash, uploadedBy: input.uploadedBy });
-  if (input.storageKey) await documents.setStorageKey(row.id, input.storageKey);
+  const row = await documents.insert(
+    { fileName: input.fileName, fileHash: input.fileHash, uploadedBy: input.uploadedBy },
+    { resurrectDeleted: input.resurrectDeleted },
+  );
+  if (input.storageKey !== undefined) await documents.setStorageKey(row.id, input.storageKey);
   await chunks.deleteByDocumentId(row.id);
   await chunks.insertMany(
     rows.map((r) => ({
@@ -284,24 +293,24 @@ export async function ingestFile(
     documents: DocumentRepository,
     chunks: ChunkRepository,
   ): Promise<Result<IngestResult>> => {
-    const existing = await (documents.findByNameForUpdate?.(fileName, { includeDeleted: true }) ?? documents.findByName(fileName, { includeDeleted: true }));
-    const live = existing && !existing.deletedAt ? existing : null;
-    if (live && live.fileHash === fileHash) {
-      return ok({ documentId: live.id, chunks: 0, status: 'unchanged' });
+    const claim = await claimDocumentByName(fileName, fileHash, documents);
+    if (claim.kind === 'unchanged') {
+      if (claim.restore) await documents.restore(claim.documentId);
+      return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
     }
     const outcome = await writeChunks(
       documents,
       chunks,
-      { fileName, fileHash, uploadedBy },
+      { fileName, fileHash, uploadedBy, resurrectDeleted: claim.kind === 'resurrect' },
       parsed.value.rows,
     );
     if (!(await nameStillClaimed(fileName, fileHash, documents))) {
-      return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+      throw new ConflictError(UPLOAD_CONFLICT_MESSAGE);
     }
     return ok({
       documentId: outcome.documentId,
       chunks: parsed.value.chunks,
-      status: live ? 'updated' : 'inserted',
+      status: claim.kind === 'replace' ? 'updated' : 'inserted',
     });
   };
 
@@ -311,6 +320,7 @@ export async function ingestFile(
       : await write(deps.documents, deps.chunks);
   } catch (error) {
     if (isDocumentNameConflict(error)) return err(new ConflictError(UPLOAD_CONFLICT_MESSAGE));
+    if (error instanceof ConflictError) return err(error);
     throw error;
   }
 }

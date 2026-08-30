@@ -18,6 +18,7 @@ import type {
   TicketRepository,
   UserRepository,
 } from '@app/domain';
+import { logger } from '@app/domain';
 import { loadEnvConfig, defaultProcessEnv } from './config/env';
 import {
   createDbClient,
@@ -32,6 +33,7 @@ import {
   createChatFeedbackRepo,
   createQualityReviewsRepo,
   createChatHistoryRepo,
+  resolveVectorDim,
 } from './db';
 import {
   getEmbeddingService,
@@ -48,7 +50,7 @@ import { createAnswerCache } from './auth/in-memory-answer-cache';
 
 export interface CoreDepsOptions {
   env?: EnvSource;
-  onQueueIngest?: (documentId: number) => Promise<void>;
+  onQueueIngest?: (documentId: number, fileHash?: string) => Promise<void>;
   onAnswerCacheInitError?: (error: unknown) => void;
   flushScheduler?: (fn: () => void) => void;
 }
@@ -77,12 +79,13 @@ export interface CoreDeps {
 
 function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
   const config = loadEnvConfig(env);
-  const dbClient = env === defaultProcessEnv ? db : createDbClient({ env });
+  const vectorDim = resolveVectorDim(env);
+  const dbClient = env === defaultProcessEnv ? db : createDbClient({ env, vectorDim });
   return {
     config,
     dbClient,
     documentRepo: createDocumentRepo(dbClient),
-    chunkRepo: createChunkRepo(dbClient),
+    chunkRepo: createChunkRepo(dbClient, vectorDim),
     ticketRepo: createTicketRepo(dbClient),
     userRepo: createUserRepo(dbClient),
     auditRepo: createAuditRepo(dbClient),
@@ -94,7 +97,7 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     chatFeedbackRepo: createChatFeedbackRepo(dbClient),
     qualityReviewsRepo: createQualityReviewsRepo(dbClient),
     chatHistoryRepo: createChatHistoryRepo(dbClient),
-    embeddingService: getEmbeddingService(),
+    embeddingService: getEmbeddingService(vectorDim),
     blobStorage: createBlobStorage(),
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),
@@ -120,6 +123,13 @@ export function buildCoreDeps(options: CoreDepsOptions = {}): CoreDeps {
   if (env !== defaultProcessEnv) {
     return constructCoreDeps(options, env);
   }
-  _defaultCore ??= constructCoreDeps(options, env);
+  if (_defaultCore) {
+    const hasOptions = options.onQueueIngest !== undefined || options.onAnswerCacheInitError !== undefined || options.flushScheduler !== undefined;
+    if (hasOptions) {
+      logger.warn('[core] buildCoreDeps called with options after singleton initialized; options ignored (first caller wins)', { optionsKeys: Object.keys(options) });
+    }
+    return _defaultCore;
+  }
+  _defaultCore = constructCoreDeps(options, env);
   return _defaultCore;
 }

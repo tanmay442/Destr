@@ -8,6 +8,8 @@ import {
   auditEvents,
   auditDeadLetter,
   chatEvents,
+  chatConversations,
+  qualityReviews,
   appSettings,
   type Document,
 } from './schema';
@@ -16,6 +18,8 @@ import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, logger } from '@app/d
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
 import { createVectorSearch } from './vector-search';
 import { createLexicalSearch } from './lexical-search';
+import { resolveVectorDim } from './schema-vector';
+import { invalidateRoleCache } from '../auth/role-cache';
 
 export { searchChunksByVector } from './vector-search';
 export { searchChunksByLexical } from './lexical-search';
@@ -50,7 +54,10 @@ export async function findDocumentByName(
 ): Promise<Document | null> {
   const parts = [eq(documents.fileName, name)];
   if (!opts.includeDeleted) parts.push(isNull(documents.deletedAt));
-  const row = await client.query.documents.findFirst({ where: whereAnd(parts) });
+  const row = await client.query.documents.findFirst({
+    where: whereAnd(parts),
+    orderBy: (table, { desc: orderByDesc }) => [orderByDesc(table.deletedAt)],
+  });
   return (row as Document | undefined) ?? null;
 }
 
@@ -59,10 +66,14 @@ export async function findDocumentByNameForUpdate(
   client: Client = db,
   opts?: { includeDeleted?: boolean | undefined },
 ): Promise<Document | null> {
+  const where = opts?.includeDeleted
+    ? eq(documents.fileName, name)
+    : and(eq(documents.fileName, name), isNull(documents.deletedAt));
   const [row] = await client
     .select()
     .from(documents)
-    .where(and(eq(documents.fileName, name), ...(opts?.includeDeleted ? [] : [isNull(documents.deletedAt)])))
+    .where(where)
+    .orderBy(sql`${documents.deletedAt} IS NULL DESC`, desc(documents.deletedAt))
     .limit(1)
     .for('update');
   return (row as Document | undefined) ?? null;
@@ -79,30 +90,22 @@ export async function findDocumentById(
   return (row as Document | undefined) ?? null;
 }
 
-function isUniqueViolation(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '23505';
-}
-
 export async function insertDocument(
   input: { fileName: string; fileHash: string; uploadedBy: string },
   client: Client = db,
+  opts: { resurrectDeleted?: boolean | undefined } = {},
 ): Promise<Document> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await tryInsert(input, client);
-    } catch (e) {
-      if (!isUniqueViolation(e) || attempt === 1) throw e;
-    }
-  }
-  throw new Error('Failed to insert document');
+  return tryInsert(input, client, opts.resurrectDeleted ?? true);
 }
 
 async function tryInsert(
   input: { fileName: string; fileHash: string; uploadedBy: string },
   client: Client,
+  resurrectDeleted: boolean,
 ): Promise<Document> {
   const existing = await client.query.documents.findFirst({
     where: eq(documents.fileName, input.fileName),
+    orderBy: (table, { desc: orderByDesc }) => [orderByDesc(table.deletedAt)],
   });
   if (existing && existing.deletedAt == null) {
     const [row] = await client
@@ -113,7 +116,7 @@ async function tryInsert(
     if (!row) throw new Error('Failed to insert document');
     return row as Document;
   }
-  if (existing && existing.deletedAt != null) {
+  if (existing && existing.deletedAt != null && resurrectDeleted) {
     const existingId = existing.id;
     const resurrect = async () => {
       await client.delete(chunks).where(eq(chunks.documentId, existingId));
@@ -124,6 +127,7 @@ async function tryInsert(
           uploadedBy: input.uploadedBy,
           deletedAt: null,
           ingestStatus: 'done',
+          ingestUpdatedAt: new Date(),
         })
         .where(eq(documents.id, existingId))
         .returning();
@@ -149,16 +153,42 @@ export async function updateDocument(
   },
   client: Client = db,
 ): Promise<Document> {
-  const [row] = await client.update(documents).set(patch).where(eq(documents.id, id)).returning();
+  const update = patch.ingestStatus === undefined
+    ? patch
+    : { ...patch, ingestUpdatedAt: new Date() };
+  const [row] = await client.update(documents).set(update).where(eq(documents.id, id)).returning();
   if (!row) throw new Error(`Failed to update document ${id}`);
   return row as Document;
+}
+
+export async function updateDocumentIfCurrent(
+  id: number,
+  expectedFileHash: string,
+  patch: {
+    fileName?: string;
+    fileHash?: string;
+    uploadedBy?: string;
+    ingestStatus?: IngestStatus;
+    storageKey?: string | null;
+  },
+  client: Client = db,
+): Promise<Document | null> {
+  const update = patch.ingestStatus === undefined
+    ? patch
+    : { ...patch, ingestUpdatedAt: new Date() };
+  const [row] = await client
+    .update(documents)
+    .set(update)
+    .where(and(eq(documents.id, id), eq(documents.fileHash, expectedFileHash), isNull(documents.deletedAt)))
+    .returning();
+  return (row as Document | undefined) ?? null;
 }
 
 export async function deleteDocumentById(id: number, client: Client = db): Promise<void> {
   await client.delete(documents).where(eq(documents.id, id));
 }
 
-export async function setDocumentStorageKey(id: number, key: string, client: Client = db): Promise<void> {
+export async function setDocumentStorageKey(id: number, key: string | null, client: Client = db): Promise<void> {
   await client.update(documents).set({ storageKey: key }).where(eq(documents.id, id));
 }
 
@@ -167,28 +197,138 @@ export async function updateDocumentIngestStatus(
   status: 'queued' | 'ingesting' | 'done' | 'failed',
   client: Client = db,
 ): Promise<void> {
-  await client.update(documents).set({ ingestStatus: status }).where(eq(documents.id, id));
+  await client.update(documents).set({ ingestStatus: status, ingestUpdatedAt: new Date() }).where(eq(documents.id, id));
 }
 
 export async function listStaleQueuedDocuments(olderThan: Date, client: Client = db): Promise<number[]> {
   const rows = await client
     .select({ id: documents.id })
     .from(documents)
-    .where(and(eq(documents.ingestStatus, 'queued'), isNull(documents.deletedAt), lt(documents.uploadedAt, olderThan)));
+    .where(
+      and(
+        or(eq(documents.ingestStatus, 'queued'), eq(documents.ingestStatus, 'ingesting')),
+        isNull(documents.deletedAt),
+        lt(documents.ingestUpdatedAt, olderThan),
+      ),
+    );
   return rows.map((r) => r.id);
 }
 
 export async function failDocumentById(id: number, client: Client = db): Promise<void> {
-  await client.update(documents).set({ ingestStatus: 'failed' }).where(and(eq(documents.id, id), eq(documents.ingestStatus, 'queued')));
+  await client
+    .update(documents)
+    .set({ ingestStatus: 'failed', ingestUpdatedAt: new Date() })
+    .where(and(
+      eq(documents.id, id),
+      isNull(documents.deletedAt),
+      or(eq(documents.ingestStatus, 'queued'), eq(documents.ingestStatus, 'ingesting')),
+    ));
+}
+
+export async function failDocumentIfStale(
+  id: number,
+  olderThan: Date,
+  client: Client = db,
+): Promise<boolean> {
+  const [row] = await client
+    .update(documents)
+    .set({ ingestStatus: 'failed', ingestUpdatedAt: new Date() })
+    .where(
+      and(
+        eq(documents.id, id),
+        or(eq(documents.ingestStatus, 'queued'), eq(documents.ingestStatus, 'ingesting')),
+        isNull(documents.deletedAt),
+        lt(documents.ingestUpdatedAt, olderThan),
+      ),
+    )
+    .returning({ id: documents.id });
+  return row !== undefined;
+}
+
+export async function failDocumentIfCurrent(
+  id: number,
+  expectedFileHash: string,
+  client: Client = db,
+): Promise<boolean> {
+  const [row] = await client
+    .update(documents)
+    .set({ ingestStatus: 'failed', ingestUpdatedAt: new Date() })
+    .where(
+      and(
+        eq(documents.id, id),
+        eq(documents.fileHash, expectedFileHash),
+        isNull(documents.deletedAt),
+        or(eq(documents.ingestStatus, 'queued'), eq(documents.ingestStatus, 'ingesting')),
+      ),
+    )
+    .returning({ id: documents.id });
+  return row !== undefined;
 }
 
 /** Conditional claim: flips `queued`→`ingesting` atomically; true iff a row was updated. */
-export async function claimDocumentIngest(id: number, client: Client = db): Promise<boolean> {
+export async function claimDocumentIngest(
+  id: number,
+  client: Client = db,
+  expectedFileHash?: string,
+): Promise<boolean> {
+  const conditions = [eq(documents.id, id), eq(documents.ingestStatus, 'queued'), isNull(documents.deletedAt)];
+  if (expectedFileHash !== undefined) conditions.push(eq(documents.fileHash, expectedFileHash));
   const [row] = await client
     .update(documents)
-    .set({ ingestStatus: 'ingesting' })
-    .where(and(eq(documents.id, id), eq(documents.ingestStatus, 'queued')))
+    .set({ ingestStatus: 'ingesting', ingestUpdatedAt: new Date() })
+    .where(and(...conditions))
     .returning({ id: documents.id });
+  return row !== undefined;
+}
+
+export async function updateDocumentIngestStatusIfCurrent(
+  id: number,
+  expectedFileHash: string,
+  expectedStatus: 'queued' | 'ingesting' | 'done' | 'failed',
+  nextStatus: 'queued' | 'ingesting' | 'done' | 'failed',
+  client: Client = db,
+): Promise<boolean> {
+  const [row] = await client
+    .update(documents)
+    .set({ ingestStatus: nextStatus, ingestUpdatedAt: new Date() })
+    .where(
+      and(
+        eq(documents.id, id),
+        eq(documents.fileHash, expectedFileHash),
+        eq(documents.ingestStatus, expectedStatus),
+        isNull(documents.deletedAt),
+      ),
+    )
+    .returning({ id: documents.id });
+  return row !== undefined;
+}
+
+export async function restoreDocumentAfterQueueFailure(
+  id: number,
+  expected: { fileHash: string; storageKey: string },
+  previous: { fileHash: string | null; ingestStatus: 'queued' | 'ingesting' | 'done' | 'failed' | null; storageKey: string | null },
+  client: Client = db,
+): Promise<boolean> {
+  const current = and(
+    eq(documents.id, id),
+    eq(documents.fileHash, expected.fileHash),
+    eq(documents.storageKey, expected.storageKey),
+    eq(documents.ingestStatus, 'queued'),
+  );
+  if (previous.fileHash !== null) {
+    const [row] = await client
+      .update(documents)
+      .set({
+        fileHash: previous.fileHash,
+        ingestStatus: previous.ingestStatus ?? 'failed',
+        storageKey: previous.storageKey,
+        ingestUpdatedAt: new Date(),
+      })
+      .where(current)
+      .returning({ id: documents.id });
+    return row !== undefined;
+  }
+  const [row] = await client.delete(documents).where(current).returning({ id: documents.id });
   return row !== undefined;
 }
 
@@ -226,6 +366,7 @@ export async function listDocuments(
       uploadedAt: documents.uploadedAt,
       storageKey: documents.storageKey,
       ingestStatus: documents.ingestStatus,
+      ingestUpdatedAt: documents.ingestUpdatedAt,
       hasBlob: sql<boolean>`(${documents.storageKey} IS NOT NULL OR ${documents.blob} IS NOT NULL)`.as('hasBlob'),
       deletedAt: documents.deletedAt,
     })
@@ -442,6 +583,8 @@ async function userHasOwnedHistory(client: Client, clerkUserId: string): Promise
   if (await client.query.documents.findFirst({ where: eq(documents.uploadedBy, clerkUserId) })) return true;
   if (await client.query.tickets.findFirst({ where: eq(tickets.userId, clerkUserId) })) return true;
   if (await client.query.chatEvents.findFirst({ where: eq(chatEvents.userId, clerkUserId) })) return true;
+  if (await client.query.chatConversations.findFirst({ where: eq(chatConversations.userId, clerkUserId) })) return true;
+  if (await client.query.qualityReviews.findFirst({ where: eq(qualityReviews.reviewerId, clerkUserId) })) return true;
   if (
     await client.query.auditEvents.findFirst({
       where: or(
@@ -510,7 +653,22 @@ export const userRepo = {
   },
   async setRole(clerkUserId: string, role: 'admin' | 'user', client: Client = db): Promise<UserRow | null> {
     const [row] = await client.update(users).set({ role }).where(eq(users.clerkUserId, clerkUserId)).returning();
+    invalidateRoleCache(clerkUserId);
     return (row as UserRow | null) ?? null;
+  },
+  async setRoleIfCurrent(
+    clerkUserId: string,
+    expectedRole: 'admin' | 'user',
+    role: 'admin' | 'user',
+    client: Client = db,
+  ): Promise<boolean> {
+    const [row] = await client
+      .update(users)
+      .set({ role })
+      .where(and(eq(users.clerkUserId, clerkUserId), eq(users.role, expectedRole)))
+      .returning({ clerkUserId: users.clerkUserId });
+    if (row) invalidateRoleCache(clerkUserId);
+    return row !== undefined;
   },
   async touchLastSeen(clerkUserId: string, client: Client = db): Promise<void> {
     await client.update(users).set({ lastSeenAt: sql`now()` }).where(eq(users.clerkUserId, clerkUserId));
@@ -688,9 +846,14 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     findById: (id, opts) => findDocumentById(id, client, opts),
     setStorageKey: (id, key) => setDocumentStorageKey(id, key, client),
     updateIngestStatus: (id, status) => updateDocumentIngestStatus(id, status, client),
-    claimIngest: (id) => claimDocumentIngest(id, client),
-    insert: (input) => insertDocument(input, client),
+    updateIngestStatusIfCurrent: (id, expectedFileHash, expectedStatus, nextStatus) =>
+      updateDocumentIngestStatusIfCurrent(id, expectedFileHash, expectedStatus, nextStatus, client),
+    claimIngest: (id, expectedFileHash) => claimDocumentIngest(id, client, expectedFileHash),
+    restoreAfterQueueFailure: (id, expected, previous) =>
+      restoreDocumentAfterQueueFailure(id, expected, previous, client),
+    insert: (input, opts) => insertDocument(input, client, opts),
     update: (id, patch) => updateDocument(id, patch, client),
+    updateIfCurrent: (id, expectedFileHash, patch) => updateDocumentIfCurrent(id, expectedFileHash, patch, client),
     deleteById: (id) => deleteDocumentById(id, client),
     softDelete: (id, at) => softDeleteDocument(id, at, client),
     restore: (id) => restoreDocument(id, client),
@@ -699,7 +862,9 @@ export function createDocumentRepo(client: Client): DocumentRepository {
     countChunksForAll: () => countChunksForAll(client),
     countPendingIngest: () => countPendingIngestDocuments(client),
     listStaleQueued: (olderThan) => listStaleQueuedDocuments(olderThan, client),
+    failDocumentIfStale: (id, olderThan) => failDocumentIfStale(id, olderThan, client),
     failDocument: (id) => failDocumentById(id, client),
+    failDocumentIfCurrent: (id, expectedFileHash) => failDocumentIfCurrent(id, expectedFileHash, client),
   };
 }
 
@@ -731,10 +896,10 @@ export function createChunkRepositoryCompat(
   };
 }
 
-export function createChunkRepo(client: Client): ChunkRepository {
+export function createChunkRepo(client: Client, vectorDim?: number): ChunkRepository {
   return createChunkRepositoryCompat(
-    createChunkStore(client),
-    createVectorSearch(client),
+    createChunkStore(client, vectorDim),
+    createVectorSearch(client, vectorDim),
     createLexicalSearch(client),
   );
 }
@@ -782,10 +947,10 @@ export function createUserRepo(client: Client = db): UserRepository {
   };
 }
 
-export function createRepositoryAdapters(client: Client = db) {
+export function createRepositoryAdapters(client: Client = db, vectorDim?: number) {
   return {
     documents: createDocumentRepo(client),
-    chunks: createChunkRepo(client),
+    chunks: createChunkRepo(client, vectorDim),
     audit: createAuditRepo(client),
     tickets: createTicketRepo(client),
     users: createUserRepo(client),
@@ -795,7 +960,7 @@ export function createRepositoryAdapters(client: Client = db) {
 export const transactionRunner: TransactionRunner = {
   async run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T> {
     return db.transaction(async (tx) => {
-      const ctx: TransactionContext = createRepositoryAdapters(tx);
+      const ctx: TransactionContext = createRepositoryAdapters(tx, resolveVectorDim());
       return fn(ctx);
     });
   },

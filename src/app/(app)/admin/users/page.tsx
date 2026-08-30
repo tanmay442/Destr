@@ -153,7 +153,7 @@ export default async function UsersPage({
         totalPages={totalPages}
         total={result.total}
         pathname="/admin/users"
-        query={{ search }}
+        query={Object.fromEntries(Object.entries(params).filter(([k, v]) => k !== 'page' && v !== undefined)) as Record<string, string>}
       />
     </section>
   );

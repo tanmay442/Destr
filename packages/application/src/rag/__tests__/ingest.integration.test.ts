@@ -161,6 +161,33 @@ describe('ingestFile', () => {
     }
   });
 
+  it('restores a recently deleted document when the hash matches', async () => {
+    const restore = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      documents: {
+        ...makeDeps().documents,
+        findByName: vi.fn().mockResolvedValue({
+          id: 1,
+          fileName: 'test.pdf',
+          fileHash: 'abc123',
+          uploadedBy: 'user',
+          uploadedAt: new Date(),
+          storageKey: null,
+          ingestStatus: 'done' as const,
+          deletedAt: new Date(),
+        }),
+        restore,
+      },
+    });
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('data'), uploadedBy: 'user' },
+      deps,
+    );
+    expect(result).toEqual({ ok: true, value: { documentId: 1, chunks: 0, status: 'unchanged' } });
+    expect(restore).toHaveBeenCalledWith(1);
+    expect(deps.chunks.deleteByDocumentId).not.toHaveBeenCalled();
+  });
+
   it('returns ValidationError when PDF has no extractable text', async () => {
     const deps = makeDeps({
       textSplitter: { splitText: vi.fn().mockResolvedValue([]) },

@@ -17,6 +17,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
+import { isAllowedUrl } from '@/lib/isAllowedUrl';
 import type { MyUIMessage } from '@/composition';
 import type { CitationData, GuardrailData } from '@/chat/types';
 import {
@@ -158,13 +159,21 @@ function StatusStages() {
   );
 }
 
+const MemoMarkdown = memo(function MemoMarkdown({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>
+      {text}
+    </Markdown>
+  );
+});
+
 function SafeLink({ href, children, ...props }: ComponentProps<'a'>) {
   const url = typeof href === 'string' ? href.trim() : '';
-  if (!/^(https?:)\/\//i.test(url)) {
+  if (!isAllowedUrl(url)) {
     return <span {...props}>{children}</span>;
   }
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" {...props}>
+    <a {...props} href={url} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
   );
@@ -263,7 +272,7 @@ const MessageItem = memo(function MessageItem({
         part.type === 'text' ? (
           isUser ? (
             <div
-              key={i}
+              key={`${message.id}-text-${i}`}
               className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-primary-foreground"
               data-testid="chat-text"
             >
@@ -271,13 +280,11 @@ const MessageItem = memo(function MessageItem({
             </div>
           ) : (
             <div
-              key={i}
+              key={`${message.id}-text-${i}`}
               className="chat-markdown w-full max-w-none text-[15px] leading-relaxed text-foreground"
               data-testid="chat-text"
             >
-              <Markdown remarkPlugins={[remarkGfm]} components={{ a: SafeLink }}>
-                {part.text}
-              </Markdown>
+              <MemoMarkdown text={part.text} />
             </div>
           )
         ) : null,
@@ -289,6 +296,7 @@ const MessageItem = memo(function MessageItem({
           data-testid="chat-citations"
         >
           {citations.map((c, i) => {
+            const citationKey = c.data.id != null ? String(c.data.id) : `${message.id}-citation-${i}`;
             const sim = c.data.similarity;
             const simPct = Math.round(sim * 100);
             const simTone =
@@ -299,7 +307,7 @@ const MessageItem = memo(function MessageItem({
                   : 'var(--warning)';
             return (
               <div
-                key={i}
+                key={citationKey}
                 className="flex w-64 shrink-0 snap-start flex-col gap-2 rounded-xl border border-border-subtle bg-surface-sunken/60 p-3"
                 data-testid="chat-citation"
               >
@@ -394,6 +402,7 @@ export function ChatInterface({
   initialMessageCount,
   conversationLimitReached = false,
   truncated = false,
+  onConversationPersisted,
 }: {
   conversationId: string;
   initialMessages?: MyUIMessage[];
@@ -401,6 +410,7 @@ export function ChatInterface({
   initialMessageCount?: number;
   conversationLimitReached?: boolean;
   truncated?: boolean;
+  onConversationPersisted?: () => void;
 }) {
   const [input, setInput] = useState('');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
@@ -432,6 +442,12 @@ export function ChatInterface({
       if (!isRetry) setMessageCount((prev) => prev + 2);
       if (!notifiedConversationRef.current) {
         notifiedConversationRef.current = true;
+        const persistedPart = message.parts.find(
+          (part) =>
+            part.type === 'data-conversation-persisted' &&
+            part.data.conversationId === conversationId,
+        );
+        if (persistedPart) onConversationPersisted?.();
         notifyConversationsChanged(conversationId);
       }
     },
@@ -595,11 +611,14 @@ export function ChatInterface({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {isStreaming ? 'Generating response…' : ''}
+      </div>
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto"
         data-testid="chat-scroll"
-        aria-live="polite"
+        aria-live="off"
         aria-atomic="false"
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">

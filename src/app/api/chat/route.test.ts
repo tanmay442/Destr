@@ -490,6 +490,16 @@ describe('/api/chat searchDocumentation tool', () => {
     searchChunksSpy.mockRestore();
   });
 
+  it('omits duplicate chunks from repeated retrieval results', async () => {
+    const searchSpy = vi.spyOn(compositionMock, 'searchChunks').mockResolvedValue(ok(searchValue) as never);
+    const { tools } = await captureTools();
+    const firstResult = await tools?.searchDocumentation?.execute({ query: 'q' });
+    const secondResult = await tools?.searchDocumentation?.execute({ query: 'q again' });
+    expect(firstResult).toHaveLength(2);
+    expect(secondResult).toEqual([]);
+    searchSpy.mockRestore();
+  });
+
   it('emits captured citations as data-citation parts after the LLM stream ends', async () => {
     authMock.mockResolvedValue({ userId: 'user_test' });
     type Ctl = ReadableStreamDefaultController<{ type: string }>;

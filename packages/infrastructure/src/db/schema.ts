@@ -17,17 +17,24 @@ export const documents = pgTable('documents', {
   fileName: text('file_name').notNull(),
   fileHash: text('file_hash').notNull(),
   uploadedBy: text('uploaded_by').notNull(),
-  uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
+  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
   blob: byteaBlob('blob'),
   storageKey: text('storage_key'),
   ingestStatus: text('ingest_status').notNull().default('done').$type<IngestStatus>(),
-  deletedAt: timestamp('deleted_at'),
+  ingestUpdatedAt: timestamp('ingest_updated_at', { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (table) => [
   uniqueIndex('documents_file_name_unique')
     .on(table.fileName)
     .where(sql`${table.deletedAt} IS NULL`),
   index('documents_deleted_at_idx').on(table.deletedAt),
   index('documents_uploaded_at_idx').on(table.uploadedAt.desc()),
+  index('documents_ingest_status_updated_idx')
+    .on(table.ingestStatus, table.ingestUpdatedAt)
+    .where(sql`${table.deletedAt} IS NULL`),
+  index('documents_uploaded_at_id_idx')
+    .on(table.uploadedAt.desc(), table.id.desc())
+    .where(sql`${table.deletedAt} IS NULL`),
 ]);
 
 export const chunks = pgTable('chunks', {

@@ -76,6 +76,10 @@ export const unpdfParser: ContentParser = {
     let pdf: PdfProxy | undefined;
     try {
       pdf = await openPdf(buffer);
+      if ((pdf as unknown as { isEncrypted?: boolean }).isEncrypted) {
+        throw new ParseError('encrypted PDF');
+      }
+      if (pdf.numPages === 0) throw new ParseError('empty PDF');
       const pages: string[] = [];
       let totalChars = 0;
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -83,7 +87,9 @@ export const unpdfParser: ContentParser = {
         totalChars = checkCharBudget(pageText, totalChars);
         pages.push(pageText);
       }
-      return repairPdfSpacing(pages.join('\n').replace(/\s+/g, ' '));
+      const extractedText = repairPdfSpacing(pages.join('\n').replace(/\s+/g, ' '));
+      if (extractedText.trim().length === 0) throw new ParseError('scanned PDF - no extractable text');
+      return extractedText;
     } catch (cause) {
       if (cause instanceof ParseError) throw cause;
       throw toParseError(cause);
@@ -96,12 +102,19 @@ export const unpdfParser: ContentParser = {
     let pdf: PdfProxy | undefined;
     try {
       pdf = await openPdf(buffer);
+      if ((pdf as unknown as { isEncrypted?: boolean }).isEncrypted) {
+        throw new ParseError('encrypted PDF');
+      }
+      if (pdf.numPages === 0) throw new ParseError('empty PDF');
       const pages: Array<{ page: number; text: string }> = [];
       let totalChars = 0;
       for (let i = 1; i <= pdf.numPages; i++) {
         const pageText = repairPdfSpacing(await getPageText(pdf, i));
         totalChars = checkCharBudget(pageText, totalChars);
         pages.push({ page: i, text: pageText });
+      }
+      if (pages.length === 0 || pages.every((p) => p.text.trim().length === 0)) {
+        throw new ParseError('scanned PDF - no extractable text');
       }
       return pages;
     } catch (cause) {

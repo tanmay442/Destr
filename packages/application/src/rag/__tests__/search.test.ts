@@ -428,10 +428,7 @@ describe('searchChunks parent-child resolution', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const ids = result.value.map((r) => r.id);
-    expect(ids).toEqual(expect.arrayContaining([3, 8]));
-    const subsumed = result.value.find((r) => r.id === 8);
-    expect(subsumed).toBeDefined();
-    expect(subsumed!.content).toBe('');
+    expect(ids).toEqual([3]);
     const contents = result.value.map((r) => r.content).join('\n');
     expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
     expect(contents.indexOf('five')).toBeGreaterThanOrEqual(0);

@@ -4,7 +4,7 @@ const createOpenAIMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@ai-sdk/openai', () => ({ createOpenAI: (...args: unknown[]) => createOpenAIMock(...args) }));
 
-import { getChatModel } from './openai-chat-service';
+import { getOpenAIChatModel } from './openai-chat-service';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
 
 describe('openai-chat-service', () => {
@@ -28,25 +28,25 @@ describe('openai-chat-service', () => {
 
   it('fails fast when LLM_MODEL is unset and no explicit model id is given', () => {
     delete process.env.LLM_MODEL;
-    expect(() => getChatModel()).toThrow('LLM_MODEL must be set');
+    expect(() => getOpenAIChatModel()).toThrow('LLM_MODEL must be set');
     expect(createOpenAIMock).not.toHaveBeenCalled();
   });
 
   it('uses LLM_MODEL as the default model', () => {
-    const model = getChatModel();
+    const model = getOpenAIChatModel();
     expect(model).toEqual({ modelId: 'gpt-4o-mini' });
     expect(createOpenAIMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'test-key' }));
   });
 
   it('an explicit model id wins over LLM_MODEL', () => {
-    const model = getChatModel('custom-model');
+    const model = getOpenAIChatModel('custom-model');
     expect(model).toEqual({ modelId: 'custom-model' });
   });
 
   it('throws when credentials are missing', () => {
     delete process.env.CUSTOM_LLM_API_KEY;
     delete process.env.CUSTOM_LLM_BASE_URL;
-    expect(() => getChatModel()).toThrow('CUSTOM_LLM_API_KEY and CUSTOM_LLM_BASE_URL');
+    expect(() => getOpenAIChatModel()).toThrow('CUSTOM_LLM_API_KEY and CUSTOM_LLM_BASE_URL');
   });
 });
 

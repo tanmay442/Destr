@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { PanelLeft } from 'lucide-react';
 import { AppSidebar, type AppRole, type AppSidebarUser } from '@/components/app/AppSidebar';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ let cachedOpen: boolean | null = null;
 const listeners = new Set<() => void>();
 
 function readOpen(): boolean {
+  if (typeof window === 'undefined') return true;
   if (cachedOpen !== null) return cachedOpen;
   try {
     cachedOpen = window.localStorage.getItem(STORAGE_KEY) !== 'false';
@@ -45,6 +46,13 @@ function useSidebarOpen(): [boolean, () => void] {
   return [open, toggle];
 }
 
+function useMounted(): boolean {
+  const [mounted, setMounted] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration guard: set mounted after initial render to avoid mismatch
+  useEffect(() => setMounted(true), []);
+  return mounted;
+}
+
 export function AppShellClient({
   user,
   role,
@@ -55,11 +63,13 @@ export function AppShellClient({
   children: React.ReactNode;
 }) {
   const [open, toggle] = useSidebarOpen();
+  const mounted = useMounted();
+  const effectiveOpen = mounted ? open : true;
 
   return (
     <>
-      <AppSidebar user={user} role={role} open={open} onToggle={toggle} />
-      {!open ? (
+      <AppSidebar user={user} role={role} open={effectiveOpen} onToggle={toggle} />
+      {!effectiveOpen ? (
         <Button
           type="button"
           variant="ghost"
@@ -73,8 +83,9 @@ export function AppShellClient({
         </Button>
       ) : null}
       <main
+        suppressHydrationWarning
         className={`flex min-h-0 flex-1 flex-col pt-14 transition-[padding] duration-200 md:pt-0 ${
-          open ? 'md:pl-72' : 'md:pl-0'
+          effectiveOpen ? 'md:pl-72' : 'md:pl-0'
         }`}
         data-testid="app-main"
       >

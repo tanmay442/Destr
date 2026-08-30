@@ -30,14 +30,14 @@ export function isNeonUrl(url: string): boolean {
   return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
 }
 
-export function buildNeonPool(url: string): NeonPool {
+function buildNeonPool(url: string): NeonPool {
   return new NeonPool({
     connectionString: url,
     ...POOL_OPTS,
   });
 }
 
-export function buildPgPool(url: string): pg.Pool {
+function buildPgPool(url: string): pg.Pool {
   return new pg.Pool({
     connectionString: url,
     ...POOL_OPTS,
@@ -64,5 +64,25 @@ function makeMissingDatabasePool(): NeonPool {
 
 export function buildMissingPool(): NeonPool {
   return makeMissingDatabasePool();
+}
+
+const pools = new Map<string, NeonPool | pg.Pool>();
+
+export function getPool(url: string): NeonPool | pg.Pool {
+  const existing = pools.get(url);
+  if (existing) return existing;
+  const pool = isNeonUrl(url)
+    ? (buildNeonPool(url) as unknown as NeonPool | pg.Pool)
+    : (buildPgPool(url) as unknown as NeonPool | pg.Pool);
+  pools.set(url, pool);
+  return pool;
+}
+
+export async function closePool(): Promise<void> {
+  const openPools = [...pools.values()];
+  pools.clear();
+  await Promise.allSettled(
+    openPools.map((pool) => (pool as unknown as { end: () => Promise<void> }).end()),
+  );
 }
 

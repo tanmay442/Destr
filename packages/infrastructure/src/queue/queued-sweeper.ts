@@ -1,6 +1,7 @@
 export interface QueuedSweeperDeps {
   listStaleQueued(olderThan: Date): Promise<number[]>;
   failDocument(documentId: number): Promise<void>;
+  failDocumentIfStale?: ((documentId: number, olderThan: Date) => Promise<boolean>) | undefined;
 }
 
 export interface QueuedSweeperOptions {
@@ -25,10 +26,24 @@ export function createQueuedSweeper(deps: QueuedSweeperDeps, opts: QueuedSweeper
     async sweep(now = new Date()) {
       const olderThan = new Date(now.getTime() - ttlMs);
       const stale = await deps.listStaleQueued(olderThan);
-      for (const documentId of stale) {
-        await deps.failDocument(documentId);
+      const results = await Promise.allSettled(
+        stale.map((documentId) =>
+          deps.failDocumentIfStale
+            ? deps.failDocumentIfStale(documentId, olderThan)
+            : deps.failDocument(documentId).then(() => true),
+        ),
+      );
+      const rejected = results.filter((result) => result.status === 'rejected');
+      if (rejected.length > 0) {
+        throw new AggregateError(
+          rejected.map((result) => (result as PromiseRejectedResult).reason),
+          `${rejected.length} failDocument calls failed`,
+        );
       }
-      return { failed: stale.length };
+      const failed = results.filter(
+        (result): result is PromiseFulfilledResult<boolean> => result.status === 'fulfilled' && result.value,
+      ).length;
+      return { failed };
     },
   };
 }

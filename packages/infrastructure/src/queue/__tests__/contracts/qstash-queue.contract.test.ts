@@ -33,6 +33,7 @@ describe('qstash queue contract', () => {
       url: 'https://worker.example.com/api/admin/ingest-worker',
       body: { documentId: 42 },
       retries: 3,
+      deduplicationId: 'document:42',
       dlq: 'https://dlq.example.com',
     });
   });

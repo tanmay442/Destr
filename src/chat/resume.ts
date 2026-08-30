@@ -1,3 +1,4 @@
+import { isAllowedUrl } from '@/lib/isAllowedUrl';
 import type { MyUIMessage } from './types';
 
 export interface StoredMessagePayload {
@@ -48,11 +49,7 @@ export function toResumedConversation(input: {
         const reasoning: { type: 'reasoning'; text?: string } = { type: 'reasoning' };
         if (typeof part.text === 'string') reasoning.text = part.text;
         parts.push(reasoning as unknown as MyUIMessage['parts'][number]);
-      } else if (
-        type === 'file' &&
-        typeof part.url === 'string' &&
-        /^https?:\/\//i.test(part.url)
-      ) {
+      } else if (type === 'file' && typeof part.url === 'string' && isAllowedUrl(part.url)) {
         parts.push({
           type: 'file',
           url: part.url,

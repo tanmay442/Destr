@@ -10,10 +10,12 @@ export function registerChatProvider(key: string, factory: ChatModelProvider): v
   chatProviderRegistry.register(key, factory);
 }
 
-export const embeddingProviderRegistry = createProviderRegistry<EmbeddingService>();
+export type EmbeddingProviderFactory = (vectorDim?: number) => EmbeddingService;
 
-export function registerEmbeddingProvider(key: string, provider: EmbeddingService): void {
-  embeddingProviderRegistry.register(key, provider);
+export const embeddingProviderRegistry = createProviderRegistry<EmbeddingProviderFactory>();
+
+export function registerEmbeddingProvider(key: string, factory: EmbeddingProviderFactory): void {
+  embeddingProviderRegistry.register(key, factory);
 }
 
 export type RerankerProvider = () => Reranker | undefined;

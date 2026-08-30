@@ -45,8 +45,8 @@ import { after } from 'next/server';
 const core = buildCoreDeps({
   env: defaultProcessEnv,
   flushScheduler: after,
-  onQueueIngest: async (documentId) => {
-    const result = await ingestQueuedDocumentStandalone(documentId);
+  onQueueIngest: async (documentId, fileHash) => {
+    const result = await ingestQueuedDocumentStandalone(documentId, fileHash);
     if (!result.ok) throw new Error(`Inline ingest failed for document ${documentId}: ${result.error.message}`);
   },
   onAnswerCacheInitError: (error) => {
@@ -86,37 +86,78 @@ const reingestQueue: IngestQueue =
 
 class StaleIngestError extends Error {}
 
+type QueuedIngestStatus = 'done' | 'already-done' | 'busy' | 'stale';
+
 async function ingestQueuedDocumentStandalone(
   documentId: number,
-): Promise<Result<{ status: 'done' | 'already-done' | 'busy'; chunks: number }>> {
+  queuedFileHash?: string,
+): Promise<Result<{ status: QueuedIngestStatus; chunks: number }>> {
   const doc = await documentRepo.findById(documentId);
   if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
+  if (queuedFileHash !== undefined && doc.fileHash !== queuedFileHash) {
+    return ok({ status: 'stale', chunks: 0 });
+  }
+  const expectedFileHash = doc.fileHash;
   if (doc.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
   if (doc.ingestStatus === 'ingesting') return ok({ status: 'busy', chunks: 0 });
   if (!doc.storageKey) return err(new NotFoundError(`Document ${documentId} has no stored blob`));
 
-  const claimed = await documentRepo.claimIngest(documentId);
-  if (!claimed) return ok({ status: 'busy', chunks: 0 });
+  const claimed = await documentRepo.claimIngest(documentId, expectedFileHash);
+  if (!claimed) {
+    const current = await documentRepo.findById(documentId);
+    if (!current || current.fileHash !== expectedFileHash) return ok({ status: 'stale', chunks: 0 });
+    if (current.ingestStatus === 'done') return ok({ status: 'already-done', chunks: 0 });
+    return ok({ status: 'busy', chunks: 0 });
+  }
 
-  const requeue = () => documentRepo.updateIngestStatus(documentId, 'queued').catch(() => {});
+  const updateStatusIfCurrent = async (
+    expectedStatus: 'queued' | 'ingesting',
+    nextStatus: 'queued' | 'failed',
+  ): Promise<void> => {
+    if (documentRepo.updateIngestStatusIfCurrent) {
+      await documentRepo.updateIngestStatusIfCurrent(
+        documentId,
+        expectedFileHash,
+        expectedStatus,
+        nextStatus,
+      );
+      return;
+    }
+    await documentRepo.updateIngestStatus(documentId, nextStatus);
+  };
+  const requeue = () => updateStatusIfCurrent('ingesting', 'queued').catch(() => {});
 
   let buffer: Buffer;
   try {
     buffer = await blobStorage.get(doc.storageKey);
-  } catch (e) {
+  } catch (error) {
     await requeue();
-    return err(new ExternalServiceError('Blob read failed', e));
+    return err(new ExternalServiceError('Blob read failed', error));
   }
 
-  const expectedHash = systemHasher.sha256(buffer);
-
+  const blobHash = systemHasher.sha256(buffer);
   const current = await documentRepo.findById(documentId);
-  if (!current || current.fileHash !== expectedHash) {
+  if (
+    !current ||
+    current.fileHash !== expectedFileHash ||
+    current.storageKey !== doc.storageKey ||
+    current.ingestStatus !== 'ingesting'
+  ) {
     await requeue();
-    return ok({ status: 'busy', chunks: 0 });
+    return ok({ status: 'stale', chunks: 0 });
+  }
+  if (blobHash !== expectedFileHash) {
+    await updateStatusIfCurrent('ingesting', 'failed');
+    return err(new ExternalServiceError('Stored blob does not match the document hash'));
   }
 
-  const prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
+  let prepared: Awaited<ReturnType<typeof prepareIngest>>;
+  try {
+    prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
+  } catch (error) {
+    await requeue();
+    return err(new ExternalServiceError('Ingest preparation failed', error));
+  }
   if (!prepared.ok) {
     await requeue();
     return prepared;
@@ -125,15 +166,30 @@ async function ingestQueuedDocumentStandalone(
   try {
     await Db.transactionRunner.run(async (tx) => {
       const fresh = await tx.documents.findById(documentId);
-      if (!fresh || fresh.fileHash !== expectedHash) throw new StaleIngestError();
+      if (
+        !fresh ||
+        fresh.fileHash !== expectedFileHash ||
+        fresh.storageKey !== doc.storageKey ||
+        fresh.ingestStatus !== 'ingesting'
+      ) throw new StaleIngestError();
       await tx.chunks.deleteByDocumentId(documentId);
       await tx.chunks.insertMany(prepared.value.rows);
-      await tx.documents.updateIngestStatus(documentId, 'done');
+      if (tx.documents.updateIngestStatusIfCurrent) {
+        const completed = await tx.documents.updateIngestStatusIfCurrent(
+          documentId,
+          expectedFileHash,
+          'ingesting',
+          'done',
+        );
+        if (!completed) throw new StaleIngestError();
+      } else {
+        await tx.documents.updateIngestStatus(documentId, 'done');
+      }
     });
-  } catch (e) {
+  } catch (error) {
     await requeue();
-    if (e instanceof StaleIngestError) return ok({ status: 'busy', chunks: 0 });
-    return err(new ExternalServiceError('Chunk insert failed', e));
+    if (error instanceof StaleIngestError) return ok({ status: 'stale', chunks: 0 });
+    return err(new ExternalServiceError('Chunk insert failed', error));
   }
   return ok({ status: 'done', chunks: prepared.value.chunks });
 }
@@ -314,17 +370,23 @@ function createComposition() {
         summarizer: Llm.createDocSummarizer(Llm.getChatModel),
         cchEnabled: CCH_ENABLED,
       }),
-    ingestQueuedDocument: (documentId: number) => ingestQueuedDocumentStandalone(documentId),
+    ingestQueuedDocument: (documentId: number, fileHash?: string) =>
+      ingestQueuedDocumentStandalone(documentId, fileHash),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
       reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
-    sweepStaleQueued: () =>
-      Queue.createQueuedSweeper({
+    sweepStaleQueued: () => {
+      const failDocumentIfStale = documentRepo.failDocumentIfStale;
+      return Queue.createQueuedSweeper({
         listStaleQueued: (olderThan) => documentRepo.listStaleQueued(olderThan),
+        failDocumentIfStale: failDocumentIfStale
+          ? (id, olderThan) => failDocumentIfStale(id, olderThan)
+          : undefined,
         failDocument: (id) => documentRepo.failDocument(id),
-      }).sweep(),
-    ingestDeadLetter: async (input: { documentId: number; payload: unknown; error: string }) => {
+      }).sweep();
+    },
+    ingestDeadLetter: async (input: { documentId: number; fileHash: string; payload: unknown; error: string }) => {
       try {
         await auditDeps.audit.recordDeadLetter({
           kind: 'ingest',
@@ -334,7 +396,11 @@ function createComposition() {
       } catch (e) {
         logger.warn('[ingest-dlq] failed to persist dead-letter row', { documentId: input.documentId, error: e instanceof Error ? e.message : String(e) });
       }
-      return documentRepo.failDocument(input.documentId);
+      if (documentRepo.failDocumentIfCurrent) {
+        await documentRepo.failDocumentIfCurrent(input.documentId, input.fileHash);
+      } else {
+        logger.error('[ingest-dlq] repository cannot apply hash-conditional failure', { documentId: input.documentId });
+      }
     },
     countPendingIngest: () => documentRepo.countPendingIngest(),
     getAnalyticsSummary: (input: { actorId: string }) =>
@@ -424,7 +490,12 @@ export function startLocalRerankerCheck(): void {
 
 export function assertSameOrigin(req: Request): Response | null {
   const origin = req.headers.get('origin');
-  if (!origin) return null;
+  if (!origin) {
+    const secFetch = req.headers.get('sec-fetch-site');
+    if (secFetch && secFetch !== 'same-origin' && secFetch !== 'same-site')
+      return new Response('CSRF', { status: 403 });
+    return null;
+  }
   let originHost: string;
   try {
     originHost = new URL(origin).host;

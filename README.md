@@ -80,7 +80,7 @@ src/                # Next.js App Router shell, UI components, and single compos
 Every commit and pull request is validated through automated quality gates:
 
 ```bash
-# Run full quality gate: Vitest (1,400+ tests) + Typecheck + ESLint + Architecture Rules
+# Run full quality gate: Vitest + Typecheck + ESLint + Architecture Rules
 pnpm gate
 
 # Run quality gate + Next.js production build:
@@ -88,9 +88,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-- **142 Test Files**: 136 passed, 6 skipped (live-DB gated).
-- **1,463 Total Tests**: 1,387 passed, 76 skipped.
-- **535 Architecture Modules**: 1,410 dependencies checked with **0 violations** (`pnpm arch`).
+Latest full local run against Docker Postgres:
+- **142 test files** and **1,418 tests**, all passing with no skips.
+- **536 architecture modules** and **1,400 dependencies** checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 
@@ -115,12 +115,14 @@ pnpm chunks:preview path/to/document.pdf
 | Script | Purpose |
 |---|---|
 | `pnpm dev` | Start Next.js development server |
-| `pnpm build` | Run local database migrations, then the production build |
+| `pnpm build` | Run the production build without database migrations |
+| `pnpm build:with-db` | Run database migrations, then the production build |
 | `pnpm gate` | Run full quality gate (`test` + `typecheck` + `lint` + `arch`) |
 | `pnpm gate:build` | Run quality gate and production build validation |
 | `pnpm db:push` | Push schema changes directly to local database |
 | `pnpm db:migrate` | Execute pending Drizzle SQL migrations |
 | `pnpm eval` | Run RAG evaluation harness over golden dataset |
+| `pnpm backfill-blobs` | Migrate legacy database blobs to configured blob storage (dry run by default) |
 
 Production migrations are not run by Vercel or the Docker build. The gated
 `deploy` job in `.github/workflows/ci.yml` runs them with

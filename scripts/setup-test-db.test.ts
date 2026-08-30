@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
@@ -18,10 +21,21 @@ vi.mock('dotenv/config', () => ({}));
 
 import { main as runSetup } from './setup-test-db';
 
+let originalCwd: string;
+let testDir: string;
+
 beforeEach(() => {
+  originalCwd = process.cwd();
+  testDir = mkdtempSync(join(tmpdir(), 'setup-test-db-'));
+  process.chdir(testDir);
   fetchMock.mockReset();
   execFileSyncMock.mockReset();
   spawnSyncMock.mockReset();
+});
+
+afterEach(() => {
+  process.chdir(originalCwd);
+  rmSync(testDir, { recursive: true, force: true });
 });
 
 describe('setup-test-db', () => {
@@ -100,11 +114,17 @@ describe('setup-test-db', () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       'node',
       ['scripts/apply-migration.mjs'],
-      expect.objectContaining({ stdio: 'inherit' }),
+      expect.objectContaining({
+        stdio: 'inherit',
+        env: expect.objectContaining({
+          DATABASE_URL: 'postgres://u:p@host/db?sslmode=require',
+          MIGRATION_DATABASE_URL: 'postgres://u:p@host/db?sslmode=require',
+        }),
+      }),
     );
     expect(spawnSyncMock).toHaveBeenCalledWith(
       'pnpm',
-      ['seed'],
+      ['seed', '--yes'],
       expect.objectContaining({ env: expect.objectContaining({ DATABASE_URL: expect.stringContaining('postgres://') }) }),
     );
   });

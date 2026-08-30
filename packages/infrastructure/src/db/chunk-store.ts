@@ -1,11 +1,11 @@
 import { eq, and, or, sql, inArray } from 'drizzle-orm';
 import { db } from './client';
-import { VECTOR_DIM } from './schema-vector';
+import { resolveVectorDimForClient } from './schema-vector';
 import { chunks } from './schema';
 import { ValidationError } from '@app/domain';
 import type { ChunkStore } from '@app/domain';
 
-export type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 function toChunkValues(r: {
   documentId: number;
@@ -53,11 +53,13 @@ export async function insertChunks(
     contentHash?: string | null | undefined;
   }>,
   client: Client = db,
+  vectorDim?: number,
 ): Promise<void> {
   if (rows.length === 0) return;
+  const expectedDimension = vectorDim ?? resolveVectorDimForClient(client);
   for (const r of rows) {
-    if (!Array.isArray(r.embedding) || r.embedding.length !== VECTOR_DIM) {
-      throw new ValidationError(`Invalid embedding: expected ${VECTOR_DIM} dimensions, got ${r.embedding.length}`);
+    if (!Array.isArray(r.embedding) || r.embedding.length !== expectedDimension) {
+      throw new ValidationError(`Invalid embedding: expected ${expectedDimension} dimensions, got ${r.embedding.length}`);
     }
     if (!r.embedding.every((v) => Number.isFinite(v))) {
       throw new ValidationError(`Invalid embedding: chunk ${r.chunkIndex} contains non-finite values`);
@@ -65,56 +67,67 @@ export async function insertChunks(
   }
   const BATCH_SIZE = 500;
 
-  const parents = rows.filter((r) => r.kind === 'parent');
-  if (parents.length === 0) {
-    for (const r of rows) {
-      if (r.parentChunkId != null) {
-        throw new ValidationError(
-          `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
-        );
-      }
-    }
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      await client.insert(chunks).values(rows.slice(i, i + BATCH_SIZE).map(toChunkValues));
-    }
-    return;
-  }
-
-  const parentIndices = parents.map((r) => r.chunkIndex ?? 0);
-  const uniqueIndices = new Set(parentIndices);
-  if (uniqueIndices.size !== parentIndices.length) {
-    throw new Error(
-      'insertChunks: parent chunkIndex values must be unique within a batch for self-FK resolution',
-    );
-  }
-
-  const indexToId = new Map<number, number>();
-  for (let i = 0; i < parents.length; i += BATCH_SIZE) {
-    const batch = parents.slice(i, i + BATCH_SIZE);
-    const inserted = await client
-      .insert(chunks)
-      .values(batch.map(toChunkValues))
-      .returning({ id: chunks.id, chunkIndex: chunks.chunkIndex });
-    for (const row of inserted) {
-      indexToId.set(Number(row.chunkIndex), Number(row.id));
-    }
-  }
-
-  const children = rows.filter((r) => r.kind !== 'parent');
-  for (let i = 0; i < children.length; i += BATCH_SIZE) {
-    const batch = children.slice(i, i + BATCH_SIZE);
-    await client.insert(chunks).values(
-      batch.map((r) => {
-        const realParentId =
-          r.parentChunkId != null ? indexToId.get(r.parentChunkId) ?? null : null;
-        if (r.parentChunkId != null && realParentId == null) {
+  async function runInserts(tx: Client): Promise<void> {
+    const parents = rows.filter((r) => r.kind === 'parent');
+    if (parents.length === 0) {
+      for (const r of rows) {
+        if (r.parentChunkId != null) {
           throw new ValidationError(
             `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
           );
         }
-        return { ...toChunkValues(r), parentChunkId: realParentId };
-      }),
-    );
+      }
+      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+        await tx.insert(chunks).values(rows.slice(i, i + BATCH_SIZE).map(toChunkValues));
+      }
+      return;
+    }
+    const parentIndices = parents.map((r) => r.chunkIndex ?? 0);
+    const uniqueIndices = new Set(parentIndices);
+    if (uniqueIndices.size !== parentIndices.length) {
+      throw new Error(
+        'insertChunks: parent chunkIndex values must be unique within a batch for self-FK resolution',
+      );
+    }
+    const indexToId = new Map<number, number>();
+    for (let i = 0; i < parents.length; i += BATCH_SIZE) {
+      const batch = parents.slice(i, i + BATCH_SIZE);
+      const inserted = await tx
+        .insert(chunks)
+        .values(batch.map(toChunkValues))
+        .returning({ id: chunks.id, chunkIndex: chunks.chunkIndex });
+      for (const row of inserted) {
+        indexToId.set(Number(row.chunkIndex), Number(row.id));
+      }
+    }
+    const children = rows.filter((r) => r.kind !== 'parent');
+    for (let i = 0; i < children.length; i += BATCH_SIZE) {
+      const batch = children.slice(i, i + BATCH_SIZE);
+      await tx.insert(chunks).values(
+        batch.map((r) => {
+          const realParentId =
+            r.parentChunkId != null ? indexToId.get(r.parentChunkId) ?? null : null;
+          if (r.parentChunkId != null && realParentId == null) {
+            throw new ValidationError(
+              `Parent chunk ${r.parentChunkId} not found in batch for chunk ${r.chunkIndex}`,
+            );
+          }
+          return { ...toChunkValues(r), parentChunkId: realParentId };
+        }),
+      );
+    }
+  }
+  if (client === db) {
+    await db.transaction(async (tx) => {
+      await runInserts(tx as unknown as Client);
+    });
+  } else {
+    const maybeTx = client as unknown as { transaction?: (fn: (tx: Client) => Promise<void>) => Promise<void> };
+    if (maybeTx.transaction) {
+      await maybeTx.transaction(async (tx) => runInserts(tx));
+    } else {
+      await runInserts(client);
+    }
   }
 }
 
@@ -385,12 +398,13 @@ export async function recountChunksForAll(client: Client = db): Promise<Array<{ 
   return rows;
 }
 
-export function createChunkStore(client: Client): ChunkStore {
+export function createChunkStore(client: Client, vectorDim?: number): ChunkStore {
+  const expectedDimension = vectorDim ?? resolveVectorDimForClient(client);
   return {
     getByIds: (ids) => getChunksByIds(ids, client),
     getByDocAndRange: (documentId, start, end) => getChunksByDocAndRange(documentId, start, end, client),
     getByDocAndRanges: (ranges) => getChunksByDocAndRanges(ranges, client),
-    insertMany: (rows) => insertChunks(rows, client),
+    insertMany: (rows) => insertChunks(rows, client, expectedDimension),
     deleteByDocumentId: (documentId) => deleteChunksByDocumentId(documentId, client),
     countForDocuments: (ids) => countChunksForDocuments(ids, client),
     countForAll: () => countChunksForAll(client),
