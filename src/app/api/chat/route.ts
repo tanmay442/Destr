@@ -1,7 +1,7 @@
 import { tool, convertToModelMessages, streamText, stepCountIs, createUIMessageStreamResponse, createUIMessageStream, type InferUIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { getComposition, assertSameOrigin, type MyUIMessage, type Composition, TRACE_ENABLED } from '@/composition';
+import { getComposition, assertSameOrigin, type Composition, TRACE_ENABLED } from '@/composition';
 import type { RetrievedChunk } from '@app/application/rag/search';
 import { buildSystemPrompt } from '@app/application/prompt/build-system-prompt';
 import {
@@ -20,6 +20,9 @@ import {
   buildAssistantMessageLike,
   shouldCache,
   type EmittedCitation,
+  type ChatInputMessage,
+  type ChatUIMessage,
+  toChatUIMessages,
 } from '@app/application/chat';
 import { NextResponse, after } from 'next/server';
 import type { AgenticResultState, ChatEventInput } from '@app/domain';
@@ -35,6 +38,24 @@ import {
 } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
+
+type MyUIMessage = ChatUIMessage;
+
+type CompositionRateLimitDecision = Awaited<ReturnType<Composition['rateLimit']>>;
+type RateLimitedDecision = { ok: false; retryAfterMs: number };
+type RateLimitDecision = { ok: true; remaining: number; resetMs: number } | RateLimitedDecision;
+
+function isRateLimited(decision: CompositionRateLimitDecision): decision is RateLimitedDecision {
+  return decision.ok === false && 'retryAfterMs' in decision;
+}
+
+function normalizeRateLimitDecision(decision: CompositionRateLimitDecision): RateLimitDecision {
+  if (isRateLimited(decision)) return decision;
+  if (decision.ok === true && 'remaining' in decision && 'resetMs' in decision) {
+    return { ok: true, remaining: decision.remaining, resetMs: decision.resetMs };
+  }
+  return { ok: false, retryAfterMs: 0 };
+}
 
 export const maxDuration = 60;
 
@@ -277,7 +298,7 @@ function buildChatTools(deps: {
         }
         ticketOpenedInTurn = true;
         const ticketLimit = await rateLimitFn(`ticket:${uid}`, { limit: 1, windowMs: 5 * 60_000 });
-        if (!ticketLimit.ok) {
+        if (isRateLimited(ticketLimit)) {
           const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
             ? Math.ceil(ticketLimit.retryAfterMs / 1000)
             : undefined;
@@ -505,9 +526,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
   const comp = getComposition();
   const cfg = await getRuntimeConfig();
   const limit = await comp.rateLimit(`chat:${userId}`, CHAT_RATE_LIMIT);
-  if (!limit.ok) {
+  if (limit.ok !== true) {
     release();
-    const retryAfter = Number.isFinite(limit.retryAfterMs)
+    const retryAfter = isRateLimited(limit)
       ? String(Math.ceil(limit.retryAfterMs / 1000))
       : undefined;
     return new Response('Too Many Requests', {
@@ -531,8 +552,9 @@ async function streamChatResponse(req: Request): Promise<Response> {
     release();
     return NextResponse.json({ error: 'invalid_request', issues: parsed.error.issues }, { status: 400 });
   }
-  const messages = parsed.data.messages as unknown as MyUIMessage[];
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const inputMessages: ChatInputMessage[] = parsed.data.messages;
+  const messages = toChatUIMessages(inputMessages);
+  const lastUserMessage = [...inputMessages].reverse().find((m) => m.role === 'user');
   const lastUserText = lastUserMessage
     ? lastUserMessage.parts
         .filter((p) => p.type === 'text')
@@ -962,7 +984,9 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       hallucinationGrader: (cfg) => comp.getHallucinationGrader(cfg),
       answerCache: comp.answerCache,
       answerCacheKey: (query, ctx) => comp.answerCacheKey(query, ctx),
-      rateLimit: { check: (key, opts) => comp.rateLimit(key, opts) },
+      rateLimit: {
+        check: async (key, opts) => normalizeRateLimitDecision(await comp.rateLimit(key, opts)),
+      },
       createTicket: (input) => comp.createTicket(input),
       userResolver: async () => {
         const clerkUser = await currentUser();
@@ -1026,10 +1050,10 @@ export async function POST(req: Request) {
   try {
     const csrf = assertSameOrigin(req);
     if (csrf) return csrf;
-    if (process.env.CHAT_TURN_USE_CASE === '1') {
-      return streamChatResponseUseCase(req);
+    if (process.env.CHAT_TURN_USE_CASE === '0') {
+      return streamChatResponse(req);
     }
-    return streamChatResponse(req);
+    return streamChatResponseUseCase(req);
   } catch (error) {
     const userId = chatSlotOwners.get(req);
     if (userId) releaseOwnedChatSlot(req, userId);

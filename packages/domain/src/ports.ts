@@ -3,9 +3,22 @@
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
 import type { AppConfig } from './app-config';
+import type { AdminListCursor } from './pagination';
+
+export type DocumentListCursor = Extract<AdminListCursor, { kind: 'documents' }>;
+export type TicketListCursor = Extract<AdminListCursor, { kind: 'tickets' }>;
+export type UserListCursor = Extract<AdminListCursor, { kind: 'users' }>;
+export type AuditListCursor = Extract<AdminListCursor, { kind: 'audit' }>;
+
+export interface CursorPageInfo {
+  nextCursor: string | null;
+  previousCursor: string | null;
+}
 
 export interface DocumentRow {
   id: number;
+  /** Stable identity retained when the numeric compatibility id stays the same. */
+  documentUid?: string;
   fileName: string;
   fileHash: string;
   uploadedBy: string;
@@ -96,8 +109,10 @@ export interface DocumentRepository {
     search?: string | undefined;
     includeDeleted?: boolean | undefined;
     limit: number;
-    offset: number;
-  }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number }>;
+    offset?: number | undefined;
+    cursor?: DocumentListCursor | undefined;
+    before?: DocumentListCursor | undefined;
+  }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number } & CursorPageInfo>;
   countChunksForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countChunksForAll(): Promise<number>;
   countPendingIngest(): Promise<number>;
@@ -143,6 +158,9 @@ export interface DocumentChunk {
 export interface RetrievedChunkRow {
   id: number;
   documentId: number;
+  /** Stable identity used by citations and re-ingest upserts. */
+  documentUid?: string;
+  chunkUid?: string;
   fileName: string | null;
   page: number | null;
   sectionTitle: string | null;
@@ -175,6 +193,8 @@ export interface InsertChunkInput {
   sectionTitle?: string | null | undefined;
   source?: string | null | undefined;
   title?: string | null | undefined;
+  /** Structural parent index before the database self-reference is resolved. */
+  parentChunkIndex?: number | null | undefined;
   parentChunkId?: number | null | undefined;
   kind?: 'parent' | 'child' | 'summary' | undefined;
   embeddingModel?: string | null | undefined;
@@ -212,6 +232,8 @@ export interface ChunkStore {
     ranges: Array<{ documentId: number; start: number; end: number }>,
   ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(rows: InsertChunkInput[]): Promise<void>;
+  /** Upsert a complete document chunk set by stable UID, then remove stale rows. */
+  replaceMany?(documentId: number, rows: InsertChunkInput[]): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
   countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countForAll(): Promise<number>;
@@ -255,9 +277,11 @@ export interface TicketRepository {
       assignee?: string | null | undefined;
       search?: string | undefined;
       limit: number;
-      offset: number;
+      offset?: number | undefined;
+      cursor?: TicketListCursor | undefined;
+      before?: TicketListCursor | undefined;
     },
-  ): Promise<{ rows: TicketRow[]; total: number }>;
+  ): Promise<{ rows: TicketRow[]; total: number } & CursorPageInfo>;
   latest(): Promise<{ id: number; ticketId: string } | null>;
   insert(input: {
     ticketId: string;
@@ -297,8 +321,10 @@ export interface UserRepository {
   list(opts: {
     search?: string | undefined;
     limit: number;
-    offset: number;
-  }): Promise<{ rows: UserRow[]; total: number }>;
+    offset?: number | undefined;
+    cursor?: UserListCursor | undefined;
+    before?: UserListCursor | undefined;
+  }): Promise<{ rows: UserRow[]; total: number } & CursorPageInfo>;
   countAll(): Promise<number>;
   countAdmins(): Promise<number>;
   /** Count admin rows while holding row locks so concurrent demotions serialize on the same count. */
@@ -346,7 +372,9 @@ export interface AuditListFilter {
   documentId?: number | undefined;
   ticketId?: string | undefined;
   limit: number;
-  offset: number;
+  offset?: number | undefined;
+  cursor?: AuditListCursor | undefined;
+  before?: AuditListCursor | undefined;
 }
 
 export interface AuditLog {
@@ -378,7 +406,7 @@ export interface AuditLog {
   list(input: AuditListFilter): Promise<{
     events: AuditEventRecord[];
     total: number;
-  }>;
+  } & CursorPageInfo>;
 }
 
 /** Per-turn chat metrics. `mode`: 'agentic' or 'vector'. */
@@ -561,24 +589,18 @@ export interface ThumbsDownDoc {
   down: number;
 }
 
-/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
-export interface ChatEventsRepo {
+export interface ChatEventWriter {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
-  
   patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
-  
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
-  
+}
+
+export interface ChatEventReader {
   getQualitySamples(limit: number, filter: { blocked?: boolean }): Promise<ChatEvent[]>;
   getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
-  
   getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
-  
-  getJudgeAverages(days?: number): Promise<{
-    avgFaithfulness: number;
-    avgRetrievalRelevance: number;
-  }>;
+  getJudgeAverages(days?: number): Promise<{ avgFaithfulness: number; avgRetrievalRelevance: number }>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
   getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
@@ -586,11 +608,20 @@ export interface ChatEventsRepo {
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
   getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]>;
   getTurnsToTicket(range?: ChatEventRange): Promise<TurnsToTicket>;
+}
+
+export interface ChatEventRetention {
   refreshDailyStats(): Promise<void>;
+}
+
+export interface ChatEventPurge {
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
 }
+
+/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
+export type ChatEventsRepo = ChatEventWriter & ChatEventReader & ChatEventRetention & ChatEventPurge;
 
 export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
 
@@ -681,10 +712,17 @@ export interface RateLimiter {
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 
+/** Optional lease port for preventing concurrent population of one answer key. */
+export interface AnswerCacheLease {
+  tryAcquire(key: string, ttlSec: number): Promise<string | null>;
+  release(key: string, token: string): Promise<void>;
+}
+
 /** Cache for query-keyed answers. Callers MUST pin model ids into the key. */
 export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
+  lease?: AnswerCacheLease;
 }
 
 export interface EmbeddingService {

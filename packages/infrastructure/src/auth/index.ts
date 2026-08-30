@@ -1,5 +1,6 @@
 export { clerkSessionStore, clerkClient, syncClerkUserRole } from './clerk-session';
 export { lruRateLimiter, createRateLimiter } from './lru-rate-limiter';
+export { createFallbackRateLimiter } from './fallback-rate-limiter';
 export { createUpstashRateLimiter } from './upstash-rate-limiter';
 export { createUpstashAnswerCache } from './upstash-answer-cache';
 export { createInMemoryAnswerCache, createAnswerCache } from './in-memory-answer-cache';

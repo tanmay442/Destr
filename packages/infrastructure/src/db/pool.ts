@@ -12,6 +12,16 @@ export function redactDatabaseUrl(url: string): string {
 }
 
 // Neon's serverless driver can't reach plain TCP Postgres; route Neon URLs to it, everything else via `pg`.
+export function isPooledNeonUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.split('.')[0]?.endsWith('-pooler') ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function isNeonUrl(url: string): boolean {
   if (!url) return false;
   let parsed: URL;
@@ -22,6 +32,16 @@ export function isNeonUrl(url: string): boolean {
   }
   const host = parsed.hostname;
   return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
+}
+
+export function enforceNeonTlsVerification(url: string): string {
+  if (!isNeonUrl(url)) return url;
+  const parsed = new URL(url);
+  const sslMode = parsed.searchParams.get('sslmode');
+  if (sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca') {
+    parsed.searchParams.set('sslmode', 'verify-full');
+  }
+  return parsed.toString();
 }
 
 function positiveIntEnv(name: string): number | null {
@@ -45,9 +65,16 @@ function resolvePoolMax(): number {
 }
 const POOL_OPTS = { max: resolvePoolMax(), idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 } as const;
 
+function warnIfNonPooledNeonUrl(url: string): void {
+  if (process.env.NODE_ENV !== 'production' || !isNeonUrl(url) || isPooledNeonUrl(url)) return;
+  console.warn(
+    `[pool] Production DATABASE_URL is a non-pooled Neon URL (${redactDatabaseUrl(url)}). Use the Neon -pooler hostname for serverless connections.`,
+  );
+}
+
 function buildNeonPool(url: string): NeonPool {
   return new NeonPool({
-    connectionString: url,
+    connectionString: enforceNeonTlsVerification(url),
     ...POOL_OPTS,
   });
 }
@@ -84,6 +111,7 @@ export function buildMissingPool(): NeonPool {
 const pools = new Map<string, NeonPool | pg.Pool>();
 
 export function getPool(url: string): NeonPool | pg.Pool {
+  warnIfNonPooledNeonUrl(url);
   const existing = pools.get(url);
   if (existing) return existing;
   const pool = isNeonUrl(url)

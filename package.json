@@ -88,5 +88,14 @@
     "vite": "^8.1.4",
     "vitest": "^4.1.10"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "unrs-resolver"
+    ],
+    "ignoredBuiltDependencies": [
+      "protobufjs"
+    ]
+  },
   "packageManager": "pnpm@10.33.2"
 }

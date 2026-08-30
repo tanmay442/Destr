@@ -1,4 +1,4 @@
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
 import { chatConversations, chatMessages, users } from './schema';
 import type {
@@ -16,6 +16,8 @@ import {
 } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+const PURGE_BATCH_SIZE = 2_000;
 
 export class ChatHistoryRepository implements ChatHistoryRepo {
   constructor(private readonly client: Client = db) {}
@@ -225,16 +227,32 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
   private async purgeWhere(
     condition: SQL,
   ): Promise<{ deletedConversations: number; deletedMessages: number }> {
-    const [countRow] = await this.client
-      .select({ total: sql<number>`count(*)::int` })
-      .from(chatMessages)
-      .innerJoin(chatConversations, eq(chatMessages.conversationId, chatConversations.id))
-      .where(condition);
-    const deleted = await this.client
-      .delete(chatConversations)
-      .where(condition)
-      .returning({ id: chatConversations.id });
-    return { deletedConversations: deleted.length, deletedMessages: Number(countRow?.total ?? 0) };
+    let deletedConversations = 0;
+    let deletedMessages = 0;
+
+    while (true) {
+      const batch = await this.client
+        .select({ id: chatConversations.id })
+        .from(chatConversations)
+        .where(condition)
+        .limit(PURGE_BATCH_SIZE);
+      if (batch.length === 0) break;
+
+      const conversationIds = batch.map((row) => row.id);
+      const removedMessages = await this.client
+        .delete(chatMessages)
+        .where(inArray(chatMessages.conversationId, conversationIds))
+        .returning({ id: chatMessages.id });
+      deletedMessages += removedMessages.length;
+
+      const removedConversations = await this.client
+        .delete(chatConversations)
+        .where(inArray(chatConversations.id, conversationIds))
+        .returning({ id: chatConversations.id });
+      deletedConversations += removedConversations.length;
+    }
+
+    return { deletedConversations, deletedMessages };
   }
 }
 

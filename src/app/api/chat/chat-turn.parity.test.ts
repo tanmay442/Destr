@@ -290,7 +290,7 @@ async function post(
   body: string = BASIC_BODY,
   signal?: AbortSignal,
 ): Promise<Response> {
-  vi.stubEnv('CHAT_TURN_USE_CASE', useCase ? '1' : '');
+  vi.stubEnv('CHAT_TURN_USE_CASE', useCase ? '1' : '0');
   return appHandler.POST(
     new Request('http://localhost/api/chat', {
       method: 'POST',

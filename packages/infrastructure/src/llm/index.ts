@@ -25,6 +25,13 @@ import {
 import { getChatModel } from './model';
 
 export { getChatModel } from './model';
+export {
+  EMBEDDING_RETRY_BUDGET_MS,
+  createRetryBudget,
+  isRetryBudgetExceeded,
+  RetryBudgetExceededError,
+  type RetryBudget,
+} from './retry';
 
 export function getEmbeddingService(vectorDim?: number): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';

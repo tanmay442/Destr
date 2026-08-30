@@ -28,6 +28,15 @@ describe('grounding evidence', () => {
     expect(evidence.citations[0]?.snippet).not.toContain('supported detail');
   });
 
+  it('uses stable chunk identities when deduplicating citations', () => {
+    const evidence = createGroundingEvidence();
+    const first = { ...CHUNK, chunkUid: 'chunk-a' };
+    const second = { ...CHUNK, chunkUid: 'chunk-b' };
+
+    expect(addGroundingEvidence(evidence, [first, second, first])).toHaveLength(2);
+    expect(evidence.citations.map((citation) => citation.chunkUid)).toEqual(['chunk-a', 'chunk-b']);
+  });
+
   it('bounds the number of unique chunks retained for one turn', () => {
     const evidence = createGroundingEvidence();
     const chunks = Array.from({ length: 35 }, (_, index) => ({ ...CHUNK, id: index + 1 }));

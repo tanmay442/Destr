@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { V4_UUID_REGEX } from './turn-id';
+import type { ChatInputMessage, ChatInputPart } from './message-types';
 
 const MAX_TEXT_LENGTH = 50_000;
 const MAX_PARTS = 100;
@@ -16,11 +17,9 @@ const MessagePartSchema = z.union([
     filename: z.string().max(255).optional(),
     mediaType: z.string().max(255).optional(),
   }),
-  z
-    .object({
-      type: z.string().refine((type) => !ALLOWED_PART_TYPE.test(type)),
-    })
-    .passthrough(),
+  z.object({
+    type: z.string().refine((type) => !ALLOWED_PART_TYPE.test(type)),
+  }),
 ]);
 
 const MessageSchema = z
@@ -31,10 +30,34 @@ const MessageSchema = z
     parts: z.array(MessagePartSchema).max(MAX_PARTS),
   })
   .strip()
-  .transform((message) => ({
-    ...message,
-    parts: message.parts.filter((part) => ALLOWED_PART_TYPE.test(part.type)),
-  }));
+  .transform((message): ChatInputMessage => {
+    const parts: ChatInputPart[] = [];
+    for (const part of message.parts) {
+      if (part.type === 'text' && 'text' in part && typeof part.text === 'string') {
+        parts.push({ type: 'text', text: part.text });
+      } else if (part.type === 'reasoning') {
+        const text = 'text' in part && typeof part.text === 'string' ? part.text : undefined;
+        parts.push({
+          type: 'reasoning',
+          ...(text !== undefined ? { text } : {}),
+        });
+      } else if (part.type === 'file' && 'url' in part && typeof part.url === 'string') {
+        const filename = 'filename' in part && typeof part.filename === 'string' ? part.filename : undefined;
+        const mediaType = 'mediaType' in part && typeof part.mediaType === 'string' ? part.mediaType : undefined;
+        parts.push({
+          type: 'file',
+          url: part.url,
+          ...(filename !== undefined ? { filename } : {}),
+          ...(mediaType !== undefined ? { mediaType } : {}),
+        });
+      }
+    }
+    return {
+      ...(message.id !== undefined ? { id: message.id } : {}),
+      role: message.role,
+      parts,
+    };
+  });
 
 export const ChatRequestSchema = z.object({
   turnId: z.string().regex(V4_UUID_REGEX, 'turnId must be a v4 UUID').optional(),

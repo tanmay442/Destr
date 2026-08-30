@@ -13,6 +13,7 @@ import {
   getTicketIntelligence,
   listAudit, logSettingsChange,
   prepareIngest,
+  replaceDocumentChunks,
   uploadPrechunkedMarkdown,
   reingestAll,
   agenticSearch,
@@ -35,7 +36,6 @@ const authAdapter = Auth.createAuthAdapter();
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { createHash } from 'node:crypto';
 import { getRuntimeConfig, registerSettingsRepoProvider } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
@@ -62,7 +62,7 @@ configureLogger(core.config.LOG_LEVEL as LogLevel);
 const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
 const systemClock = { now: () => new Date() };
-const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
+const systemHasher = Db.defaultHasher;
 
 const bind = <Args extends unknown[], T>(
   fn: (...args: Args) => Promise<Result<T>>,
@@ -71,7 +71,16 @@ const bind = <Args extends unknown[], T>(
 
 const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
 const ingestQueue = core.ingestQueue;
-const rateLimiter = core.rateLimiter;
+const rateLimiter = Auth.createFallbackRateLimiter({
+  primary: core.rateLimiter,
+  fallback: Auth.lruRateLimiter,
+  onFallback: ({ key, error }) => {
+    logger.warn('[rate-limit] provider failed; using the bounded local limiter', {
+      key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
+});
 
 if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
@@ -172,8 +181,7 @@ async function ingestQueuedDocumentStandalone(
         fresh.storageKey !== doc.storageKey ||
         fresh.ingestStatus !== 'ingesting'
       ) throw new StaleIngestError();
-      await tx.chunks.deleteByDocumentId(documentId);
-      await tx.chunks.insertMany(prepared.value.rows);
+      await replaceDocumentChunks(tx.chunks, documentId, prepared.value.rows);
       if (tx.documents.updateIngestStatusIfCurrent) {
         const completed = await tx.documents.updateIngestStatusIfCurrent(
           documentId,
@@ -445,7 +453,7 @@ function createComposition() {
     qualityReviewsRepo,
     chatHistoryRepo,
     session: Auth.clerkSessionStore,
-    rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
+    rateLimit: (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),
   };
 }

@@ -8,4 +8,6 @@ export * from './build-event-meta';
 export * from './should-cache';
 export * from './grounding-evidence';
 export * from './request-schema';
+export * from './message-types';
+export * from './cache-lease';
 export * from './history';

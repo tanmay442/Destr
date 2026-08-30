@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { sql, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { VECTOR_DIM } from '../schema-vector';
-import { tickets, auditEvents, documents } from '../schema';
+import { tickets, auditEvents, documents, chatEvents, chatFeedback } from '../schema';
 import {
   insertChunks,
+  replaceChunks,
   insertDocument,
   getChunksByIds,
   getChunksByDocAndRange,
@@ -71,6 +72,53 @@ suite('db-integration (real SQL)', () => {
       sql`SELECT count(*)::int AS n FROM documents WHERE file_name = ${fileName}`,
     )) as unknown as { rows: Array<{ n: number }> };
     expect(leftover.rows[0]!.n).toBe(0);
+  });
+
+  it('reuses numeric chunk rows on stable-identity replacement and keeps feedback references', async () => {
+    const fileName = `stable-${randomUUID()}.pdf`;
+    try {
+      await db.transaction(async (tx) => {
+        const doc = await insertDocument({ fileName, fileHash: randomUUID(), uploadedBy: 'stable-test' }, tx);
+        const rows = [
+          { documentId: doc.id, content: 'stable alpha', embedding: emb(), chunkIndex: 0, kind: 'child' as const },
+          { documentId: doc.id, content: 'stable beta', embedding: emb(), chunkIndex: 1, kind: 'child' as const },
+        ];
+        await replaceChunks(doc.id, rows, tx);
+        const firstResult = await tx.execute(
+          sql`SELECT id, chunk_uid FROM chunks WHERE document_id = ${doc.id} ORDER BY chunk_index`,
+        ) as unknown as { rows: Array<{ id: number; chunk_uid: string }> };
+        const firstIds = firstResult.rows.map((row) => Number(row.id));
+        const firstUids = firstResult.rows.map((row) => row.chunk_uid);
+        const turnId = randomUUID();
+        await tx.insert(chatEvents).values({ turnId, mode: 'vector' });
+        await tx.insert(chatFeedback).values({
+          turnId,
+          feedback: 1,
+          documentIds: [doc.id],
+          chunkIds: firstIds,
+        });
+
+        await replaceChunks(doc.id, rows, tx);
+        const secondResult = await tx.execute(
+          sql`SELECT id, chunk_uid FROM chunks WHERE document_id = ${doc.id} ORDER BY chunk_index`,
+        ) as unknown as { rows: Array<{ id: number; chunk_uid: string }> };
+        expect(secondResult.rows.map((row) => Number(row.id))).toEqual(firstIds);
+        expect(secondResult.rows.map((row) => row.chunk_uid)).toEqual(firstUids);
+
+        const documentResult = await tx.execute(
+          sql`SELECT document_uid FROM documents WHERE id = ${doc.id}`,
+        ) as unknown as { rows: Array<{ document_uid: string }> };
+        expect(documentResult.rows[0]?.document_uid).toBe(doc.documentUid);
+
+        const feedbackResult = await tx.execute(
+          sql`SELECT chunk_ids FROM chat_feedback WHERE turn_id = ${turnId}`,
+        ) as unknown as { rows: Array<{ chunk_ids: number[] }> };
+        expect(feedbackResult.rows[0]?.chunk_ids.map(Number)).toEqual(firstIds);
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      expect(error).toBe(ROLLBACK);
+    }
   });
 
   it('aggregates ticket response times and honors a from/to range, then rolls back', async () => {

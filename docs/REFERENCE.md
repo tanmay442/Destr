@@ -77,7 +77,7 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 
 ## 4. Admin Console Subsystems
 
-- **Pagination**: all list tables (documents, users, tickets, audit) use server-side pagination at 30 rows/page with prev/next controls; out-of-range pages redirect to the last valid page.
+- **Pagination**: all list tables (documents, users, tickets, audit) use deterministic compound keyset pagination at 30 rows/page with cursor-based prev/next controls; direct numeric pages and API clients retain offset compatibility, and out-of-range pages redirect to the last valid page.
 
 ### Overview (`/admin`)
 - Metric cards: documents, chunks, tickets, open tickets, users; latest 10 audit events (per-request render, not a push stream).
@@ -127,8 +127,8 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 
 | Table | Description | Key Columns |
 |---|---|---|
-| `documents` | Ingested PDF sources | `id`, `file_name`, `file_hash`, `uploaded_by`, `uploaded_at`, `blob`/`storage_key`, `ingest_status`, `deleted_at` |
-| `chunks` | Text chunks with embeddings + FTS vector | `id`, `document_id`, `chunk_index`, `kind` (parent/child/summary), `parent_chunk_id`, `page`, `title`, `content`, `embedding`, `content_hash`, `tsv` |
+| `documents` | Ingested PDF sources | `id`, `document_uid`, `file_name`, `file_hash`, `uploaded_by`, `uploaded_at`, `blob`/`storage_key`, `ingest_status`, `deleted_at` |
+| `chunks` | Text chunks with embeddings + FTS vector | `id`, `chunk_uid`, `document_id`, `chunk_index`, `kind` (parent/child/summary), `parent_chunk_id`, `page`, `title`, `content`, `embedding`, `content_hash`, `tsv` |
 | `tickets` | Support escalation tickets | serial `id` + unique `ticket_id` (`TKT-*`), `user_id`, `name`, `email`, `issue`, `status`, `assigned_to`, `notes`, `created_at` |
 | `users` | Local mirror of Clerk identities + RBAC | `clerk_user_id` (PK), `email` (unique), `name`, `image_url`, `role`, `last_seen_at`, `created_at` |
 | `app_settings` | Single-row dynamic runtime config | `id` (fixed 1), `overrides` (JSONB), `version`, `updated_at`, `updated_by` |
@@ -142,6 +142,9 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 | `chat_daily_stats` | Materialized view of daily aggregates (refreshed by the telemetry job) | `day`, `mode`, `total`, `p50_ms`, `p95_ms`, `hallucination_count`, `ood_count`, `tickets_created`, `self_serve_count`, `avg_max_similarity`, `unique_users`, `tokens_in/out` |
 
 Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chunks excluded) and GIN `tsvector` on `chunks.tsv`.
+
+- `documents.document_uid` is generated once and remains stable when a document row is replaced. `chunks.chunk_uid` is a deterministic SHA-256 identity over the document UID, chunk structure, and content hash.
+- Chunk replacement upserts by `chunk_uid` and removes only stale chunks. Numeric `chunks.id` values therefore remain valid for existing `chat_feedback.chunk_ids` references.
 
 ### 5.1 Chat history retention & purge CLI
 
@@ -158,7 +161,7 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 
 ### Chat Grounding Evidence
 - Retrieval evidence is accumulated for the full turn across first-turn prefetch and repeated `searchDocumentation` calls. A later empty search does not erase evidence already found.
-- Chunks are deduplicated by chunk id, with a content-and-source-metadata fallback when an id is unavailable. At most 30 unique chunks are retained per turn.
+- Chunks are deduplicated by stable chunk UID, then by numeric chunk id, with a content-and-source-metadata fallback when no id is available. At most 30 unique chunks are retained per turn.
 - The model, citations, and hallucination checker use the same bounded chunk content. UI citation snippets remain shorter for display.
 
 ### Turn Answer Cache
@@ -190,6 +193,10 @@ EVAL_REAL=1 pnpm eval   # live model evaluation against keyed providers (schedul
 ## 8. Deployment & Environment
 
 The authoritative list of environment variables is `.env.example` (with per-var comments). This section documents the behavior of the environment-driven deployment features. Env vars are intentionally **not** covered in the README.
+
+### Deployment isolation
+
+Destr serves one customer per deployment. Do not share the Clerk instance, Postgres database, blob bucket or prefix, Redis data set, or queue configuration between customers. The knowledge corpus, settings, administration, tickets, audit data, and analytics are deployment-wide. User IDs scope saved conversations, feedback, cache entries, and rate limits; they do not create tenant boundaries. See [ADR 0001](adr/0001-single-tenant-per-deployment.md).
 
 ### 8.1 Clerk Custom-Domain Proxy & CSP (`CLERK_PROXY_URL` / `NEXT_PUBLIC_CLERK_PROXY_URL`)
 
@@ -223,9 +230,9 @@ The root layout (`src/app/layout.tsx`) renders the `google-site-verification` me
 
 Every tool that runs DDL prefers `MIGRATION_DATABASE_URL ?? DATABASE_URL` (`scripts/migrate.ts`, `scripts/apply-migration.mjs`, `drizzle.config.ts`). The app never holds the owner credential, so a leaked `DATABASE_URL` can no longer drop tables, plant triggers, or create roles.
 
-**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_conversations`, `chat_events`, `chat_feedback`, `chat_messages`, `chunks`, `documents`, `quality_reviews`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+**Row-Level Security.** Repository migrations do not create `rag_app`, grant privileges, enable RLS, or create policies. These are owner-managed provisioning steps. A `rag_app_full_access` policy with `USING (true)` limits which database role can access deployment data; it does not isolate customers or users inside a deployment.
 
-**Manual runbook step for the chat history and quality tables.** Migrations apply the DDL but not the live GRANT/RLS state — after applying `0018_chat_history.sql` (and likewise `0020_military_mathemanic.sql`/`0021_misty_harbor.sql` for `quality_reviews`), run the following as the DDL-capable owner (same pattern as the original rollout):
+Apply the role, grants, RLS setting, and policy to every app table after provisioning and whenever a migration adds a table. `_migrations` stays owner-only. For example, the chat history and quality tables require:
 
 ```sql
 ALTER TABLE chat_conversations ENABLE ROW LEVEL SECURITY;
@@ -241,7 +248,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON quality_reviews TO rag_app;
 GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 ```
 
-**Skipping this step makes the app see zero rows silently** — RLS is default-deny, so without a policy (and grants) for `rag_app` every history query returns nothing. Verify afterwards that `rag_app` reads and writes normally while a role without a policy sees zero rows.
+If RLS is enabled without a matching policy, `rag_app` sees zero rows. If grants are missing, queries fail with permission errors. After each production migration, connect with `DATABASE_URL` and test a read plus a rolled-back write. As the owner, verify every app table has RLS and a `rag_app` policy in `pg_class` and `pg_policies`. A probe role with only `SELECT` grants and no policy must see zero rows. These checks validate database-role hardening, not multi-tenant isolation.
 
 **Migration flow (where DDL runs):**
 1. **Local dev** — `pnpm db:migrate` applies DDL; `pnpm build` runs only the production build, while `pnpm build:with-db` applies migrations first. All migration commands use `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.

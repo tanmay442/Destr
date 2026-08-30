@@ -21,7 +21,7 @@ function ticketRow(over: { ticketId: string; status: 'created' | 'in_progress' |
 function makeMockRepos(overrides: { tickets?: Partial<TicketRepository>; audit?: Partial<AuditLog>; users?: Partial<UserRepository> } = {}) {
   const tickets = {
     findByTicketId: vi.fn().mockResolvedValue(null),
-    insert: vi.fn().mockResolvedValue({ ticketId: 'TKT-12345678', status: 'created' }),
+    insert: vi.fn().mockResolvedValue({ ticketId: 'TKT-123456789abc', status: 'created' }),
     update: vi.fn().mockResolvedValue(null),
     list: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
     latest: vi.fn().mockResolvedValue(null),
@@ -414,10 +414,12 @@ describe('createTicket', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
+      expect(result.value.ticketId).toMatch(/^TKT-[a-f0-9]{12}$/);
       expect(result.value.status).toBe('created');
     }
-    expect(deps.tickets.insert).toHaveBeenCalledOnce();
+    expect(deps.tickets.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: expect.stringMatching(/^TKT-[a-f0-9]{12}$/) }),
+    );
     expect(deps.audit.logTicketEvent).toHaveBeenCalledOnce();
   });
 
@@ -429,7 +431,7 @@ describe('createTicket', () => {
     );
     expect(deps.audit.logTicketEvent).toHaveBeenCalledWith({
       action: 'create',
-      ticketId: 'TKT-12345678',
+      ticketId: 'TKT-123456789abc',
       actorId: 'user_1',
     });
   });

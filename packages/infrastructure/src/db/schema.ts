@@ -14,6 +14,7 @@ import {
 
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
+  documentUid: uuid('document_uid').defaultRandom().notNull(),
   fileName: text('file_name').notNull(),
   fileHash: text('file_hash').notNull(),
   uploadedBy: text('uploaded_by').notNull(),
@@ -27,18 +28,19 @@ export const documents = pgTable('documents', {
   uniqueIndex('documents_file_name_unique')
     .on(table.fileName)
     .where(sql`${table.deletedAt} IS NULL`),
+  uniqueIndex('documents_document_uid_unique').on(table.documentUid),
   index('documents_deleted_at_idx').on(table.deletedAt),
   index('documents_uploaded_at_idx').on(table.uploadedAt.desc()),
   index('documents_ingest_status_updated_idx')
     .on(table.ingestStatus, table.ingestUpdatedAt)
     .where(sql`${table.deletedAt} IS NULL`),
   index('documents_uploaded_at_id_idx')
-    .on(table.uploadedAt.desc(), table.id.desc())
-    .where(sql`${table.deletedAt} IS NULL`),
+    .on(table.uploadedAt.desc(), table.id.desc()),
 ]);
 
 export const chunks = pgTable('chunks', {
   id: serial('id').primaryKey(),
+  chunkUid: text('chunk_uid').notNull(),
   documentId: integer('document_id').references(() => documents.id, { onDelete: 'cascade' }).notNull(),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
@@ -50,9 +52,10 @@ export const chunks = pgTable('chunks', {
   parentChunkId: integer('parent_chunk_id'),
   kind: text('kind').notNull().default('child'),
   embeddingModel: text('embedding_model'),
-  contentHash: text('content_hash'),
+  contentHash: text('content_hash').notNull(),
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
 }, (table) => [
+  uniqueIndex('chunks_chunk_uid_unique').on(table.chunkUid),
   index('embedding_idx')
     .using('hnsw', sql`${table.embedding} vector_cosine_ops`)
     .where(sql`${table.kind} <> 'parent'`),
@@ -83,6 +86,7 @@ export const tickets = pgTable('tickets', {
   check('tickets_status_check', sql`${table.status} IN ('created','in_progress','closed')`),
   index('tickets_assigned_to_idx').on(table.assignedTo),
   index('tickets_created_at_idx').on(table.createdAt.desc()),
+  index('tickets_created_at_id_idx').on(table.createdAt.desc(), table.id.desc()),
 ]);
 
 export const users = pgTable('users', {
@@ -95,6 +99,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   check('users_role_check', sql`${table.role} IN ('admin','user')`),
+  index('users_created_at_id_idx').on(table.createdAt, table.clerkUserId),
 ]);
 
 /** Generic audit trail. `source_ref` is a backfill-only dedup key. */
@@ -112,6 +117,7 @@ export const auditEvents = pgTable('audit_events', {
   check('audit_events_kind_check', sql`${table.kind} IN ('document','ticket','user','settings','chat')`),
   index('audit_events_kind_idx').on(table.kind),
   index('audit_events_at_idx').on(table.at.desc()),
+  index('audit_events_at_id_idx').on(table.at.desc(), table.id.desc()),
   index('audit_events_actor_id_idx').on(table.actorId),
   index('audit_events_kind_target_id_idx').on(table.kind, table.targetId),
   uniqueIndex('idx_audit_events_source_ref')
@@ -131,7 +137,10 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
   error: text('error').notNull(),
   attemptedAt: timestamp('attempted_at', { withTimezone: true }).defaultNow().notNull(),
   replayed: boolean('replayed').notNull().default(false),
-});
+}, (table) => [
+  index('audit_dead_letter_attempted_at_idx').on(table.attemptedAt.desc()),
+  index('audit_dead_letter_replayed_idx').on(table.replayed).where(sql`${table.replayed} = false`),
+]);
 
 /** Append-only per-turn chat metrics. `mode` is `agentic` or `vector`. */
 export const chatEvents = pgTable('chat_events', {

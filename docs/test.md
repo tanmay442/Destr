@@ -106,6 +106,8 @@ Multi-implementation ports are validated through **shared contract-assertion har
   - **Quality review queue (`packages/infrastructure/src/db/__tests__/quality-reviews-repo.test.ts`)**: verdicts (`good`/`bad`/`docs_missing`), one review per turn per reviewer, sampled-turn listing.
 - **Admin Document & Ingestion (`packages/application/src/admin/__tests__/`)**:
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.
+- **Admin List Cursor Pagination (`packages/domain/src/pagination.test.ts`, `packages/application/src/admin/__tests__/pagination.test.ts`, `packages/infrastructure/src/db/__tests__/repositories.test.ts`, `src/components/admin/Pagination.test.tsx`)**:
+  Cursor validation and resource-kind checks, compound-key tie handling, forward and backward keyset traversal, offset compatibility, and cursor links that preserve filters.
 - **Ingest Status Poller (`src/app/api/admin/documents/status/route.test.ts`)**:
   Auth gating and single aggregate pending-count query (`countPendingIngest`), replacing the previous full-table walk.
 - **Ticket Management (`packages/application/src/admin/__tests__/tickets.test.ts`)**:

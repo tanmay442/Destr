@@ -46,7 +46,7 @@ Ollama replaces the LLM providers.
    Vercel deployment region (e.g. `us-east-1` if Vercel is `iad1`).
 3. Copy the **pooled connection string** (uses port `6543`, hostname
    `-pooler`); this goes into `DATABASE_URL`. It should end with
-   `?sslmode=require`.
+   `?sslmode=verify-full`.
 4. **Enable pgvector**: open the Neon SQL editor and run:
    ```sql
    CREATE EXTENSION IF NOT EXISTS vector;

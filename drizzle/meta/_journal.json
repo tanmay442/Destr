@@ -169,6 +169,27 @@
       "when": 1788032757283,
       "tag": "0023_ingest_status_timestamp",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788094678643,
+      "tag": "0024_db_retention_safety",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788104851851,
+      "tag": "0025_stable_document_chunk_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788107762765,
+      "tag": "0026_living_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }

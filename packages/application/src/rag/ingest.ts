@@ -3,7 +3,7 @@ import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, PdfParser, TextSplitter, TransactionRunner,
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
-  IngestStatus,
+  IngestStatus, InsertChunkInput,
 } from '@app/domain';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS, RESTORE_WINDOW_MS } from '@app/domain';
 
@@ -240,6 +240,21 @@ export async function parseAndEmbed(
   return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
 }
 
+export async function replaceDocumentChunks(
+  chunks: Pick<ChunkRepository, 'deleteByDocumentId' | 'insertMany'> & {
+    replaceMany?: ((documentId: number, rows: InsertChunkInput[]) => Promise<void>) | undefined;
+  },
+  documentId: number,
+  rows: InsertChunkInput[],
+): Promise<void> {
+  if (chunks.replaceMany) {
+    await chunks.replaceMany(documentId, rows);
+    return;
+  }
+  await chunks.deleteByDocumentId(documentId);
+  await chunks.insertMany(rows);
+}
+
 /** Write the upsert-then-replace-chunks sequence. Exported so other ingest
  *  paths (pre-chunked Markdown) can reuse the atomic insert + chunk-replace. */
 export async function writeChunks(
@@ -259,8 +274,9 @@ export async function writeChunks(
     { resurrectDeleted: input.resurrectDeleted },
   );
   if (input.storageKey !== undefined) await documents.setStorageKey(row.id, input.storageKey);
-  await chunks.deleteByDocumentId(row.id);
-  await chunks.insertMany(
+  await replaceDocumentChunks(
+    chunks,
+    row.id,
     rows.map((r) => ({
       documentId: row.id,
       content: r.content,

@@ -31,6 +31,13 @@ describe('emitCitations', () => {
     });
   });
 
+  it('carries stable document and chunk identities', () => {
+    const [c] = emitCitations([
+      chunk({ documentUid: 'document-uid', chunkUid: 'chunk-uid' }),
+    ]);
+    expect(c).toMatchObject({ documentUid: 'document-uid', chunkUid: 'chunk-uid' });
+  });
+
   it('truncates the snippet at the snippet max and appends an ellipsis', () => {
     const long = 'x'.repeat(500);
     const [c] = emitCitations([chunk({ content: long })], 100);

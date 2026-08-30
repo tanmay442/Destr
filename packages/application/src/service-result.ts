@@ -1,7 +1,37 @@
-import { err, ok, type Result } from '@app/domain';
-import { DomainError, ExternalServiceError } from '@app/domain';
+import {
+  decodeListCursor,
+  DomainError,
+  ExternalServiceError,
+  ValidationError,
+  type AdminListCursor,
+  type AuditListCursor,
+  type DocumentListCursor,
+  type ListCursorKind,
+  type Result,
+  type TicketListCursor,
+  type UserListCursor,
+  err,
+  ok,
+} from '@app/domain';
 
 export type { Result } from '@app/domain';
+
+export function decodeCursorAtBoundary(raw: unknown, expectedKind: 'documents'): DocumentListCursor | undefined;
+export function decodeCursorAtBoundary(raw: unknown, expectedKind: 'tickets'): TicketListCursor | undefined;
+export function decodeCursorAtBoundary(raw: unknown, expectedKind: 'users'): UserListCursor | undefined;
+export function decodeCursorAtBoundary(raw: unknown, expectedKind: 'audit'): AuditListCursor | undefined;
+export function decodeCursorAtBoundary(raw: unknown, expectedKind: ListCursorKind): AdminListCursor | undefined;
+export function decodeCursorAtBoundary(
+  raw: unknown,
+  expectedKind: ListCursorKind,
+): AdminListCursor | undefined {
+  if (raw === undefined) return undefined;
+  const cursor = decodeListCursor(raw, expectedKind);
+  if (cursor === null) {
+    throw new ValidationError(`Invalid ${expectedKind} pagination cursor`);
+  }
+  return cursor;
+}
 
 /** DomainErrors pass through unwrapped; unknown throws become ExternalServiceError. */
 export async function wrapServiceCall<T>(

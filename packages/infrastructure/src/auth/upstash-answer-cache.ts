@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { randomUUID } from 'node:crypto';
 import type { AnswerCache } from '@app/domain';
 import { registerAnswerCacheProvider } from './answer-cache-registry';
 
@@ -7,6 +8,17 @@ import { registerAnswerCacheProvider } from './answer-cache-registry';
  * verbatim string round-tripping (Upstash auto-deserializes JSON on read).
  * Throws if Redis env vars are missing.
  */
+export const ANSWER_CACHE_LEASE_ACQUIRE_LUA = `
+  return redis.call('set', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) and ARGV[1] or nil
+`;
+
+export const ANSWER_CACHE_LEASE_RELEASE_LUA = `
+  if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+  end
+  return 0
+`;
+
 export function createUpstashAnswerCache(): AnswerCache {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -32,6 +44,27 @@ export function createUpstashAnswerCache(): AnswerCache {
       } catch {
         // Best-effort cache write; never fail the request path.
       }
+    },
+    lease: {
+      async tryAcquire(key, ttlSec) {
+        const tokenValue = randomUUID();
+        const acquired = await redis.eval(
+          ANSWER_CACHE_LEASE_ACQUIRE_LUA,
+          [`rag:answer-lease:${key}`],
+          [tokenValue, Math.max(1, Math.ceil(ttlSec))],
+        );
+        return acquired === tokenValue ? tokenValue : null;
+      },
+      async release(key, tokenValue) {
+        try {
+          await redis.eval(
+            ANSWER_CACHE_LEASE_RELEASE_LUA,
+            [`rag:answer-lease:${key}`],
+            [tokenValue],
+          );
+        } catch {
+        }
+      },
     },
   };
 }

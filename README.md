@@ -24,6 +24,8 @@
 
 **Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback (empty results trigger a fresh rewrite-and-retry pass before an out-of-domain wall replaces empty replies), and real-time administrative telemetry. Answer quality is continuously monitored via sampled LLM judges plus an admin review queue. Chats persist per signed-in account across sessions and devices, with automatic expiry on an admin-configured retention window.
 
+Destr is single-tenant by deployment. Each customer deployment must use separate Clerk, Postgres, blob storage, Redis, and queue resources. Documents, settings, administration, and analytics are deployment-wide.
+
 ---
 
 ## Quick Start

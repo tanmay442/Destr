@@ -18,10 +18,12 @@ import type {
   BlobStorage,
   IngestQueue,
   IngestStatus,
+  CursorPageInfo,
 } from '@app/domain';
 import {
   parseAndEmbed,
   writeChunks,
+  replaceDocumentChunks,
   claimDocumentByName,
   nameStillClaimed,
   UPLOAD_CONFLICT_MESSAGE,
@@ -29,7 +31,12 @@ import {
 } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '@app/domain';
-import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
+import {
+  decodeCursorAtBoundary,
+  wrapServiceCall,
+  serviceResult,
+  sanitizePagination,
+} from '../service-result';
 import { requireAdminActor } from './authz';
 
 function isDocumentNameConflict(error: unknown): boolean {
@@ -57,6 +64,8 @@ interface ListDocumentsInput {
   includeDeleted?: boolean | undefined;
   limit?: number;
   offset?: number;
+  cursor?: unknown;
+  before?: unknown;
 }
 
 export async function listDocuments(
@@ -82,17 +91,24 @@ export async function listDocuments(
       hasBlob: boolean;
     }>;
     total: number;
-  }>
+  } & CursorPageInfo>
 > {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
+    const cursor = decodeCursorAtBoundary(input.cursor, 'documents');
+    const before = decodeCursorAtBoundary(input.before, 'documents');
+    if (cursor !== undefined && before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const { documents, total } = await deps.documents.list({
+    const { documents, total, nextCursor, previousCursor } = await deps.documents.list({
       search: input.search,
       includeDeleted: input.includeDeleted,
       limit,
-      offset,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(cursor === undefined && before === undefined ? { offset } : {}),
     });
     const ids = documents.map((d) => d.id);
     const chunkCounts =
@@ -112,7 +128,12 @@ export async function listDocuments(
       uploaderName: uploaderMap.get(d.uploadedBy) ?? null,
       chunkCount: chunkCounts.get(d.id) ?? 0,
     }));
-    return ok({ documents: result, total });
+    return ok({
+      documents: result,
+      total,
+      nextCursor: nextCursor ?? null,
+      previousCursor: previousCursor ?? null,
+    });
   }, 'Failed to list documents');
 }
 
@@ -488,8 +509,9 @@ export async function replacePdf(
           await tx.documents.update(input.documentId, patch);
         }
         if (parsed) {
-          await tx.chunks.deleteByDocumentId(input.documentId);
-          await tx.chunks.insertMany(
+          await replaceDocumentChunks(
+            tx.chunks,
+            input.documentId,
             parsed.value.rows.map((r) => ({
               documentId: input.documentId,
               content: r.content,

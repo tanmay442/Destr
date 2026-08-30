@@ -6,14 +6,27 @@ import {
   NotFoundError,
   ConflictError,
   ForbiddenError,
+  ValidationError,
   sanitizeText,
 } from '@app/domain';
-import type { TicketRepository, AuditLog, TicketRow, UserRepository, TransactionRunner } from '@app/domain';
+import type {
+  TicketRepository,
+  AuditLog,
+  TicketRow,
+  UserRepository,
+  TransactionRunner,
+  CursorPageInfo,
+} from '@app/domain';
 import { randomUUID } from 'node:crypto';
-import { MAX_TICKET_NOTES_LENGTH, MAX_LIST_LIMIT } from '@app/domain';
+import {
+  MAX_LIST_LIMIT,
+  MAX_TICKET_NOTES_LENGTH,
+  TICKET_ID_HEX_LENGTH,
+  TICKET_ID_PREFIX,
+} from '@app/domain';
 import { requireAdminActor } from './authz';
 import { safeAudit } from '../audit-reliability';
-import { sanitizePagination } from '../service-result';
+import { decodeCursorAtBoundary, sanitizePagination, wrapServiceCall } from '../service-result';
 import { capCodePoints } from '../text';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
@@ -51,25 +64,37 @@ export async function listTickets(
     search?: string | undefined;
     limit?: number;
     offset?: number;
+    cursor?: unknown;
+    before?: unknown;
     actorId: string;
   },
   deps: { tickets: TicketRepository; users: UserRepository },
-): Promise<Result<{ tickets: TicketRow[]; total: number }>> {
+): Promise<Result<{ tickets: TicketRow[]; total: number } & CursorPageInfo>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
-  try {
+  return wrapServiceCall(async () => {
+    const cursor = decodeCursorAtBoundary(input.cursor, 'tickets');
+    const before = decodeCursorAtBoundary(input.before, 'tickets');
+    if (cursor !== undefined && before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const r = await deps.tickets.list({
+    const result = await deps.tickets.list({
       status: input.status,
       assignee: input.assignee,
       search: input.search,
       limit,
-      offset,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(cursor === undefined && before === undefined ? { offset } : {}),
     });
-    return ok({ tickets: r.rows, total: r.total });
-  } catch (e) {
-    return err(new ExternalServiceError('Failed to list tickets', e));
-  }
+    return ok({
+      tickets: result.rows,
+      total: result.total,
+      nextCursor: result.nextCursor ?? null,
+      previousCursor: result.previousCursor ?? null,
+    });
+  }, 'Failed to list tickets');
 }
 
 export interface UpdateTicketInput {
@@ -158,7 +183,7 @@ export async function createTicket(
   const MAX_CREATE_ATTEMPTS = 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-    const ticketId = `TKT-${randomUUID().slice(0, 12)}`;
+    const ticketId = `${TICKET_ID_PREFIX}${randomUUID().replaceAll('-', '').slice(0, TICKET_ID_HEX_LENGTH)}`;
     try {
       const row = await deps.tickets.insert({
         ticketId,

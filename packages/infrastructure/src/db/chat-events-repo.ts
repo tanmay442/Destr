@@ -1,4 +1,4 @@
-import { and, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
 import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
@@ -22,6 +22,7 @@ type Client = typeof db;
 
 const MAX_BUFFER = 100;
 const FLUSH_INTERVAL_MS = 5_000;
+const PURGE_BATCH_SIZE = 2_000;
 
 const TURN_BUCKET_LABELS = ['1', '2', '3', '4', '5+'] as const;
 
@@ -584,91 +585,204 @@ export class ChatEventBatcher implements ChatEventsRepo {
   }
 
   async purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }> {
-    const result = await this.client.execute(sql`
-      with removed_feedback as (
-        delete from ${chatFeedback}
-        where ${chatFeedback.turnId} in (
-          select ${chatEvents.turnId} from ${chatEvents}
-          where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
-        )
-        returning ${chatFeedback.turnId}
+    return {
+      deletedCount: await this.purgeEventRows(
+        sql`${chatEvents.createdAt} <= ${cutoff}`,
       ),
-      removed_reviews as (
-        delete from ${qualityReviews}
-        where ${qualityReviews.turnId} in (
-          select ${chatEvents.turnId} from ${chatEvents}
-          where ${chatEvents.createdAt} <= ${cutoff} and ${chatEvents.turnId} is not null
-        )
-        returning ${qualityReviews.id}
-      )
-      delete from ${chatEvents}
-      where ${chatEvents.createdAt} <= ${cutoff}
-      returning ${chatEvents.id}
-    `);
-    const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
-    return { deletedCount: rows.length };
+    };
   }
 
   async purgeUserData(userId: string): Promise<{ deletedCount: number }> {
-    const result = await this.client.execute(sql`
-      with affected_ticket_ids as materialized (
-        select ${tickets.ticketId} from ${tickets} where ${tickets.userId} = ${userId}
-      ),
-      removed_reviews_by_turn as (
-        delete from ${qualityReviews}
-        where ${qualityReviews.turnId} in (
-          select ${chatEvents.turnId} from ${chatEvents}
-          where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
+    if (!this.supportsBatchedDeletes()) return this.purgeUserDataWithSql(userId);
+
+    await this.deleteQualityReviewsByReviewer(userId);
+    await this.deleteAuditRowsForUser(userId);
+    await this.deleteTicketsForUser(userId);
+    const deletedCount = await this.purgeEventRows(eq(chatEvents.userId, userId));
+    await this.client.delete(users).where(eq(users.clerkUserId, userId));
+    return { deletedCount };
+  }
+
+  private supportsBatchedDeletes(): boolean {
+    return typeof this.client.select === 'function' && typeof this.client.delete === 'function';
+  }
+
+  private async purgeEventRows(condition: SQL): Promise<number> {
+    if (!this.supportsBatchedDeletes()) return this.purgeEventRowsWithSql(condition);
+
+    let deletedCount = 0;
+    while (true) {
+      const batch = await this.client
+        .select({ id: chatEvents.id, turnId: chatEvents.turnId })
+        .from(chatEvents)
+        .where(condition)
+        .limit(PURGE_BATCH_SIZE);
+      if (batch.length === 0) break;
+
+      const eventIds = batch.map((row) => row.id);
+      const turnIds = batch.flatMap((row) => (row.turnId === null ? [] : [row.turnId]));
+      if (turnIds.length > 0) {
+        await this.client.delete(chatFeedback).where(inArray(chatFeedback.turnId, turnIds));
+        await this.client.delete(qualityReviews).where(inArray(qualityReviews.turnId, turnIds));
+      }
+      const deleted = await this.client
+        .delete(chatEvents)
+        .where(inArray(chatEvents.id, eventIds))
+        .returning({ id: chatEvents.id });
+      deletedCount += deleted.length;
+    }
+    return deletedCount;
+  }
+
+  private async purgeEventRowsWithSql(condition: SQL): Promise<number> {
+    let deletedCount = 0;
+    while (true) {
+      const result = await this.client.execute(sql`
+        WITH batch AS MATERIALIZED (
+          SELECT ${chatEvents.id} AS id, ${chatEvents.turnId} AS turn_id
+          FROM ${chatEvents}
+          WHERE ${condition}
+          LIMIT ${PURGE_BATCH_SIZE}
+        ),
+        removed_feedback AS (
+          DELETE FROM ${chatFeedback}
+          USING batch
+          WHERE ${chatFeedback.turnId} = batch.turn_id
+        ),
+        removed_reviews AS (
+          DELETE FROM ${qualityReviews}
+          USING batch
+          WHERE ${qualityReviews.turnId} = batch.turn_id
         )
-        returning ${qualityReviews.id}
-      ),
-      removed_reviews_by_reviewer as (
-        delete from ${qualityReviews}
-        where ${qualityReviews.reviewerId} = ${userId}
-        returning ${qualityReviews.id}
-      ),
-      removed_feedback as (
-        delete from ${chatFeedback}
-        where ${chatFeedback.turnId} in (
-          select ${chatEvents.turnId} from ${chatEvents}
-          where ${chatEvents.userId} = ${userId} and ${chatEvents.turnId} is not null
+        DELETE FROM ${chatEvents}
+        USING batch
+        WHERE ${chatEvents.id} = batch.id
+        RETURNING ${chatEvents.id}
+      `);
+      const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
+      deletedCount += rows.length;
+      if (rows.length < PURGE_BATCH_SIZE) break;
+    }
+    return deletedCount;
+  }
+
+  private async deleteQualityReviewsByReviewer(userId: string): Promise<void> {
+    while (true) {
+      const batch = await this.client
+        .select({ id: qualityReviews.id })
+        .from(qualityReviews)
+        .where(eq(qualityReviews.reviewerId, userId))
+        .limit(PURGE_BATCH_SIZE);
+      if (batch.length === 0) break;
+      await this.client
+        .delete(qualityReviews)
+        .where(inArray(qualityReviews.id, batch.map((row) => row.id)));
+    }
+  }
+
+  private async deleteAuditRowsForUser(userId: string): Promise<void> {
+    const condition = sql`
+      ${auditEvents.actorId} = ${userId}
+      OR ${auditEvents.targetId} = ${userId}
+      OR (
+        ${auditEvents.kind} = 'ticket'
+        AND EXISTS (
+          SELECT 1
+          FROM ${tickets}
+          WHERE ${tickets.userId} = ${userId}
+            AND ${tickets.ticketId} = ${auditEvents.targetId}
         )
-        returning ${chatFeedback.turnId}
-      ),
-      removed_events as (
-        delete from ${chatEvents}
-        where ${chatEvents.userId} = ${userId}
-        returning ${chatEvents.id}
-      ),
-      removed_tickets as (
-        delete from ${tickets}
-        where ${tickets.userId} = ${userId}
-        returning ${tickets.id}
-      ),
-      removed_audit as (
-        delete from ${auditEvents}
-        where ${auditEvents.actorId} = ${userId}
-          or ${auditEvents.targetId} = ${userId}
-          or (${auditEvents.kind} = 'ticket' and ${auditEvents.targetId} in (
-            select ticket_id from affected_ticket_ids
-          ))
-        returning ${auditEvents.id}
-      ),
-      removed_user as (
-        delete from ${users}
-        where ${users.clerkUserId} = ${userId}
-        returning ${users.clerkUserId}
       )
-      select id from removed_events
-      where (select count(*) from removed_reviews_by_turn) >= 0
-        and (select count(*) from removed_reviews_by_reviewer) >= 0
-        and (select count(*) from removed_feedback) >= 0
-        and (select count(*) from removed_tickets) >= 0
-        and (select count(*) from removed_audit) >= 0
-        and (select count(*) from removed_user) >= 0
-    `);
-    const rows = (result as unknown as { rows: Array<{ id?: number }> }).rows ?? [];
-    return { deletedCount: rows.length };
+    `;
+    while (true) {
+      const batch = await this.client
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(condition)
+        .limit(PURGE_BATCH_SIZE);
+      if (batch.length === 0) break;
+      await this.client
+        .delete(auditEvents)
+        .where(inArray(auditEvents.id, batch.map((row) => row.id)));
+    }
+  }
+
+  private async deleteTicketsForUser(userId: string): Promise<void> {
+    while (true) {
+      const batch = await this.client
+        .select({ id: tickets.id })
+        .from(tickets)
+        .where(eq(tickets.userId, userId))
+        .limit(PURGE_BATCH_SIZE);
+      if (batch.length === 0) break;
+      await this.client
+        .delete(tickets)
+        .where(inArray(tickets.id, batch.map((row) => row.id)));
+    }
+  }
+
+  private async purgeUserDataWithSql(userId: string): Promise<{ deletedCount: number }> {
+    let deletedCount = 0;
+    while (true) {
+      const result = await this.client.execute(sql`
+        WITH affected_ticket_ids AS MATERIALIZED (
+          SELECT ${tickets.ticketId} FROM ${tickets} WHERE ${tickets.userId} = ${userId}
+        ),
+        batch AS MATERIALIZED (
+          SELECT ${chatEvents.id} AS id, ${chatEvents.turnId} AS turn_id
+          FROM ${chatEvents}
+          WHERE ${chatEvents.userId} = ${userId}
+          LIMIT ${PURGE_BATCH_SIZE}
+        ),
+        removed_reviews_by_turn AS (
+          DELETE FROM ${qualityReviews}
+          USING batch
+          WHERE ${qualityReviews.turnId} = batch.turn_id
+        ),
+        removed_reviews_by_reviewer AS (
+          DELETE FROM ${qualityReviews}
+          WHERE ${qualityReviews.reviewerId} = ${userId}
+        ),
+        removed_feedback AS (
+          DELETE FROM ${chatFeedback}
+          USING batch
+          WHERE ${chatFeedback.turnId} = batch.turn_id
+        ),
+        removed_events AS (
+          DELETE FROM ${chatEvents}
+          USING batch
+          WHERE ${chatEvents.id} = batch.id
+          RETURNING ${chatEvents.id}
+        ),
+        removed_tickets AS (
+          DELETE FROM ${tickets}
+          WHERE ${tickets.userId} = ${userId}
+        ),
+        removed_audit AS (
+          DELETE FROM ${auditEvents}
+          WHERE ${auditEvents.actorId} = ${userId}
+            OR ${auditEvents.targetId} = ${userId}
+            OR (${auditEvents.kind} = 'ticket' AND ${auditEvents.targetId} IN (
+              SELECT ticket_id FROM affected_ticket_ids
+            ))
+        ),
+        removed_user AS (
+          DELETE FROM ${users}
+          WHERE ${users.clerkUserId} = ${userId}
+        )
+        SELECT id FROM removed_events
+        WHERE (SELECT count(*) FROM removed_reviews_by_turn) >= 0
+          AND (SELECT count(*) FROM removed_reviews_by_reviewer) >= 0
+          AND (SELECT count(*) FROM removed_feedback) >= 0
+          AND (SELECT count(*) FROM removed_tickets) >= 0
+          AND (SELECT count(*) FROM removed_audit) >= 0
+          AND (SELECT count(*) FROM removed_user) >= 0
+      `);
+      const rows = (result as unknown as { rows: Array<{ id?: number }> }).rows ?? [];
+      deletedCount += rows.length;
+      if (rows.length < PURGE_BATCH_SIZE) break;
+    }
+    return { deletedCount };
   }
 
   async anonymizeUserData(userId: string): Promise<{ updatedCount: number }> {

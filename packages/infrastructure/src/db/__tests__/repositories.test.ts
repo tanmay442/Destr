@@ -15,10 +15,12 @@ import {
   ticketRepo,
   userRepo,
 } from '../repositories';
-import { isNeonUrl, redactDatabaseUrl } from '../pool';
+import { enforceNeonTlsVerification, isNeonUrl, redactDatabaseUrl } from '../pool';
 import { VECTOR_DIM } from '../schema-vector';
 
 const dialect = new PgDialect();
+const paginationTimestamp = new Date('2026-04-01T12:00:00.000Z');
+const timestamp = paginationTimestamp;
 
 function makeExecuteClient(rows: unknown[]) {
   const executed: SQL[] = [];
@@ -312,11 +314,147 @@ describe('auditRepo.list', () => {
   it('accepts non-conflicting filters and returns the queried rows', async () => {
     const client = makeSelectClient();
     const result = await auditRepo.list({ kind: 'document', documentId: 5, limit: 20, offset: 0 }, client);
-    expect(result).toEqual({ events: [], total: 0 });
+    expect(result).toEqual({ events: [], total: 0, nextCursor: null, previousCursor: null });
     await expect(auditRepo.list({ kind: 'ticket', ticketId: 'T-1', limit: 10, offset: 0 }, client)).resolves.toEqual({
       events: [],
       total: 0,
+      nextCursor: null,
+      previousCursor: null,
     });
+  });
+});
+
+describe('keyset list pagination', () => {
+  type QueryCall = {
+    where?: unknown;
+    orderBy: unknown[];
+    limit?: number;
+  };
+
+  function makePaginatedSelectClient(dataRows: unknown[], count = dataRows.length) {
+    const calls: QueryCall[] = [];
+    let selectIndex = 0;
+
+    function makeChain(rows: unknown[]): {
+      from: () => ReturnType<typeof makeChain>;
+      leftJoin: () => ReturnType<typeof makeChain>;
+      where: (condition?: unknown) => ReturnType<typeof makeChain>;
+      orderBy: (...orders: unknown[]) => ReturnType<typeof makeChain>;
+      limit: (value: number) => ReturnType<typeof makeChain>;
+      offset: (value: number) => Promise<unknown[]>;
+      then: (resolve: (value: unknown[]) => unknown) => Promise<unknown>;
+    } {
+      const call: QueryCall = { orderBy: [] };
+      calls.push(call);
+      const chain = {
+        from: () => chain,
+        leftJoin: () => chain,
+        where: (condition?: unknown) => {
+          call.where = condition;
+          return chain;
+        },
+        orderBy: (...orders: unknown[]) => {
+          call.orderBy = orders;
+          return chain;
+        },
+        limit: (value: number) => {
+          call.limit = value;
+          return chain;
+        },
+        offset: async () => rows,
+        then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
+      };
+      return chain;
+    }
+
+    const client = {
+      select: () => {
+        const rows = selectIndex++ === 0 ? dataRows : [{ count }];
+        return makeChain(rows);
+      },
+    };
+    return { client: client as never, calls };
+  }
+
+  it('keeps the nearest rows when a backward document query has an extra row', async () => {
+    const { client, calls } = makePaginatedSelectClient([
+      { id: 4, uploadedAt: timestamp },
+      { id: 5, uploadedAt: timestamp },
+      { id: 6, uploadedAt: timestamp },
+    ], 6);
+    const result = await listDocuments({
+      limit: 2,
+      before: { kind: 'documents', sortAt: timestamp, id: 3 },
+    }, client);
+
+    expect(result.documents.map((row) => row.id)).toEqual([5, 4]);
+    expect(result.total).toBe(6);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+    expect(calls[0]?.limit).toBe(3);
+  });
+
+  it('keeps the nearest rows when a backward ticket query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { id: 4, createdAt: timestamp },
+      { id: 5, createdAt: timestamp },
+      { id: 6, createdAt: timestamp },
+    ], 6);
+    const result = await ticketRepo.list({
+      limit: 2,
+      before: { kind: 'tickets', sortAt: timestamp, id: 3 },
+    }, client);
+
+    expect(result.rows.map((row) => row.id)).toEqual([5, 4]);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('keeps the nearest rows when a backward user query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { clerkUserId: 'user_3', createdAt: timestamp },
+      { clerkUserId: 'user_2', createdAt: timestamp },
+      { clerkUserId: 'user_1', createdAt: timestamp },
+    ], 6);
+    const result = await userRepo.list({
+      limit: 2,
+      before: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_4' },
+    }, client);
+
+    expect(result.rows.map((row) => row.clerkUserId)).toEqual(['user_2', 'user_3']);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('keeps the nearest rows when a backward audit query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { id: 4, at: timestamp, kind: 'document', action: 'created', actorId: null },
+      { id: 5, at: timestamp, kind: 'document', action: 'created', actorId: null },
+      { id: 6, at: timestamp, kind: 'document', action: 'created', actorId: null },
+    ], 6);
+    const result = await auditRepo.list({
+      limit: 2,
+      before: { kind: 'audit', sortAt: timestamp, id: 3 },
+    }, client);
+
+    expect(result.events.map((event) => event.id)).toEqual([5, 4]);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('passes compound cursor predicates to forward queries', async () => {
+    const { client, calls } = makePaginatedSelectClient([
+      { id: 2, uploadedAt: timestamp },
+    ], 2);
+    await listDocuments({
+      limit: 2,
+      cursor: { kind: 'documents', sortAt: timestamp, id: 3 },
+    }, client);
+
+    const query = dialect.sqlToQuery(calls[0]!.where as SQL);
+    expect(query.sql).toContain('"documents"."uploaded_at" < $1');
+    expect(query.sql).toContain('"documents"."id" < $3');
+    expect(calls[0]!.orderBy).toHaveLength(2);
   });
 });
 
@@ -352,6 +490,20 @@ describe('isNeonUrl', () => {
 
   it('throws a descriptive error for a malformed URL', () => {
     expect(() => isNeonUrl('not a url')).toThrow(/Invalid DATABASE_URL/);
+  });
+});
+
+describe('enforceNeonTlsVerification', () => {
+  it.each(['prefer', 'require', 'verify-ca'])('upgrades Neon sslmode=%s to verify-full', (sslMode) => {
+    const result = enforceNeonTlsVerification(
+      `postgres://user:pass@ep-example-pooler.us-east-1.aws.neon.tech/db?sslmode=${sslMode}`,
+    );
+    expect(new URL(result).searchParams.get('sslmode')).toBe('verify-full');
+  });
+
+  it('does not change non-Neon connection strings', () => {
+    const url = 'postgres://user:pass@localhost:5432/db?sslmode=require';
+    expect(enforceNeonTlsVerification(url)).toBe(url);
   });
 });
 

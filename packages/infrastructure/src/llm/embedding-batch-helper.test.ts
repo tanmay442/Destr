@@ -3,6 +3,7 @@ import { EMBEDDING_BATCH_SIZE } from '@app/domain';
 import { embedBatchWithModel } from './embedding-batch-helper';
 
 const embedManyMock = vi.hoisted(() => vi.fn());
+const sleepMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual<typeof import('ai')>('ai');
@@ -10,7 +11,7 @@ vi.mock('ai', async () => {
 });
 vi.mock('./retry', async () => {
   const actual = await vi.importActual<typeof import('./retry')>('./retry');
-  return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) };
+  return { ...actual, sleep: sleepMock };
 });
 
 const model = { modelId: 'mock-embed' } as never;
@@ -22,6 +23,7 @@ function embeddingsFor(values: string[]): number[][] {
 describe('embedBatchWithModel', () => {
   beforeEach(() => {
     embedManyMock.mockReset();
+    sleepMock.mockReset().mockResolvedValue(undefined);
   });
 
   it('embeds all values in batches of EMBEDDING_BATCH_SIZE', async () => {
@@ -35,6 +37,7 @@ describe('embedBatchWithModel', () => {
 
     expect(result).toHaveLength(total);
     expect(embedManyMock).toHaveBeenCalledTimes(3);
+    expect(embedManyMock.mock.calls[0]![0].maxRetries).toBe(0);
   });
 
   it('retries retryable 429 failures and succeeds on the retry', async () => {
@@ -50,11 +53,56 @@ describe('embedBatchWithModel', () => {
     expect(embedManyMock).toHaveBeenCalledTimes(2);
   });
 
+  it('honors Retry-After without sleeping past the shared budget', async () => {
+    const retryable = Object.assign(new Error('rate limited'), {
+      statusCode: 429,
+      responseHeaders: { 'Retry-After': '2' },
+    });
+    embedManyMock
+      .mockRejectedValueOnce(retryable)
+      .mockImplementation(async ({ values }: { values: string[] }) => ({
+        embeddings: embeddingsFor(values),
+      }));
+
+    vi.useFakeTimers();
+    try {
+      const pending = embedBatchWithModel(['a'], model, undefined, { maxDurationMs: 5_000 });
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(embedManyMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toHaveLength(1);
+      expect(embedManyMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts active batches at the shared budget and does not launch later batches', async () => {
+    vi.useFakeTimers();
+    try {
+      const values = Array.from({ length: EMBEDDING_BATCH_SIZE * 4 }, (_, i) => `v${i}`);
+      embedManyMock.mockImplementation(({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
+        }),
+      );
+
+      const pending = embedBatchWithModel(values, model, undefined, { maxDurationMs: 50 });
+      const rejection = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+      await vi.advanceTimersByTimeAsync(50);
+
+      await rejection;
+      expect(embedManyMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('surfaces non-retryable errors immediately with the failing batch offset', async () => {
     embedManyMock.mockRejectedValue(new Error('bad request'));
 
     await expect(embedBatchWithModel(['a'], model)).rejects.toThrow(
-      'Embedding request failed at offset 0 after 5 attempts',
+      'Embedding request failed at offset 0 after 3 attempts',
     );
     expect(embedManyMock).toHaveBeenCalledTimes(1);
   });

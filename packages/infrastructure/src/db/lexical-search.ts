@@ -11,7 +11,9 @@ export async function searchChunksByLexical(
 ): Promise<
   Array<{
     id: number;
+    chunkUid?: string;
     documentId: number;
+    documentUid?: string;
     fileName: string | null;
     page: number | null;
     sectionTitle: string | null;
@@ -28,7 +30,9 @@ export async function searchChunksByLexical(
   const result = await client.execute(sql`
     SELECT
       c.id AS id,
+      c.chunk_uid AS "chunkUid",
       c.document_id AS "documentId",
+      d.document_uid AS "documentUid",
       d.file_name AS "fileName",
       c.page AS page,
       c.section_title AS "sectionTitle",
@@ -49,7 +53,9 @@ export async function searchChunksByLexical(
   `);
   type RawRow = {
     id: number;
+    chunkUid?: string | null;
     documentId: number;
+    documentUid?: string | null;
     fileName: string | null;
     page: number | null;
     sectionTitle: string | null;
@@ -63,7 +69,9 @@ export async function searchChunksByLexical(
   const rows = (result as unknown as { rows?: RawRow[] }).rows ?? [];
   return rows.map((r) => ({
     id: Number(r.id),
+    ...(r.chunkUid ? { chunkUid: r.chunkUid } : {}),
     documentId: Number(r.documentId),
+    ...(r.documentUid ? { documentUid: r.documentUid } : {}),
     fileName: r.fileName ?? null,
     page: r.page != null ? Number(r.page) : null,
     sectionTitle: r.sectionTitle ?? null,

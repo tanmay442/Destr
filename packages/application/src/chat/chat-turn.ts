@@ -5,7 +5,6 @@ import type {
   streamText,
   tool,
   InferUIMessageChunk,
-  UIMessage,
 } from 'ai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { randomUUID } from 'node:crypto';
@@ -37,6 +36,10 @@ import { citationDocumentIds, type EmittedCitation } from './emit-citations';
 import { addGroundingEvidence, createGroundingEvidence, formatGroundingReference, type GroundingEvidence } from './grounding-evidence';
 import { ChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
+import { toChatUIMessages, type ChatInputMessage, type ChatUIMessage } from './message-types';
+import { createCacheLease, waitForCachedAnswer, type CacheLease } from './cache-lease';
+
+type UIMessage = ChatUIMessage;
 
 interface CachedAnswerPayload {
   text: string;
@@ -432,8 +435,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   if (!parsed.success) {
     return { kind: 'invalid-request', issues: parsed.error.issues };
   }
-  const messages = parsed.data.messages as unknown as UIMessage[];
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const inputMessages: ChatInputMessage[] = parsed.data.messages;
+  const messages = toChatUIMessages(inputMessages);
+  const lastUserMessage = [...inputMessages].reverse().find((m) => m.role === 'user');
   const lastUserText = lastUserMessage
     ? lastUserMessage.parts
         .filter((p) => p.type === 'text')
@@ -469,9 +473,27 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         fingerprint: cacheFingerprint(cfg, effectiveMode),
       })
     : null;
-  if (cacheKey) {
+  let cacheLease: CacheLease | null = null;
+  const releaseCacheLease = async (): Promise<void> => {
+    const lease = cacheLease;
+    cacheLease = null;
+    if (lease) await lease.release();
+  };
+  let cacheLeaseEscaped = false;
+
+  try {
+    if (cacheKey) {
     if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
-    const cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    let cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    if (!cached) {
+      const lease = createCacheLease(deps.answerCache, cacheKey, Math.ceil(MAX_DURATION_MS / 1000));
+      if (await lease.acquire()) {
+        cacheLease = lease;
+        cached = await deps.answerCache.get(cacheKey).catch(() => null);
+      } else {
+        cached = await waitForCachedAnswer(deps.answerCache, cacheKey);
+      }
+    }
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
@@ -502,7 +524,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           guardrail: null,
         }),
       });
-      const stream = deps.ai.createUIMessageStream({
+      await releaseCacheLease();
+      const stream = deps.ai.createUIMessageStream<UIMessage>({
         execute: ({ writer }) => {
           writer.write({ type: 'text-start', id: 'cached' });
           writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
@@ -511,16 +534,17 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             writer.write({
               type: 'data-citation',
               data: src,
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           if (historyPersisted && parsed.data.conversationId) {
             writer.write({
               type: 'data-conversation-persisted',
               data: { conversationId: parsed.data.conversationId },
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
         },
       });
+      cacheLeaseEscaped = true;
       return {
         kind: 'stream',
         stream,
@@ -528,7 +552,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       };
     }
     if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
-  }
+    }
 
   let prefetch: RetrievedChunk[] | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
@@ -580,7 +604,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }),
   });
 
-  const llmStream = result.toUIMessageStream({ originalMessages: messages });
+  const llmStream = result.toUIMessageStream<UIMessage>({ originalMessages: messages });
 
   const citationStream = new ReadableStream<InferUIMessageChunk<UIMessage>>({
     start(controller) {
@@ -592,16 +616,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (
-              metrics.firstTokenMs === null &&
-              typeof (value as { type?: unknown }).type === 'string' &&
-              String((value as { type?: unknown }).type).startsWith('text')
-            ) {
+            if (metrics.firstTokenMs === null && value.type.startsWith('text')) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
             }
-            const vt = (value as { type?: unknown; delta?: unknown }).type;
-            if (vt === 'text-delta' && typeof (value as { delta?: unknown }).delta === 'string') {
-              partialText += (value as { delta: string }).delta;
+            if (value.type === 'text-delta') {
+              partialText += value.delta;
             }
             controller.enqueue(value);
           }
@@ -611,22 +630,22 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             controller.enqueue({
               type: 'data-guardrail',
               data: { outOfDomain: false, notice: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
-            } as InferUIMessageChunk<UIMessage>);
+            });
             const tid = `deadline-${turnId}`;
-            controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({ type: 'text-start', id: tid });
             controller.enqueue({
               type: 'text-delta',
               id: tid,
               delta: TURN_DEADLINE_TEXT,
-            } as InferUIMessageChunk<UIMessage>);
-            controller.enqueue({ type: 'text-end', id: tid } as InferUIMessageChunk<UIMessage>);
+            });
+            controller.enqueue({ type: 'text-end', id: tid });
           }
           const finalCitations = dedupeCitations(capturedCitations);
           for (const src of finalCitations) {
             controller.enqueue({
               type: 'data-citation',
               data: src,
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
           const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
@@ -748,7 +767,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             controller.enqueue({
               type: 'data-conversation-persisted',
               data: { conversationId: parsed.data.conversationId },
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           if (
             turnId &&
@@ -818,19 +837,25 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }
             }
           } catch {}
+          await releaseCacheLease();
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
+        await releaseCacheLease();
         controller.close();
       })();
     },
   });
 
+  cacheLeaseEscaped = true;
   return {
     kind: 'stream',
     stream: citationStream,
     meta: { turnId, mode: persistedMode, cacheHit: false },
   };
+  } finally {
+    if (!cacheLeaseEscaped) await releaseCacheLease();
+  }
 }
 
 const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;

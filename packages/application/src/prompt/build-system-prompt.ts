@@ -19,7 +19,7 @@ You assist users by answering questions using two tools: \`searchDocumentation\`
 # Knowledge Ticket Rules
 Call \`createKnowledgeTicket\` if the user explicitly requests human escalation, or if documentation search yields no relevant results.
 Keep the \`issue\` field under 4,000 characters (truncate with \`…\` if exceeded) using this structure:
-- Context: <relevant context, tier, or workspace info>
+- Context: <relevant account, plan, or deployment context>
 - Question: <user's core request>
 - Attempted: <searches or clarifications tried>`;
 

@@ -19,6 +19,7 @@ export function createGroundingEvidence(): GroundingEvidence {
 }
 
 function chunkKey(chunk: RetrievedChunk): string {
+  if (chunk.chunkUid) return `uid:${chunk.chunkUid}`;
   if (Number.isInteger(chunk.id)) return `id:${chunk.id}`;
   return `fallback:${chunk.documentId ?? ''}:${chunk.source ?? ''}:${chunk.page ?? ''}:${chunk.content}`;
 }

@@ -27,6 +27,8 @@ function boundedNonnegativeNumber(value: number | undefined, fallback: number): 
 export interface RetrievedChunk {
   id: number;
   documentId: number;
+  documentUid?: string;
+  chunkUid?: string;
   fileName: string | null;
   page: number | null;
   sectionTitle: string | null;
@@ -71,6 +73,8 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
   return {
     id: r.id,
     documentId: r.documentId,
+    ...(r.documentUid ? { documentUid: r.documentUid } : {}),
+    ...(r.chunkUid ? { chunkUid: r.chunkUid } : {}),
     fileName: r.fileName,
     page: r.page,
     sectionTitle: r.sectionTitle,
@@ -118,6 +122,8 @@ async function resolveParents(
       chunk: {
         id: p.id,
         documentId: p.documentId,
+        ...(p.documentUid ? { documentUid: p.documentUid } : {}),
+        ...(p.chunkUid ? { chunkUid: p.chunkUid } : {}),
         fileName: p.fileName,
         page: child?.page ?? p.page,
         sectionTitle: child?.sectionTitle ?? p.sectionTitle,
@@ -223,11 +229,12 @@ function reciprocalRankFusion(
   rrfK: number,
   lexicalWeight: number,
 ): ScoredRow[] {
-  const fused = new Map<number, { row: RetrievedChunkRow; score: number }>();
+  const fused = new Map<string, { row: RetrievedChunkRow; score: number }>();
   const add = (rows: RetrievedChunkRow[], boost: number) => {
     rows.forEach((row, rank) => {
-      const prev = fused.get(row.id)?.score ?? 0;
-      fused.set(row.id, { row, score: prev + boost / (rrfK + rank + 1) });
+      const key = row.chunkUid ?? `id:${row.id}`;
+      const prev = fused.get(key)?.score ?? 0;
+      fused.set(key, { row, score: prev + boost / (rrfK + rank + 1) });
     });
   };
   add(vectorRows, 1);

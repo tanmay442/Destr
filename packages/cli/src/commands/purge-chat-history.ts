@@ -9,6 +9,17 @@ export interface PurgeHistoryParseResult {
   allowSubDay: boolean;
 }
 
+function parseDaysValue(value: string | undefined): number {
+  if (value === undefined || value === '' || value.startsWith('--')) {
+    throw new Error('Missing value for --days');
+  }
+  const days = Number(value);
+  if (!Number.isFinite(days)) {
+    throw new Error(`Invalid --days value: ${value}`);
+  }
+  return days;
+}
+
 export function parsePurgeHistoryArgs(argv: string[]): PurgeHistoryParseResult {
   let days: number | null = null;
   let yes = false;
@@ -16,19 +27,19 @@ export function parsePurgeHistoryArgs(argv: string[]): PurgeHistoryParseResult {
   let allowSubDay = false;
 
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a.startsWith('--days=')) {
-      days = Number(a.slice('--days='.length));
-    } else if (a === '--days') {
-      days = Number(argv[++i]);
-    } else if (a === '--yes' || a === '-y') {
+    const argument = argv[i]!;
+    if (argument.startsWith('--days=')) {
+      days = parseDaysValue(argument.slice('--days='.length));
+    } else if (argument === '--days') {
+      days = parseDaysValue(argv[++i]);
+    } else if (argument === '--yes' || argument === '-y') {
       yes = true;
-    } else if (a === '--dry-run') {
+    } else if (argument === '--dry-run') {
       dryRun = true;
-    } else if (a === '--allow-sub-day' || a === '--force') {
+    } else if (argument === '--allow-sub-day' || argument === '--force') {
       allowSubDay = true;
     } else {
-      throw new Error(`Unknown option: ${a}`);
+      throw new Error(`Unknown option: ${argument}`);
     }
   }
 

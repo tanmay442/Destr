@@ -4,6 +4,8 @@ import { CITATION_SNIPPET_MAX } from '@app/domain';
 export interface EmittedCitation {
   id: number;
   documentId: number;
+  documentUid?: string;
+  chunkUid?: string;
   similarity: number;
   snippet: string;
   fileName: string | null;
@@ -27,6 +29,8 @@ export function emitCitations(
   return chunks.map((m) => ({
     id: m.id,
     documentId: m.documentId,
+    ...(m.documentUid ? { documentUid: m.documentUid } : {}),
+    ...(m.chunkUid ? { chunkUid: m.chunkUid } : {}),
     similarity: m.similarity,
     snippet: truncateSnippet(m.content, snippetMax),
     fileName: m.fileName,

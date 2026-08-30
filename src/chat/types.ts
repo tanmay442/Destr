@@ -3,6 +3,8 @@ import type { UIMessage } from 'ai';
 export interface CitationData {
   id?: number;
   documentId?: number;
+  documentUid?: string;
+  chunkUid?: string;
   similarity: number;
   snippet: string;
   fileName?: string | null;

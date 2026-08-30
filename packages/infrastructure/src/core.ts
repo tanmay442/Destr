@@ -34,6 +34,7 @@ import {
   createQualityReviewsRepo,
   createChatHistoryRepo,
   resolveVectorDim,
+  defaultHasher,
 } from './db';
 import {
   getEmbeddingService,
@@ -85,7 +86,7 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     config,
     dbClient,
     documentRepo: createDocumentRepo(dbClient),
-    chunkRepo: createChunkRepo(dbClient, vectorDim),
+    chunkRepo: createChunkRepo(dbClient, vectorDim, defaultHasher),
     ticketRepo: createTicketRepo(dbClient),
     userRepo: createUserRepo(dbClient),
     auditRepo: createAuditRepo(dbClient),

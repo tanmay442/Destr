@@ -1,4 +1,5 @@
-import { eq, desc, ilike, or, sql, isNull, and, lt } from 'drizzle-orm';
+import { eq, desc, asc, gt, ilike, or, sql, isNull, and, lt } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { db } from './client';
 import {
   documents,
@@ -13,9 +14,24 @@ import {
   appSettings,
   type Document,
 } from './schema';
-import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
-import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, logger } from '@app/domain';
+import type {
+  TicketRow,
+  UserRow,
+  IngestStatus,
+  AuditEventInput,
+  AuditEventRecord,
+  AuditKind,
+  AuditListFilter,
+  TicketResponseTimes,
+  ChatEventRange,
+  DocumentListCursor,
+  Hasher,
+  TicketListCursor,
+  UserListCursor,
+} from '@app/domain';
+import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, encodeListCursor, logger } from '@app/domain';
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
+import { defaultHasher } from './stable-identities';
 import { createVectorSearch } from './vector-search';
 import { createLexicalSearch } from './lexical-search';
 import { resolveVectorDim } from './schema-vector';
@@ -25,6 +41,7 @@ export { searchChunksByVector } from './vector-search';
 export { searchChunksByLexical } from './lexical-search';
 export {
   insertChunks,
+  replaceChunks,
   getChunksByIds,
   getChunksByDocAndRange,
   getChunksByDocAndRanges,
@@ -37,10 +54,22 @@ export {
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-function whereAnd(parts: ReturnType<typeof eq>[]) {
+function whereAnd(parts: SQL[]) {
   if (parts.length === 0) return undefined;
   if (parts.length === 1) return parts[0];
   return and(...parts);
+}
+
+function requiredOr(...parts: SQL[]): SQL {
+  const condition = or(...parts);
+  if (condition === undefined) throw new Error('Expected at least one SQL condition');
+  return condition;
+}
+
+function requiredAnd(...parts: SQL[]): SQL {
+  const condition = and(...parts);
+  if (condition === undefined) throw new Error('Expected at least one SQL condition');
+  return condition;
 }
 
 function escapeLikePattern(value: string): string {
@@ -347,19 +376,46 @@ export async function listDocuments(
     search?: string | undefined;
     includeDeleted?: boolean | undefined;
     limit: number;
-    offset: number;
+    offset?: number | undefined;
+    cursor?: DocumentListCursor | undefined;
+    before?: DocumentListCursor | undefined;
   },
   client: Client = db,
-): Promise<{ documents: Array<Document & { hasBlob: boolean }>; total: number }> {
-  const whereParts = [] as ReturnType<typeof eq>[];
-  if (!opts.includeDeleted) whereParts.push(isNull(documents.deletedAt));
-  if (opts.search) whereParts.push(ilike(documents.fileName, `%${escapeLikePattern(opts.search)}%`));
-  const where = whereAnd(whereParts);
+): Promise<{
+  documents: Array<Document & { hasBlob: boolean }>;
+  total: number;
+  nextCursor: string | null;
+  previousCursor: string | null;
+}> {
+  if (opts.cursor !== undefined && opts.before !== undefined) {
+    throw new ValidationError('Only one pagination cursor may be provided');
+  }
+  const filterParts: SQL[] = [];
+  if (!opts.includeDeleted) filterParts.push(isNull(documents.deletedAt));
+  if (opts.search) filterParts.push(ilike(documents.fileName, `%${escapeLikePattern(opts.search)}%`));
+  const filter = whereAnd(filterParts);
+  const pageParts = [...filterParts];
+  const isBackward = opts.before !== undefined;
+  const position = opts.cursor ?? opts.before;
+  if (position !== undefined) {
+    pageParts.push(
+      isBackward
+        ? requiredOr(
+            gt(documents.uploadedAt, position.sortAt),
+            requiredAnd(eq(documents.uploadedAt, position.sortAt), gt(documents.id, position.id)),
+          )
+        : requiredOr(
+            lt(documents.uploadedAt, position.sortAt),
+            requiredAnd(eq(documents.uploadedAt, position.sortAt), lt(documents.id, position.id)),
+          ),
+    );
+  }
+  const pageFilter = whereAnd(pageParts);
   const limit = Math.min(Math.max(opts.limit, 1), 500);
-  const offset = Math.max(opts.offset, 0);
-  const rows = await client
+  const query = client
     .select({
       id: documents.id,
+      documentUid: documents.documentUid,
       fileName: documents.fileName,
       fileHash: documents.fileHash,
       uploadedBy: documents.uploadedBy,
@@ -371,15 +427,39 @@ export async function listDocuments(
       deletedAt: documents.deletedAt,
     })
     .from(documents)
-    .where(where)
-    .orderBy(desc(documents.uploadedAt), desc(documents.id))
-    .limit(limit)
-    .offset(offset);
+    .where(pageFilter)
+    .orderBy(
+      ...(isBackward
+        ? [asc(documents.uploadedAt), asc(documents.id)]
+        : [desc(documents.uploadedAt), desc(documents.id)]),
+    )
+    .limit(limit + 1);
+  const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+    ? await query.offset(Math.max(opts.offset, 0))
+    : await query;
+  const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+  const hasExtra = queriedRows.length > limit;
+  const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
   const total = (await client
     .select({ count: sql<number>`count(*)::int` })
     .from(documents)
-    .where(where))[0]?.count ?? 0;
-  return { documents: rows as unknown as Array<Document & { hasBlob: boolean }>, total };
+    .where(filter))[0]?.count ?? 0;
+  const firstRow = pageRows[0];
+  const lastRow = pageRows[pageRows.length - 1];
+  const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+  const hasPrevious = isBackward
+    ? hasExtra
+    : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+  return {
+    documents: pageRows as unknown as Array<Document & { hasBlob: boolean }>,
+    total,
+    nextCursor: hasNext && lastRow
+      ? encodeListCursor({ kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id })
+      : null,
+    previousCursor: hasPrevious && firstRow
+      ? encodeListCursor({ kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id })
+      : null,
+  };
 }
 
 export const ticketRepo = {
@@ -396,18 +476,44 @@ export const ticketRepo = {
     assignee?: string | null | undefined;
     search?: string | undefined;
     limit: number;
-    offset: number;
-  }, client: Client = db): Promise<{ rows: TicketRow[]; total: number }> {
-    const limit = Math.min(Math.max(opts.limit, 1), 500);
-    const offset = Math.max(opts.offset, 0);
-    const whereParts = [] as ReturnType<typeof eq>[];
-    if (opts.status) whereParts.push(eq(tickets.status, opts.status));
-    if (opts.assignee !== undefined && opts.assignee !== null) {
-      whereParts.push(eq(tickets.assignedTo, opts.assignee));
+    offset?: number | undefined;
+    cursor?: TicketListCursor | undefined;
+    before?: TicketListCursor | undefined;
+  }, client: Client = db): Promise<{
+    rows: TicketRow[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
+    if (opts.cursor !== undefined && opts.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
     }
-    if (opts.search) whereParts.push(ilike(tickets.issue, `%${escapeLikePattern(opts.search)}%`));
-    const where = whereAnd(whereParts);
-    const rows = await client
+    const limit = Math.min(Math.max(opts.limit, 1), 500);
+    const filterParts: SQL[] = [];
+    if (opts.status) filterParts.push(eq(tickets.status, opts.status));
+    if (opts.assignee !== undefined && opts.assignee !== null) {
+      filterParts.push(eq(tickets.assignedTo, opts.assignee));
+    }
+    if (opts.search) filterParts.push(ilike(tickets.issue, `%${escapeLikePattern(opts.search)}%`));
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = opts.before !== undefined;
+    const position = opts.cursor ?? opts.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              gt(tickets.createdAt, position.sortAt),
+              requiredAnd(eq(tickets.createdAt, position.sortAt), gt(tickets.id, position.id)),
+            )
+          : requiredOr(
+              lt(tickets.createdAt, position.sortAt),
+              requiredAnd(eq(tickets.createdAt, position.sortAt), lt(tickets.id, position.id)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
+    const query = client
       .select({
         id: tickets.id,
         ticketId: tickets.ticketId,
@@ -421,15 +527,39 @@ export const ticketRepo = {
         createdAt: tickets.createdAt,
       })
       .from(tickets)
-      .where(where)
-      .orderBy(desc(tickets.createdAt), desc(tickets.id))
-      .limit(limit)
-      .offset(offset);
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [asc(tickets.createdAt), asc(tickets.id)]
+          : [desc(tickets.createdAt), desc(tickets.id)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+      ? await query.offset(Math.max(opts.offset, 0))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
     const total = (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(tickets)
-      .where(where))[0]?.count ?? 0;
-    return { rows: rows as unknown as TicketRow[], total };
+      .where(filter))[0]?.count ?? 0;
+    const firstRow = pageRows[0];
+    const lastRow = pageRows[pageRows.length - 1];
+    const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+    return {
+      rows: pageRows as unknown as TicketRow[],
+      total,
+      nextCursor: hasNext && lastRow
+        ? encodeListCursor({ kind: 'tickets', sortAt: lastRow.createdAt, id: lastRow.id })
+        : null,
+      previousCursor: hasPrevious && firstRow
+        ? encodeListCursor({ kind: 'tickets', sortAt: firstRow.createdAt, id: firstRow.id })
+        : null,
+    };
   },
   async latest(client: Client = db): Promise<{ id: number; ticketId: string } | null> {
     const [latest] = await client
@@ -673,28 +803,86 @@ export const userRepo = {
   async touchLastSeen(clerkUserId: string, client: Client = db): Promise<void> {
     await client.update(users).set({ lastSeenAt: sql`now()` }).where(eq(users.clerkUserId, clerkUserId));
   },
-  async list(opts: { search?: string | undefined; limit: number; offset: number }, client: Client = db): Promise<{ rows: UserRow[]; total: number }> {
+  async list(opts: {
+    search?: string | undefined;
+    limit: number;
+    offset?: number | undefined;
+    cursor?: UserListCursor | undefined;
+    before?: UserListCursor | undefined;
+  }, client: Client = db): Promise<{
+    rows: UserRow[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
+    if (opts.cursor !== undefined && opts.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const search = opts.search?.trim();
-    const where = search
-      ? or(
+    const filterParts: SQL[] = [];
+    if (search) {
+      filterParts.push(
+        requiredOr(
           ilike(users.email, `%${escapeLikePattern(search)}%`),
           ilike(users.name, `%${escapeLikePattern(search)}%`),
-        )
-      : undefined;
+        ),
+      );
+    }
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = opts.before !== undefined;
+    const position = opts.cursor ?? opts.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              lt(users.createdAt, position.sortAt),
+              requiredAnd(eq(users.createdAt, position.sortAt), lt(users.clerkUserId, position.clerkUserId)),
+            )
+          : requiredOr(
+              gt(users.createdAt, position.sortAt),
+              requiredAnd(eq(users.createdAt, position.sortAt), gt(users.clerkUserId, position.clerkUserId)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
     const limit = Math.min(Math.max(opts.limit, 1), MAX_LIST_LIMIT);
-    const offset = Math.max(opts.offset, 0);
-    const rows = (await client
+    const query = client
       .select()
       .from(users)
-      .where(where)
-      .orderBy(users.createdAt)
-      .limit(limit)
-      .offset(offset)) as UserRow[];
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [desc(users.createdAt), desc(users.clerkUserId)]
+          : [asc(users.createdAt), asc(users.clerkUserId)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+      ? await query.offset(Math.max(opts.offset, 0))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = (isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit)) as UserRow[];
     const [totalRow] = await client
       .select({ count: sql<number>`count(*)::int` })
       .from(users)
-      .where(where);
-    return { rows, total: totalRow?.count ?? 0 };
+      .where(filter);
+    const firstRow = pageRows[0];
+    const lastRow = pageRows[pageRows.length - 1];
+    const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+    return {
+      rows: pageRows,
+      total: totalRow?.count ?? 0,
+      nextCursor: hasNext && lastRow
+        ? encodeListCursor({ kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId })
+        : null,
+      previousCursor: hasPrevious && firstRow
+        ? encodeListCursor({ kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId })
+        : null,
+    };
   },
   async countAll(client: Client = db): Promise<number> {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(users);
@@ -762,7 +950,12 @@ export const auditRepo = {
       client,
     );
   },
-  async list(input: AuditListFilter, client: Client = db): Promise<{ events: AuditEventRecord[]; total: number }> {
+  async list(input: AuditListFilter, client: Client = db): Promise<{
+    events: AuditEventRecord[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
     if (input.kind !== undefined && !['document', 'ticket', 'user', 'settings'].includes(input.kind)) {
       throw new ValidationError(`Invalid audit kind: ${input.kind}`);
     }
@@ -775,22 +968,41 @@ export const auditRepo = {
     if (input.documentId !== undefined && input.kind !== undefined && input.kind !== 'document') {
       throw new ValidationError('Cannot filter by documentId with kind different from document');
     }
-    const parts = [] as ReturnType<typeof eq>[];
-    if (input.kind) parts.push(eq(auditEvents.kind, input.kind));
-    if (input.action) parts.push(eq(auditEvents.action, input.action));
-    if (input.actorId) parts.push(eq(auditEvents.actorId, input.actorId));
-    if (input.from) parts.push(sql`${auditEvents.at} >= ${input.from}` as unknown as ReturnType<typeof eq>);
-    if (input.to) parts.push(sql`${auditEvents.at} <= ${input.to}` as unknown as ReturnType<typeof eq>);
+    if (input.cursor !== undefined && input.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
+    const filterParts: SQL[] = [];
+    if (input.kind) filterParts.push(eq(auditEvents.kind, input.kind));
+    if (input.action) filterParts.push(eq(auditEvents.action, input.action));
+    if (input.actorId) filterParts.push(eq(auditEvents.actorId, input.actorId));
+    if (input.from) filterParts.push(sql`${auditEvents.at} >= ${input.from}`);
+    if (input.to) filterParts.push(sql`${auditEvents.at} <= ${input.to}`);
     if (input.documentId !== undefined) {
-      parts.push(eq(auditEvents.kind, 'document'), eq(auditEvents.targetId, String(input.documentId)));
+      filterParts.push(eq(auditEvents.kind, 'document'), eq(auditEvents.targetId, String(input.documentId)));
     }
     if (input.ticketId !== undefined) {
-      parts.push(eq(auditEvents.kind, 'ticket'), eq(auditEvents.targetId, input.ticketId));
+      filterParts.push(eq(auditEvents.kind, 'ticket'), eq(auditEvents.targetId, input.ticketId));
     }
-    const where = whereAnd(parts);
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = input.before !== undefined;
+    const position = input.cursor ?? input.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              gt(auditEvents.at, position.sortAt),
+              requiredAnd(eq(auditEvents.at, position.sortAt), gt(auditEvents.id, position.id)),
+            )
+          : requiredOr(
+              lt(auditEvents.at, position.sortAt),
+              requiredAnd(eq(auditEvents.at, position.sortAt), lt(auditEvents.id, position.id)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
     const limit = Math.min(Math.max(input.limit, 1), MAX_AUDIT_LIMIT);
-    const offset = Math.max(input.offset, 0);
-    const rows = await client
+    const query = client
       .select({
         id: auditEvents.id,
         kind: auditEvents.kind,
@@ -804,26 +1016,50 @@ export const auditRepo = {
       })
       .from(auditEvents)
       .leftJoin(users, eq(users.clerkUserId, auditEvents.actorId))
-      .where(where)
-      .orderBy(desc(auditEvents.at), desc(auditEvents.id))
-      .limit(limit)
-      .offset(offset);
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [asc(auditEvents.at), asc(auditEvents.id)]
+          : [desc(auditEvents.at), desc(auditEvents.id)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && input.cursor === undefined && input.offset !== undefined
+      ? await query.offset(Math.max(input.offset, 0))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
     const total = (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(auditEvents)
-      .where(where))[0]?.count ?? 0;
-    const events = rows.map((r) => ({
-      id: r.id,
-      kind: r.kind as AuditKind,
-      action: r.action,
-      actorId: r.actorId,
-      actorName: r.actorName ?? null,
-      targetType: r.targetType ?? null,
-      targetId: r.targetId ?? null,
-      details: (r.details ?? {}) as Record<string, unknown>,
-      at: r.at instanceof Date ? r.at : new Date(r.at),
+      .where(filter))[0]?.count ?? 0;
+    const events = pageRows.map((row) => ({
+      id: row.id,
+      kind: row.kind as AuditKind,
+      action: row.action,
+      actorId: row.actorId,
+      actorName: row.actorName ?? null,
+      targetType: row.targetType ?? null,
+      targetId: row.targetId ?? null,
+      details: (row.details ?? {}) as Record<string, unknown>,
+      at: row.at instanceof Date ? row.at : new Date(row.at),
     }));
-    return { events, total };
+    const firstEvent = events[0];
+    const lastEvent = events[events.length - 1];
+    const hasNext = isBackward ? events.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (input.cursor !== undefined || (input.offset ?? 0) > 0) && events.length > 0;
+    return {
+      events,
+      total,
+      nextCursor: hasNext && lastEvent
+        ? encodeListCursor({ kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id })
+        : null,
+      previousCursor: hasPrevious && firstEvent
+        ? encodeListCursor({ kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id })
+        : null,
+    };
   },
   async recordDeadLetter(
     input: { kind: AuditKind; payload: unknown; error: string },
@@ -888,6 +1124,14 @@ export function createChunkRepositoryCompat(
     getByDocAndRange: (documentId, start, end) => store.getByDocAndRange(documentId, start, end),
     getByDocAndRanges: (ranges) => store.getByDocAndRanges(ranges),
     insertMany: (rows) => store.insertMany(rows),
+    replaceMany: async (documentId, rows) => {
+      if (store.replaceMany) {
+        await store.replaceMany(documentId, rows);
+        return;
+      }
+      await store.deleteByDocumentId(documentId);
+      await store.insertMany(rows);
+    },
     deleteByDocumentId: (documentId) => store.deleteByDocumentId(documentId),
     countForDocuments: (ids) => store.countForDocuments(ids),
     countForAll: () => store.countForAll(),
@@ -896,9 +1140,13 @@ export function createChunkRepositoryCompat(
   };
 }
 
-export function createChunkRepo(client: Client, vectorDim?: number): ChunkRepository {
+export function createChunkRepo(
+  client: Client,
+  vectorDim?: number,
+  hasher: Hasher = defaultHasher,
+): ChunkRepository {
   return createChunkRepositoryCompat(
-    createChunkStore(client, vectorDim),
+    createChunkStore(client, vectorDim, hasher),
     createVectorSearch(client, vectorDim),
     createLexicalSearch(client),
   );
@@ -947,10 +1195,14 @@ export function createUserRepo(client: Client = db): UserRepository {
   };
 }
 
-export function createRepositoryAdapters(client: Client = db, vectorDim?: number) {
+export function createRepositoryAdapters(
+  client: Client = db,
+  vectorDim?: number,
+  hasher: Hasher = defaultHasher,
+) {
   return {
     documents: createDocumentRepo(client),
-    chunks: createChunkRepo(client, vectorDim),
+    chunks: createChunkRepo(client, vectorDim, hasher),
     audit: createAuditRepo(client),
     tickets: createTicketRepo(client),
     users: createUserRepo(client),

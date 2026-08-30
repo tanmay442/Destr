@@ -1,4 +1,4 @@
-/** Env-independent defaults. Re-exported at runtime by `@app/infrastructure/config`; keep both in sync. */
+/** Env-independent defaults consumed by domain and infrastructure configuration. */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
 export const UPLOAD_CHUNKED_MAX_MD_BYTES = 25_000_000;
@@ -18,6 +18,8 @@ export const EMBEDDING_BATCH_SIZE = 50;
 export const MAX_AUDIT_LIMIT = 200;
 export const MAX_LIST_LIMIT = 100;
 export const MAX_TICKET_NOTES_LENGTH = 10_000;
+export const TICKET_ID_PREFIX = 'TKT-';
+export const TICKET_ID_HEX_LENGTH = 12;
 export const INGEST_CHUNK_SIZE = 800;
 export const PARENT_CHUNK_SIZE = 1800;
 export const CHILD_CHUNK_SIZE = 400;
