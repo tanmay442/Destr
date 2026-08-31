@@ -33,16 +33,16 @@ function assertDimension(modelId: string, embeddings: number[][], vectorDim?: nu
 
 function createOllamaEmbeddingService(vectorDim?: number): EmbeddingService {
   return {
-    async embed(value: string): Promise<number[]> {
+    async embed(value: string, opts: { signal?: AbortSignal } = {}): Promise<number[]> {
       const model = getOllamaEmbeddingModel();
-      const embeddings = await embedBatchWithModel([value], model);
+      const embeddings = await embedBatchWithModel([value], model, undefined, opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings[0] ?? [];
     },
 
-    async embedBatch(values: string[]): Promise<number[][]> {
+    async embedBatch(values: string[], opts: { signal?: AbortSignal } = {}): Promise<number[][]> {
       const model = getOllamaEmbeddingModel();
-      const embeddings = await embedBatchWithModel(values, model);
+      const embeddings = await embedBatchWithModel(values, model, undefined, opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings;
     },

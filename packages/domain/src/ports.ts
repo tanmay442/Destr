@@ -205,7 +205,7 @@ export interface InsertChunkInput {
 export interface VectorSearch {
   searchByVector(
     embedding: number[],
-    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+    opts: { threshold: number; limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
 }
 
@@ -213,23 +213,25 @@ export interface VectorSearch {
 export interface LexicalSearch {
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number } },
+    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
 }
 
 /** Relational chunk CRUD (parent/child self-FK resolution, ranges, counts). */
 export interface ChunkStore {
   /** Fetch chunks by ids. Caller overrides `similarity`; used to resolve child→parent. */
-  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  getByIds(ids: number[], opts?: { signal?: AbortSignal }): Promise<RetrievedChunkRow[]>;
   /** Fetch chunks in `[start, end]` range. Used by window parent-child mode. */
   getByDocAndRange(
     documentId: number,
     start: number,
     end: number,
+    opts?: { signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   /** Batched getByDocAndRange. Returns map keyed by `documentId:start:end`. */
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
+    opts?: { signal?: AbortSignal },
   ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(rows: InsertChunkInput[]): Promise<void>;
   /** Upsert a complete document chunk set by stable UID, then remove stale rows. */
@@ -245,20 +247,22 @@ export interface ChunkStore {
 export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore {
   searchByVector(
     embedding: number[],
-    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+    opts: { threshold: number; limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number } },
+    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
-  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  getByIds(ids: number[], opts?: { signal?: AbortSignal }): Promise<RetrievedChunkRow[]>;
   getByDocAndRange(
     documentId: number,
     start: number,
     end: number,
+    opts?: { signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
+    opts?: { signal?: AbortSignal },
   ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(rows: InsertChunkInput[]): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
@@ -726,8 +730,8 @@ export interface AnswerCache {
 }
 
 export interface EmbeddingService {
-  embed(value: string): Promise<number[]>;
-  embedBatch(values: string[]): Promise<number[][]>;
+  embed(value: string, opts?: { signal?: AbortSignal }): Promise<number[]>;
+  embedBatch(values: string[], opts?: { signal?: AbortSignal }): Promise<number[][]>;
 }
 
 /** A reranked document with original index and relevance score. */

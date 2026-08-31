@@ -15,6 +15,34 @@ import { sanitizePagination } from '../service-result';
 const MAX_SEARCH_LIMIT = 50;
 const MAX_CANDIDATE_LIMIT = 500;
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Search aborted');
+}
+
+function abortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return operation;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Search aborted'));
+    };
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
   const candidate = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
   return Math.min(Math.max(candidate, 1), maximum);
@@ -51,6 +79,7 @@ export interface SearchDeps {
 }
 
 export interface SearchOpts {
+  signal?: AbortSignal | undefined;
   threshold?: number | undefined;
   limit?: number | undefined;
   /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
@@ -89,6 +118,7 @@ async function resolveParents(
   hits: ScoredRow[],
   deps: SearchDeps,
   topN: number,
+  signal?: AbortSignal,
 ): Promise<RetrievedChunk[]> {
   const childHits = hits.filter((h) => h.parentChunkId != null);
   const flatHits = hits.filter((h) => h.parentChunkId == null);
@@ -97,7 +127,10 @@ async function resolveParents(
   }
 
   const parentIds = [...new Set(childHits.map((h) => h.parentChunkId as number))];
-  const parents = await deps.chunks.getByIds(parentIds);
+  const parents = await abortable(
+    signal ? deps.chunks.getByIds(parentIds, { signal }) : deps.chunks.getByIds(parentIds),
+    signal,
+  );
   const parentById = new Map(parents.map((p) => [p.id, p]));
 
   const bestSimilarity = new Map<number, number>();
@@ -156,10 +189,14 @@ async function resolveWindow(
   hits: ScoredRow[],
   deps: SearchDeps,
   radius: number,
+  signal?: AbortSignal,
 ): Promise<RetrievedChunk[]> {
   const boundedRadius = Math.max(0, Math.floor(radius));
   const ranges = hits.map((h) => ({ documentId: h.documentId, start: h.chunkIndex - boundedRadius, end: h.chunkIndex + boundedRadius }));
-  const ranged = await deps.chunks.getByDocAndRanges(ranges);
+  const ranged = await abortable(
+    signal ? deps.chunks.getByDocAndRanges(ranges, { signal }) : deps.chunks.getByDocAndRanges(ranges),
+    signal,
+  );
   const seen = new Set<number>();
   const resolved: RetrievedChunk[] = [];
   for (const h of hits) {
@@ -204,9 +241,10 @@ async function rerankRows(
   reranker: Reranker,
   threshold: number,
   vectorIds: Set<number>,
+  signal?: AbortSignal,
 ): Promise<RetrievedChunkRow[]> {
   try {
-    const ranked = await reranker.rank(query, rows.map((r) => r.content));
+    const ranked = await abortable(reranker.rank(query, rows.map((r) => r.content)), signal);
     const ordered = [...ranked]
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .map((r) => rows[r.index])
@@ -250,6 +288,7 @@ export async function searchChunks(
   opts: SearchOpts,
   deps: SearchDeps,
 ): Promise<Result<RetrievedChunk[]>> {
+  throwIfAborted(opts.signal);
   if (query.trim() === '') {
     return ok([]);
   }
@@ -263,8 +302,12 @@ export async function searchChunks(
 
   let embedding: number[];
   try {
-    embedding = await deps.embeddings.embed(query);
+    embedding = await abortable(
+      opts.signal ? deps.embeddings.embed(query, { signal: opts.signal }) : deps.embeddings.embed(query),
+      opts.signal,
+    );
   } catch (cause) {
+    throwIfAborted(opts.signal);
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
 
@@ -273,9 +316,19 @@ export async function searchChunks(
   const runHybrid = hybridEnabled && searchByLexical != null;
 
   // Run vector + lexical concurrently; lexical failure falls back to vector-only.
-  const vectorPromise = deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit });
+  const vectorPromise = abortable(
+    opts.signal
+      ? deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit, signal: opts.signal })
+      : deps.chunks.searchByVector(embedding, { threshold: preThreshold, limit: candidateLimit }),
+    opts.signal,
+  );
   const lexicalPromise = runHybrid
-    ? searchByLexical(query, { limit: candidateLimit }).then(
+    ? abortable(
+        opts.signal
+          ? searchByLexical(query, { limit: candidateLimit, signal: opts.signal })
+          : searchByLexical(query, { limit: candidateLimit }),
+        opts.signal,
+      ).then(
         (rows) => ({ ok: true as const, rows }),
         (cause: unknown) => ({ ok: false as const, cause }),
       )
@@ -286,11 +339,13 @@ export async function searchChunks(
   try {
     vectorRows = await vectorPromise;
   } catch (cause) {
+    throwIfAborted(opts.signal);
     vectorError = cause;
   }
   const vectorIds = new Set(vectorRows.map((r) => r.id));
 
   const lexicalResult = await lexicalPromise;
+  throwIfAborted(opts.signal);
   if (vectorError !== undefined) {
     if (!runHybrid || lexicalResult === null || !lexicalResult.ok) {
       return err(new ExternalServiceError('Vector search failed', vectorError));
@@ -331,14 +386,20 @@ async function capAndResolve(
   deps: SearchDeps,
   vectorIds: Set<number>,
 ): Promise<Result<RetrievedChunk[]>> {
+  throwIfAborted(opts.signal);
   const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
   const capped = deps.reranker
-    ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds)
+    ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds, opts.signal)
     : sortByRelevance(rows).slice(0, topN);
 
   const resolved =
     (opts.mode ?? PARENT_CHILD_MODE) === 'window'
-      ? await resolveWindow(capped, deps, boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT))
-      : await resolveParents(capped, deps, topN);
+      ? await resolveWindow(
+          capped,
+          deps,
+          boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT),
+          opts.signal,
+        )
+      : await resolveParents(capped, deps, topN, opts.signal);
   return ok(resolved);
 }

@@ -240,7 +240,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
   return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
 }
 
-function getAgenticDeps(cfg: AppConfig): AgenticDeps {
+function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
   const aux = Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
@@ -254,6 +254,7 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
     similarityThreshold: cfg.similarityThreshold,
     hybridEnabled: cfg.hybridEnabled,
+    signal,
   };
 }
 
@@ -283,7 +284,7 @@ function createComposition() {
         },
         getSearchDeps(cfg),
       ),
-    agenticSearch: async (cfg: AppConfig, query: string) => {
+    agenticSearch: async (cfg: AppConfig, query: string, opts: { signal?: AbortSignal | undefined } = {}) => {
       if (process.env.AGENTIC_ENABLED === 'false') {
         const fallback = await bind(
           searchChunks,
@@ -297,6 +298,7 @@ function createComposition() {
             lexicalWeight: LEXICAL_WEIGHT,
             rerankTopN: RERANK_TOP_N,
             candidateLimit: CANDIDATE_POOL,
+            signal: opts.signal,
           },
           getSearchDeps(cfg),
         );
@@ -313,7 +315,7 @@ function createComposition() {
         });
       }
       try {
-        return await agenticSearch(query, getAgenticDeps(cfg));
+        return await agenticSearch(query, getAgenticDeps(cfg, opts.signal));
       } catch (e) {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
@@ -447,6 +449,7 @@ function createComposition() {
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
     answerCache: core.answerCache,
+    turnResultCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
     chatFeedbackRepo,

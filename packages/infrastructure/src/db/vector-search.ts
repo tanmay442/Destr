@@ -1,13 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client';
 import { resolveVectorDimForClient } from './schema-vector';
+import { abortableQuery } from './query-cancellation';
 import type { VectorSearch } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function searchChunksByVector(
   embedding: number[],
-  opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+  opts: { threshold: number; limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   client: Client = db,
   vectorDim?: number,
 ): Promise<
@@ -36,10 +37,11 @@ export async function searchChunksByVector(
   }
   const vectorLiteral = `[${embedding.join(',')}]`;
   const candidatePool = Math.max(opts.limit * 10, 50);
-  await client.execute(
-    sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`,
+  await abortableQuery(
+    client.execute(sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`),
+    opts.signal,
   );
-  const result = await client.execute(sql`
+  const result = await abortableQuery(client.execute(sql`
     WITH candidates AS (
       SELECT ch.id
       FROM chunks ch
@@ -72,7 +74,7 @@ export async function searchChunksByVector(
       ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     ORDER BY similarity DESC
     LIMIT ${opts.limit}
-  `);
+  `), opts.signal);
   type RawRow = {
     id: number;
     chunkUid?: string | null;

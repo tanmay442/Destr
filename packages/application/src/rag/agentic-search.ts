@@ -5,6 +5,7 @@ import { AGENTIC_RETRIEVE_LIMIT, AGENTIC_MAX_RETRIES, AGENT_STEP_BUDGET } from '
 
 export interface AgenticDeps {
   search: SearchDeps;
+  signal?: AbortSignal | undefined;
   queryRewriter: QueryRewriter;
   retrieveLimit?: number;
   maxRetries?: number;
@@ -27,10 +28,39 @@ type PassOutcome =
   | { kind: 'empty' }
   | { kind: 'kept'; chunks: RetrievedChunk[] };
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Agentic search aborted');
+}
+
+function abortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return operation;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Agentic search aborted'));
+    };
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,
 ): Promise<Result<AgenticResult>> {
+  throwIfAborted(deps.signal);
   if (originalQuery.trim() === '') {
     return ok({
       chunks: [],
@@ -48,7 +78,7 @@ export async function agenticSearch(
     const tryRewrite = async (query: string): Promise<string> => {
       if (!rewriteOn) return query;
       try {
-        return await deps.queryRewriter.rewrite(query);
+        return await abortable(deps.queryRewriter.rewrite(query), deps.signal);
       } catch (cause) {
         logger.debug('agentic rewrite failed', { error: String(cause), query });
         return query;
@@ -65,6 +95,7 @@ export async function agenticSearch(
           limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT,
           threshold: deps.similarityThreshold,
           hybridEnabled: deps.hybridEnabled,
+          signal: deps.signal,
         },
         deps.search,
       );
@@ -104,6 +135,7 @@ export async function agenticSearch(
       resultState: 'ok',
     });
   } catch (e) {
+    throwIfAborted(deps.signal);
     return err(new ExternalServiceError('Agentic search failed', e));
   }
 }

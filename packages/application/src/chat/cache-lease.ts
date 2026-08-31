@@ -84,18 +84,42 @@ export function createCacheLease(cache: AnswerCache, key: string, ttlSec: number
   };
 }
 
+export interface CacheWaitOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+function wait(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function waitForCachedAnswer(
   cache: AnswerCache,
   key: string,
-  timeoutMs = 500,
+  options: CacheWaitOptions = {},
 ): Promise<string | null> {
-  const deadline = Date.now() + Math.max(0, timeoutMs);
+  const deadline = Date.now() + Math.max(0, options.timeoutMs ?? 45_000);
   let delayMs = 25;
   while (Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(delayMs, Math.max(1, deadline - Date.now()))));
+    await wait(
+      Math.min(delayMs, Math.max(1, deadline - Date.now())),
+      options.signal,
+    );
     const value = await cache.get(key).catch(() => null);
     if (value) return value;
-    delayMs = Math.min(delayMs * 2, 100);
+    delayMs = Math.min(delayMs * 2, 250);
   }
   return null;
 }

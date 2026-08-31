@@ -78,13 +78,10 @@ Multi-implementation ports are validated through **shared contract-assertion har
 
 ---
 
-## Core & Parity Test Suites
+## Core & Supporting Test Suites
 
 - **Composition Singleton (`packages/infrastructure/src/core.test.ts`)**:
   Validates `buildCoreDeps()` singleton semantics, default environment memoization, and custom environment isolation.
-
-- **Chat Turn Use-Case Parity (`src/app/api/chat/chat-turn.parity.test.ts`)**:
-  Validates 100% side-by-side behavioral parity between legacy inline chat routing and the decoupled `@app/application/chat` turn use-case, including a persistence case asserting both paths save identical chat history.
 
 - **Answer Cache Golden Key (`src/app/api/chat/cache-key.golden.test.ts`)**:
   Pins cache key generation stability across text normalization, model changes, and configuration fingerprints.
@@ -95,6 +92,8 @@ Multi-implementation ports are validated through **shared contract-assertion har
 
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
   Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, duplicate-result filtering across repeated searches, first-turn prefetching, and answer cache hit/miss semantics.
+- **Chat Turn (`packages/application/src/chat/__tests__/chat-turn.test.ts`):**
+  Turn-result idempotency, request-fingerprint conflicts, bounded history, cache leases, guardrails, ticket limits, and request-abort propagation.
 - **Grounding Evidence (`packages/application/src/chat/__tests__/grounding-evidence.test.ts`)**:
   Per-turn chunk identity deduplication, fallback identity for incomplete test data, bounded model/grader context, and citation aggregation.
 - **Agentic Retrieval (`packages/application/src/rag/agentic-search.test.ts`)**:

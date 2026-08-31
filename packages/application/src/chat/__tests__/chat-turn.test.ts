@@ -83,6 +83,10 @@ function makeDeps(overrides: DepsOverrides = {}) {
   const answerCache = {
     get: vi.fn(async () => null as string | null),
     set: vi.fn<(key: string, value: string, ttlSec: number) => Promise<void>>(async () => undefined),
+    lease: {
+      tryAcquire: vi.fn(async () => `test-token-${Math.random()}`),
+      release: vi.fn(async () => undefined),
+    },
   };
   const answerCacheKey = vi.fn((query: string, ctx: { userId?: string; fingerprint?: string }) =>
     `rag:answer:${query}-${ctx.userId ?? ''}-${ctx.fingerprint ?? ''}`,
@@ -127,6 +131,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
     agenticSearch: overrides.agenticSearch ?? agenticSearch,
     hallucinationGrader: overrides.hallucinationGrader ?? (() => null),
     answerCache: overrides.answerCache ?? answerCache,
+    ...(overrides.turnResultCache ? { turnResultCache: overrides.turnResultCache } : {}),
     answerCacheKey: overrides.answerCacheKey ?? answerCacheKey,
     rateLimit: overrides.rateLimit ?? rateLimit,
     createTicket: overrides.createTicket ?? createTicket,
@@ -301,6 +306,57 @@ describe('chatTurn', () => {
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.cacheHit).toBe(true);
     expect(event?.mode).toBe('vector');
+  });
+
+  it('replays a completed turn by turn ID without calling the model again', async () => {
+    const values = new Map<string, string>();
+    const turnResultCache = {
+      get: vi.fn(async (key: string) => values.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string) => {
+        values.set(key, value);
+      }),
+    };
+    const { deps, fakes } = makeDeps({ turnResultCache });
+    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'once' }));
+
+    const first = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(first.kind).toBe('stream');
+    if (first.kind !== 'stream') return;
+    await readParts(first.stream);
+
+    const second = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(second.kind).toBe('stream');
+    if (second.kind !== 'stream') return;
+    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(await readParts(second.stream)).toContainEqual({ type: 'text-delta', id: 'cached', delta: 'once' });
+    expect(turnResultCache.set).toHaveBeenCalledWith(
+      expect.stringContaining('rag:turn-result:'),
+      expect.stringContaining('turn-result'),
+      86_400,
+    );
+    expect(fakes.record.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ cacheHit: true }));
+  });
+
+  it('rejects reuse of a turn ID for a different request', async () => {
+    const values = new Map<string, string>();
+    const turnResultCache = {
+      get: vi.fn(async (key: string) => values.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string) => {
+        values.set(key, value);
+      }),
+    };
+    const { deps } = makeDeps({ turnResultCache });
+    const first = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(first.kind).toBe('stream');
+    if (first.kind !== 'stream') return;
+    await readParts(first.stream);
+
+    const conflictBody = {
+      ...BASIC_BODY,
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'A different question' }] }],
+    };
+    const second = await run({ request: makeRequest(conflictBody), userId: 'user_test' }, deps);
+    expect(second).toEqual({ kind: 'idempotency-conflict' });
   });
 
   it('writes a freshly generated grounded first-turn answer to the cache on miss', async () => {
@@ -517,7 +573,7 @@ describe('chatTurn', () => {
     await captured.current?.searchDocumentation?.execute({ query: 'vague' });
     closeLlm();
     await readParts(result.stream);
-    expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague');
+    expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', { signal: expect.any(AbortSignal) });
     expect(fakes.searchChunks).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect((event?.meta as Record<string, unknown>)?.rewritten).toBe(true);
@@ -531,7 +587,10 @@ describe('chatTurn', () => {
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
     await captured.current?.searchDocumentation?.execute({ query: 'plain' });
-    expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', { limit: undefined });
+    expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', {
+      limit: undefined,
+      signal: expect.any(AbortSignal),
+    });
     expect(fakes.agenticSearch).not.toHaveBeenCalled();
   });
 

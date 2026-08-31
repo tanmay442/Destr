@@ -7,7 +7,7 @@ import type {
   InferUIMessageChunk,
 } from 'ai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
@@ -36,23 +36,49 @@ import { citationDocumentIds, type EmittedCitation } from './emit-citations';
 import { addGroundingEvidence, createGroundingEvidence, formatGroundingReference, type GroundingEvidence } from './grounding-evidence';
 import { ChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
-import { toChatUIMessages, type ChatInputMessage, type ChatUIMessage } from './message-types';
+import {
+  compactModelHistory,
+  toChatUIMessages,
+  type ChatInputMessage,
+  type ChatUIMessage,
+} from './message-types';
 import { createCacheLease, waitForCachedAnswer, type CacheLease } from './cache-lease';
 
 type UIMessage = ChatUIMessage;
 
+const TURN_RESULT_CACHE_TTL_SEC = 86_400;
+
 interface CachedAnswerPayload {
   text: string;
   citations: EmittedCitation[];
+  requestFingerprint?: string;
+  guardrail?: {
+    outOfDomain: boolean;
+    offerTicket: boolean;
+    notice?: boolean;
+    message?: string;
+    isEmpty?: boolean;
+    resultState?: string;
+  };
 }
 
-function parseCachedAnswer(value: string): CachedAnswerPayload {
+function parseCachedAnswer(value: string): CachedAnswerPayload;
+function parseCachedAnswer(value: string, expectedKind: 'turn-result'): CachedAnswerPayload | null;
+function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedAnswerPayload | null {
   try {
     const parsed: unknown = JSON.parse(value);
     if (typeof parsed === 'object' && parsed !== null) {
-      const candidate = parsed as { v?: unknown; text?: unknown; citations?: unknown };
+      const candidate = parsed as {
+        v?: unknown;
+        kind?: unknown;
+        text?: unknown;
+        citations?: unknown;
+        requestFingerprint?: unknown;
+        guardrail?: unknown;
+      };
       if (
         candidate.v === 1 &&
+        (expectedKind === undefined || candidate.kind === expectedKind) &&
         typeof candidate.text === 'string' &&
         Array.isArray(candidate.citations) &&
         candidate.citations.every(
@@ -62,12 +88,22 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
             typeof (c as Record<string, unknown>).snippet === 'string',
         )
       ) {
-        return { text: candidate.text, citations: candidate.citations as EmittedCitation[] };
+        const result: CachedAnswerPayload = {
+          text: candidate.text,
+          citations: candidate.citations as EmittedCitation[],
+        };
+        if (typeof candidate.requestFingerprint === 'string') {
+          result.requestFingerprint = candidate.requestFingerprint;
+        };
+        if (typeof candidate.guardrail === 'object' && candidate.guardrail !== null) {
+          result.guardrail = candidate.guardrail as NonNullable<CachedAnswerPayload['guardrail']>;
+        }
+        return result;
       }
     }
   } catch {
   }
-  return { text: value, citations: [] };
+  return expectedKind === undefined ? { text: value, citations: [] } : null;
 }
 
 export type AiSdk = {
@@ -78,6 +114,52 @@ export type AiSdk = {
   createUIMessageStream: typeof createUIMessageStream;
 };
 
+function turnRequestFingerprint(
+  conversationId: string | undefined,
+  messages: ChatInputMessage[],
+): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ conversationId: conversationId ?? null, messages }))
+    .digest('hex');
+}
+
+function parseTurnResult(
+  value: string,
+  requestFingerprint: string,
+): { answer: CachedAnswerPayload } | { conflict: true } | null {
+  const answer = parseCachedAnswer(value, 'turn-result');
+  if (!answer) return null;
+  if (answer.requestFingerprint !== requestFingerprint) return { conflict: true };
+  return { answer };
+}
+
+function createCachedAnswerStream(
+  ai: AiSdk,
+  cachedAnswer: CachedAnswerPayload,
+  historyPersisted: boolean,
+  conversationId: string | undefined,
+): ReadableStream<InferUIMessageChunk<UIMessage>> {
+  return ai.createUIMessageStream<UIMessage>({
+    execute: ({ writer }) => {
+      writer.write({ type: 'text-start', id: 'cached' });
+      writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
+      writer.write({ type: 'text-end', id: 'cached' });
+      for (const citation of dedupeCitations(cachedAnswer.citations)) {
+        writer.write({ type: 'data-citation', data: citation });
+      }
+      if (cachedAnswer.guardrail) {
+        writer.write({ type: 'data-guardrail', data: cachedAnswer.guardrail });
+      }
+      if (historyPersisted && conversationId) {
+        writer.write({
+          type: 'data-conversation-persisted',
+          data: { conversationId },
+        });
+      }
+    },
+  });
+}
+
 export interface ChatTurnDeps {
   ai: AiSdk;
   getChatModel(): LanguageModelV3;
@@ -87,13 +169,18 @@ export interface ChatTurnDeps {
   searchChunks(
     cfg: AppConfig,
     query: string,
-    opts: { limit?: number | undefined },
+    opts: { limit?: number | undefined; signal?: AbortSignal | undefined },
   ): Promise<Result<RetrievedChunk[]>>;
-  agenticSearch(cfg: AppConfig, query: string): Promise<Result<AgenticResult>>;
+  agenticSearch(
+    cfg: AppConfig,
+    query: string,
+    opts?: { signal?: AbortSignal | undefined },
+  ): Promise<Result<AgenticResult>>;
   hallucinationGrader(
     cfg: AppConfig,
   ): ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   answerCache: AnswerCache;
+  turnResultCache?: AnswerCache;
   answerCacheKey(
     query: string,
     ctx: { embeddingModel: string; chatModel: string; userId?: string; fingerprint?: string },
@@ -151,6 +238,8 @@ export type ChatTurnResult =
       meta: { turnId: string | null; mode: 'vector' | 'agentic'; cacheHit: boolean };
     }
   | { kind: 'rate-limited'; retryAfterSec: string | undefined }
+  | { kind: 'cache-wait-timeout' }
+  | { kind: 'idempotency-conflict' }
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
 
@@ -261,6 +350,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   isEmptyRef: { value: boolean };
   resultStateRef: { value: AgenticResultState | null };
   metrics: TurnMetrics;
+  prefetched?: { query: string; matches: RetrievedChunk[] } | undefined;
 }) {
   const {
     cfg,
@@ -272,8 +362,10 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     isEmptyRef,
     resultStateRef,
     metrics,
+    prefetched,
   } = opts;
   let ticketOpenedInTurn = false;
+  let prefetchedConsumed = false;
   return {
     searchDocumentation: deps.ai.tool({
       description:
@@ -299,8 +391,28 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
         const t0 = performance.now();
+        const canReusePrefetch =
+          !prefetchedConsumed &&
+          prefetched !== undefined &&
+          prefetched.query.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
+        if (canReusePrefetch) {
+          prefetchedConsumed = true;
+          matches = prefetched.matches;
+          for (const match of matches) {
+            if (metrics.maxSimilarity === null || match.similarity > metrics.maxSimilarity) {
+              metrics.maxSimilarity = match.similarity;
+            }
+          }
+          metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
+          return matches.map((match) => ({
+            content: formatGroundingReference(match),
+            similarity: match.similarity,
+            documentTitle: match.title ?? undefined,
+            section: match.sectionTitle ?? undefined,
+          }));
+        }
         if (effectiveMode === 'agentic') {
-          const r = await deps.agenticSearch(cfg, query);
+          const r = await deps.agenticSearch(cfg, query, { signal: request.signal });
           if (!r.ok) {
             logger.error('Agentic retrieval failed', { error: r.error });
             return [];
@@ -321,7 +433,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
           matches = r.value.chunks;
         } else {
-          const r = await deps.searchChunks(cfg, query, { limit });
+          const r = await deps.searchChunks(cfg, query, { limit, signal: request.signal });
           if (!r.ok) {
             logger.error('RAG retrieval failed', { error: r.error });
             return [];
@@ -449,6 +561,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
+  const turnRequestHash = turnRequestFingerprint(parsed.data.conversationId, inputMessages);
 
   const isFirstTurn = messages.length <= 1;
 
@@ -473,15 +586,94 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         fingerprint: cacheFingerprint(cfg, effectiveMode),
       })
     : null;
+  const turnResultCache = deps.turnResultCache;
+  const turnResultKey = turnResultCache && turnId
+    ? `rag:turn-result:${encodeURIComponent(userId)}:${turnId}`
+    : null;
   let cacheLease: CacheLease | null = null;
-  const releaseCacheLease = async (): Promise<void> => {
-    const lease = cacheLease;
+  let turnLease: CacheLease | null = null;
+  const releaseLeases = async (): Promise<void> => {
+    const leases = [cacheLease, turnLease].filter((lease): lease is CacheLease => lease !== null);
     cacheLease = null;
-    if (lease) await lease.release();
+    turnLease = null;
+    await Promise.all(leases.map((lease) => lease.release()));
   };
-  let cacheLeaseEscaped = false;
+  let leasesEscaped = false;
+  request.signal.addEventListener('abort', () => {
+    void releaseLeases();
+  }, { once: true });
 
   try {
+    if (turnResultCache && turnResultKey) {
+      let turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
+      let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+      if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+      if (!turnState) {
+        const lease = createCacheLease(turnResultCache, turnResultKey, Math.ceil(MAX_DURATION_MS / 1000));
+        if (await lease.acquire()) {
+          turnLease = lease;
+          turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
+          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+        } else {
+          const remainingWaitMs = Math.max(
+            1_000,
+            MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+          );
+          turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
+            timeoutMs: remainingWaitMs,
+            signal: request.signal,
+          });
+          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+          if (!turnState) return { kind: 'cache-wait-timeout' };
+        }
+      }
+      if (turnState && 'answer' in turnState) {
+        const cachedAnswer = turnState.answer;
+        deps.eventSink.record({
+          turnId,
+          userId,
+          query: queryText,
+          mode: persistedMode,
+          cacheHit: true,
+          totalMs: Math.round(performance.now() - turnStart),
+          ...(cachedAnswer.citations.length > 0
+            ? {
+                citationCount: cachedAnswer.citations.length,
+                meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+              }
+            : {}),
+        });
+        const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
+          conversationId: parsed.data.conversationId,
+          turnId,
+          retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+          title: lastUserText,
+          userMessage: lastUserMessage,
+          assistantMessage: buildAssistantMessageLike({
+            turnId,
+            text: cachedAnswer.text,
+            citations: dedupeCitations(cachedAnswer.citations),
+            guardrail: cachedAnswer.guardrail ?? null,
+          }),
+        });
+        await releaseLeases();
+        const stream = createCachedAnswerStream(
+          deps.ai,
+          cachedAnswer,
+          historyPersisted,
+          parsed.data.conversationId,
+        );
+        leasesEscaped = true;
+        return {
+          kind: 'stream',
+          stream,
+          meta: { turnId, mode: persistedMode, cacheHit: true },
+        };
+      }
+    }
+
     if (cacheKey) {
     if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
     let cached = await deps.answerCache.get(cacheKey).catch(() => null);
@@ -491,7 +683,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         cacheLease = lease;
         cached = await deps.answerCache.get(cacheKey).catch(() => null);
       } else {
-        cached = await waitForCachedAnswer(deps.answerCache, cacheKey);
+        const remainingWaitMs = Math.max(
+          1_000,
+          MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+        );
+        cached = await waitForCachedAnswer(deps.answerCache, cacheKey, {
+          timeoutMs: remainingWaitMs,
+          signal: request.signal,
+        });
+        if (!cached) return { kind: 'cache-wait-timeout' };
       }
     }
     if (cached) {
@@ -524,7 +724,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           guardrail: null,
         }),
       });
-      await releaseCacheLease();
+      await releaseLeases();
       const stream = deps.ai.createUIMessageStream<UIMessage>({
         execute: ({ writer }) => {
           writer.write({ type: 'text-start', id: 'cached' });
@@ -544,7 +744,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }
         },
       });
-      cacheLeaseEscaped = true;
+      leasesEscaped = true;
       return {
         kind: 'stream',
         stream,
@@ -556,7 +756,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   let prefetch: RetrievedChunk[] | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
-    const prefetchResult = await deps.searchChunks(cfg, lastUserText, {});
+    const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
@@ -588,7 +788,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch),
-    messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
+    messages: await deps.ai.convertToModelMessages(compactModelHistory(messages), {
+      ignoreIncompleteToolCalls: true,
+    }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
     tools: buildChatTools(deps, {
@@ -601,6 +803,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       isEmptyRef,
       resultStateRef,
       metrics,
+      ...(prefetch ? { prefetched: { query: lastUserText, matches: prefetch } } : {}),
     }),
   });
 
@@ -699,6 +902,34 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }
             } catch (err) {
               logger.warn('Answer cache write skipped', { error: String(err) });
+            }
+          }
+          if (turnResultCache && turnResultKey && !timedOut) {
+            try {
+              const finalAnswer = await result.text;
+              if (finalAnswer && finalAnswer.trim() !== '') {
+                const guardrail = hallucinationBlocked
+                  ? {
+                      outOfDomain: finalOutOfDomain,
+                      offerTicket: true,
+                      isEmpty,
+                    }
+                  : undefined;
+                await turnResultCache.set(
+                  turnResultKey,
+                  JSON.stringify({
+                    v: 1,
+                    kind: 'turn-result',
+                    requestFingerprint: turnRequestHash,
+                    text: finalAnswer,
+                    citations: finalCitations,
+                    ...(guardrail ? { guardrail } : {}),
+                  }),
+                  TURN_RESULT_CACHE_TTL_SEC,
+                );
+              }
+            } catch (err) {
+              logger.warn('Turn result cache write skipped', { error: String(err) });
             }
           }
           const usage = await Promise.resolve(result.usage).catch(() => null);
@@ -837,24 +1068,24 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }
             }
           } catch {}
-          await releaseCacheLease();
+          await releaseLeases();
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
-        await releaseCacheLease();
+        await releaseLeases();
         controller.close();
       })();
     },
   });
 
-  cacheLeaseEscaped = true;
+  leasesEscaped = true;
   return {
     kind: 'stream',
     stream: citationStream,
     meta: { turnId, mode: persistedMode, cacheHit: false },
   };
   } finally {
-    if (!cacheLeaseEscaped) await releaseCacheLease();
+    if (!leasesEscaped) await releaseLeases();
   }
 }
 

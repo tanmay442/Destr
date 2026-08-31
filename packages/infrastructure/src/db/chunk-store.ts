@@ -3,6 +3,7 @@ import { db } from './client';
 import { resolveVectorDimForClient } from './schema-vector';
 import { chunks } from './schema';
 import { ValidationError } from '@app/domain';
+import { abortableQuery } from './query-cancellation';
 import type { ChunkStore, InsertChunkInput, Hasher } from '@app/domain';
 import {
   createChunkUid,
@@ -291,6 +292,7 @@ export async function replaceChunks(
 export async function getChunksByIds(
   ids: number[],
   client: Client = db,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<
   Array<{
     id: number;
@@ -309,7 +311,7 @@ export async function getChunksByIds(
   }>
 > {
   if (ids.length === 0) return [];
-  const result = await client.execute(sql`
+  const result = await abortableQuery(client.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -329,7 +331,7 @@ export async function getChunksByIds(
     WHERE d.deleted_at IS NULL
       AND c.id IN ${ids}
     ORDER BY c.id
-  `);
+  `), opts.signal);
   type RawRow = {
     id: number;
     chunkUid?: string | null;
@@ -368,6 +370,7 @@ export async function getChunksByDocAndRange(
   start: number,
   end: number,
   client: Client = db,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<
   Array<{
     id: number;
@@ -385,7 +388,7 @@ export async function getChunksByDocAndRange(
     chunkIndex: number;
   }>
 > {
-  const result = await client.execute(sql`
+  const result = await abortableQuery(client.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -407,7 +410,7 @@ export async function getChunksByDocAndRange(
       AND c.chunk_index >= ${start}
       AND c.chunk_index <= ${end}
     ORDER BY c.chunk_index
-  `);
+  `), opts.signal);
   type RawRow = {
     id: number;
     chunkUid?: string | null;
@@ -444,6 +447,7 @@ export async function getChunksByDocAndRange(
 export async function getChunksByDocAndRanges(
   ranges: Array<{ documentId: number; start: number; end: number }>,
   client: Client = db,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<Map<string, Array<{
   id: number;
   chunkUid?: string;
@@ -478,7 +482,7 @@ export async function getChunksByDocAndRanges(
   const conditions = ranges.map((r) =>
     and(sql`c.document_id = ${r.documentId}`, sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
   );
-  const result = await client.execute(sql`
+  const result = await abortableQuery(client.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -498,7 +502,7 @@ export async function getChunksByDocAndRanges(
     WHERE d.deleted_at IS NULL
       AND (${or(...conditions)})
     ORDER BY c.document_id, c.chunk_index
-  `);
+  `), opts.signal);
   type RawRow = {
     id: number;
     chunkUid?: string | null;
@@ -619,9 +623,9 @@ export function createChunkStore(
 ): ChunkStore {
   const expectedDimension = vectorDim ?? resolveVectorDimForClient(client);
   return {
-    getByIds: (ids) => getChunksByIds(ids, client),
-    getByDocAndRange: (documentId, start, end) => getChunksByDocAndRange(documentId, start, end, client),
-    getByDocAndRanges: (ranges) => getChunksByDocAndRanges(ranges, client),
+    getByIds: (ids, opts) => getChunksByIds(ids, client, opts),
+    getByDocAndRange: (documentId, start, end, opts) => getChunksByDocAndRange(documentId, start, end, client, opts),
+    getByDocAndRanges: (ranges, opts) => getChunksByDocAndRanges(ranges, client, opts),
     insertMany: (rows) => insertChunks(rows, client, expectedDimension, hasher),
     replaceMany: (documentId, rows) => replaceChunks(documentId, rows, client, expectedDimension, hasher),
     deleteByDocumentId: (documentId) => deleteChunksByDocumentId(documentId, client),

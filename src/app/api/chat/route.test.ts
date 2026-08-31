@@ -120,6 +120,10 @@ type MockComposition = {
   answerCache: {
     get: ReturnType<typeof vi.fn>;
     set: ReturnType<typeof vi.fn>;
+    lease: {
+      tryAcquire: ReturnType<typeof vi.fn>;
+      release: ReturnType<typeof vi.fn>;
+    };
   };
   logTicketEvent: ReturnType<typeof vi.fn>;
   agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
@@ -146,6 +150,10 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     answerCache: {
       get: vi.fn(async () => null),
       set: vi.fn(async () => undefined),
+      lease: {
+        tryAcquire: vi.fn(async () => `test-token-${Math.random()}`),
+        release: vi.fn(async () => undefined),
+      },
     },
     logTicketEvent: vi.fn(),
     agenticSearch: vi.fn(async () => ok(agenticResult()) as never),
@@ -486,7 +494,10 @@ describe('/api/chat searchDocumentation tool', () => {
       .mockResolvedValueOnce(ok([]) as never);
     const { tools } = await captureTools();
     await tools?.searchDocumentation?.execute({ query: 'q', limit: 5 });
-    expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', { limit: 5 });
+    expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', {
+      limit: 5,
+      signal: expect.any(AbortSignal),
+    });
     searchChunksSpy.mockRestore();
   });
 
@@ -702,7 +713,9 @@ describe('/api/chat agentic loop (Session 8)', () => {
     );
     const { tools } = await captureToolsForAgentic();
     const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
-    expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague');
+    expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague', {
+      signal: expect.any(AbortSignal),
+    });
     expect(result).toHaveLength(1);
     expect(result[0]!.content).toBe('<reference source="null">\nkeep this\n</reference>');
   });
@@ -713,7 +726,10 @@ describe('/api/chat agentic loop (Session 8)', () => {
     const agenticSpy = compositionMock.agenticSearch as ReturnType<typeof vi.fn>;
     const { tools } = await captureToolsForAgentic();
     await tools?.searchDocumentation?.execute({ query: 'plain' });
-    expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', { limit: undefined });
+    expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', {
+      limit: undefined,
+      signal: expect.any(AbortSignal),
+    });
     expect(agenticSpy).not.toHaveBeenCalled();
     searchSpy.mockRestore();
   });

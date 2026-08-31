@@ -49,6 +49,33 @@ export interface ChatInputMessage {
   parts: ChatInputPart[];
 }
 
+export const MAX_MODEL_HISTORY_MESSAGES = 24;
+export const MAX_MODEL_HISTORY_TEXT_CHARS = 50_000;
+
+function messageTextChars(message: ChatUIMessage): number {
+  return message.parts.reduce(
+    (total, part) => total + (part.type === 'text' || part.type === 'reasoning' ? part.text.length : 0),
+    0,
+  );
+}
+
+export function compactModelHistory(
+  messages: ChatUIMessage[],
+  maxMessages = MAX_MODEL_HISTORY_MESSAGES,
+  maxTextChars = MAX_MODEL_HISTORY_TEXT_CHARS,
+): ChatUIMessage[] {
+  const selected: ChatUIMessage[] = [];
+  let textChars = 0;
+  for (let index = messages.length - 1; index >= 0 && selected.length < maxMessages; index -= 1) {
+    const message = messages[index]!;
+    const nextTextChars = textChars + messageTextChars(message);
+    if (selected.length > 0 && nextTextChars > maxTextChars) break;
+    selected.push(message);
+    textChars = nextTextChars;
+  }
+  return selected.reverse();
+}
+
 export function toChatUIMessages(messages: ChatInputMessage[]): ChatUIMessage[] {
   return messages.map((message, messageIndex) => ({
     id: message.id ?? `message-${messageIndex}`,

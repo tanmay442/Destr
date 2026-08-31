@@ -762,6 +762,24 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     expect(result.value.map((r) => r.id)).toEqual([2, 1]);
   });
 
+  it('stops waiting for vector retrieval when the request is aborted', async () => {
+    const deps = makeDeps();
+    let vectorStarted = false;
+    deps.chunks.searchByVector = vi.fn(() => {
+      vectorStarted = true;
+      return new Promise<RetrievedChunkRow[]>(() => undefined);
+    });
+    const controller = new AbortController();
+    const pending = searchChunks('q', { hybridEnabled: false, signal: controller.signal }, deps);
+    await vi.waitFor(() => expect(vectorStarted).toBe(true));
+    controller.abort(new Error('client disconnected'));
+    await expect(pending).rejects.toThrow('client disconnected');
+    expect(deps.chunks.searchByVector).toHaveBeenCalledWith(
+      [0.1, 0.2, 0.3],
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it('keeps fused ordering when child hits resolve to parents (H1)', async () => {
     const deps = hybridDeps(
       [{ ...flatRow(10, 'child hit', 0.9), parentChunkId: 5 }, flatRow(7, 'flat hit', 0.95)],
