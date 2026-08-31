@@ -11,23 +11,25 @@ function encodePayload(payload: unknown): string {
 describe('list cursors', () => {
   it('round-trips compound numeric keys for equal timestamps', () => {
     const timestamp = new Date('2026-04-01T12:00:00.000Z');
-    const encoded = encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 42 });
+    const encoded = encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 42, total: 120 });
 
     expect(decodeListCursor(encoded, 'documents')).toEqual({
       kind: 'documents',
       sortAt: timestamp,
       id: 42,
+      total: 120,
     });
   });
 
   it('round-trips the string tie-breaker used by users', () => {
     const timestamp = new Date('2026-04-01T12:00:00.000Z');
-    const encoded = encodeListCursor({ kind: 'users', sortAt: timestamp, clerkUserId: 'user_42' });
+    const encoded = encodeListCursor({ kind: 'users', sortAt: timestamp, clerkUserId: 'user_42', total: 120 });
 
     expect(decodeListCursor(encoded, 'users')).toEqual({
       kind: 'users',
       sortAt: timestamp,
       clerkUserId: 'user_42',
+      total: 120,
     });
   });
 
@@ -36,6 +38,7 @@ describe('list cursors', () => {
       kind: 'documents',
       sortAt: new Date('2026-04-01T12:00:00.000Z'),
       id: 42,
+      total: 120,
     });
     const malformed = encodePayload({ v: 1, k: 'documents', t: 'not-a-date', i: 42 });
 

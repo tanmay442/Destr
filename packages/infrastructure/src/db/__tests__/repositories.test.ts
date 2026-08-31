@@ -229,12 +229,12 @@ describe('insertDocument', () => {
     expect(state.lastUpdate).toMatchObject({ fileHash: 'h2', uploadedBy: 'u2' });
   });
 
-  it('resurrects a soft-deleted row by deleting chunks then restoring the document', async () => {
+  it('resurrects a soft-deleted row without deleting stable chunks before replacement', async () => {
     const { client, state, doc } = makeDocClient();
     state.existing = { ...doc, deletedAt: new Date('2026-01-01T00:00:00Z') };
     const row = await insertDocument({ fileName: 'x.pdf', fileHash: 'h2', uploadedBy: 'u2' }, client);
     expect(row.id).toBe(42);
-    expect(state.deletes).toBe(1);
+    expect(state.deletes).toBe(0);
     expect(state.updates).toBe(1);
     expect(state.inserts).toBe(0);
     expect(state.lastUpdate).toMatchObject({
@@ -384,7 +384,7 @@ describe('keyset list pagination', () => {
     ], 6);
     const result = await listDocuments({
       limit: 2,
-      before: { kind: 'documents', sortAt: timestamp, id: 3 },
+      before: { kind: 'documents', sortAt: timestamp, id: 3, total: 6 },
     }, client);
 
     expect(result.documents.map((row) => row.id)).toEqual([5, 4]);
@@ -392,6 +392,7 @@ describe('keyset list pagination', () => {
     expect(result.nextCursor).not.toBeNull();
     expect(result.previousCursor).not.toBeNull();
     expect(calls[0]?.limit).toBe(3);
+    expect(calls).toHaveLength(1);
   });
 
   it('keeps the nearest rows when a backward ticket query has an extra row', async () => {
@@ -402,7 +403,7 @@ describe('keyset list pagination', () => {
     ], 6);
     const result = await ticketRepo.list({
       limit: 2,
-      before: { kind: 'tickets', sortAt: timestamp, id: 3 },
+      before: { kind: 'tickets', sortAt: timestamp, id: 3, total: 6 },
     }, client);
 
     expect(result.rows.map((row) => row.id)).toEqual([5, 4]);
@@ -418,7 +419,7 @@ describe('keyset list pagination', () => {
     ], 6);
     const result = await userRepo.list({
       limit: 2,
-      before: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_4' },
+      before: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_4', total: 6 },
     }, client);
 
     expect(result.rows.map((row) => row.clerkUserId)).toEqual(['user_2', 'user_3']);
@@ -434,7 +435,7 @@ describe('keyset list pagination', () => {
     ], 6);
     const result = await auditRepo.list({
       limit: 2,
-      before: { kind: 'audit', sortAt: timestamp, id: 3 },
+      before: { kind: 'audit', sortAt: timestamp, id: 3, total: 6 },
     }, client);
 
     expect(result.events.map((event) => event.id)).toEqual([5, 4]);
@@ -448,7 +449,7 @@ describe('keyset list pagination', () => {
     ], 2);
     await listDocuments({
       limit: 2,
-      cursor: { kind: 'documents', sortAt: timestamp, id: 3 },
+      cursor: { kind: 'documents', sortAt: timestamp, id: 3, total: 2 },
     }, client);
 
     const query = dialect.sqlToQuery(calls[0]!.where as SQL);

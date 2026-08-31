@@ -3,7 +3,6 @@ import type { SQL } from 'drizzle-orm';
 import { db } from './client';
 import {
   documents,
-  chunks,
   tickets,
   users,
   auditEvents,
@@ -148,7 +147,6 @@ async function tryInsert(
   if (existing && existing.deletedAt != null && resurrectDeleted) {
     const existingId = existing.id;
     const resurrect = async () => {
-      await client.delete(chunks).where(eq(chunks.documentId, existingId));
       const [row] = await client
         .update(documents)
         .set({
@@ -440,7 +438,7 @@ export async function listDocuments(
   const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
   const hasExtra = queriedRows.length > limit;
   const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
-  const total = (await client
+  const total = position?.total ?? (await client
     .select({ count: sql<number>`count(*)::int` })
     .from(documents)
     .where(filter))[0]?.count ?? 0;
@@ -454,10 +452,10 @@ export async function listDocuments(
     documents: pageRows as unknown as Array<Document & { hasBlob: boolean }>,
     total,
     nextCursor: hasNext && lastRow
-      ? encodeListCursor({ kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id })
+      ? encodeListCursor({ kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id, total })
       : null,
     previousCursor: hasPrevious && firstRow
-      ? encodeListCursor({ kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id })
+      ? encodeListCursor({ kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id, total })
       : null,
   };
 }
@@ -540,7 +538,7 @@ export const ticketRepo = {
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
     const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
-    const total = (await client
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(tickets)
       .where(filter))[0]?.count ?? 0;
@@ -554,10 +552,10 @@ export const ticketRepo = {
       rows: pageRows as unknown as TicketRow[],
       total,
       nextCursor: hasNext && lastRow
-        ? encodeListCursor({ kind: 'tickets', sortAt: lastRow.createdAt, id: lastRow.id })
+        ? encodeListCursor({ kind: 'tickets', sortAt: lastRow.createdAt, id: lastRow.id, total })
         : null,
       previousCursor: hasPrevious && firstRow
-        ? encodeListCursor({ kind: 'tickets', sortAt: firstRow.createdAt, id: firstRow.id })
+        ? encodeListCursor({ kind: 'tickets', sortAt: firstRow.createdAt, id: firstRow.id, total })
         : null,
     };
   },
@@ -863,10 +861,10 @@ export const userRepo = {
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
     const pageRows = (isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit)) as UserRow[];
-    const [totalRow] = await client
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(users)
-      .where(filter);
+      .where(filter))[0]?.count ?? 0;
     const firstRow = pageRows[0];
     const lastRow = pageRows[pageRows.length - 1];
     const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
@@ -875,12 +873,12 @@ export const userRepo = {
       : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
     return {
       rows: pageRows,
-      total: totalRow?.count ?? 0,
+      total,
       nextCursor: hasNext && lastRow
-        ? encodeListCursor({ kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId })
+        ? encodeListCursor({ kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId, total })
         : null,
       previousCursor: hasPrevious && firstRow
-        ? encodeListCursor({ kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId })
+        ? encodeListCursor({ kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId, total })
         : null,
     };
   },
@@ -1029,7 +1027,7 @@ export const auditRepo = {
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
     const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
-    const total = (await client
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(auditEvents)
       .where(filter))[0]?.count ?? 0;
@@ -1054,10 +1052,10 @@ export const auditRepo = {
       events,
       total,
       nextCursor: hasNext && lastEvent
-        ? encodeListCursor({ kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id })
+        ? encodeListCursor({ kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id, total })
         : null,
       previousCursor: hasPrevious && firstEvent
-        ? encodeListCursor({ kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id })
+        ? encodeListCursor({ kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id, total })
         : null,
     };
   },

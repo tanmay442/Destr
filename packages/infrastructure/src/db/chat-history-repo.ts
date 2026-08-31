@@ -231,25 +231,44 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
     let deletedMessages = 0;
 
     while (true) {
-      const batch = await this.client
-        .select({ id: chatConversations.id })
-        .from(chatConversations)
-        .where(condition)
-        .limit(PURGE_BATCH_SIZE);
-      if (batch.length === 0) break;
+      const removed = await this.client.transaction(async (tx) => {
+        const batch = await tx
+          .select({ id: chatConversations.id })
+          .from(chatConversations)
+          .where(condition)
+          .orderBy(chatConversations.id)
+          .limit(PURGE_BATCH_SIZE)
+          .for('update', { skipLocked: true });
+        if (batch.length === 0) {
+          return { conversations: 0, messages: 0 };
+        }
 
-      const conversationIds = batch.map((row) => row.id);
-      const removedMessages = await this.client
-        .delete(chatMessages)
-        .where(inArray(chatMessages.conversationId, conversationIds))
-        .returning({ id: chatMessages.id });
-      deletedMessages += removedMessages.length;
+        const conversationIds = batch.map((row) => row.id);
+        let messages = 0;
+        while (true) {
+          const messageBatch = await tx
+            .select({ id: chatMessages.id })
+            .from(chatMessages)
+            .where(inArray(chatMessages.conversationId, conversationIds))
+            .orderBy(chatMessages.id)
+            .limit(PURGE_BATCH_SIZE);
+          if (messageBatch.length === 0) break;
+          const removedMessages = await tx
+            .delete(chatMessages)
+            .where(inArray(chatMessages.id, messageBatch.map((row) => row.id)))
+            .returning({ id: chatMessages.id });
+          messages += removedMessages.length;
+        }
 
-      const removedConversations = await this.client
-        .delete(chatConversations)
-        .where(inArray(chatConversations.id, conversationIds))
-        .returning({ id: chatConversations.id });
-      deletedConversations += removedConversations.length;
+        const removedConversations = await tx
+          .delete(chatConversations)
+          .where(and(inArray(chatConversations.id, conversationIds), condition))
+          .returning({ id: chatConversations.id });
+        return { conversations: removedConversations.length, messages };
+      });
+      if (removed.conversations === 0) break;
+      deletedConversations += removed.conversations;
+      deletedMessages += removed.messages;
     }
 
     return { deletedConversations, deletedMessages };

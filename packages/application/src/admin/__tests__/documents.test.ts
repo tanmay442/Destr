@@ -209,7 +209,10 @@ function makeUploadDeps(opts: {
   chunks: { insertMany: ReturnType<typeof vi.fn>; deleteByDocumentId: ReturnType<typeof vi.fn> };
 } {
   const documents = {
-    findByName: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(baseDocument()),
+    findByName: vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(baseDocument()),
     findById: vi.fn().mockResolvedValue(null),
     update: vi.fn().mockResolvedValue(baseDocument({ id: 1, fileHash: 'newhash', ingestStatus: 'queued' })),
     insert: vi.fn().mockResolvedValue(baseDocument()),
@@ -265,6 +268,29 @@ function makeUploadDeps(opts: {
 }
 
 describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
+  it('skips blob storage, parsing, and embedding when an upload is unchanged', async () => {
+    const mocks = makeUploadDeps({
+      documents: {
+        findByName: vi.fn().mockResolvedValue(
+          baseDocument({ id: 1, fileHash: 'newhash', storageKey: 'old-blob' }),
+        ),
+      },
+    });
+
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1' },
+      mocks.deps,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { documentId: 1, chunks: 0, status: 'unchanged' },
+    });
+    expect(mocks.blobStorage.put).not.toHaveBeenCalled();
+    expect(mocks.deps.pdfParser.extractText).not.toHaveBeenCalled();
+    expect(mocks.deps.embeddings.embedBatch).not.toHaveBeenCalled();
+  });
+
   it('resurrects a soft-deleted doc that is re-uploaded unchanged within the restore window', async () => {
     const mocks = makeUploadDeps({
       documents: {
@@ -305,6 +331,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       documents: {
         findByName: vi
           .fn()
+          .mockResolvedValueOnce(null)
           .mockResolvedValueOnce({
             ...baseDocument({ id: 1, fileHash: 'oldhash', storageKey: oldKey, deletedAt: new Date(Date.now() - RESTORE_WINDOW_MS - 1000) }),
           })
@@ -378,6 +405,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       documents: {
         findByName: vi
           .fn()
+          .mockResolvedValueOnce(null)
           .mockResolvedValueOnce({
             ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
           })
@@ -461,6 +489,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
         findByName: vi
           .fn()
           .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(null)
           .mockResolvedValue(baseDocument({ id: 8, fileHash: 'other-hash' })),
       },
     });
@@ -479,6 +508,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       documents: {
         findByName: vi
           .fn()
+          .mockResolvedValueOnce(null)
           .mockResolvedValueOnce(null)
           .mockResolvedValue(baseDocument({ id: 8, fileHash: 'other-hash' })),
       },

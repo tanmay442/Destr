@@ -59,7 +59,7 @@ describe('admin list pagination application boundary', () => {
     const result = await listTickets(
       {
         actorId: 'admin_1',
-        cursor: encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 4 }),
+        cursor: encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 4, total: 20 }),
       },
       {
         tickets: { list: vi.fn() } as unknown as TicketRepository,
@@ -73,7 +73,7 @@ describe('admin list pagination application boundary', () => {
   it('returns repository cursors for users and omits the compatibility offset', async () => {
     const list = vi.fn().mockResolvedValue({ rows: [], total: 2, ...pageInfo });
     const result = await listUsers(
-      { cursor: encodeListCursor({ kind: 'users', sortAt: timestamp, clerkUserId: 'user_1' }) },
+      { cursor: encodeListCursor({ kind: 'users', sortAt: timestamp, clerkUserId: 'user_1', total: 20 }) },
       { users: adminUserRepository({ list }) },
     );
 
@@ -81,14 +81,14 @@ describe('admin list pagination application boundary', () => {
     expect(list).toHaveBeenCalledWith({
       search: undefined,
       limit: 25,
-      cursor: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_1' },
+      cursor: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_1', total: 20 },
     });
   });
 
   it('returns repository cursors for tickets', async () => {
     const list = vi.fn().mockResolvedValue({ rows: [], total: 2, ...pageInfo });
     const result = await listTickets(
-      { actorId: 'admin_1', before: encodeListCursor({ kind: 'tickets', sortAt: timestamp, id: 4 }) },
+      { actorId: 'admin_1', before: encodeListCursor({ kind: 'tickets', sortAt: timestamp, id: 4, total: 20 }) },
       { tickets: { list } as unknown as TicketRepository, users: adminUserRepository() },
     );
 
@@ -98,14 +98,14 @@ describe('admin list pagination application boundary', () => {
       assignee: undefined,
       search: undefined,
       limit: 25,
-      before: { kind: 'tickets', sortAt: timestamp, id: 4 },
+      before: { kind: 'tickets', sortAt: timestamp, id: 4, total: 20 },
     });
   });
 
   it('returns repository cursors for documents', async () => {
     const list = vi.fn().mockResolvedValue({ documents: [], total: 2, ...pageInfo });
     const result = await listDocuments(
-      { actorId: 'admin_1', before: encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 4 }) },
+      { actorId: 'admin_1', before: encodeListCursor({ kind: 'documents', sortAt: timestamp, id: 4, total: 20 }) },
       {
         documents: { list } as unknown as DocumentRepository,
         chunks: { countForDocuments: vi.fn().mockResolvedValue(new Map()) } as unknown as ChunkRepository,
@@ -118,14 +118,14 @@ describe('admin list pagination application boundary', () => {
       search: undefined,
       includeDeleted: undefined,
       limit: 25,
-      before: { kind: 'documents', sortAt: timestamp, id: 4 },
+      before: { kind: 'documents', sortAt: timestamp, id: 4, total: 20 },
     });
   });
 
   it('returns repository cursors for audit events', async () => {
     const list = vi.fn().mockResolvedValue({ events: [], total: 2, ...pageInfo });
     const result = await listAudit(
-      { actorId: 'admin_1', cursor: encodeListCursor({ kind: 'audit', sortAt: timestamp, id: 4 }) },
+      { actorId: 'admin_1', cursor: encodeListCursor({ kind: 'audit', sortAt: timestamp, id: 4, total: 20 }) },
       { audit: { list } as unknown as AuditLog, users: adminUserRepository() },
     );
 
@@ -139,7 +139,7 @@ describe('admin list pagination application boundary', () => {
       documentId: undefined,
       ticketId: undefined,
       limit: 50,
-      cursor: { kind: 'audit', sortAt: timestamp, id: 4 },
+      cursor: { kind: 'audit', sortAt: timestamp, id: 4, total: 20 },
     });
   });
 });

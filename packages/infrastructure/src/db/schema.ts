@@ -30,7 +30,6 @@ export const documents = pgTable('documents', {
     .where(sql`${table.deletedAt} IS NULL`),
   uniqueIndex('documents_document_uid_unique').on(table.documentUid),
   index('documents_deleted_at_idx').on(table.deletedAt),
-  index('documents_uploaded_at_idx').on(table.uploadedAt.desc()),
   index('documents_ingest_status_updated_idx')
     .on(table.ingestStatus, table.ingestUpdatedAt)
     .where(sql`${table.deletedAt} IS NULL`),
@@ -85,7 +84,6 @@ export const tickets = pgTable('tickets', {
   index('tickets_status_idx').on(table.status),
   check('tickets_status_check', sql`${table.status} IN ('created','in_progress','closed')`),
   index('tickets_assigned_to_idx').on(table.assignedTo),
-  index('tickets_created_at_idx').on(table.createdAt.desc()),
   index('tickets_created_at_id_idx').on(table.createdAt.desc(), table.id.desc()),
 ]);
 
@@ -116,7 +114,6 @@ export const auditEvents = pgTable('audit_events', {
 }, (table) => [
   check('audit_events_kind_check', sql`${table.kind} IN ('document','ticket','user','settings','chat')`),
   index('audit_events_kind_idx').on(table.kind),
-  index('audit_events_at_idx').on(table.at.desc()),
   index('audit_events_at_id_idx').on(table.at.desc(), table.id.desc()),
   index('audit_events_actor_id_idx').on(table.actorId),
   index('audit_events_kind_target_id_idx').on(table.kind, table.targetId),

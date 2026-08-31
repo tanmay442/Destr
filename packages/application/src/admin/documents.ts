@@ -210,11 +210,36 @@ export async function uploadPdf(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
+    const unchanged = await completeUnchangedUpload(input, deps);
+    if (unchanged !== null) return unchanged;
     if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest) {
       return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
     }
     return uploadPdfSync(input, deps);
   }, 'Failed to upload PDF');
+}
+
+async function completeUnchangedUpload(
+  input: { fileName: string; buffer: Buffer; actorId: string },
+  deps: Pick<IngestDeps, 'documents' | 'hasher'> & { runner: TransactionRunner },
+): Promise<Result<IngestResult> | null> {
+  const fileHash = deps.hasher.sha256(input.buffer);
+  const candidate = await deps.documents.findByName(input.fileName, { includeDeleted: true });
+  if (candidate?.fileHash !== fileHash) return null;
+
+  return deps.runner.run(async (tx) => {
+    const claim = await claimDocumentByName(input.fileName, fileHash, tx.documents);
+    if (claim.kind !== 'unchanged') return null;
+    if (claim.restore) {
+      await tx.documents.restore(claim.documentId);
+      await tx.audit.logDocumentEvent({
+        action: 'restore',
+        documentId: claim.documentId,
+        actorId: input.actorId,
+      });
+    }
+    return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
+  });
 }
 
 async function uploadPdfSync(

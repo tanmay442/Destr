@@ -3,14 +3,14 @@ export const MAX_CURSOR_LENGTH = 512;
 export type ListCursorKind = 'documents' | 'tickets' | 'users' | 'audit';
 
 export type AdminListCursor =
-  | { kind: 'documents'; sortAt: Date; id: number }
-  | { kind: 'tickets'; sortAt: Date; id: number }
-  | { kind: 'users'; sortAt: Date; clerkUserId: string }
-  | { kind: 'audit'; sortAt: Date; id: number };
+  | { kind: 'documents'; sortAt: Date; id: number; total: number }
+  | { kind: 'tickets'; sortAt: Date; id: number; total: number }
+  | { kind: 'users'; sortAt: Date; clerkUserId: string; total: number }
+  | { kind: 'audit'; sortAt: Date; id: number; total: number };
 
 type EncodedCursor =
-  | { v: 1; k: 'documents' | 'tickets' | 'audit'; t: string; i: number }
-  | { v: 1; k: 'users'; t: string; i: string };
+  | { v: 1; k: 'documents' | 'tickets' | 'audit'; t: string; i: number; n: number }
+  | { v: 1; k: 'users'; t: string; i: string; n: number };
 
 declare function btoa(data: string): string;
 declare function atob(data: string): string;
@@ -70,6 +70,10 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 function encodeSortAt(value: Date): string {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
     throw new TypeError('Cannot encode a cursor with an invalid sort date');
@@ -91,6 +95,13 @@ function encodeStringTieBreaker(value: string): string {
   return value;
 }
 
+function encodeTotal(value: number): number {
+  if (!isNonNegativeSafeInteger(value)) {
+    throw new TypeError('Cannot encode a cursor with an invalid total');
+  }
+  return value;
+}
+
 export function encodeListCursor(cursor: AdminListCursor): string {
   let payload: EncodedCursor;
   switch (cursor.kind) {
@@ -100,6 +111,7 @@ export function encodeListCursor(cursor: AdminListCursor): string {
         k: 'documents',
         t: encodeSortAt(cursor.sortAt),
         i: encodeNumericTieBreaker(cursor.id),
+        n: encodeTotal(cursor.total),
       };
       break;
     case 'tickets':
@@ -108,6 +120,7 @@ export function encodeListCursor(cursor: AdminListCursor): string {
         k: 'tickets',
         t: encodeSortAt(cursor.sortAt),
         i: encodeNumericTieBreaker(cursor.id),
+        n: encodeTotal(cursor.total),
       };
       break;
     case 'users':
@@ -116,6 +129,7 @@ export function encodeListCursor(cursor: AdminListCursor): string {
         k: 'users',
         t: encodeSortAt(cursor.sortAt),
         i: encodeStringTieBreaker(cursor.clerkUserId),
+        n: encodeTotal(cursor.total),
       };
       break;
     case 'audit':
@@ -124,6 +138,7 @@ export function encodeListCursor(cursor: AdminListCursor): string {
         k: 'audit',
         t: encodeSortAt(cursor.sortAt),
         i: encodeNumericTieBreaker(cursor.id),
+        n: encodeTotal(cursor.total),
       };
       break;
     default: {
@@ -162,12 +177,12 @@ export function decodeListCursor(
     return null;
   }
   const sortAt = parseSortAt(parsed.t);
-  if (sortAt === null) return null;
+  if (sortAt === null || !isNonNegativeSafeInteger(parsed.n)) return null;
 
   if (parsed.k === 'users') {
     if (typeof parsed.i !== 'string' || !isValidTieBreaker(parsed.i)) return null;
-    return { kind: 'users', sortAt, clerkUserId: parsed.i };
+    return { kind: 'users', sortAt, clerkUserId: parsed.i, total: parsed.n };
   }
   if (!isPositiveSafeInteger(parsed.i)) return null;
-  return { kind: parsed.k, sortAt, id: parsed.i };
+  return { kind: parsed.k, sortAt, id: parsed.i, total: parsed.n };
 }
