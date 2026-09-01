@@ -1,7 +1,12 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { normalizeOpenAIBaseURL } from './openai-base-url';
-import { registerChatProvider } from './registries';
+import { registerChatProvider, registerChatProviderAdapter } from './registries';
+import {
+  OPENAI_PROMPT_CACHE_CAPABILITIES,
+  buildOpenAIPromptCacheOptions,
+  parsePromptCacheUsage,
+} from './prompt-cache';
 
 export function getOpenAIChatModel(modelId?: string): LanguageModelV3 {
   const apiKey = process.env.CUSTOM_LLM_API_KEY;
@@ -18,3 +23,8 @@ export function getOpenAIChatModel(modelId?: string): LanguageModelV3 {
 }
 
 registerChatProvider('openai', getOpenAIChatModel);
+registerChatProviderAdapter('openai', {
+  capabilities: OPENAI_PROMPT_CACHE_CAPABILITIES,
+  buildProviderOptions: buildOpenAIPromptCacheOptions,
+  parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('openai', usage, providerMetadata),
+});

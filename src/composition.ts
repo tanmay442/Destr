@@ -18,6 +18,7 @@ import {
   reingestAll,
   agenticSearch,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
+  type CacheLeasePolicy, type CacheLeaseTelemetry,
   type AgenticDeps,
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
@@ -69,7 +70,7 @@ const bind = <Args extends unknown[], T>(
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = Auth.createFallbackRateLimiter({
   primary: core.rateLimiter,
@@ -81,6 +82,24 @@ const rateLimiter = Auth.createFallbackRateLimiter({
     });
   },
 });
+
+/**
+ * Cross-instance single-flight is required in production. A process-local
+ * coordinator is only enabled explicitly for local/degraded deployments.
+ */
+const configuredCacheLeasePolicy = process.env.CACHE_LEASE_MODE;
+const cacheLeasePolicy: CacheLeasePolicy = configuredCacheLeasePolicy === 'degraded'
+  ? 'degraded'
+  : configuredCacheLeasePolicy === 'strict' || process.env.NODE_ENV === 'production'
+    ? 'strict'
+    : 'degraded';
+const onCacheLeaseTelemetry = (event: CacheLeaseTelemetry): void => {
+  logger.warn('chat.cache.lease_coordination', {
+    operation: event.operation,
+    result: event.result,
+    policy: event.policy,
+  });
+};
 
 if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
@@ -325,7 +344,7 @@ function createComposition() {
     getAgenticDeps,
     resolveReranker,
     availableRerankers,
-    listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
+    listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, { ...userDeps, cursorCodec }),
     setUserRole: (input: Parameters<typeof setUserRole>[0]) =>
       bind(setUserRole, input, { ...userDeps, ...auditDeps, runner: txRunner, syncClerkRole: Auth.syncClerkUserRole }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
@@ -344,14 +363,14 @@ function createComposition() {
       }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
-      bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
+      bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps, cursorCodec }),
     uploadPdf: async (input: Parameters<typeof uploadPdf>[0]) =>
       bind(uploadPdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
-    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps }),
+    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
@@ -375,6 +394,7 @@ function createComposition() {
         embeddings: embeddingService,
         hasher: systemHasher,
         blobStorage,
+        pdfValidator: Pdf.unpdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
         summarizer: Llm.createDocSummarizer(Llm.getChatModel),
@@ -440,14 +460,37 @@ function createComposition() {
         captureQueryText: runtime.captureQueryText,
       });
     },
-    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
+    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps, cursorCodec }),
     db: core.dbClient,
     schema: Db.schema,
     blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
+    allowedChatFileOrigins: new Set(
+      (process.env.CHAT_FILE_ALLOWED_ORIGINS ?? '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    ),
+    getChatModelRequestOptions: (input: { stablePromptPrefix: string; prefixVersion: string }) => {
+      const adapter = Llm.getChatModelAdapter();
+      const providerOptions = adapter.buildProviderOptions(input);
+      return {
+        ...(providerOptions !== undefined ? { providerOptions } : {}),
+        telemetry: {
+          provider: adapter.provider,
+          model: adapter.modelId,
+          promptPrefixVersion: input.prefixVersion,
+          promptCache: { ...adapter.capabilities },
+        },
+        parseUsage: adapter.parseUsage,
+      };
+    },
+    getRetrievalProvider: () => 'pgvector',
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
+    cacheLeasePolicy,
+    onCacheLeaseTelemetry,
     answerCache: core.answerCache,
     turnResultCache: core.answerCache,
     settingsRepo,
