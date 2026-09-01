@@ -107,6 +107,8 @@ Multi-implementation ports are validated through **shared contract-assertion har
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.
 - **Admin List Cursor Pagination (`packages/domain/src/pagination.test.ts`, `packages/application/src/admin/__tests__/pagination.test.ts`, `packages/infrastructure/src/db/__tests__/repositories.test.ts`, `src/components/admin/Pagination.test.tsx`)**:
   Cursor validation and resource-kind checks, compound-key tie handling, forward and backward keyset traversal, offset compatibility, and cursor links that preserve filters.
+- **Signed Filter-Bound Cursor v2 (`packages/infrastructure/src/pagination/signed-cursor.test.ts`, `packages/infrastructure/src/config/cursor.test.ts`)**:
+  HMAC round trips, authenticated totals, one-byte and signature tampering, resource/filter/sort mismatches, expiry, previous-key rotation, explicit unsigned-v1 rejection, maximum length, and random-input totality. The domain context test also proves normalized filter key order and whitespace produce one binding while changed filters do not.
 - **Ingest Status Poller (`src/app/api/admin/documents/status/route.test.ts`)**:
   Auth gating and single aggregate pending-count query (`countPendingIngest`), replacing the previous full-table walk.
 - **Ticket Management (`packages/application/src/admin/__tests__/tickets.test.ts`)**:
@@ -149,6 +151,8 @@ export DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragage
 MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate   # apply drizzle/ migrations
 DATABASE_URL=$DATABASE_URL pnpm test  # DB-gated suites now execute instead of skipping
 ```
+
+The chat-event purge unit tests cover ordered `FOR UPDATE SKIP LOCKED` selection and child-delete rollback with an injected transaction client. The live purge/concurrency checks in `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` remain database-gated; a skipped suite is not evidence that PostgreSQL locking or cancellation passed. `packages/infrastructure/src/db/query-cancellation.test.ts` covers lazy pre-abort behavior and, when `DATABASE_URL` is reachable, repeats a live node-postgres `pg_sleep(10)` cancellation, checks `pg_stat_activity`, and verifies the pool remains healthy. Neon uses the documented statement-timeout fallback rather than claiming backend-PID cancellation.
 
 Vitest loads `.env.test` when present, and its values take precedence over inherited shell variables so the branch created by `test:ci` is tested. Remove `.env.test` to use the local shell URL above. The password matches `.env.example` / `docker-compose.yml`. Migration tooling prefers `MIGRATION_DATABASE_URL` and falls back to `DATABASE_URL`; against a fresh local volume either works, since the compose user owns the database.
 
