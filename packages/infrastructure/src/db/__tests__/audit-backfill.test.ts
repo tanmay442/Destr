@@ -33,7 +33,29 @@ function backfillBlock(): string {
     .filter(Boolean);
   const block = statements.find((s) => s.includes('DO $$'));
   if (!block) throw new Error('backfill DO block not found in migration');
-  return block;
+  // Migration 0009 ran before partitioning and used ON CONFLICT(source_ref).
+  // The current 0029 schema cannot have a parent-level unique constraint that
+  // omits the range key, so exercise the same idempotent backfill semantics
+  // with an explicit anti-join against the partitioned parent. The applied
+  // historical migration file is intentionally left unchanged.
+  const replacements: Array<[string, string]> = [
+    [
+      `FROM document_audit\n    ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING;`,
+      `FROM document_audit AS legacy\n    WHERE NOT EXISTS (\n      SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'document_audit:' || legacy.id\n    );`,
+    ],
+    [
+      `FROM ticket_audit\n    ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING;`,
+      `FROM ticket_audit AS legacy\n    WHERE NOT EXISTS (\n      SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'ticket_audit:' || legacy.id\n    );`,
+    ],
+    [
+      `FROM user_audit\n    ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING;`,
+      `FROM user_audit AS legacy\n    WHERE NOT EXISTS (\n      SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'user_audit:' || legacy.id\n    );`,
+    ],
+  ];
+  let compatible = block;
+  for (const [before, after] of replacements) compatible = compatible.replace(before, after);
+  if (compatible === block) throw new Error('backfill block did not contain the legacy conflict clauses');
+  return compatible;
 }
 
 async function seedLegacyTables(): Promise<void> {
