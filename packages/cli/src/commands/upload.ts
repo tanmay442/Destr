@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
 import {
@@ -110,60 +110,67 @@ function resolvePath(baseDir: string, p?: string): string | undefined {
   return resolve(baseDir, p);
 }
 
+class UploadFileError extends Error {}
+
+/**
+ * Open once, inspect the descriptor, and read from that same descriptor. A
+ * second size check catches files that grow/shrink while the CLI is reading
+ * them, avoiding a misleading upload based on a different file version.
+ */
+function readUploadFile(
+  filePath: string,
+  opts: { label: string; maxBytes: number },
+): Buffer {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, 'r');
+    const before = fstatSync(fd);
+    if (!before.isFile()) {
+      throw new UploadFileError(`${opts.label} path is not a file: ${filePath}`);
+    }
+    if (before.size > opts.maxBytes) {
+      throw new UploadFileError(
+        `${opts.label} exceeds maximum size of ${opts.maxBytes} bytes: ${filePath}`,
+      );
+    }
+    const contents = readFileSync(fd);
+    const after = fstatSync(fd);
+    if (after.size !== before.size || contents.length !== before.size) {
+      throw new UploadFileError(`${opts.label} changed while reading: ${filePath}`);
+    }
+    return contents;
+  } catch (error: unknown) {
+    if (error instanceof UploadFileError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UploadFileError(`${opts.label} could not be read: ${filePath}: ${reason}`);
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The read/open error is more useful than a close failure.
+      }
+    }
+  }
+}
+
 export async function runUpload(opts: UploadOptions = {}): Promise<void> {
   const mdPath = resolvePath(opts.fixturesDir ?? process.cwd(), opts.md);
   if (!mdPath) {
-    console.error('Missing --md <file.md> (required).');
-    process.exit(1);
-  }
-  if (!existsSync(mdPath)) {
-    console.error(`Markdown file not found: ${mdPath}`);
-    process.exit(1);
+    throw new UploadFileError('Missing --md <file.md> (required).');
   }
 
   const { maxMarkdownBytes, maxPdfBytes } = getUploadLimits();
-  const mdStats = statSync(mdPath);
-  if (!mdStats.isFile()) {
-    console.error(`Markdown path is not a file: ${mdPath}`);
-    process.exit(1);
-  }
-  if (mdStats.size > maxMarkdownBytes) {
-    console.error(`Markdown file exceeds maximum size of ${maxMarkdownBytes} bytes: ${mdPath}`);
-    process.exit(1);
-  }
-
-  const mdText = readFileSync(mdPath, 'utf8');
-  const mdByteLength = Buffer.byteLength(mdText, 'utf8');
-  if (mdByteLength > maxMarkdownBytes) {
-    console.error(`Markdown file exceeds maximum size of ${maxMarkdownBytes} bytes: ${mdPath}`);
-    process.exit(1);
-  }
+  const mdBuffer = readUploadFile(mdPath, { label: 'Markdown file', maxBytes: maxMarkdownBytes });
+  const mdText = mdBuffer.toString('utf8');
   const fileName = opts.name ?? mdPath.split(/[\\/]/).pop() ?? 'upload.md';
 
   const pdfPath = resolvePath(opts.fixturesDir ?? process.cwd(), opts.pdf);
   let pdfBuffer: Buffer | undefined;
   if (pdfPath) {
-    if (!existsSync(pdfPath)) {
-      console.error(`PDF companion file not found: ${pdfPath}`);
-      process.exit(1);
-    }
-    const pdfStats = statSync(pdfPath);
-    if (!pdfStats.isFile()) {
-      console.error(`PDF companion path is not a file: ${pdfPath}`);
-      process.exit(1);
-    }
-    if (pdfStats.size > maxPdfBytes) {
-      console.error(`PDF companion exceeds maximum size of ${maxPdfBytes} bytes: ${pdfPath}`);
-      process.exit(1);
-    }
-    pdfBuffer = readFileSync(pdfPath);
-    if (pdfBuffer.length > maxPdfBytes) {
-      console.error(`PDF companion exceeds maximum size of ${maxPdfBytes} bytes: ${pdfPath}`);
-      process.exit(1);
-    }
+    pdfBuffer = readUploadFile(pdfPath, { label: 'PDF companion file', maxBytes: maxPdfBytes });
     if (!isPdf(pdfBuffer)) {
-      console.error(`PDF companion is not a valid PDF: ${pdfPath}`);
-      process.exit(1);
+      throw new UploadFileError(`PDF companion is not a valid PDF: ${pdfPath}`);
     }
   }
 
@@ -206,8 +213,7 @@ export async function runUpload(opts: UploadOptions = {}): Promise<void> {
       `${fileName}: status=${result.status} documentId=${result.documentId} chunks=${result.chunks}`,
     );
   } catch (err: unknown) {
-    console.error(`upload failed: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+    throw new UploadFileError(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -239,7 +245,7 @@ if (isMainModule()) {
     delimiter: args.delimiter ?? MD_CHUNK_DELIMITER,
     dryRun: args.dryRun,
   }).catch((err) => {
-    console.error('upload failed:', err);
+    console.error('upload failed:', err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
 }

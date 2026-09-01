@@ -37,6 +37,9 @@ const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
 
 const DEFAULT_AGENT_NAME = 'Destr';
 
+/** Stable prefix version used when grouping provider prompt-cache entries. */
+export const SYSTEM_PROMPT_PREFIX_VERSION = 'system-v1';
+
 function buildPersonaBlock(config: AppConfig): string {
   const agentName = config.agentPersona.name ?? DEFAULT_AGENT_NAME;
   const toneRule = TONE_RULE[config.agentPersona.tone];
@@ -98,10 +101,11 @@ function buildPrefetchBlock(chunks: RetrievedChunk[]): string {
   return `${header}\n\n${bullets}\n\n${directive}`;
 }
 
-export function buildSystemPrompt(
-  config: AppConfig,
-  preFetched: RetrievedChunk[] | null,
-): string {
+/**
+ * Build only the deterministic instruction/configuration prefix. Retrieval
+ * evidence is intentionally excluded so providers can cache this prefix.
+ */
+export function buildStableSystemPrompt(config: AppConfig): string {
   const blocks: string[] = [TOOL_CONTRACT_BLOCK, buildPersonaBlock(config), GUARDRAIL_BLOCK];
 
   const outOfScope = buildOutOfScopeBlock(config);
@@ -110,9 +114,14 @@ export function buildSystemPrompt(
   const custom = buildCustomInstructionsBlock(config);
   if (custom) blocks.push(custom);
   
-  if (preFetched && preFetched.length > 0) {
-    blocks.push(buildPrefetchBlock(preFetched));
-  }
-  
   return blocks.join('\n\n');
+}
+
+export function buildSystemPrompt(
+  config: AppConfig,
+  preFetched: RetrievedChunk[] | null,
+): string {
+  const stablePrefix = buildStableSystemPrompt(config);
+  if (!preFetched || preFetched.length === 0) return stablePrefix;
+  return `${stablePrefix}\n\n${buildPrefetchBlock(preFetched)}`;
 }

@@ -758,6 +758,36 @@ describe('chatTurn', () => {
     expect(opts.system).toContain('The dental plan covers two cleanings per year.');
   });
 
+  it('reuses a normalized exact-match prefetch once and records that path', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await captured.current?.searchDocumentation?.execute({ query: '  how do i reset my password?  ' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'exact_match_reused' }));
+    expect(event.meta?.reformulationCount).toBe(0);
+  });
+
+  it('performs a new search for a reformulated prefetch query and records it', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await captured.current?.searchDocumentation?.execute({ query: 'password recovery policy' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(2);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'query_changed' }));
+    expect(event.meta?.reformulationCount).toBe(1);
+  });
+
   it('does not pre-fetch on a follow-up turn even when enabled', async () => {
     const { deps } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
     const body = {

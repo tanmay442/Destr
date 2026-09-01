@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ingestPrechunked, type PrechunkedIngestDeps } from '../ingest-prechunked';
-import { ConflictError } from '@app/domain';
+import { ConflictError, UPLOAD_CHUNKED_MAX_PDF_BYTES, ValidationError } from '@app/domain';
 import type { ParsedChunk } from '@app/domain';
 
 function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDeps {
@@ -47,6 +47,7 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
     embeddings: { embed: vi.fn(), embedBatch },
     hasher: { sha256: vi.fn().mockReturnValue('hash-123') },
     blobStorage,
+    pdfValidator: { validate: vi.fn().mockResolvedValue(undefined) },
     ...overrides,
   };
 }
@@ -129,6 +130,44 @@ describe('ingestPrechunked', () => {
     await ingestPrechunked({ fileName: 'doc2.md', chunks: CHUNKS, uploadedBy: 'user' }, depsNoPdf);
     expect(depsNoPdf.blobStorage!.put).not.toHaveBeenCalled();
     expect(depsNoPdf.documents.setStorageKey).toHaveBeenCalledWith(1, null);
+  });
+
+  it('rejects an invalid companion PDF before embedding or durable storage', async () => {
+    const deps = makeDeps({
+      pdfValidator: { validate: vi.fn().mockRejectedValue(new Error('malformed PDF')) },
+    });
+    const result = await ingestPrechunked(
+      {
+        fileName: 'doc.md',
+        chunks: CHUNKS,
+        uploadedBy: 'user',
+        pdfBuffer: Buffer.from('%PDF-garbage'),
+      },
+      deps,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(ValidationError);
+    expect(deps.embeddings.embedBatch).not.toHaveBeenCalled();
+    expect(deps.blobStorage?.put).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized companion PDF before invoking the parser', async () => {
+    const validate = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({ pdfValidator: { validate } });
+    const result = await ingestPrechunked(
+      {
+        fileName: 'doc.md',
+        chunks: CHUNKS,
+        uploadedBy: 'user',
+        pdfBuffer: Buffer.alloc(UPLOAD_CHUNKED_MAX_PDF_BYTES + 1),
+      },
+      deps,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(validate).not.toHaveBeenCalled();
+    expect(deps.embeddings.embedBatch).not.toHaveBeenCalled();
   });
 
   it('deletes the companion PDF blob when the transaction/writeChunks fails (M5)', async () => {

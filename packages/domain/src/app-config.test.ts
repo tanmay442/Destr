@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import { appConfigSchema, partialAppConfigSchema } from './app-config';
 
 const parse = (input: Record<string, unknown>) =>
@@ -45,6 +46,36 @@ describe('partialAppConfigSchema', () => {
     expect(coerced.success).toBe(true);
     if (coerced.success) {
       expect(coerced.data).toEqual({ parentChunkSize: 2000 });
+    }
+  });
+});
+
+function unwrapObjectKeys(schema: unknown): string[] | null {
+  if (schema instanceof z.ZodObject) return Object.keys(schema.shape).sort();
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault) {
+    return unwrapObjectKeys(schema.unwrap());
+  }
+  return null;
+}
+
+describe('configuration schema parity', () => {
+  it('keeps every full-schema key in the partial override schema', () => {
+    const fullKeys = Object.keys(appConfigSchema.shape).sort();
+    const partialKeys = Object.keys(partialAppConfigSchema.shape).sort();
+    expect(partialKeys).toEqual(fullKeys);
+  });
+
+  it('keeps keys for every nested configuration object in sync', () => {
+    const partialEntries = new Map(Object.entries(partialAppConfigSchema.shape));
+    for (const [key, fullSchema] of Object.entries(appConfigSchema.shape)) {
+      const fullNestedKeys = unwrapObjectKeys(fullSchema);
+      if (fullNestedKeys === null) continue;
+
+      const partialSchema = partialEntries.get(key);
+      if (!partialSchema) throw new Error(`Missing partial configuration key: ${key}`);
+      const partialNestedKeys = unwrapObjectKeys(partialSchema);
+      if (partialNestedKeys === null) throw new Error(`Partial key is not an object: ${key}`);
+      expect(partialNestedKeys, `nested key parity for ${key}`).toEqual(fullNestedKeys);
     }
   });
 });

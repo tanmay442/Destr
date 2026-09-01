@@ -19,6 +19,7 @@ import type {
   IngestQueue,
   IngestStatus,
   CursorPageInfo,
+  ListCursorCodec,
 } from '@app/domain';
 import {
   parseAndEmbed,
@@ -37,6 +38,7 @@ import {
   serviceResult,
   sanitizePagination,
 } from '../service-result';
+import { createListCursorContext } from '@app/domain';
 import { requireAdminActor } from './authz';
 
 function isDocumentNameConflict(error: unknown): boolean {
@@ -74,6 +76,7 @@ export async function listDocuments(
     documents: DocumentRepository;
     chunks: ChunkRepository;
     users: UserRepository;
+    cursorCodec?: ListCursorCodec | undefined;
   },
 ): Promise<
   Result<{
@@ -96,19 +99,28 @@ export async function listDocuments(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
-    const cursor = decodeCursorAtBoundary(input.cursor, 'documents');
-    const before = decodeCursorAtBoundary(input.before, 'documents');
+    const search = input.search?.trim() || undefined;
+    const includeDeleted = input.includeDeleted === true;
+    const includeDeletedOption = deps.cursorCodec === undefined ? input.includeDeleted : includeDeleted;
+    const cursorContext = deps.cursorCodec
+      ? createListCursorContext('documents', { search: search ?? null, includeDeleted })
+      : undefined;
+    const cursor = decodeCursorAtBoundary(input.cursor, 'documents', deps.cursorCodec, cursorContext);
+    const before = decodeCursorAtBoundary(input.before, 'documents', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
       throw new ValidationError('Only one pagination cursor may be provided');
     }
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
     const { documents, total, nextCursor, previousCursor } = await deps.documents.list({
-      search: input.search,
-      includeDeleted: input.includeDeleted,
+      search,
+      includeDeleted: includeDeletedOption,
       limit,
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
+      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
+        ? { cursorCodec: deps.cursorCodec, cursorContext }
+        : {}),
     });
     const ids = documents.map((d) => d.id);
     const chunkCounts =
@@ -210,20 +222,24 @@ export async function uploadPdf(
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
-    const unchanged = await completeUnchangedUpload(input, deps);
+    // Hash once at the upload boundary and carry it through every ingest path.
+    // The queued worker may independently verify the stored blob later, but
+    // this request must not hash the same full buffer in each branch.
+    const fileHash = deps.hasher.sha256(input.buffer);
+    const unchanged = await completeUnchangedUpload(input, fileHash, deps);
     if (unchanged !== null) return unchanged;
     if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest) {
-      return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
+      return queuePdfForIngest(input, fileHash, deps, (newId) => ({ action: 'upload', documentId: newId }));
     }
-    return uploadPdfSync(input, deps);
+    return uploadPdfSync(input, fileHash, deps);
   }, 'Failed to upload PDF');
 }
 
 async function completeUnchangedUpload(
   input: { fileName: string; buffer: Buffer; actorId: string },
-  deps: Pick<IngestDeps, 'documents' | 'hasher'> & { runner: TransactionRunner },
+  fileHash: string,
+  deps: Pick<IngestDeps, 'documents'> & { runner: TransactionRunner },
 ): Promise<Result<IngestResult> | null> {
-  const fileHash = deps.hasher.sha256(input.buffer);
   const candidate = await deps.documents.findByName(input.fileName, { includeDeleted: true });
   if (candidate?.fileHash !== fileHash) return null;
 
@@ -244,9 +260,9 @@ async function completeUnchangedUpload(
 
 async function uploadPdfSync(
   input: { fileName: string; buffer: Buffer; actorId: string },
+  fileHash: string,
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
-  const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
   let parsed: Awaited<ReturnType<typeof parseAndEmbed>>;
@@ -325,10 +341,10 @@ async function uploadPdfSync(
 
 async function queuePdfForIngest(
   input: { fileName: string; buffer: Buffer; actorId: string },
+  fileHash: string,
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
   auditFor: (newDocumentId: number) => { action: 'upload' | 'replace'; documentId: number },
 ): Promise<Result<IngestResult>> {
-  const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
   let previous: RowPrevious = { fileHash: null, status: null, storageKey: null };

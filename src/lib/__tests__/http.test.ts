@@ -259,6 +259,18 @@ describe('readBoundedBytes', () => {
     expect(res).toEqual({ ok: false, reason: 'error' });
   });
 
+  it('distinguishes an aborted request from a body read failure', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const req = new Request('http://x', {
+      method: 'POST',
+      body: 'partial',
+      signal: controller.signal,
+    });
+    const res = await readBoundedBytes(req, 1000);
+    expect(res).toEqual({ ok: false, reason: 'aborted' });
+  });
+
   it('accepts a body exactly at the cap', async () => {
     const req = new Request('http://x', { method: 'POST', body: 'x'.repeat(5000) });
     const res = await readBoundedBytes(req, 5000);

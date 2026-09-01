@@ -16,6 +16,7 @@ import type {
   UserRepository,
   TransactionRunner,
   CursorPageInfo,
+  ListCursorCodec,
 } from '@app/domain';
 import { randomUUID } from 'node:crypto';
 import {
@@ -28,6 +29,7 @@ import { requireAdminActor } from './authz';
 import { safeAudit } from '../audit-reliability';
 import { decodeCursorAtBoundary, sanitizePagination, wrapServiceCall } from '../service-result';
 import { capCodePoints } from '../text';
+import { createListCursorContext } from '@app/domain';
 
 export const TICKET_STATUSES = ['created', 'in_progress', 'closed'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -46,6 +48,30 @@ const MAX_TICKET_ISSUE_LENGTH = 4000;
 const MAX_TICKET_NAME_LENGTH = 100;
 const MAX_TICKET_EMAIL_LENGTH = 254;
 const MAX_TICKET_UPDATE_ATTEMPTS = 3;
+export const MAX_TICKET_CREATE_ATTEMPTS = 5;
+const TICKET_ID_UNIQUE_CONSTRAINT = 'tickets_ticket_id_unique';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Drizzle may wrap a node-postgres/Neon error in `cause`. Retry only the
+ * unique violation for the ticket identifier itself; retrying every database
+ * error can amplify outages and can duplicate non-idempotent writes.
+ */
+function isTicketIdCollision(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!isRecord(current)) return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if (current.code === '23505' && current.constraint === TICKET_ID_UNIQUE_CONSTRAINT) return true;
+    current = current.cause;
+  }
+  return false;
+}
 
 export function sanitizeTicketNote(input: string): string {
   return sanitizeText(input);
@@ -68,13 +94,21 @@ export async function listTickets(
     before?: unknown;
     actorId: string;
   },
-  deps: { tickets: TicketRepository; users: UserRepository },
+  deps: { tickets: TicketRepository; users: UserRepository; cursorCodec?: ListCursorCodec | undefined },
 ): Promise<Result<{ tickets: TicketRow[]; total: number } & CursorPageInfo>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
-    const cursor = decodeCursorAtBoundary(input.cursor, 'tickets');
-    const before = decodeCursorAtBoundary(input.before, 'tickets');
+    const search = input.search?.trim() || undefined;
+    const cursorContext = deps.cursorCodec
+      ? createListCursorContext('tickets', {
+          status: input.status ?? null,
+          assignee: input.assignee ?? null,
+          search: search ?? null,
+        })
+      : undefined;
+    const cursor = decodeCursorAtBoundary(input.cursor, 'tickets', deps.cursorCodec, cursorContext);
+    const before = decodeCursorAtBoundary(input.before, 'tickets', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
       throw new ValidationError('Only one pagination cursor may be provided');
     }
@@ -82,11 +116,14 @@ export async function listTickets(
     const result = await deps.tickets.list({
       status: input.status,
       assignee: input.assignee,
-      search: input.search,
+      search,
       limit,
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
+      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
+        ? { cursorCodec: deps.cursorCodec, cursorContext }
+        : {}),
     });
     return ok({
       tickets: result.rows,
@@ -180,9 +217,8 @@ export async function createTicket(
   input: CreateTicketInput,
   deps: { tickets: TicketRepository; audit: AuditLog },
 ): Promise<Result<{ ticketId: string; status: 'created' }>> {
-  const MAX_CREATE_ATTEMPTS = 5;
   let lastErr: unknown;
-  for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < MAX_TICKET_CREATE_ATTEMPTS; attempt++) {
     const ticketId = `${TICKET_ID_PREFIX}${randomUUID().replaceAll('-', '').slice(0, TICKET_ID_HEX_LENGTH)}`;
     try {
       const row = await deps.tickets.insert({
@@ -201,6 +237,9 @@ export async function createTicket(
       );
       return ok({ ticketId: row.ticketId, status: 'created' as const });
     } catch (e) {
+      if (!isTicketIdCollision(e)) {
+        return err(new ExternalServiceError('Failed to create ticket', e));
+      }
       lastErr = e;
     }
   }

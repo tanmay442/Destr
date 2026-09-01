@@ -91,3 +91,26 @@ export class PayloadTooLargeError extends DomainError {
     super(message);
   }
 }
+
+/** The caller disconnected or explicitly cancelled the in-flight request. */
+export class RequestCancelledError extends DomainError {
+  readonly code = 'request_cancelled';
+  readonly status = 499;
+  constructor(message = 'Request cancelled', cause?: unknown) {
+    super(message, { cause });
+  }
+}
+
+/**
+ * Recognize cancellation from the thrown value itself. Callers must not infer
+ * cancellation merely from a signal that happened to abort after another
+ * database or provider failure.
+ */
+export function isRequestCancellationError(error: unknown): boolean {
+  if (error instanceof RequestCancelledError) return true;
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return candidate.name === 'AbortError'
+    || candidate.code === 'ABORT_ERR'
+    || candidate.code === 'database_query_cancelled';
+}

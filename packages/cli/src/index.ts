@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error('rag-agent failed:', err);
+main().catch((err: unknown) => {
+  console.error('rag-agent failed:', err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

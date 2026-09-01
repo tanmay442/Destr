@@ -6,8 +6,8 @@ import type {
   tool,
   InferUIMessageChunk,
 } from 'ai';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { createHash, randomUUID } from 'node:crypto';
+import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
@@ -24,7 +24,11 @@ import {
   type Result,
 } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import { buildSystemPrompt } from '../prompt/build-system-prompt';
+import {
+  buildStableSystemPrompt,
+  buildSystemPrompt,
+  SYSTEM_PROMPT_PREFIX_VERSION,
+} from '../prompt/build-system-prompt';
 import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
@@ -34,7 +38,7 @@ import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
 import { citationDocumentIds, type EmittedCitation } from './emit-citations';
 import { addGroundingEvidence, createGroundingEvidence, formatGroundingReference, type GroundingEvidence } from './grounding-evidence';
-import { ChatRequestSchema } from './request-schema';
+import { createChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
 import {
   compactModelHistory,
@@ -42,7 +46,19 @@ import {
   type ChatInputMessage,
   type ChatUIMessage,
 } from './message-types';
-import { createCacheLease, waitForCachedAnswer, type CacheLease } from './cache-lease';
+import {
+  createCacheLease,
+  waitForCachedAnswer,
+  type CacheLease,
+  type CacheLeaseOptions,
+  type CacheLeasePolicy,
+  type CacheLeaseTelemetry,
+} from './cache-lease';
+import {
+  legacyTurnRequestFingerprint,
+  turnRequestFingerprint,
+  TURN_FINGERPRINT_VERSION,
+} from './turn-fingerprint';
 
 type UIMessage = ChatUIMessage;
 
@@ -52,6 +68,7 @@ interface CachedAnswerPayload {
   text: string;
   citations: EmittedCitation[];
   requestFingerprint?: string;
+  fingerprintVersion?: number;
   guardrail?: {
     outOfDomain: boolean;
     offerTicket: boolean;
@@ -74,6 +91,7 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         text?: unknown;
         citations?: unknown;
         requestFingerprint?: unknown;
+        fingerprintVersion?: unknown;
         guardrail?: unknown;
       };
       if (
@@ -95,6 +113,9 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         if (typeof candidate.requestFingerprint === 'string') {
           result.requestFingerprint = candidate.requestFingerprint;
         };
+        if (typeof candidate.fingerprintVersion === 'number') {
+          result.fingerprintVersion = candidate.fingerprintVersion;
+        }
         if (typeof candidate.guardrail === 'object' && candidate.guardrail !== null) {
           result.guardrail = candidate.guardrail as NonNullable<CachedAnswerPayload['guardrail']>;
         }
@@ -114,22 +135,39 @@ export type AiSdk = {
   createUIMessageStream: typeof createUIMessageStream;
 };
 
-function turnRequestFingerprint(
-  conversationId: string | undefined,
-  messages: ChatInputMessage[],
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ conversationId: conversationId ?? null, messages }))
-    .digest('hex');
+/** Provider-neutral usage facts returned by an infrastructure model adapter. */
+export interface ChatModelUsageTelemetry {
+  inputTokens: number | null;
+  inputTokensStatus: 'reported' | 'unsupported';
+  cachedInputTokens: number | null;
+  cachedInputTokensStatus: 'reported' | 'unsupported';
+  cacheReadTokens: number | null;
+  cacheReadStatus: 'reported' | 'unsupported';
+  cacheWriteTokens: number | null;
+  cacheWriteStatus: 'reported' | 'unsupported';
+  cacheHitRatio: number | null;
+}
+
+/**
+ * The application receives a generic adapter callback. Provider-specific
+ * option keys, capability objects, and parsing remain inside infrastructure.
+ */
+export interface ChatModelRequestOptions {
+  providerOptions?: SharedV3ProviderOptions;
+  telemetry?: Record<string, unknown>;
+  parseUsage?: (usage: unknown, providerMetadata?: unknown) => ChatModelUsageTelemetry;
 }
 
 function parseTurnResult(
   value: string,
-  requestFingerprint: string,
+  requestFingerprint: { current: string; legacy: string },
 ): { answer: CachedAnswerPayload } | { conflict: true } | null {
   const answer = parseCachedAnswer(value, 'turn-result');
   if (!answer) return null;
-  if (answer.requestFingerprint !== requestFingerprint) return { conflict: true };
+  const expected = answer.fingerprintVersion === TURN_FINGERPRINT_VERSION
+    ? requestFingerprint.current
+    : requestFingerprint.legacy;
+  if (answer.requestFingerprint !== expected) return { conflict: true };
   return { answer };
 }
 
@@ -164,6 +202,14 @@ export interface ChatTurnDeps {
   ai: AiSdk;
   getChatModel(): LanguageModelV3;
   getChatModelId(): string;
+  /** Trusted origins from which the configured model provider may fetch files. */
+  allowedChatFileOrigins?: ReadonlySet<string>;
+  getChatModelRequestOptions?: (input: {
+    stablePromptPrefix: string;
+    prefixVersion: string;
+  }) => ChatModelRequestOptions | undefined;
+  /** Provider-neutral retrieval adapter identity; raw queries are never included. */
+  getRetrievalProvider?: () => string;
   getEmbeddingModelId(): string;
   getRuntimeConfig(): Promise<AppConfig>;
   searchChunks(
@@ -185,6 +231,10 @@ export interface ChatTurnDeps {
     query: string,
     ctx: { embeddingModel: string; chatModel: string; userId?: string; fingerprint?: string },
   ): string;
+  /** Strict in production; degraded is an explicit local-development mode. */
+  cacheLeasePolicy?: CacheLeasePolicy;
+  /** Receives rate-limited lease availability/ownership diagnostics. */
+  onCacheLeaseTelemetry?: (event: CacheLeaseTelemetry) => void;
   rateLimit: RateLimiter;
   createTicket(input: {
     userId: string;
@@ -239,6 +289,7 @@ export type ChatTurnResult =
     }
   | { kind: 'rate-limited'; retryAfterSec: string | undefined }
   | { kind: 'cache-wait-timeout' }
+  | { kind: 'cache-unavailable' }
   | { kind: 'idempotency-conflict' }
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
@@ -331,6 +382,8 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
 
 interface TurnMetrics {
   retrieveMs: number;
+  prefetchMs: number | null;
+  prefetchStatus: 'disabled' | 'performed' | 'exact_match_reused' | 'query_changed';
   firstTokenMs: number | null;
   hallucinationMs: number | null;
   hitCount: number | null;
@@ -338,6 +391,28 @@ interface TurnMetrics {
   ticketCreated: boolean;
   ticketId: string | null;
   rewritten: boolean;
+  reformulationCount: number;
+}
+
+interface GenerationUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonnegativeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function parseGenerationUsage(value: unknown): GenerationUsage {
+  if (!isRecord(value)) return { inputTokens: null, outputTokens: null };
+  return {
+    inputTokens: nonnegativeNumber(value.inputTokens),
+    outputTokens: nonnegativeNumber(value.outputTokens),
+  };
 }
 
 function buildChatTools(deps: ChatTurnDeps, opts: {
@@ -366,6 +441,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   } = opts;
   let ticketOpenedInTurn = false;
   let prefetchedConsumed = false;
+  let prefetchQueryChanged = false;
   return {
     searchDocumentation: deps.ai.tool({
       description:
@@ -397,6 +473,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           prefetched.query.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
         if (canReusePrefetch) {
           prefetchedConsumed = true;
+          metrics.prefetchStatus = 'exact_match_reused';
           matches = prefetched.matches;
           for (const match of matches) {
             if (metrics.maxSimilarity === null || match.similarity > metrics.maxSimilarity) {
@@ -411,10 +488,16 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             section: match.sectionTitle ?? undefined,
           }));
         }
+        if (prefetched !== undefined && !prefetchQueryChanged) {
+          prefetchQueryChanged = true;
+          metrics.prefetchStatus = 'query_changed';
+          metrics.reformulationCount += 1;
+        }
         if (effectiveMode === 'agentic') {
           const r = await deps.agenticSearch(cfg, query, { signal: request.signal });
           if (!r.ok) {
             logger.error('Agentic retrieval failed', { error: r.error });
+            metrics.retrieveMs += Math.round(performance.now() - t0);
             return [];
           }
           if (deps.traceEnabled) {
@@ -430,12 +513,16 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             isEmptyRef.value = r.value.isEmpty;
             resultStateRef.value = r.value.resultState;
           }
-          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
+          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) {
+            metrics.rewritten = true;
+            metrics.reformulationCount += 1;
+          }
           matches = r.value.chunks;
         } else {
           const r = await deps.searchChunks(cfg, query, { limit, signal: request.signal });
           if (!r.ok) {
             logger.error('RAG retrieval failed', { error: r.error });
+            metrics.retrieveMs += Math.round(performance.now() - t0);
             return [];
           }
           if (deps.traceEnabled) {
@@ -543,7 +630,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     return { kind: 'payload-too-large' };
   }
   const raw = body.value;
-  const parsed = ChatRequestSchema.safeParse(raw);
+  const parsed = createChatRequestSchema(deps.allowedChatFileOrigins).safeParse(raw);
   if (!parsed.success) {
     return { kind: 'invalid-request', issues: parsed.error.issues };
   }
@@ -561,7 +648,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
-  const turnRequestHash = turnRequestFingerprint(parsed.data.conversationId, inputMessages);
+  const turnRequestHash = {
+    current: turnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      retry: parsed.data.retry,
+      semanticContext: cacheFingerprint(cfg, cfg.retrievalMode),
+      messages: inputMessages,
+    }),
+    legacy: legacyTurnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      messages: inputMessages,
+    }),
+  };
 
   const isFirstTurn = messages.length <= 1;
 
@@ -575,7 +673,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, firstTokenMs: null, hallucinationMs: null, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+  const metrics: TurnMetrics = {
+    retrieveMs: 0,
+    prefetchMs: null,
+    prefetchStatus: 'disabled',
+    firstTokenMs: null,
+    hallucinationMs: null,
+    hitCount: null,
+    maxSimilarity: null,
+    ticketCreated: false,
+    ticketId: null,
+    rewritten: false,
+    reformulationCount: 0,
+  };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -596,12 +706,24 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     const leases = [cacheLease, turnLease].filter((lease): lease is CacheLease => lease !== null);
     cacheLease = null;
     turnLease = null;
-    await Promise.all(leases.map((lease) => lease.release()));
+    const results = await Promise.all(leases.map((lease) => lease.releaseResult()));
+    for (const result of results) {
+      if (result.kind === 'unavailable') {
+        logger.warn('chat.cache.lease_release_unavailable', { turnId });
+      }
+    }
   };
   let leasesEscaped = false;
-  request.signal.addEventListener('abort', () => {
-    void releaseLeases();
-  }, { once: true });
+  const cacheLeaseOptions: CacheLeaseOptions = {
+    policy: deps.cacheLeasePolicy ?? 'degraded',
+    onTelemetry: deps.onCacheLeaseTelemetry ?? ((event: CacheLeaseTelemetry): void => {
+      logger.warn('chat.cache.lease_coordination', {
+        operation: event.operation,
+        result: event.result,
+        policy: event.policy,
+      });
+    }),
+  };
 
   try {
     if (turnResultCache && turnResultKey) {
@@ -609,13 +731,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
       if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
       if (!turnState) {
-        const lease = createCacheLease(turnResultCache, turnResultKey, Math.ceil(MAX_DURATION_MS / 1000));
-        if (await lease.acquire()) {
+        const lease = createCacheLease(
+          turnResultCache,
+          turnResultKey,
+          Math.ceil(MAX_DURATION_MS / 1000),
+          cacheLeaseOptions,
+        );
+        const leaseResult = await lease.acquireResult();
+        if (leaseResult.kind === 'acquired') {
           turnLease = lease;
           turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
-        } else {
+        } else if (leaseResult.kind === 'held') {
           const remainingWaitMs = Math.max(
             1_000,
             MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
@@ -627,6 +755,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
           if (!turnState) return { kind: 'cache-wait-timeout' };
+        } else {
+          return { kind: 'cache-unavailable' };
         }
       }
       if (turnState && 'answer' in turnState) {
@@ -678,11 +808,17 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
     let cached = await deps.answerCache.get(cacheKey).catch(() => null);
     if (!cached) {
-      const lease = createCacheLease(deps.answerCache, cacheKey, Math.ceil(MAX_DURATION_MS / 1000));
-      if (await lease.acquire()) {
+      const lease = createCacheLease(
+        deps.answerCache,
+        cacheKey,
+        Math.ceil(MAX_DURATION_MS / 1000),
+        cacheLeaseOptions,
+      );
+      const leaseResult = await lease.acquireResult();
+      if (leaseResult.kind === 'acquired') {
         cacheLease = lease;
         cached = await deps.answerCache.get(cacheKey).catch(() => null);
-      } else {
+      } else if (leaseResult.kind === 'held') {
         const remainingWaitMs = Math.max(
           1_000,
           MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
@@ -692,6 +828,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           signal: request.signal,
         });
         if (!cached) return { kind: 'cache-wait-timeout' };
+      } else {
+        return { kind: 'cache-unavailable' };
       }
     }
     if (cached) {
@@ -756,7 +894,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   let prefetch: RetrievedChunk[] | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
+    const prefetchStartedAt = performance.now();
     const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
+    metrics.prefetchMs = Math.round(performance.now() - prefetchStartedAt);
+    metrics.retrieveMs += metrics.prefetchMs;
+    metrics.prefetchStatus = 'performed';
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
@@ -764,6 +906,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       prefetch = addGroundingEvidence(groundingEvidence, prefetchResult.value);
     }
   }
+
+  const modelRequestOptions = deps.getChatModelRequestOptions?.({
+    stablePromptPrefix: buildStableSystemPrompt(cfg),
+    prefixVersion: SYSTEM_PROMPT_PREFIX_VERSION,
+  });
 
   const outOfDomainRef = { value: false };
   const isEmptyRef = { value: false };
@@ -805,6 +952,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       metrics,
       ...(prefetch ? { prefetched: { query: lastUserText, matches: prefetch } } : {}),
     }),
+    ...(modelRequestOptions?.providerOptions !== undefined
+      ? { providerOptions: modelRequestOptions.providerOptions }
+      : {}),
   });
 
   const llmStream = result.toUIMessageStream<UIMessage>({ originalMessages: messages });
@@ -878,6 +1028,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
           if (
             cacheKey &&
+            cacheLease?.isOwned() === true &&
             !timedOut &&
             shouldCache({
               citations: finalCitations,
@@ -894,8 +1045,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 if (deps.traceEnabled) {
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
                 }
-                await deps.answerCache.set(
-                  cacheKey,
+                await cacheLease?.publish(
                   JSON.stringify({ v: 1, text: finalAnswer, citations: finalCitations }),
                   cfg.answerCacheTtlSec,
                 );
@@ -904,7 +1054,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               logger.warn('Answer cache write skipped', { error: String(err) });
             }
           }
-          if (turnResultCache && turnResultKey && !timedOut) {
+          if (turnResultCache && turnResultKey && turnLease?.isOwned() === true && !timedOut) {
             try {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
@@ -915,12 +1065,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                       isEmpty,
                     }
                   : undefined;
-                await turnResultCache.set(
-                  turnResultKey,
+                await turnLease?.publish(
                   JSON.stringify({
                     v: 1,
                     kind: 'turn-result',
-                    requestFingerprint: turnRequestHash,
+                    requestFingerprint: turnRequestHash.current,
+                    fingerprintVersion: TURN_FINGERPRINT_VERSION,
                     text: finalAnswer,
                     citations: finalCitations,
                     ...(guardrail ? { guardrail } : {}),
@@ -932,7 +1082,24 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               logger.warn('Turn result cache write skipped', { error: String(err) });
             }
           }
-          const usage = await Promise.resolve(result.usage).catch(() => null);
+          const usageCandidate = result.totalUsage !== undefined ? result.totalUsage : result.usage;
+          const usageValue = await Promise.resolve(usageCandidate).catch(() => null);
+          const parsedUsage = parseGenerationUsage(usageValue);
+          let promptCacheUsage: ChatModelUsageTelemetry | null = null;
+          if (modelRequestOptions?.parseUsage) {
+            try {
+              const providerMetadata = result.providerMetadata === undefined
+                ? undefined
+                : await Promise.resolve(result.providerMetadata).catch(() => undefined);
+              promptCacheUsage = modelRequestOptions.parseUsage(usageValue, providerMetadata);
+            } catch (cause: unknown) {
+              logger.warn('chat.model.prompt_cache_usage_parse_failed', {
+                error: String(cause),
+              });
+            }
+          }
+          const inputTokens = promptCacheUsage?.inputTokens ?? parsedUsage.inputTokens;
+          const outputTokens = parsedUsage.outputTokens;
           const totalMs = Math.round(performance.now() - turnStart);
           deps.eventSink.record({
             turnId,
@@ -948,14 +1115,33 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
             citationCount: finalCitations.length,
-            tokensIn: usage?.inputTokens ?? 0,
-            tokensOut: usage?.outputTokens ?? 0,
+            tokensIn: inputTokens,
+            tokensOut: outputTokens,
             meta: buildEventMeta({
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
               resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              modelTelemetry: modelRequestOptions?.telemetry,
+              promptCache: promptCacheUsage
+                ? {
+                    inputTokens: promptCacheUsage.inputTokens,
+                    inputTokensStatus: promptCacheUsage.inputTokensStatus,
+                    cachedInputTokens: promptCacheUsage.cachedInputTokens,
+                    cachedInputTokensStatus: promptCacheUsage.cachedInputTokensStatus,
+                    cacheReadTokens: promptCacheUsage.cacheReadTokens,
+                    cacheReadStatus: promptCacheUsage.cacheReadStatus,
+                    cacheWriteTokens: promptCacheUsage.cacheWriteTokens,
+                    cacheWriteStatus: promptCacheUsage.cacheWriteStatus,
+                    cacheHitRatio: promptCacheUsage.cacheHitRatio,
+                  }
+                : undefined,
+              prefetchStatus: metrics.prefetchStatus,
+              prefetchMs: metrics.prefetchMs,
+              reformulationCount: metrics.reformulationCount,
+              retrievalProvider: deps.getRetrievalProvider?.() ?? 'unknown',
+              retrievalMode: persistedMode,
               ...(timedOut ? { fallbackReason: 'turn_deadline' as const } : {}),
             }),
           });
@@ -963,6 +1149,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             event: 'chat.turn.timings',
             turnId,
             retrieveMs: metrics.retrieveMs,
+            prefetchMs: metrics.prefetchMs,
+            prefetchStatus: metrics.prefetchStatus,
+            reformulationCount: metrics.reformulationCount,
+            retrievalProvider: deps.getRetrievalProvider?.() ?? 'unknown',
+            retrievalMode: persistedMode,
             firstTokenMs: metrics.firstTokenMs,
             hallucinationMs: metrics.hallucinationMs,
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),

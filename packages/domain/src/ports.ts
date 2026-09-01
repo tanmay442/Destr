@@ -3,7 +3,7 @@
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
 import type { AppConfig } from './app-config';
-import type { AdminListCursor } from './pagination';
+import type { AdminListCursor, CursorContext, ListCursorCodec } from './pagination';
 
 export type DocumentListCursor = Extract<AdminListCursor, { kind: 'documents' }>;
 export type TicketListCursor = Extract<AdminListCursor, { kind: 'tickets' }>;
@@ -112,6 +112,9 @@ export interface DocumentRepository {
     offset?: number | undefined;
     cursor?: DocumentListCursor | undefined;
     before?: DocumentListCursor | undefined;
+    /** Signed cursor adapter and its normalized request binding. */
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number } & CursorPageInfo>;
   countChunksForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countChunksForAll(): Promise<number>;
@@ -176,6 +179,11 @@ export interface RetrievedChunkRow {
 export interface ContentParser {
   extractPages(buffer: Uint8Array): Promise<Array<{ page: number; text: string }>>;
   extractText(buffer: Uint8Array): Promise<string>;
+}
+
+/** Performs bounded structural validation before a PDF is durably stored. */
+export interface PdfValidator {
+  validate(buffer: Uint8Array, opts?: { signal?: AbortSignal | undefined }): Promise<void>;
 }
 
 /** A chunking strategy that turns structured pages into DocumentChunk[]. */
@@ -284,6 +292,8 @@ export interface TicketRepository {
       offset?: number | undefined;
       cursor?: TicketListCursor | undefined;
       before?: TicketListCursor | undefined;
+      cursorCodec?: ListCursorCodec | undefined;
+      cursorContext?: CursorContext | undefined;
     },
   ): Promise<{ rows: TicketRow[]; total: number } & CursorPageInfo>;
   latest(): Promise<{ id: number; ticketId: string } | null>;
@@ -328,6 +338,8 @@ export interface UserRepository {
     offset?: number | undefined;
     cursor?: UserListCursor | undefined;
     before?: UserListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   }): Promise<{ rows: UserRow[]; total: number } & CursorPageInfo>;
   countAll(): Promise<number>;
   countAdmins(): Promise<number>;
@@ -379,6 +391,8 @@ export interface AuditListFilter {
   offset?: number | undefined;
   cursor?: AuditListCursor | undefined;
   before?: AuditListCursor | undefined;
+  cursorCodec?: ListCursorCodec | undefined;
+  cursorContext?: CursorContext | undefined;
 }
 
 export interface AuditLog {
@@ -716,7 +730,65 @@ export interface RateLimiter {
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 
-/** Optional lease port for preventing concurrent population of one answer key. */
+/** The result of trying to become the producer for one cache key. */
+export type LeaseAcquireResult =
+  | { kind: 'acquired'; handle: LeaseHandle }
+  | { kind: 'held' }
+  | { kind: 'unavailable' };
+
+/** Result of extending an owned lease. */
+export type LeaseRenewResult =
+  | { kind: 'renewed' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' }
+  | { kind: 'unsupported' };
+
+/** Result of releasing an owned lease. */
+export type LeaseReleaseResult =
+  | { kind: 'released' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' };
+
+/** Result of atomically publishing a value while ownership is still valid. */
+export type LeasePublishResult =
+  | { kind: 'published' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' }
+  | { kind: 'unsupported' };
+
+/**
+ * Opaque ownership handle returned by a cache coordination provider.
+ *
+ * Provider tokens (for example Redis values) stay inside the adapter. The
+ * application can only renew or release the ownership represented by this
+ * handle and cannot accidentally mix a token with another cache key.
+ */
+export interface LeaseHandle {
+  /** Adapters may disable renewal when the legacy provider cannot extend TTL. */
+  readonly renewalSupported?: boolean;
+  renew(ttlSec: number): Promise<LeaseRenewResult>;
+  /** Distributed adapters use this to fence stale producers at publication. */
+  publish?(value: string, ttlSec: number): Promise<LeasePublishResult>;
+  release(): Promise<LeaseReleaseResult>;
+}
+
+/** Whether a coordination provider is process-local or shared by instances. */
+export type CacheLeaseScope = 'local' | 'distributed';
+
+/** Explicit single-flight coordination for one answer-cache provider. */
+export interface CacheLeaseCoordinator {
+  readonly scope: CacheLeaseScope;
+  acquire(key: string, ttlSec: number): Promise<LeaseAcquireResult>;
+}
+
+/** Descriptive aliases for callers that refer to this port as single-flight. */
+export type CacheCoordination = CacheLeaseCoordinator;
+export type SingleFlightCoordinator = CacheLeaseCoordinator;
+
+/**
+ * Legacy token-shaped lease kept for source compatibility with older adapters.
+ * New callers must use `AnswerCache.coordination`, whose handle hides tokens.
+ */
 export interface AnswerCacheLease {
   tryAcquire(key: string, ttlSec: number): Promise<string | null>;
   release(key: string, token: string): Promise<void>;
@@ -726,6 +798,9 @@ export interface AnswerCacheLease {
 export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
+  /** Explicit ownership coordination; absent only for legacy/test adapters. */
+  coordination?: CacheLeaseCoordinator;
+  /** @deprecated Use `coordination`; retained for older adapter consumers. */
   lease?: AnswerCacheLease;
 }
 

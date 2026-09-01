@@ -230,3 +230,25 @@ export const ANSWER_CACHE_ENABLED: boolean = defaultConfig.ANSWER_CACHE_ENABLED 
 export const ANSWER_CACHE_TTL_SEC: number = defaultConfig.ANSWER_CACHE_TTL_SEC as number;
 export const TRACE_ENABLED: boolean = defaultConfig.TRACE_ENABLED as boolean;
 export const EVAL_FAITHFULNESS_THRESHOLD: number = defaultConfig.EVAL_FAITHFULNESS_THRESHOLD as number;
+
+// Database settings have a separate parser because the pool/client must share
+// one validated URL and pool size rather than reading process.env at import time.
+export {
+  DEFAULT_DATABASE_POOL_SIZE,
+  DEFAULT_NEON_PRODUCTION_POOL_SIZE,
+  MAX_DATABASE_POOL_SIZE,
+  parseDatabaseConfig,
+  parseDatabaseConnection,
+  redactDatabaseUrl,
+  resetNonPooledNeonWarnings,
+} from './database';
+export type { DatabaseConfig, DatabaseConfigOptions, ParsedDatabaseConnection } from './database';
+
+export {
+  DEFAULT_CURSOR_TTL_SECONDS,
+  MAX_CURSOR_TTL_SECONDS,
+  MIN_CURSOR_SECRET_BYTES,
+  parseCursorSigningConfig,
+  defaultCursorEnv,
+} from './cursor';
+export type { CursorSigningConfig, CursorSigningConfigOptions } from './cursor';

@@ -329,6 +329,22 @@ describe('/api/chat', () => {
     expect(streamTextImpl).not.toHaveBeenCalled();
   });
 
+  it('returns 499 when the client cancels the request body', async () => {
+    authMock.mockResolvedValue({ userId: 'user_cancelled' });
+    const controller = new AbortController();
+    controller.abort();
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [] }),
+        signal: controller.signal,
+      }),
+    );
+    expect(res.status).toBe(499);
+    expect(streamTextImpl).not.toHaveBeenCalled();
+  });
+
   it('caps concurrent streams per user at 2, freeing the slot when a stream ends', async () => {
     authMock.mockResolvedValue({ userId: 'user_conc' });
     let blocked = true;

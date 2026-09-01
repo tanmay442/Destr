@@ -1,9 +1,17 @@
 import { randomUUID } from 'crypto';
-import { err, ok, type Result, ValidationError, ExternalServiceError, ConflictError } from '@app/domain';
+import {
+  err,
+  ok,
+  type Result,
+  ValidationError,
+  ExternalServiceError,
+  ConflictError,
+  UPLOAD_CHUNKED_MAX_PDF_BYTES,
+} from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, BlobStorage, TransactionRunner, ParsedChunk, MarkdownParser,
-  DocSummarizer,
+  DocSummarizer, PdfValidator,
 } from '@app/domain';
 import {
   writeChunks,
@@ -17,6 +25,7 @@ import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
 const MAX_PRECHUNKED_CHUNKS = 5000;
 const MAX_PRECHUNKED_DELIMITER_LENGTH = 200;
+const PDF_VALIDATION_TIMEOUT_MS = 15_000;
 
 function safeBlobName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
@@ -41,6 +50,8 @@ export interface PrechunkedIngestDeps {
   hasher: Hasher;
   /** Stores the companion PDF and links it to the document row. */
   blobStorage?: BlobStorage;
+  /** Validates a companion PDF structurally before hashing, embedding, or storage. */
+  pdfValidator?: PdfValidator;
   /** Makes the upsert + chunk-replace sequence atomic. */
   runner?: TransactionRunner;
   /** Optional Contextual-Chunk-Header summarizer. */
@@ -67,6 +78,25 @@ export async function ingestPrechunked(
   }
   if (chunks.length > MAX_PRECHUNKED_CHUNKS) {
     return err(new ValidationError(`${fileName} has ${chunks.length} segments; maximum is ${MAX_PRECHUNKED_CHUNKS}`));
+  }
+  if (pdfBuffer) {
+    if (pdfBuffer.byteLength > UPLOAD_CHUNKED_MAX_PDF_BYTES) {
+      return err(new ValidationError(
+        `Companion PDF exceeds ${UPLOAD_CHUNKED_MAX_PDF_BYTES} bytes`,
+      ));
+    }
+    if (!deps.pdfValidator) {
+      return err(new ValidationError('Companion PDF validation is unavailable'));
+    }
+    try {
+      await deps.pdfValidator.validate(pdfBuffer, {
+        signal: AbortSignal.timeout(PDF_VALIDATION_TIMEOUT_MS),
+      });
+    } catch (cause: unknown) {
+      return err(new ValidationError('Companion PDF is invalid or unsupported', {
+        reason: cause instanceof Error ? cause.message : 'validation failed',
+      }));
+    }
   }
 
   // Dedup hash covers the markdown AND any companion PDF, so re-uploading one

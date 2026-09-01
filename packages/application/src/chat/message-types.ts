@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import type { ValidatedChatFile } from './chat-file';
 
 export interface ChatCitationData {
   id?: number;
@@ -36,12 +37,7 @@ export type ChatUIMessage = UIMessage<
 export type ChatInputPart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text?: string }
-  | {
-      type: 'file';
-      url: string;
-      filename?: string;
-      mediaType?: string;
-    };
+  | ValidatedChatFile;
 
 export interface ChatInputMessage {
   id?: string;
@@ -54,7 +50,17 @@ export const MAX_MODEL_HISTORY_TEXT_CHARS = 50_000;
 
 function messageTextChars(message: ChatUIMessage): number {
   return message.parts.reduce(
-    (total, part) => total + (part.type === 'text' || part.type === 'reasoning' ? part.text.length : 0),
+    (total, part) => {
+      if (part.type === 'text' || part.type === 'reasoning') return total + part.text.length;
+      if (part.type === 'file') {
+        return total + new TextEncoder().encode(JSON.stringify({
+          url: part.url,
+          filename: part.filename,
+          mediaType: part.mediaType,
+        })).byteLength;
+      }
+      return total;
+    },
     0,
   );
 }
@@ -90,7 +96,7 @@ export function toChatUIMessages(messages: ChatInputMessage[]): ChatUIMessage[] 
           return {
             type: 'file',
             url: part.url,
-            mediaType: part.mediaType ?? 'application/octet-stream',
+            mediaType: part.mediaType,
             ...(part.filename !== undefined ? { filename: part.filename } : {}),
           };
       }

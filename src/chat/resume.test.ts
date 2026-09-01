@@ -94,6 +94,7 @@ describe('toResumedConversation', () => {
               { type: 'file', url: 'https://x/y.png', filename: 'y.png', mediaType: 'image/png' },
               { type: 'file', url: 'javascript:alert(1)', filename: 'evil.png' },
               { type: 'file', url: 'data:text/html,<script>1</script>', filename: 'data.png' },
+              { type: 'file', url: 'http://127.0.0.1/private.png', filename: 'private.png', mediaType: 'image/png' },
               { type: 'tool-call', state: 'output-available' },
             ],
           },

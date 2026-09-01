@@ -1,6 +1,11 @@
 /** Env-independent defaults consumed by domain and infrastructure configuration. */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
+export const CHAT_FILE_MAX_URL_LENGTH = 2_048;
+export const CHAT_FILE_MAX_FILENAME_LENGTH = 255;
+export const CHAT_FILE_MAX_PER_MESSAGE = 8;
+export const CHAT_FILE_MAX_PER_REQUEST = 16;
+export const CHAT_FILE_METADATA_MAX_BYTES = 64_000;
 export const UPLOAD_CHUNKED_MAX_MD_BYTES = 25_000_000;
 export const UPLOAD_CHUNKED_MAX_PDF_BYTES = 100_000_000;
 export const BLOB_GET_MAX_BYTES = UPLOAD_CHUNKED_MAX_PDF_BYTES;
@@ -19,7 +24,8 @@ export const MAX_AUDIT_LIMIT = 200;
 export const MAX_LIST_LIMIT = 100;
 export const MAX_TICKET_NOTES_LENGTH = 10_000;
 export const TICKET_ID_PREFIX = 'TKT-';
-export const TICKET_ID_HEX_LENGTH = 12;
+/** New ticket IDs use 64 bits of entropy; legacy 8- and 12-hex IDs remain valid. */
+export const TICKET_ID_HEX_LENGTH = 16;
 export const INGEST_CHUNK_SIZE = 800;
 export const PARENT_CHUNK_SIZE = 1800;
 export const CHILD_CHUNK_SIZE = 400;

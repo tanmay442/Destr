@@ -12,7 +12,7 @@ import { chatTurn } from '@app/application/chat';
 import { NextResponse, after } from 'next/server';
 import { logger } from '@/lib/logger';
 import { readBoundedText, respond } from '@/lib/http';
-import { CHAT_MAX_BODY_BYTES } from '@app/domain';
+import { CHAT_MAX_BODY_BYTES, isRequestCancellationError } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { judgeFaithfulness, judgeRelevance } from '@/composition';
 
@@ -221,9 +221,9 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
   const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
   if (!bounded.ok) {
     release();
-    return bounded.reason === 'too-large'
-      ? new Response('Payload too large', { status: 413 })
-      : new Response('Bad Request', { status: 400 });
+    if (bounded.reason === 'too-large') return new Response('Payload too large', { status: 413 });
+    if (bounded.reason === 'aborted') return new Response(null, { status: 499 });
+    return new Response('Bad Request', { status: 400 });
   }
   const boundedReq = new Request(req.url, {
     method: 'POST',
@@ -238,6 +238,12 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       ai: { streamText, tool, stepCountIs, convertToModelMessages, createUIMessageStream },
       getChatModel: () => comp.getChatModel(),
       getChatModelId: () => (comp.getChatModel() as { modelId?: string })?.modelId ?? 'unknown',
+      ...(typeof comp.getChatModelRequestOptions === 'function'
+        ? { getChatModelRequestOptions: comp.getChatModelRequestOptions }
+        : {}),
+      ...(typeof comp.getRetrievalProvider === 'function'
+        ? { getRetrievalProvider: comp.getRetrievalProvider }
+        : {}),
       getEmbeddingModelId: () => comp.getEmbeddingModelId(),
       getRuntimeConfig,
       searchChunks: (cfg, query, opts) => comp.searchChunks(cfg, query, opts),
@@ -246,6 +252,8 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       answerCache: comp.answerCache,
       turnResultCache: comp.turnResultCache,
       answerCacheKey: (query, ctx) => comp.answerCacheKey(query, ctx),
+      cacheLeasePolicy: comp.cacheLeasePolicy,
+      onCacheLeaseTelemetry: comp.onCacheLeaseTelemetry,
       rateLimit: {
         check: async (key, opts) => normalizeRateLimitDecision(await comp.rateLimit(key, opts)),
       },
@@ -302,6 +310,12 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
         status: 503,
         headers: { 'Retry-After': '1' },
       });
+    case 'cache-unavailable':
+      release();
+      return new Response('Chat coordination is temporarily unavailable. Please retry shortly.', {
+        status: 503,
+        headers: { 'Retry-After': '1' },
+      });
     case 'idempotency-conflict':
       release();
       return new Response('The turn ID is already associated with a different request.', { status: 409 });
@@ -325,6 +339,7 @@ export async function POST(req: Request) {
   } catch (error) {
     const userId = chatSlotOwners.get(req);
     if (userId) releaseOwnedChatSlot(req, userId);
+    if (req.signal.aborted && isRequestCancellationError(error)) return new Response(null, { status: 499 });
     logger.error('Chat request failed', { error: String(error) });
     return respond(error);
   }

@@ -9,5 +9,7 @@ export * from './should-cache';
 export * from './grounding-evidence';
 export * from './request-schema';
 export * from './message-types';
+export * from './chat-file';
+export * from './turn-fingerprint';
 export * from './cache-lease';
 export * from './history';

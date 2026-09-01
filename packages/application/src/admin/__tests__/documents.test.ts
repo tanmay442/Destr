@@ -289,6 +289,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.blobStorage.put).not.toHaveBeenCalled();
     expect(mocks.deps.pdfParser.extractText).not.toHaveBeenCalled();
     expect(mocks.deps.embeddings.embedBatch).not.toHaveBeenCalled();
+    expect(mocks.deps.hasher.sha256).toHaveBeenCalledTimes(1);
   });
 
   it('resurrects a soft-deleted doc that is re-uploaded unchanged within the restore window', async () => {
@@ -365,6 +366,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.documents.insert).toHaveBeenCalled();
     expect(mocks.ingestQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 7, fileHash: 'newhash', attemptId: expect.any(String) }));
     expect(mocks.documents.updateIngestStatus).toHaveBeenCalledWith(7, 'queued');
+    expect(mocks.deps.hasher.sha256).toHaveBeenCalledTimes(1);
   });
 
   it('rolls back a brand-new async upload when enqueue fails so a retry can re-upload', async () => {
@@ -481,6 +483,7 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
       expect(result.value.status).toBe('inserted');
     }
     expect(mocks.ingestQueue.enqueue).not.toHaveBeenCalled();
+    expect(mocks.deps.hasher.sha256).toHaveBeenCalledTimes(1);
   });
 
   it('returns a conflict when a concurrent writer wins the name after the claim (sync)', async () => {

@@ -32,6 +32,20 @@ describe('validateEnv', () => {
     expect(result.message).toBe('');
   });
 
+  it('requires a cursor signing secret in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('CURSOR_SIGNING_SECRET', '');
+    const result = validateEnv();
+    expect(result.ok).toBe(false);
+    expect(result.missing.map((item) => item.name)).toContain('CURSOR_SIGNING_SECRET');
+  });
+
+  it('reports an invalid cache lease policy', () => {
+    vi.stubEnv('CACHE_LEASE_MODE', 'unsafe-fallback');
+    const result = validateEnv();
+    expect(result.invalid.map((item) => item.name)).toContain('CACHE_LEASE_MODE');
+  });
+
   it('lists all missing vars in one call', () => {
     vi.stubEnv('DATABASE_URL', '');
     vi.stubEnv('AI_STUDIO_KEY', '');

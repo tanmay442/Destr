@@ -39,4 +39,23 @@ describe('compactModelHistory', () => {
       'latest',
     ]);
   });
+
+  it('includes file metadata in the history compaction budget', () => {
+    const messages = toChatUIMessages([
+      inputMessage('old', 'assistant', 'old'),
+      {
+        id: 'file',
+        role: 'user',
+        parts: [{
+          type: 'file',
+          url: `https://example.com/${'x'.repeat(200)}.pdf`,
+          filename: 'document.pdf',
+          mediaType: 'application/pdf',
+        }],
+      },
+      inputMessage('latest', 'user', 'new'),
+    ]);
+
+    expect(compactModelHistory(messages, 24, 100).map((message) => message.id)).toEqual(['latest']);
+  });
 });
