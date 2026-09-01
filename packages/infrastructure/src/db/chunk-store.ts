@@ -3,7 +3,7 @@ import { db } from './client';
 import { resolveVectorDimForClient } from './schema-vector';
 import { chunks } from './schema';
 import { ValidationError } from '@app/domain';
-import { abortableQuery } from './query-cancellation';
+import { executeDatabaseCancelable } from './query-cancellation';
 import type { ChunkStore, InsertChunkInput, Hasher } from '@app/domain';
 import {
   createChunkUid,
@@ -234,19 +234,22 @@ export async function insertChunks(
   await runWithClient(client, (tx) => runInserts(normalized, tx));
 }
 
-async function deleteStaleChunks(
+export async function deleteStaleChunks(
   documentId: number,
   retainedUids: string[],
   client: Client,
 ): Promise<void> {
-  const retained = sql.join(retainedUids.map((uid) => sql`${uid}`), sql`, `);
   while (true) {
     const result = await client.execute(sql`
       WITH candidates AS MATERIALIZED (
         SELECT candidate.id
         FROM chunks AS candidate
         WHERE candidate.document_id = ${documentId}
-          AND candidate.chunk_uid NOT IN (${retained})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM unnest(${sql.param(retainedUids)}::text[]) AS retained(chunk_uid)
+            WHERE retained.chunk_uid = candidate.chunk_uid
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM chunks AS child
@@ -311,7 +314,7 @@ export async function getChunksByIds(
   }>
 > {
   if (ids.length === 0) return [];
-  const result = await abortableQuery(client.execute(sql`
+  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -331,7 +334,7 @@ export async function getChunksByIds(
     WHERE d.deleted_at IS NULL
       AND c.id IN ${ids}
     ORDER BY c.id
-  `), opts.signal);
+  `), signal: opts.signal });
   type RawRow = {
     id: number;
     chunkUid?: string | null;
@@ -388,7 +391,7 @@ export async function getChunksByDocAndRange(
     chunkIndex: number;
   }>
 > {
-  const result = await abortableQuery(client.execute(sql`
+  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -410,7 +413,7 @@ export async function getChunksByDocAndRange(
       AND c.chunk_index >= ${start}
       AND c.chunk_index <= ${end}
     ORDER BY c.chunk_index
-  `), opts.signal);
+  `), signal: opts.signal });
   type RawRow = {
     id: number;
     chunkUid?: string | null;
@@ -482,7 +485,7 @@ export async function getChunksByDocAndRanges(
   const conditions = ranges.map((r) =>
     and(sql`c.document_id = ${r.documentId}`, sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
   );
-  const result = await abortableQuery(client.execute(sql`
+  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -502,7 +505,7 @@ export async function getChunksByDocAndRanges(
     WHERE d.deleted_at IS NULL
       AND (${or(...conditions)})
     ORDER BY c.document_id, c.chunk_index
-  `), opts.signal);
+  `), signal: opts.signal });
   type RawRow = {
     id: number;
     chunkUid?: string | null;

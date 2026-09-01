@@ -2,11 +2,18 @@ import { drizzle as drizzleNeon, type NeonDatabase } from 'drizzle-orm/neon-serv
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
-import { buildMissingPool, getPool, isNeonUrl } from './pool';
+import { parseDatabaseConfig, type DatabaseConfig } from '../config/database';
+import { buildMissingPool, getPool } from './pool';
 import { registerVectorDim, resolveVectorDim } from './schema-vector';
 import * as schema from './schema';
 
 export { schema };
+
+const clientDatabaseConfigs = new WeakMap<object, DatabaseConfig>();
+
+export function databaseConfigForClient(client: object): DatabaseConfig | undefined {
+  return clientDatabaseConfigs.get(client);
+}
 
 /**
  * Call once per process (composition/CLI). Singleton semantics are enforced in Phase 05.
@@ -17,16 +24,21 @@ export function createDbClient(cfg: { databaseUrl?: string; vectorDim?: number; 
   if (!Number.isInteger(vectorDim) || vectorDim <= 0) {
     throw new Error(`Invalid vectorDim: "${vectorDim}". Expected a positive integer.`);
   }
-  const url = cfg.databaseUrl ?? cfg.env?.get('DATABASE_URL') ?? defaultProcessEnv.get('DATABASE_URL') ?? '';
-  const client = !url
+  const env = cfg.env ?? defaultProcessEnv;
+  const databaseConfig = parseDatabaseConfig(
+    env,
+    cfg.databaseUrl !== undefined ? { databaseUrl: cfg.databaseUrl } : {},
+  );
+  const client = !databaseConfig.databaseUrl
     ? drizzleNeon(buildMissingPool(), { schema })
     : (() => {
-        const pool = getPool(url);
-        return isNeonUrl(url)
+        const pool = getPool(databaseConfig);
+        return databaseConfig.isNeon
           ? drizzleNeon(pool as ReturnType<typeof getPool> & import('@neondatabase/serverless').Pool, { schema })
           : (drizzlePg(pool as import('pg').Pool, { schema }) as unknown as NeonDatabase<typeof schema>);
       })();
   registerVectorDim(client, vectorDim);
+  clientDatabaseConfigs.set(client, databaseConfig);
   return client;
 }
 

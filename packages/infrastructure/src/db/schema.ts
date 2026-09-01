@@ -1,6 +1,7 @@
 import {
   pgTable, serial, bigserial, text, timestamp, integer, real, jsonb, boolean,
   index, check, foreignKey, uniqueIndex, uuid, smallint,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { vector, tsvector } from './schema-vector';
@@ -70,7 +71,10 @@ export const chunks = pgTable('chunks', {
 ]);
 
 export const tickets = pgTable('tickets', {
-  id: serial('id').primaryKey(),
+  // This table can outlive the 32-bit serial range at deployment scale.
+  // Keep the JS representation numeric, with safe-integer validation at
+  // repository boundaries (see safe-id.ts); never emit a raw bigint in JSON.
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   ticketId: text('ticket_id').notNull().unique(),
   userId: text('user_id').notNull(),
   name: text('name').notNull(),
@@ -100,9 +104,9 @@ export const users = pgTable('users', {
   index('users_created_at_id_idx').on(table.createdAt, table.clerkUserId),
 ]);
 
-/** Generic audit trail. `source_ref` is a backfill-only dedup key. */
+/** Generic audit trail. `source_ref` is retained for historical backfill data. */
 export const auditEvents = pgTable('audit_events', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).notNull(),
   kind: text('kind').notNull(),
   action: text('action').notNull(),
   actorId: text('actor_id').notNull(),
@@ -117,9 +121,7 @@ export const auditEvents = pgTable('audit_events', {
   index('audit_events_at_id_idx').on(table.at.desc(), table.id.desc()),
   index('audit_events_actor_id_idx').on(table.actorId),
   index('audit_events_kind_target_id_idx').on(table.kind, table.targetId),
-  uniqueIndex('idx_audit_events_source_ref')
-    .on(table.sourceRef)
-    .where(sql`${table.sourceRef} IS NOT NULL`),
+  primaryKey({ columns: [table.id, table.at], name: 'audit_events_pkey' }),
 ]);
 
 /**
@@ -140,9 +142,24 @@ export const auditDeadLetter = pgTable('audit_dead_letter', {
 ]);
 
 /** Append-only per-turn chat metrics. `mode` is `agentic` or `vector`. */
+/**
+ * Non-partitioned registry for globally unique turn IDs. The physical event
+ * table is range-partitioned by created_at, so a parent-level UNIQUE(turn_id)
+ * cannot be represented by PostgreSQL. Migration 0029 installs triggers that
+ * register a turn and reject duplicate events atomically.
+ */
+export const chatTurns = pgTable('chat_turns', {
+  turnId: uuid('turn_id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  userId: text('user_id'),
+}, (table) => [
+  index('chat_turns_created_at_idx').on(table.createdAt),
+  index('chat_turns_user_id_idx').on(table.userId),
+]);
+
 export const chatEvents = pgTable('chat_events', {
-  id: serial('id').primaryKey(),
-  turnId: uuid('turn_id').unique(),
+  id: bigserial('id', { mode: 'number' }).notNull(),
+  turnId: uuid('turn_id').references(() => chatTurns.turnId, { onDelete: 'restrict' }),
   userId: text('user_id'),
   query: text('query'),
   mode: text('mode').notNull(),
@@ -161,6 +178,7 @@ export const chatEvents = pgTable('chat_events', {
   meta: jsonb('meta').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
+  primaryKey({ columns: [table.id, table.createdAt], name: 'chat_events_pkey' }),
   check('chat_events_mode_check', sql`${table.mode} IN ('agentic','vector')`),
   index('chat_events_created_at_idx').on(table.createdAt.desc()),
   index('chat_events_mode_idx').on(table.mode),
@@ -169,7 +187,7 @@ export const chatEvents = pgTable('chat_events', {
 ]);
 
 export const chatFeedback = pgTable('chat_feedback', {
-  turnId: uuid('turn_id').primaryKey().references(() => chatEvents.turnId, { onDelete: 'cascade' }),
+  turnId: uuid('turn_id').primaryKey().references(() => chatTurns.turnId, { onDelete: 'cascade' }),
   feedback: smallint('feedback').notNull(),
   documentIds: integer('document_ids').array().notNull().default(sql`'{}'`),
   chunkIds: integer('chunk_ids').array().notNull().default(sql`'{}'`),
@@ -180,8 +198,8 @@ export const chatFeedback = pgTable('chat_feedback', {
 ]);
 
 export const qualityReviews = pgTable('quality_reviews', {
-  id: serial('id').primaryKey(),
-  turnId: uuid('turn_id').references(() => chatEvents.turnId, { onDelete: 'cascade' }),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  turnId: uuid('turn_id').references(() => chatTurns.turnId, { onDelete: 'cascade' }),
   reviewerId: text('reviewer_id').references(() => users.clerkUserId, { onDelete: 'cascade' }),
   verdict: text('verdict').notNull(),
   note: text('note'),
@@ -208,13 +226,14 @@ export const chatConversations = pgTable('chat_conversations', {
 ]);
 
 export const chatMessages = pgTable('chat_messages', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: bigserial('id', { mode: 'number' }).notNull(),
   conversationId: uuid('conversation_id').notNull().references(() => chatConversations.id, { onDelete: 'cascade' }),
   turnId: uuid('turn_id'),
   role: text('role').notNull(),
   content: jsonb('content').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
+  primaryKey({ columns: [table.conversationId, table.id], name: 'chat_messages_pkey' }),
   check('chat_messages_role_check', sql`${table.role} IN ('user','assistant')`),
   check('chat_messages_content_bytes_check', sql`octet_length(${table.content}::text) <= ${sql.raw(String(MAX_STORED_MESSAGE_BYTES))}`),
   index('idx_chat_messages_conversation_id').on(table.conversationId, table.id),

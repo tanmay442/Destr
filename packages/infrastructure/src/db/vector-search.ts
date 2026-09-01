@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client';
 import { resolveVectorDimForClient } from './schema-vector';
-import { abortableQuery } from './query-cancellation';
+import { executeDatabaseCancelable } from './query-cancellation';
 import type { VectorSearch } from '@app/domain';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -37,11 +37,12 @@ export async function searchChunksByVector(
   }
   const vectorLiteral = `[${embedding.join(',')}]`;
   const candidatePool = Math.max(opts.limit * 10, 50);
-  await abortableQuery(
-    client.execute(sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`),
-    opts.signal,
-  );
-  const result = await abortableQuery(client.execute(sql`
+  const result = await executeDatabaseCancelable({
+    client,
+    operation: async (queryClient) => {
+      const runSearch = async (tx: Client) => {
+        await tx.execute(sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`);
+        return tx.execute(sql`
     WITH candidates AS (
       SELECT ch.id
       FROM chunks ch
@@ -73,8 +74,18 @@ export async function searchChunksByVector(
       AND (1 - (c.embedding <=> ${vectorLiteral}::vector)) > ${opts.threshold}
       ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     ORDER BY similarity DESC
-    LIMIT ${opts.limit}
-  `), opts.signal);
+        LIMIT ${opts.limit}
+        `);
+      };
+      // Real Drizzle clients keep the LOCAL HNSW setting and query on one
+      // transaction/connection. Minimal contract-test clients may expose only
+      // execute; retain that narrow compatibility without affecting runtime.
+      return typeof queryClient.transaction === 'function'
+        ? queryClient.transaction((tx) => runSearch(tx as Client))
+        : runSearch(queryClient);
+    },
+    signal: opts.signal,
+  });
   type RawRow = {
     id: number;
     chunkUid?: string | null;

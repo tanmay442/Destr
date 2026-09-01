@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client';
 import type { LexicalSearch } from '@app/domain';
-import { abortableQuery } from './query-cancellation';
+import { executeDatabaseCancelable } from './query-cancellation';
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -28,7 +28,7 @@ export async function searchChunksByLexical(
 > {
   if (!query.trim()) return [];
   const lexQuery = sql`plainto_tsquery('english', ${query})`;
-  const result = await abortableQuery(client.execute(sql`
+  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -51,7 +51,7 @@ export async function searchChunksByLexical(
       ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     ORDER BY similarity DESC
     LIMIT ${opts.limit}
-  `), opts.signal);
+  `), signal: opts.signal });
   type RawRow = {
     id: number;
     chunkUid?: string | null;

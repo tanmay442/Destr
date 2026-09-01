@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { eq, isNull, or, sql, SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
-import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter } from '../schema';
+import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter } from '../schema';
 import { db } from '../client';
 import type { ChatEventInput } from '@app/domain';
 
@@ -64,6 +64,81 @@ function makeFakeClient(opts: { failChatInsert?: boolean } = {}) {
 }
 
 const sample: ChatEventInput = { userId: 'u1', query: 'q', mode: 'vector' };
+
+function makeTransactionalPurgeClient(options: { failChild?: unknown } = {}) {
+  const state = {
+    transactions: 0,
+    commits: 0,
+    rollbacks: 0,
+    selectCalls: 0,
+    selectedConditions: [] as unknown[],
+    orderBy: [] as unknown[],
+    limits: [] as number[],
+    locks: [] as unknown[],
+    deletedTables: [] as unknown[],
+    parentDeleteCount: 0,
+  };
+  const selectedRows = [{ id: 1, turnId: uuid(1) }];
+  const tx = {
+    select() {
+      return {
+        from() {
+          return {
+            where(condition: unknown) {
+              state.selectedConditions.push(condition);
+              return {
+                orderBy(column: unknown) {
+                  state.orderBy.push(column);
+                  return {
+                    limit(value: number) {
+                      state.limits.push(value);
+                      return {
+                        for(strength: string, config: unknown) {
+                          state.locks.push({ strength, config });
+                          const rows = state.selectCalls === 0 ? selectedRows : [];
+                          state.selectCalls += 1;
+                          return Promise.resolve(rows);
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    delete(table: unknown) {
+      state.deletedTables.push(table);
+      return {
+        where: () => {
+          if (options.failChild && table === options.failChild) throw new Error('child delete failed');
+          if (table === chatEvents) {
+            state.parentDeleteCount += 1;
+            return { returning: async () => [{ id: 1 }] };
+          }
+          return [];
+        },
+      };
+    },
+  };
+  const client = {
+    ...tx,
+    async transaction<T>(callback: (inner: typeof tx) => Promise<T>): Promise<T> {
+      state.transactions += 1;
+      try {
+        const result = await callback(tx);
+        state.commits += 1;
+        return result;
+      } catch (error: unknown) {
+        state.rollbacks += 1;
+        throw error;
+      }
+    },
+  };
+  return { client: client as never, state };
+}
 
 describe('ChatEventBatcher', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -526,6 +601,36 @@ let insertCalls = 0;
     expect(batcher.patchMeta('11111111-1111-4111-8111-111111111111', { notice: false })).toBe(false);
     await batcher.flush();
     expect(inserts).toHaveLength(1);
+  });
+
+  it('purges each direct-Drizzle batch in an ordered SKIP LOCKED transaction', async () => {
+    const { client, state } = makeTransactionalPurgeClient();
+
+    await expect(new ChatEventBatcher(client).purgeOlderThan(new Date('2026-01-01T00:00:00.000Z')))
+      .resolves.toEqual({ deletedCount: 1 });
+
+    expect(state.transactions).toBe(2);
+    expect(state.commits).toBe(2);
+    expect(state.rollbacks).toBe(0);
+    expect(state.orderBy).toEqual([chatEvents.id, chatEvents.id]);
+    expect(state.limits).toEqual([2_000, 2_000]);
+    expect(state.locks).toEqual([
+      { strength: 'update', config: { skipLocked: true } },
+      { strength: 'update', config: { skipLocked: true } },
+    ]);
+    expect(state.deletedTables).toEqual([chatFeedback, qualityReviews, chatEvents]);
+  });
+
+  it('rolls back a batch when dependent cleanup fails before parent deletion', async () => {
+    const { client, state } = makeTransactionalPurgeClient({ failChild: chatFeedback });
+
+    await expect(new ChatEventBatcher(client).purgeOlderThan(new Date('2026-01-01T00:00:00.000Z')))
+      .rejects.toThrow('child delete failed');
+
+    expect(state.transactions).toBe(1);
+    expect(state.commits).toBe(0);
+    expect(state.rollbacks).toBe(1);
+    expect(state.parentDeleteCount).toBe(0);
   });
 });
 

@@ -104,13 +104,13 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
 
           const droppedUser = await tx
             .delete(chatMessages)
-            .where(eq(chatMessages.id, prevUser.id))
+            .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.id, prevUser.id)))
             .returning({ id: chatMessages.id });
           removedByReplace += droppedUser.length;
           if (nextAssistant) {
             const droppedAssistant = await tx
               .delete(chatMessages)
-              .where(eq(chatMessages.id, nextAssistant.id))
+              .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.id, nextAssistant.id)))
               .returning({ id: chatMessages.id });
             removedByReplace += droppedAssistant.length;
           }
@@ -247,7 +247,7 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
         let messages = 0;
         while (true) {
           const messageBatch = await tx
-            .select({ id: chatMessages.id })
+            .select({ id: chatMessages.id, conversationId: chatMessages.conversationId })
             .from(chatMessages)
             .where(inArray(chatMessages.conversationId, conversationIds))
             .orderBy(chatMessages.id)
@@ -255,7 +255,7 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
           if (messageBatch.length === 0) break;
           const removedMessages = await tx
             .delete(chatMessages)
-            .where(inArray(chatMessages.id, messageBatch.map((row) => row.id)))
+            .where(messageKeyPredicate(messageBatch))
             .returning({ id: chatMessages.id });
           messages += removedMessages.length;
         }
@@ -273,6 +273,15 @@ export class ChatHistoryRepository implements ChatHistoryRepo {
 
     return { deletedConversations, deletedMessages };
   }
+}
+
+function messageKeyPredicate(
+  rows: Array<{ conversationId: string; id: number }>,
+): SQL {
+  return sql`(${chatMessages.conversationId}, ${chatMessages.id}) IN (${sql.join(
+    rows.map((row) => sql`(${row.conversationId}, ${row.id})`),
+    sql`, `,
+  )})`;
 }
 
 async function countOwnerConversations(client: Client, userId: string): Promise<number> {

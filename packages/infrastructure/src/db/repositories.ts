@@ -14,6 +14,7 @@ import {
   type Document,
 } from './schema';
 import type {
+  AdminListCursor,
   TicketRow,
   UserRow,
   IngestStatus,
@@ -27,6 +28,9 @@ import type {
   Hasher,
   TicketListCursor,
   UserListCursor,
+  CursorContext,
+  ListCursorCodec,
+  ListCursorPayload,
 } from '@app/domain';
 import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, encodeListCursor, logger } from '@app/domain';
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
@@ -35,6 +39,7 @@ import { createVectorSearch } from './vector-search';
 import { createLexicalSearch } from './lexical-search';
 import { resolveVectorDim } from './schema-vector';
 import { invalidateRoleCache } from '../auth/role-cache';
+import { toSafeDatabaseId } from './safe-id';
 
 export { searchChunksByVector } from './vector-search';
 export { searchChunksByLexical } from './lexical-search';
@@ -73,6 +78,31 @@ function requiredAnd(...parts: SQL[]): SQL {
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
+}
+
+function encodeRepositoryCursor(
+  cursor: AdminListCursor,
+  codec?: ListCursorCodec,
+  context?: CursorContext,
+): string {
+  if (codec === undefined) return encodeListCursor(cursor);
+  if (context === undefined) {
+    throw new ValidationError('Signed cursor context is required');
+  }
+  const payload: ListCursorPayload = {
+    ...cursor,
+    filterFingerprint: context.filterFingerprint,
+    sort: context.sort,
+  };
+  return codec.encode(payload);
+}
+
+function toTicketRow(row: typeof tickets.$inferSelect): TicketRow {
+  return {
+    ...row,
+    id: toSafeDatabaseId(row.id, 'tickets.id'),
+    status: row.status as TicketRow['status'],
+  };
 }
 
 export async function findDocumentByName(
@@ -377,6 +407,8 @@ export async function listDocuments(
     offset?: number | undefined;
     cursor?: DocumentListCursor | undefined;
     before?: DocumentListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   },
   client: Client = db,
 ): Promise<{
@@ -452,10 +484,18 @@ export async function listDocuments(
     documents: pageRows as unknown as Array<Document & { hasBlob: boolean }>,
     total,
     nextCursor: hasNext && lastRow
-      ? encodeListCursor({ kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id, total })
+      ? encodeRepositoryCursor(
+          { kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id, total },
+          opts.cursorCodec,
+          opts.cursorContext,
+        )
       : null,
     previousCursor: hasPrevious && firstRow
-      ? encodeListCursor({ kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id, total })
+      ? encodeRepositoryCursor(
+          { kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id, total },
+          opts.cursorCodec,
+          opts.cursorContext,
+        )
       : null,
   };
 }
@@ -463,11 +503,11 @@ export async function listDocuments(
 export const ticketRepo = {
   async findByTicketId(ticketId: string, client: Client = db): Promise<TicketRow | null> {
     const row = await client.query.tickets.findFirst({ where: eq(tickets.ticketId, ticketId) });
-    return (row as TicketRow | undefined) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async findByTicketIdForUpdate(ticketId: string, client: Client = db): Promise<TicketRow | null> {
     const [row] = await client.select().from(tickets).where(eq(tickets.ticketId, ticketId)).for('update');
-    return (row as TicketRow | undefined) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async list(opts: {
     status?: 'created' | 'in_progress' | 'closed' | undefined;
@@ -477,6 +517,8 @@ export const ticketRepo = {
     offset?: number | undefined;
     cursor?: TicketListCursor | undefined;
     before?: TicketListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   }, client: Client = db): Promise<{
     rows: TicketRow[];
     total: number;
@@ -542,20 +584,29 @@ export const ticketRepo = {
       .select({ count: sql<number>`count(*)::int` })
       .from(tickets)
       .where(filter))[0]?.count ?? 0;
-    const firstRow = pageRows[0];
-    const lastRow = pageRows[pageRows.length - 1];
     const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
     const hasPrevious = isBackward
       ? hasExtra
       : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+    const safePageRows = pageRows.map((row) => toTicketRow(row));
+    const firstSafeRow = safePageRows[0];
+    const lastSafeRow = safePageRows[safePageRows.length - 1];
     return {
-      rows: pageRows as unknown as TicketRow[],
+      rows: safePageRows,
       total,
-      nextCursor: hasNext && lastRow
-        ? encodeListCursor({ kind: 'tickets', sortAt: lastRow.createdAt, id: lastRow.id, total })
+      nextCursor: hasNext && lastSafeRow
+        ? encodeRepositoryCursor(
+            { kind: 'tickets', sortAt: lastSafeRow.createdAt, id: lastSafeRow.id, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
         : null,
-      previousCursor: hasPrevious && firstRow
-        ? encodeListCursor({ kind: 'tickets', sortAt: firstRow.createdAt, id: firstRow.id, total })
+      previousCursor: hasPrevious && firstSafeRow
+        ? encodeRepositoryCursor(
+            { kind: 'tickets', sortAt: firstSafeRow.createdAt, id: firstSafeRow.id, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
         : null,
     };
   },
@@ -565,17 +616,19 @@ export const ticketRepo = {
       .from(tickets)
       .orderBy(desc(tickets.id))
       .limit(1);
-    return latest ?? null;
+    return latest
+      ? { id: toSafeDatabaseId(latest.id, 'tickets.id'), ticketId: latest.ticketId }
+      : null;
   },
   async insert(input: { ticketId: string; userId: string; name: string; email: string; issue: string }, client: Client = db): Promise<TicketRow> {
     const [row] = await client.insert(tickets).values(input).returning();
     if (!row) throw new Error('Failed to insert ticket');
-    return row as TicketRow;
+    return toTicketRow(row);
   },
   async update(ticketId: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>, client: Client = db): Promise<TicketRow | null> {
     if (Object.keys(patch).length === 0) return null;
     const [row] = await client.update(tickets).set(patch).where(eq(tickets.ticketId, ticketId)).returning();
-    return (row as TicketRow | null) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async countAll(client: Client = db): Promise<number> {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(tickets);
@@ -807,6 +860,8 @@ export const userRepo = {
     offset?: number | undefined;
     cursor?: UserListCursor | undefined;
     before?: UserListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   }, client: Client = db): Promise<{
     rows: UserRow[];
     total: number;
@@ -875,10 +930,18 @@ export const userRepo = {
       rows: pageRows,
       total,
       nextCursor: hasNext && lastRow
-        ? encodeListCursor({ kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId, total })
+        ? encodeRepositoryCursor(
+            { kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
         : null,
       previousCursor: hasPrevious && firstRow
-        ? encodeListCursor({ kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId, total })
+        ? encodeRepositoryCursor(
+            { kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
         : null,
     };
   },
@@ -1032,7 +1095,7 @@ export const auditRepo = {
       .from(auditEvents)
       .where(filter))[0]?.count ?? 0;
     const events = pageRows.map((row) => ({
-      id: row.id,
+      id: toSafeDatabaseId(row.id, 'audit_events.id'),
       kind: row.kind as AuditKind,
       action: row.action,
       actorId: row.actorId,
@@ -1052,10 +1115,18 @@ export const auditRepo = {
       events,
       total,
       nextCursor: hasNext && lastEvent
-        ? encodeListCursor({ kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id, total })
+        ? encodeRepositoryCursor(
+            { kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id, total },
+            input.cursorCodec,
+            input.cursorContext,
+          )
         : null,
       previousCursor: hasPrevious && firstEvent
-        ? encodeListCursor({ kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id, total })
+        ? encodeRepositoryCursor(
+            { kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id, total },
+            input.cursorCodec,
+            input.cursorContext,
+          )
         : null,
     };
   },

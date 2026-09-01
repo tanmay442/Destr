@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
+import { chatEvents, chatFeedback, chatTurns, qualityReviews, auditEvents, tickets, users, auditDeadLetter, type NewChatEvent } from './schema';
 import type {
   ChatEventsRepo,
   ChatEvent,
@@ -17,6 +17,7 @@ import type {
   TurnsToTicket,
   TurnToTicketBucket,
 } from '@app/domain';
+import { toSafeDatabaseId } from './safe-id';
 
 type Client = typeof db;
 
@@ -90,7 +91,7 @@ function sinceStartUtc(days: number): Date {
 
 function toChatEvent(row: typeof chatEvents.$inferSelect): ChatEvent {
   return {
-    id: row.id,
+    id: toSafeDatabaseId(row.id, 'chat_events.id'),
     turnId: row.turnId,
     userId: row.userId,
     query: row.query,
@@ -151,6 +152,11 @@ export class ChatEventBatcher implements ChatEventsRepo {
       update ${chatEvents}
       set meta = ${chatEvents.meta} || ${JSON.stringify(patch)}::jsonb
       where ${chatEvents.turnId} = ${turnId}
+        and ${chatEvents.createdAt} = (
+          select ${chatTurns.createdAt}
+          from ${chatTurns}
+          where ${chatTurns.turnId} = ${turnId}
+        )
       returning ${chatEvents.id}
     `);
     const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
@@ -607,29 +613,47 @@ export class ChatEventBatcher implements ChatEventsRepo {
     return typeof this.client.select === 'function' && typeof this.client.delete === 'function';
   }
 
+  private supportsTransactionalBatchedDeletes(): boolean {
+    return this.supportsBatchedDeletes() && typeof this.client.transaction === 'function';
+  }
+
   private async purgeEventRows(condition: SQL): Promise<number> {
-    if (!this.supportsBatchedDeletes()) return this.purgeEventRowsWithSql(condition);
+    if (!this.supportsTransactionalBatchedDeletes()) return this.purgeEventRowsWithSql(condition);
 
     let deletedCount = 0;
     while (true) {
-      const batch = await this.client
-        .select({ id: chatEvents.id, turnId: chatEvents.turnId })
-        .from(chatEvents)
-        .where(condition)
-        .limit(PURGE_BATCH_SIZE);
-      if (batch.length === 0) break;
+      const batch = await this.client.transaction(async (tx) => {
+        // Keep selection, child cleanup, and parent deletion in one short
+        // transaction. SKIP LOCKED lets independent workers make progress
+        // without selecting the same event rows.
+        const selected = await tx
+          .select({ id: chatEvents.id, turnId: chatEvents.turnId })
+          .from(chatEvents)
+          .where(condition)
+          .orderBy(chatEvents.id)
+          .limit(PURGE_BATCH_SIZE)
+          .for('update', { skipLocked: true });
+        if (selected.length === 0) {
+          return { selected: 0, deleted: 0 };
+        }
 
-      const eventIds = batch.map((row) => row.id);
-      const turnIds = batch.flatMap((row) => (row.turnId === null ? [] : [row.turnId]));
-      if (turnIds.length > 0) {
-        await this.client.delete(chatFeedback).where(inArray(chatFeedback.turnId, turnIds));
-        await this.client.delete(qualityReviews).where(inArray(qualityReviews.turnId, turnIds));
-      }
-      const deleted = await this.client
-        .delete(chatEvents)
-        .where(inArray(chatEvents.id, eventIds))
-        .returning({ id: chatEvents.id });
-      deletedCount += deleted.length;
+        const eventIds = selected.map((row) => toSafeDatabaseId(row.id, 'chat_events.id'));
+        const turnIds = selected.flatMap((row) => (row.turnId === null ? [] : [row.turnId]));
+        if (turnIds.length > 0) {
+          await tx.delete(chatFeedback).where(inArray(chatFeedback.turnId, turnIds));
+          await tx.delete(qualityReviews).where(inArray(qualityReviews.turnId, turnIds));
+        }
+        const deleted = await tx
+          .delete(chatEvents)
+          // Reapply the retention/ownership predicate after locking. A row
+          // changed by another transaction is therefore retained according
+          // to the purge policy instead of being deleted accidentally.
+          .where(and(inArray(chatEvents.id, eventIds), condition))
+          .returning({ id: chatEvents.id });
+        return { selected: selected.length, deleted: deleted.length };
+      });
+      if (batch.selected === 0) break;
+      deletedCount += batch.deleted;
     }
     return deletedCount;
   }
@@ -642,7 +666,9 @@ export class ChatEventBatcher implements ChatEventsRepo {
           SELECT ${chatEvents.id} AS id, ${chatEvents.turnId} AS turn_id
           FROM ${chatEvents}
           WHERE ${condition}
+          ORDER BY ${chatEvents.id}
           LIMIT ${PURGE_BATCH_SIZE}
+          FOR UPDATE SKIP LOCKED
         ),
         removed_feedback AS (
           DELETE FROM ${chatFeedback}
@@ -657,10 +683,15 @@ export class ChatEventBatcher implements ChatEventsRepo {
         DELETE FROM ${chatEvents}
         USING batch
         WHERE ${chatEvents.id} = batch.id
+          AND ${condition}
         RETURNING ${chatEvents.id}
       `);
       const rows = (result as unknown as { rows: Array<{ id: number }> }).rows ?? [];
       deletedCount += rows.length;
+      // The fallback executes one complete batch as one atomic statement, so
+      // a short result means there were fewer than the bounded batch size of
+      // rows available to this worker. Another concurrent worker may own
+      // skipped rows; it will account for those rows in its own transaction.
       if (rows.length < PURGE_BATCH_SIZE) break;
     }
     return deletedCount;
@@ -676,7 +707,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
       if (batch.length === 0) break;
       await this.client
         .delete(qualityReviews)
-        .where(inArray(qualityReviews.id, batch.map((row) => row.id)));
+        .where(inArray(qualityReviews.id, batch.map((row) => toSafeDatabaseId(row.id, 'quality_reviews.id'))));
     }
   }
 
@@ -703,7 +734,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
       if (batch.length === 0) break;
       await this.client
         .delete(auditEvents)
-        .where(inArray(auditEvents.id, batch.map((row) => row.id)));
+        .where(inArray(auditEvents.id, batch.map((row) => toSafeDatabaseId(row.id, 'audit_events.id'))));
     }
   }
 
@@ -717,7 +748,7 @@ export class ChatEventBatcher implements ChatEventsRepo {
       if (batch.length === 0) break;
       await this.client
         .delete(tickets)
-        .where(inArray(tickets.id, batch.map((row) => row.id)));
+        .where(inArray(tickets.id, batch.map((row) => toSafeDatabaseId(row.id, 'tickets.id'))));
     }
   }
 
