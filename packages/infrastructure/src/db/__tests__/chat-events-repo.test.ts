@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { eq, isNull, or, sql, SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
-import { chatEvents, chatFeedback, qualityReviews, auditEvents, tickets, users, auditDeadLetter } from '../schema';
+import { chatEvents, chatFeedback, chatTurns, qualityReviews, auditEvents, tickets, users, auditDeadLetter } from '../schema';
 import { db } from '../client';
 import type { ChatEventInput } from '@app/domain';
 
@@ -652,6 +652,63 @@ const ROLLBACK = new Error('ROLLBACK');
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
+  it('claims global turn uniqueness through the registry without scanning event partitions', async () => {
+    const turnId = crypto.randomUUID();
+    const firstCreatedAt = new Date();
+    const secondCreatedAt = new Date(Date.UTC(
+      firstCreatedAt.getUTCFullYear(),
+      firstCreatedAt.getUTCMonth() + 1,
+      2,
+    ));
+
+    try {
+      const attempts = await Promise.allSettled([
+        db.insert(chatEvents).values({ turnId, mode: 'vector', createdAt: firstCreatedAt }),
+        db.insert(chatEvents).values({ turnId, mode: 'agentic', createdAt: secondCreatedAt }),
+      ]);
+
+      expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+      expect(await db.select().from(chatEvents).where(eq(chatEvents.turnId, turnId))).toHaveLength(1);
+      expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(1);
+
+      const functionDefinition = await db.execute(sql`
+        SELECT pg_get_functiondef('destr_register_chat_turn()'::regprocedure) AS definition
+      `);
+      const definition = String(functionDefinition.rows[0]?.definition ?? '').toLowerCase();
+      expect(definition).toContain('returning turn_id into claimed_turn_id');
+      expect(definition).not.toContain('from chat_events');
+    } finally {
+      await db.delete(chatEvents).where(eq(chatEvents.turnId, turnId));
+      await db.delete(chatTurns).where(eq(chatTurns.turnId, turnId));
+    }
+  });
+
+  it('rolls back a registry claim when the event insert fails', async () => {
+    const turnId = crypto.randomUUID();
+
+    await expect(db.execute(sql`
+      INSERT INTO chat_events (turn_id, mode)
+      VALUES (${turnId}, 'invalid-mode')
+    `)).rejects.toThrow();
+
+    expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(0);
+  });
+
+  it('removes the registry row directly when its event is deleted', async () => {
+    const turnId = crypto.randomUUID();
+    await db.insert(chatEvents).values({ turnId, mode: 'vector' });
+
+    await db.delete(chatEvents).where(eq(chatEvents.turnId, turnId));
+
+    expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(0);
+    const functionDefinition = await db.execute(sql`
+      SELECT pg_get_functiondef('destr_cleanup_chat_turn()'::regprocedure) AS definition
+    `);
+    expect(String(functionDefinition.rows[0]?.definition ?? '').toLowerCase())
+      .not.toContain('from chat_events');
+  });
+
   it('purgeUserData removes the user events and their feedback rows', async () => {
     try {
       await db.transaction(async (tx) => {

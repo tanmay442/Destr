@@ -211,6 +211,13 @@
       "when": 1788266095207,
       "tag": "0029_physical_partitions",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788352930280,
+      "tag": "0030_atomic_chat_turn_claim",
+      "breakpoints": true
     }
   ]
 }
