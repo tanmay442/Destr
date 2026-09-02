@@ -7,7 +7,7 @@ import {
   resolveReranker,
   assertSameOrigin,
 } from '@/composition';
-import { MAX_LIST_LIMIT } from '@app/domain';
+import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 
 describe('parseQueryPagination', () => {
@@ -85,6 +85,12 @@ describe('parseQueryPagination', () => {
     const url = new URL('http://localhost/api/test?offset=0');
     const { offset } = parseQueryPagination(url);
     expect(offset).toBe(0);
+  });
+
+  it('caps legacy offsets to the bounded compatibility window', () => {
+    const url = new URL(`http://localhost/api/test?offset=${MAX_LEGACY_LIST_OFFSET + 1}`);
+    const { offset } = parseQueryPagination(url);
+    expect(offset).toBe(MAX_LEGACY_LIST_OFFSET);
   });
 });
 

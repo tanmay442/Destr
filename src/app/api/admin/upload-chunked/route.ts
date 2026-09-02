@@ -123,6 +123,7 @@ export async function POST(req: Request) {
     uploadedBy: session.user.id,
     pdfBuffer,
     pdfFileName,
+    signal: req.signal,
   });
   if (!result.ok) return respond(result.error);
 

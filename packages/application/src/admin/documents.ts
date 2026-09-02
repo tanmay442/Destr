@@ -76,7 +76,7 @@ export async function listDocuments(
     documents: DocumentRepository;
     chunks: ChunkRepository;
     users: UserRepository;
-    cursorCodec?: ListCursorCodec | undefined;
+    cursorCodec: ListCursorCodec;
   },
 ): Promise<
   Result<{
@@ -101,10 +101,8 @@ export async function listDocuments(
   return wrapServiceCall(async () => {
     const search = input.search?.trim() || undefined;
     const includeDeleted = input.includeDeleted === true;
-    const includeDeletedOption = deps.cursorCodec === undefined ? input.includeDeleted : includeDeleted;
-    const cursorContext = deps.cursorCodec
-      ? createListCursorContext('documents', { search: search ?? null, includeDeleted })
-      : undefined;
+    const includeDeletedOption = includeDeleted;
+    const cursorContext = createListCursorContext('documents', { search: search ?? null, includeDeleted });
     const cursor = decodeCursorAtBoundary(input.cursor, 'documents', deps.cursorCodec, cursorContext);
     const before = decodeCursorAtBoundary(input.before, 'documents', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
@@ -118,9 +116,8 @@ export async function listDocuments(
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
-      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
-        ? { cursorCodec: deps.cursorCodec, cursorContext }
-        : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
     });
     const ids = documents.map((d) => d.id);
     const chunkCounts =
@@ -216,7 +213,7 @@ async function putUncommittedBlob(
 }
 
 export async function uploadPdf(
-  input: { fileName: string; buffer: Buffer; actorId: string },
+  input: { fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -259,7 +256,7 @@ async function completeUnchangedUpload(
 }
 
 async function uploadPdfSync(
-  input: { fileName: string; buffer: Buffer; actorId: string },
+  input: { fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
   fileHash: string,
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
@@ -267,7 +264,7 @@ async function uploadPdfSync(
   await putUncommittedBlob(key, input.buffer, deps);
   let parsed: Awaited<ReturnType<typeof parseAndEmbed>>;
   try {
-    parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer }, deps);
+    parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer, signal: input.signal }, deps);
   } catch (cause) {
     await cleanupUncommittedBlob(key, deps);
     throw cause;
@@ -494,7 +491,7 @@ export async function hardDeleteDocument(
 }
 
 export async function replacePdf(
-  input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
+  input: { documentId: number; fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -522,7 +519,7 @@ export async function replacePdf(
     if (!useAsync) {
       try {
         parsed = await parseAndEmbed(
-          { fileName: input.fileName, buffer: input.buffer },
+          { fileName: input.fileName, buffer: input.buffer, signal: input.signal },
           deps,
         );
       } catch (cause) {

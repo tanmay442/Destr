@@ -94,19 +94,17 @@ export async function listTickets(
     before?: unknown;
     actorId: string;
   },
-  deps: { tickets: TicketRepository; users: UserRepository; cursorCodec?: ListCursorCodec | undefined },
+  deps: { tickets: TicketRepository; users: UserRepository; cursorCodec: ListCursorCodec },
 ): Promise<Result<{ tickets: TicketRow[]; total: number } & CursorPageInfo>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
     const search = input.search?.trim() || undefined;
-    const cursorContext = deps.cursorCodec
-      ? createListCursorContext('tickets', {
-          status: input.status ?? null,
-          assignee: input.assignee ?? null,
-          search: search ?? null,
-        })
-      : undefined;
+    const cursorContext = createListCursorContext('tickets', {
+      status: input.status ?? null,
+      assignee: input.assignee ?? null,
+      search: search ?? null,
+    });
     const cursor = decodeCursorAtBoundary(input.cursor, 'tickets', deps.cursorCodec, cursorContext);
     const before = decodeCursorAtBoundary(input.before, 'tickets', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
@@ -121,9 +119,8 @@ export async function listTickets(
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
-      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
-        ? { cursorCodec: deps.cursorCodec, cursorContext }
-        : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
     });
     return ok({
       tickets: result.rows,

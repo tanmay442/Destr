@@ -18,6 +18,8 @@ import type { EnvSource } from '@app/domain';
 
 const SIGNATURE_BYTES = 32;
 const MAX_CONTEXT_BINDING_LENGTH = 4096;
+/** Allow small clock skew between app instances without extending expiry. */
+const ISSUED_AT_FUTURE_SKEW_MS = 60_000;
 
 interface WireRecord {
   readonly v: 2;
@@ -264,7 +266,10 @@ export function createSignedListCursorCodec(
         const issuedAt = payload.issuedAt;
         const expiresAt = payload.expiresAt;
         if (issuedAt === undefined || expiresAt === undefined) return invalid('invalid-payload');
-        if (expiresAt.getTime() <= issuedAt.getTime() || issuedAt.getTime() > now.getTime()) return invalid('invalid-payload');
+        if (
+          expiresAt.getTime() <= issuedAt.getTime() ||
+          issuedAt.getTime() > now.getTime() + ISSUED_AT_FUTURE_SKEW_MS
+        ) return invalid('invalid-payload');
         if (expiresAt.getTime() <= now.getTime()) return { kind: 'expired' };
         return { kind: 'valid', payload };
       } catch {

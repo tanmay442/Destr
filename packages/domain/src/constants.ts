@@ -22,6 +22,8 @@ export const EMBEDDING_BATCH_CONCURRENCY = 3;
 export const EMBEDDING_BATCH_SIZE = 50;
 export const MAX_AUDIT_LIMIT = 200;
 export const MAX_LIST_LIMIT = 100;
+/** Maximum offset accepted by compatibility/legacy list pagination. */
+export const MAX_LEGACY_LIST_OFFSET = 100_000;
 export const MAX_TICKET_NOTES_LENGTH = 10_000;
 export const TICKET_ID_PREFIX = 'TKT-';
 /** New ticket IDs use 64 bits of entropy; legacy 8- and 12-hex IDs remain valid. */

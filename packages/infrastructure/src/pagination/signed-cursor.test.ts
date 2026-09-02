@@ -97,6 +97,21 @@ describe('signed list cursor v2', () => {
     expect(codec.decode(forged, { ...context, now: issuedAt })).toEqual({ kind: 'invalid', reason: 'signature' });
   });
 
+  it('allows a small issuance clock skew without extending the expiry window', () => {
+    const codec = createSignedListCursorCodec(config);
+    const context = documentContext();
+    const futureIssuedAt = new Date(issuedAt.getTime() + 30_000);
+    const futureExpiresAt = new Date(futureIssuedAt.getTime() + config.ttlMs);
+    const encoded = codec.encode(documentPayload(context, { issuedAt: futureIssuedAt, expiresAt: futureExpiresAt }));
+
+    expect(codec.decode(encoded, { ...context, now: issuedAt })).toMatchObject({ kind: 'valid' });
+    expect(codec.decode(encoded, { ...context, now: new Date(futureIssuedAt.getTime() - 60_001) })).toEqual({
+      kind: 'invalid',
+      reason: 'invalid-payload',
+    });
+    expect(codec.decode(encoded, { ...context, now: futureExpiresAt })).toEqual({ kind: 'expired' });
+  });
+
   it('accepts the previous key during rotation', () => {
     const oldCodec = createSignedListCursorCodec({ secret: 'previous-signing-secret-with-at-least-32-bytes', ttlMs: config.ttlMs });
     const rotatedCodec = createSignedListCursorCodec({

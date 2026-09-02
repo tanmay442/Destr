@@ -48,6 +48,16 @@ describe('partialAppConfigSchema', () => {
       expect(coerced.data).toEqual({ parentChunkSize: 2000 });
     }
   });
+
+  it('rejects unknown top-level patch keys instead of silently dropping them', () => {
+    expect(parse({ unknownSetting: true }).success).toBe(false);
+  });
+
+  it('rejects unknown keys in nested patch objects', () => {
+    expect(parse({ agentPersona: { displayName: 'Nova' } }).success).toBe(false);
+    expect(parse({ branding: { icon: 'help' } }).success).toBe(false);
+    expect(parse({ outOfScopeTopics: [{ response: 'decline' }] }).success).toBe(false);
+  });
 });
 
 function unwrapObjectKeys(schema: unknown): string[] | null {

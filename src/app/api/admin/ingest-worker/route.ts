@@ -93,8 +93,8 @@ export async function POST(req: Request) {
   }
 
   const result = rawFileHash === undefined
-    ? await getComposition().ingestQueuedDocument(documentId)
-    : await getComposition().ingestQueuedDocument(documentId, rawFileHash);
+    ? await getComposition().ingestQueuedDocument(documentId, undefined, req.signal)
+    : await getComposition().ingestQueuedDocument(documentId, rawFileHash, req.signal);
   if (!result.ok) {
     if (result.error instanceof NotFoundError) {
       return NextResponse.json(

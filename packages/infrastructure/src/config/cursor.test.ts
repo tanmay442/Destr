@@ -34,8 +34,8 @@ describe('parseCursorSigningConfig', () => {
     expect(config.ttlMs).toBe(600_000);
   });
 
-  it('uses a non-production fallback and bounds malformed TTL values', () => {
-    const config = parseCursorSigningConfig(env({ NODE_ENV: 'test', CURSOR_TTL_SEC: 'not-a-number' }));
+  it('uses a non-production fallback and defaults blank TTL values', () => {
+    const config = parseCursorSigningConfig(env({ NODE_ENV: 'test', CURSOR_TTL_SEC: ' ' }));
     expect(Buffer.byteLength(config.secret, 'utf8')).toBeGreaterThanOrEqual(MIN_CURSOR_SECRET_BYTES);
     expect(config.ttlMs).toBe(DEFAULT_CURSOR_TTL_SECONDS * 1000);
 
@@ -44,6 +44,32 @@ describe('parseCursorSigningConfig', () => {
       CURSOR_TTL_SECONDS: String(MAX_CURSOR_TTL_SECONDS),
     }));
     expect(bounded.ttlMs).toBe(MAX_CURSOR_TTL_SECONDS * 1000);
+  });
+
+  it.each([
+    ['CURSOR_TTL_SEC', 'not-a-number'],
+    ['CURSOR_TTL_SEC', '0'],
+    ['CURSOR_TTL_SEC', String(MAX_CURSOR_TTL_SECONDS + 1)],
+    ['CURSOR_TTL_SECONDS', 'not-a-number'],
+    ['CURSOR_TTL_SECONDS', '1.5'],
+    ['CURSOR_TTL_SECONDS', '-1'],
+  ] as const)('fails fast for invalid %s=%s', (key, value) => {
+    expect(() => parseCursorSigningConfig(env({ [key]: value }))).toThrow(new RegExp(key));
+  });
+
+  it('prefers the primary TTL name when both names are configured', () => {
+    const config = parseCursorSigningConfig(env({
+      CURSOR_TTL_SEC: '600',
+      CURSOR_TTL_SECONDS: '900',
+    }));
+    expect(config.ttlMs).toBe(600_000);
+  });
+
+  it('still rejects an invalid legacy alias when the primary name is set', () => {
+    expect(() => parseCursorSigningConfig(env({
+      CURSOR_TTL_SEC: '600',
+      CURSOR_TTL_SECONDS: 'invalid',
+    }))).toThrow(/CURSOR_TTL_SECONDS/);
   });
 
   it('rejects a short previous key instead of silently disabling rotation', () => {

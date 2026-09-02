@@ -79,6 +79,22 @@ describe('ingestFile', () => {
     ]);
   });
 
+  it('passes the request abort signal through the synchronous embedding path', async () => {
+    const signal = new AbortController().signal;
+    const deps = makeDeps();
+
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user', signal },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(
+      ['Sample PDF text content.'],
+      { signal },
+    );
+  });
+
   it('uses stable chunk replacement when the repository supports it', async () => {
     const deps = makeDeps();
     const replaceMany = vi.fn().mockResolvedValue(undefined);

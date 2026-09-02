@@ -1126,6 +1126,26 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
 });
 
 describe('§T6 soft turn deadline', () => {
+  it('arms an immediately expiring signal when the soft budget is already exhausted', async () => {
+    const dateNow = vi.spyOn(Date, 'now');
+    dateNow.mockReturnValueOnce(1_000).mockReturnValue(1_100);
+    let timeoutMs: number | undefined;
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
+      timeoutMs = delay;
+      return new AbortController().signal;
+    });
+    try {
+      const { deps } = makeDeps();
+      deps.turnSoftDeadlineMs = 40;
+      const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+      expect(result.kind).toBe('stream');
+      expect(timeoutMs).toBe(0);
+    } finally {
+      timeout.mockRestore();
+      dateNow.mockRestore();
+    }
+  });
+
   it('ends a slow generation with graceful guardrail + notice, skipping cache and judge', async () => {
     streamTextMock.mockImplementation((opts: { abortSignal?: AbortSignal }) => ({
       toUIMessageStream: () =>

@@ -16,6 +16,15 @@ const MAX_TOTAL_TEXT_CHARS = 200_000;
 
 const ALLOWED_PART_TYPE = /^(text|reasoning|file)$/;
 
+function hasUsableLastUserContent(messages: ChatInputMessage[]): boolean {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+  if (!lastUserMessage) return false;
+
+  return lastUserMessage.parts.some((part) =>
+    part.type === 'file' || (part.type === 'text' && part.text.trim() !== ''),
+  );
+}
+
 function createMessageSchema(allowedFileOrigins?: ReadonlySet<string>) {
   const filePartSchema = z.object({
     type: z.literal('file'),
@@ -112,7 +121,11 @@ export function createChatRequestSchema(allowedFileOrigins?: ReadonlySet<string>
           .map((part) => JSON.stringify(part)),
       ).join('');
       return new TextEncoder().encode(metadata).byteLength <= CHAT_FILE_METADATA_MAX_BYTES;
-    }, 'File metadata exceeds the per-request budget'),
+    }, 'File metadata exceeds the per-request budget')
+    .refine(
+      hasUsableLastUserContent,
+      'The last user message must contain text or a file',
+    ),
   });
 }
 

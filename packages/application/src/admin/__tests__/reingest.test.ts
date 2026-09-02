@@ -1,7 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { reingestAll } from '../reingest';
 import { ExternalServiceError } from '@app/domain';
-import type { DocumentRepository, IngestQueue } from '@app/domain';
+import type {
+  ChunkRepository,
+  CursorContext,
+  CursorDecodeResult,
+  DocumentRepository,
+  IngestQueue,
+  ListCursorCodec,
+  ListCursorPayload,
+} from '@app/domain';
 
 function makeDoc(id: number) {
   return {
@@ -17,8 +25,8 @@ function makeDoc(id: number) {
   };
 }
 
-function listPage(ids: number[]) {
-  return { documents: ids.map(makeDoc), total: ids.length };
+function listPage(ids: number[], total = ids.length, nextCursor: string | null = null) {
+  return { documents: ids.map(makeDoc), total, nextCursor, previousCursor: null };
 }
 
 function makeDocsRepo(list: ReturnType<typeof vi.fn>) {
@@ -28,13 +36,33 @@ function makeDocsRepo(list: ReturnType<typeof vi.fn>) {
   } as unknown as DocumentRepository;
 }
 
+const cursorCodec: ListCursorCodec = {
+  encode: vi.fn(() => 'encoded-test-cursor'),
+  decode: vi.fn((value: string, context: CursorContext): CursorDecodeResult => {
+    const id = value === 'cursor-2' ? 2 : value === 'cursor-3' ? 4 : 1;
+    const payload: ListCursorPayload = {
+      kind: 'documents',
+      sortAt: new Date('2026-01-01T00:00:00.000Z'),
+      id,
+      total: 5,
+      filterFingerprint: context.filterFingerprint,
+      sort: context.sort,
+    };
+    return { kind: 'valid', payload };
+  }),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe('reingestAll', () => {
   it('enqueues every non-deleted document exactly once (single page)', async () => {
     const enqueue = vi.fn().mockResolvedValue(undefined);
     const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2, 3])));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.enqueued).toBe(3);
@@ -51,14 +79,14 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(
       vi.fn(async () => {
         call++;
-        if (call === 1) return { documents: [makeDoc(1), makeDoc(2)], total: 5 };
-        if (call === 2) return { documents: [makeDoc(3), makeDoc(4)], total: 5 };
-        return { documents: [makeDoc(5)], total: 5 };
+        if (call === 1) return listPage([1, 2], 5, 'cursor-2');
+        if (call === 2) return listPage([3, 4], 5, 'cursor-3');
+        return listPage([5], 5);
       }),
     );
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.enqueued).toBe(5);
@@ -71,7 +99,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(vi.fn().mockResolvedValue({ documents: [], total: 0 }));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.enqueued).toBe(0);
@@ -85,7 +113,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(list);
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    await reingestAll({ documents, queue });
+    await reingestAll({ documents, queue, cursorCodec });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ includeDeleted: false }),
     );
@@ -96,7 +124,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1])));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(true);
     expect(documents.update).toHaveBeenCalledWith(1, { ingestStatus: 'queued' });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'h1', attemptId: expect.any(String) }));
@@ -111,7 +139,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(list);
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(true);
     expect(documents.update).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ documentId: 1, fileHash: 'h1', attemptId: expect.any(String) }));
@@ -123,7 +151,7 @@ describe('reingestAll', () => {
     const chunks = { deleteByDocumentId: vi.fn().mockResolvedValue(undefined) };
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue, chunks } as never);
+    const result = await reingestAll({ documents, queue, chunks: chunks as unknown as ChunkRepository, cursorCodec });
     expect(result.ok).toBe(true);
     expect(chunks.deleteByDocumentId).not.toHaveBeenCalled();
   });
@@ -134,7 +162,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(list);
     const queue = { enqueue, isNoOp: () => true } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(ExternalServiceError);
@@ -151,7 +179,7 @@ describe('reingestAll', () => {
     const documents = makeDocsRepo(vi.fn().mockResolvedValue(listPage([1, 2])));
     const queue = { enqueue, isNoOp: () => false } as unknown as IngestQueue;
 
-    const result = await reingestAll({ documents, queue });
+    const result = await reingestAll({ documents, queue, cursorCodec });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(ExternalServiceError);

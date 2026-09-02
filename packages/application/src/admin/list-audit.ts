@@ -27,7 +27,7 @@ export async function listAudit(
     before?: unknown;
     actorId: string;
   },
-  deps: { audit: AuditLog; users: UserRepository; cursorCodec?: ListCursorCodec | undefined },
+  deps: { audit: AuditLog; users: UserRepository; cursorCodec: ListCursorCodec },
 ): Promise<Result<{ events: AuditEventRecord[]; total: number } & CursorPageInfo>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
@@ -35,17 +35,15 @@ export async function listAudit(
     const action = input.action?.trim() || undefined;
     const actor = input.actor?.trim() || undefined;
     const ticketId = input.ticketId?.trim() || undefined;
-    const cursorContext = deps.cursorCodec
-      ? createListCursorContext('audit', {
-          kind: input.kind ?? null,
-          action: action ?? null,
-          actorId: actor ?? null,
-          from: input.from ?? null,
-          to: input.to ?? null,
-          documentId: input.documentId ?? null,
-          ticketId: ticketId ?? null,
-        })
-      : undefined;
+    const cursorContext = createListCursorContext('audit', {
+      kind: input.kind ?? null,
+      action: action ?? null,
+      actorId: actor ?? null,
+      from: input.from ?? null,
+      to: input.to ?? null,
+      documentId: input.documentId ?? null,
+      ticketId: ticketId ?? null,
+    });
     const cursor = decodeCursorAtBoundary(input.cursor, 'audit', deps.cursorCodec, cursorContext);
     const before = decodeCursorAtBoundary(input.before, 'audit', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
@@ -64,9 +62,8 @@ export async function listAudit(
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
-      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
-        ? { cursorCodec: deps.cursorCodec, cursorContext }
-        : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
     });
     return ok({
       events: result.events,

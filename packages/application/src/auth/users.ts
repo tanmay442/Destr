@@ -9,13 +9,11 @@ import { createListCursorContext } from '@app/domain';
 
 export async function listUsers(
   input: { search?: string | undefined; limit?: number; offset?: number; cursor?: unknown; before?: unknown },
-  deps: { users: UserRepository; cursorCodec?: ListCursorCodec | undefined },
+  deps: { users: UserRepository; cursorCodec: ListCursorCodec },
 ): Promise<Result<{ users: Array<{ clerkUserId: string; email: string; name: string | null; role: string; lastSeenAt: Date | null; createdAt: Date }>; total: number } & CursorPageInfo>> {
   return wrapServiceCall(async () => {
     const search = input.search?.trim() || undefined;
-    const cursorContext = deps.cursorCodec
-      ? createListCursorContext('users', { search: search ?? null })
-      : undefined;
+    const cursorContext = createListCursorContext('users', { search: search ?? null });
     const cursor = decodeCursorAtBoundary(input.cursor, 'users', deps.cursorCodec, cursorContext);
     const before = decodeCursorAtBoundary(input.before, 'users', deps.cursorCodec, cursorContext);
     if (cursor !== undefined && before !== undefined) {
@@ -28,9 +26,8 @@ export async function listUsers(
       ...(cursor !== undefined ? { cursor } : {}),
       ...(before !== undefined ? { before } : {}),
       ...(cursor === undefined && before === undefined ? { offset } : {}),
-      ...(deps.cursorCodec !== undefined && cursorContext !== undefined
-        ? { cursorCodec: deps.cursorCodec, cursorContext }
-        : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
     });
     return ok({
       users: result.rows,

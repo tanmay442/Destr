@@ -610,12 +610,21 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
     expect(sys).toContain('createKnowledgeTicket');
   });
 
-  it('respects appConfig.prefetchFirstTurn = false on empty lastUserText', async () => {
-    const { system } = await captureSystemForBody({
-      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: '' }] }],
-    });
-    expect(typeof system).toBe('string');
-    expect(system as string).not.toMatch(/Pre-fetched Reference Data/);
+  it('rejects an empty last user message before model generation', async () => {
+    authMock.mockResolvedValue({ userId: 'user_test' });
+    const modelCallsBeforeRequest = streamTextImpl.mock.calls.length;
+    const res = await appHandler.POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: '' }] }],
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(streamTextImpl).toHaveBeenCalledTimes(modelCallsBeforeRequest);
   });
 
   it('with prefetchFirstTurn = false, citation still surfaces as data-citation when the tool is called', async () => {

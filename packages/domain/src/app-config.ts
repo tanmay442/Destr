@@ -111,20 +111,29 @@ type DeepPartial<T> = T extends readonly (infer Element)[]
 
 const appConfigShape = appConfigSchema.shape;
 
+const partialAgentPersonaSchema = z.object({
+  name: agentPersonaSchema.shape.name,
+  tone: agentPersonaSchema.shape.tone.removeDefault().optional(),
+}).strict();
+
+const partialOutOfScopeTopicSchema = z.object({
+  topic: outOfScopeTopicSchema.shape.topic.optional(),
+  handling: outOfScopeTopicSchema.shape.handling.optional(),
+}).strict();
+
+const partialBrandingSchema = z.object({
+  title: brandingSchema.shape.title.removeDefault().optional(),
+  description: brandingSchema.shape.description.removeDefault().optional(),
+}).strict();
+
 export const partialAppConfigSchema = z.object({
   orgName: appConfigShape.orgName.removeDefault().optional(),
   audience: appConfigShape.audience.removeDefault().optional(),
-  agentPersona: z.object({
-    name: agentPersonaSchema.shape.name,
-    tone: agentPersonaSchema.shape.tone.removeDefault().optional(),
-  }).optional(),
+  agentPersona: partialAgentPersonaSchema.optional(),
   customInstructions: appConfigShape.customInstructions,
-  outOfScopeTopics: z.array(outOfScopeTopicSchema.partial()).optional(),
+  outOfScopeTopics: z.array(partialOutOfScopeTopicSchema).optional(),
   adminEmails: appConfigShape.adminEmails.removeDefault().optional(),
-  branding: z.object({
-    title: brandingSchema.shape.title.removeDefault().optional(),
-    description: brandingSchema.shape.description.removeDefault().optional(),
-  }).optional(),
+  branding: partialBrandingSchema.optional(),
   seedDocsDir: appConfigShape.seedDocsDir.removeDefault().optional(),
   prefetchFirstTurn: appConfigShape.prefetchFirstTurn.removeDefault().optional(),
   chunkingStrategy: appConfigShape.chunkingStrategy.removeDefault().optional(),
@@ -148,4 +157,4 @@ export const partialAppConfigSchema = z.object({
   captureQueryText: appConfigShape.captureQueryText.removeDefault().optional(),
   chatHistoryRetentionDays: appConfigShape.chatHistoryRetentionDays.removeDefault().optional(),
   retrievalModeRolloutPercent: appConfigShape.retrievalModeRolloutPercent.removeDefault().optional(),
-}).strip() satisfies z.ZodType<DeepPartial<AppConfig>>;
+}).strict() satisfies z.ZodType<DeepPartial<AppConfig>>;

@@ -292,6 +292,19 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.deps.hasher.sha256).toHaveBeenCalledTimes(1);
   });
 
+  it('passes the request abort signal to synchronous upload embedding', async () => {
+    const signal = new AbortController().signal;
+    const mocks = makeUploadDeps();
+
+    const result = await uploadPdf(
+      { fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1', signal },
+      mocks.deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mocks.deps.embeddings.embedBatch).toHaveBeenCalledWith(['body'], { signal });
+  });
+
   it('resurrects a soft-deleted doc that is re-uploaded unchanged within the restore window', async () => {
     const mocks = makeUploadDeps({
       documents: {
@@ -448,6 +461,25 @@ describe('uploadPdf / replacePdf (ingest lifecycle)', () => {
     expect(mocks.blobStorage.put).toHaveBeenCalledTimes(1);
     expect(mocks.blobStorage.delete).toHaveBeenCalledTimes(1);
     expect(mocks.documents.update).not.toHaveBeenCalled();
+  });
+
+  it('passes the request abort signal to synchronous replacement embedding', async () => {
+    const signal = new AbortController().signal;
+    const mocks = makeUploadDeps({
+      documents: {
+        findById: vi.fn().mockResolvedValue({
+          ...baseDocument({ id: 1, fileHash: 'old-hash', storageKey: 'docs/old/f.pdf', ingestStatus: 'done' }),
+        }),
+      },
+    });
+
+    const result = await replacePdf(
+      { documentId: 1, fileName: 'f.pdf', buffer: Buffer.from('small'), actorId: 'user_1', signal },
+      mocks.deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mocks.deps.embeddings.embedBatch).toHaveBeenCalledWith(['body'], { signal });
   });
 
   it('does not delete chunks on the async replace path (worker-side delete owns it)', async () => {

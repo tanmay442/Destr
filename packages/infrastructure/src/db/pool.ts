@@ -80,15 +80,31 @@ function hasDatabaseUrl(config: DatabaseConfig): config is DatabaseConfig & { da
   return typeof config.databaseUrl === 'string' && config.databaseUrl !== '';
 }
 
+/**
+ * Pool construction depends on more than the connection string. Keep each
+ * effective pool configuration isolated so a later caller cannot inherit a
+ * previously constructed pool with a different capacity or driver policy.
+ */
+function poolCacheKey(config: DatabaseConfig & { databaseUrl: string }): string {
+  return JSON.stringify({
+    databaseUrl: config.databaseUrl,
+    poolMax: config.poolMax,
+    driver: config.isNeon ? 'neon' : 'pg',
+    isPooledNeon: config.isPooledNeon,
+    sslMode: config.sslMode ?? null,
+  });
+}
+
 export function getPool(input: string | DatabaseConfig): NeonPool | pg.Pool {
   const config = typeof input === 'string'
     ? parseDatabaseConfig(defaultDatabaseEnv, { databaseUrl: input })
     : input;
   if (!hasDatabaseUrl(config)) return buildMissingPool();
-  const existing = pools.get(config.databaseUrl);
+  const cacheKey = poolCacheKey(config);
+  const existing = pools.get(cacheKey);
   if (existing) return existing;
   const pool = config.isNeon ? buildNeonPool(config) : buildPgPool(config);
-  pools.set(config.databaseUrl, pool);
+  pools.set(cacheKey, pool);
   return pool;
 }
 

@@ -745,7 +745,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
         } else if (leaseResult.kind === 'held') {
           const remainingWaitMs = Math.max(
-            1_000,
+            0,
             MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
           );
           turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
@@ -820,7 +820,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         cached = await deps.answerCache.get(cacheKey).catch(() => null);
       } else if (leaseResult.kind === 'held') {
         const remainingWaitMs = Math.max(
-          1_000,
+          0,
           MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
         );
         cached = await waitForCachedAnswer(deps.answerCache, cacheKey, {
@@ -925,7 +925,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
   const elapsedBeforeStream = Date.now() - requestStartedAt;
-  const softDeadlineMsRemaining = Math.max(1_000, softDeadlineMs - elapsedBeforeStream);
+  // An already-expired budget must abort immediately; a one-second floor here
+  // would let the model run past the application's hard wall-time boundary.
+  const softDeadlineMsRemaining = Math.max(0, softDeadlineMs - elapsedBeforeStream);
   const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsRemaining);
   let softDeadlineFired = false;
   softDeadlineSignal.addEventListener('abort', () => {

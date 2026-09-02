@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { ok, err, type Result, ExternalServiceError } from '@app/domain';
-import type { DocumentRepository, ChunkRepository, IngestQueue } from '@app/domain';
+import { ok, err, type Result, ExternalServiceError, createListCursorContext } from '@app/domain';
+import type {
+  DocumentListCursor,
+  DocumentRepository,
+  ChunkRepository,
+  IngestQueue,
+  ListCursorCodec,
+} from '@app/domain';
 import { MAX_LIST_LIMIT } from '@app/domain';
+import { decodeCursorAtBoundary } from '../service-result';
 
 export interface ReingestDeps {
   documents: DocumentRepository;
   queue: IngestQueue;
+  /** Signed cursor dependencies for the repository's paged list output. */
+  cursorCodec: ListCursorCodec;
   /** Retained for compatibility with callers that pass a chunk repository. */
   chunks?: ChunkRepository;
 }
@@ -32,15 +41,19 @@ export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSu
   }
   try {
     const documentIds: number[] = [];
-    let offset = 0;
     const limit = MAX_LIST_LIMIT;
+    const cursorContext = createListCursorContext('documents', { search: null, includeDeleted: false });
+    let cursor: DocumentListCursor | undefined;
 
     while (true) {
-      const { documents, total } = await deps.documents.list({
+      const page = await deps.documents.list({
         includeDeleted: false,
         limit,
-        offset,
+        ...(cursor !== undefined ? { cursor } : {}),
+        cursorCodec: deps.cursorCodec,
+        cursorContext,
       });
+      const { documents } = page;
       for (const doc of documents) {
         if (doc.ingestStatus === 'ingesting') continue;
         const attemptId = randomUUID();
@@ -74,8 +87,9 @@ export async function reingestAll(deps: ReingestDeps): Promise<Result<ReingestSu
         }
         documentIds.push(doc.id);
       }
-      offset += documents.length;
-      if (offset >= total || documents.length === 0) break;
+      if (documents.length === 0 || page.nextCursor === null) break;
+      cursor = decodeCursorAtBoundary(page.nextCursor, 'documents', deps.cursorCodec, cursorContext);
+      if (cursor === undefined) break;
     }
 
     return ok({ enqueued: documentIds.length, documentIds });

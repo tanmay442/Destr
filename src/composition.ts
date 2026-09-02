@@ -40,7 +40,7 @@ const getAppSession = authAdapter.getAppSession;
 import { getRuntimeConfig, registerSettingsRepoProvider } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
-import { MAX_LIST_LIMIT } from '@app/domain';
+import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import { after } from 'next/server';
 
 const core = buildCoreDeps({
@@ -119,6 +119,7 @@ type QueuedIngestStatus = 'done' | 'already-done' | 'busy' | 'stale';
 async function ingestQueuedDocumentStandalone(
   documentId: number,
   queuedFileHash?: string,
+  signal?: AbortSignal | undefined,
 ): Promise<Result<{ status: QueuedIngestStatus; chunks: number }>> {
   const doc = await documentRepo.findById(documentId);
   if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
@@ -181,7 +182,10 @@ async function ingestQueuedDocumentStandalone(
 
   let prepared: Awaited<ReturnType<typeof prepareIngest>>;
   try {
-    prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
+    prepared = await prepareIngest(
+      { documentId, fileName: doc.fileName, buffer, signal },
+      await resolveIngestDeps(),
+    );
   } catch (error) {
     await requeue();
     return err(new ExternalServiceError('Ingest preparation failed', error));
@@ -378,7 +382,7 @@ function createComposition() {
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
-    replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
+    replacePdf: async (input: Parameters<typeof replacePdf>[0]) =>
       bind(replacePdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     uploadChunkedMarkdown: (input: {
       fileName: string;
@@ -387,6 +391,7 @@ function createComposition() {
       uploadedBy: string;
       pdfBuffer?: Buffer | undefined;
       pdfFileName?: string | undefined;
+      signal?: AbortSignal | undefined;
     }) =>
       bind(uploadPrechunkedMarkdown, input, {
         documents: documentRepo,
@@ -400,12 +405,12 @@ function createComposition() {
         summarizer: Llm.createDocSummarizer(Llm.getChatModel),
         cchEnabled: CCH_ENABLED,
       }),
-    ingestQueuedDocument: (documentId: number, fileHash?: string) =>
-      ingestQueuedDocumentStandalone(documentId, fileHash),
+    ingestQueuedDocument: (documentId: number, fileHash?: string, signal?: AbortSignal | undefined) =>
+      ingestQueuedDocumentStandalone(documentId, fileHash, signal),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
+      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo, cursorCodec }),
     sweepStaleQueued: () => {
       const failDocumentIfStale = documentRepo.failDocumentIfStale;
       return Queue.createQueuedSweeper({
@@ -434,7 +439,7 @@ function createComposition() {
     },
     countPendingIngest: () => documentRepo.countPendingIngest(),
     getAnalyticsSummary: (input: { actorId: string }) =>
-      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps }),
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
     getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
@@ -590,7 +595,10 @@ export function parseQueryPagination(
   const rawOffset = Number(url.searchParams.get('offset') ?? defaults.offset ?? 0);
   return {
     limit: Math.min(Math.max(Math.floor(Number.isFinite(rawLimit) ? rawLimit : (defaults.limit ?? 25)), 1), MAX_LIST_LIMIT),
-    offset: Math.max(Math.floor(Number.isFinite(rawOffset) ? rawOffset : (defaults.offset ?? 0)), 0),
+    offset: Math.min(
+      Math.max(Math.floor(Number.isFinite(rawOffset) ? rawOffset : (defaults.offset ?? 0)), 0),
+      MAX_LEGACY_LIST_OFFSET,
+    ),
   };
 }
 

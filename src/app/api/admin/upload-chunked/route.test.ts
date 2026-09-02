@@ -111,10 +111,16 @@ describe('POST /api/admin/upload-chunked', () => {
   });
 
   it('ingests a valid pre-chunked upload', async () => {
-    const res = await route.POST(multipartRequest([['md', 'a---chunk---b', 'a.md']]));
+    const req = multipartRequest([['md', 'a---chunk---b', 'a.md']]);
+    const res = await route.POST(req);
     expect(res.status).toBe(200);
     expect(uploadChunkedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ fileName: 'a.md', delimiter: '---chunk---', uploadedBy: 'admin-1' }),
+      expect.objectContaining({
+        fileName: 'a.md',
+        delimiter: '---chunk---',
+        uploadedBy: 'admin-1',
+        signal: req.signal,
+      }),
     );
   });
 

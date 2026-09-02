@@ -41,6 +41,7 @@ export interface PrechunkedIngestInput {
   pdfBuffer?: Buffer | undefined;
   /** Blob filename for the PDF when it differs from `fileName`. */
   pdfFileName?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface PrechunkedIngestDeps {
@@ -68,11 +69,28 @@ function isDocumentNameConflict(error: unknown): boolean {
   return pgError?.code === '23505' && (pgError.constraint === 'documents_name_key' || pgError.constraint === 'documents_file_name_unique');
 }
 
+function canonicalHashInput(chunks: ParsedChunk[], pdfBuffer: Buffer | undefined): Buffer {
+  const canonical = {
+    schema: 'prechunked-file-v1',
+    chunks: chunks.map((chunk) => ({
+      content: chunk.content,
+      page: chunk.page ?? null,
+      sectionTitle: chunk.sectionTitle ?? null,
+      source: chunk.source ?? null,
+    })),
+    companionPdfBytes: pdfBuffer?.byteLength ?? null,
+  };
+  const chunkMetadata = Buffer.from(JSON.stringify(canonical), 'utf8');
+  return pdfBuffer === undefined
+    ? chunkMetadata
+    : Buffer.concat([chunkMetadata, Buffer.from('\n--companion-pdf--\n', 'utf8'), pdfBuffer]);
+}
+
 export async function ingestPrechunked(
   input: PrechunkedIngestInput,
   deps: PrechunkedIngestDeps,
 ): Promise<Result<IngestResult>> {
-  const { fileName, chunks, uploadedBy, pdfBuffer, pdfFileName } = input;
+  const { fileName, chunks, uploadedBy, pdfBuffer, pdfFileName, signal } = input;
   if (chunks.length === 0) {
     return err(new ValidationError(`No chunks parsed from ${fileName}`));
   }
@@ -99,12 +117,9 @@ export async function ingestPrechunked(
     }
   }
 
-  // Dedup hash covers the markdown AND any companion PDF, so re-uploading one
-  // with different content for the other is never treated as unchanged.
-  const markdownSource = Buffer.from(chunks.map((chunk) => chunk.content).join('\n'));
-  const fileHash = pdfBuffer
-    ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
-    : deps.hasher.sha256(markdownSource);
+  // Dedup hash covers chunk boundaries, provenance metadata, and any companion
+  // PDF, so changes to segmentation or citations are reprocessed as well.
+  const fileHash = deps.hasher.sha256(canonicalHashInput(chunks, pdfBuffer));
 
   let header = '';
   let title: string | null = null;
@@ -119,9 +134,10 @@ export async function ingestPrechunked(
   }
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(
-      chunks.map((c) => (header ? header + c.content : c.content)),
-    );
+    const values = chunks.map((c) => (header ? header + c.content : c.content));
+    embeddings = signal === undefined
+      ? await deps.embeddings.embedBatch(values)
+      : await deps.embeddings.embedBatch(values, { signal });
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
@@ -216,6 +232,7 @@ export interface UploadPrechunkedMarkdownInput {
   uploadedBy: string;
   pdfBuffer?: Buffer | undefined;
   pdfFileName?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 /**
@@ -236,6 +253,7 @@ export async function uploadPrechunkedMarkdown(
       uploadedBy: input.uploadedBy,
       pdfBuffer: input.pdfBuffer,
       pdfFileName: input.pdfFileName,
+      signal: input.signal,
     },
     deps,
   );

@@ -7,10 +7,6 @@ import {
   users,
   auditEvents,
   auditDeadLetter,
-  chatEvents,
-  chatConversations,
-  qualityReviews,
-  appSettings,
   type Document,
 } from './schema';
 import type {
@@ -32,7 +28,7 @@ import type {
   ListCursorCodec,
   ListCursorPayload,
 } from '@app/domain';
-import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, encodeListCursor, logger } from '@app/domain';
+import { ConflictError, ValidationError, MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
 import { defaultHasher } from './stable-identities';
 import { createVectorSearch } from './vector-search';
@@ -82,12 +78,14 @@ function escapeLikePattern(value: string): string {
 
 function encodeRepositoryCursor(
   cursor: AdminListCursor,
-  codec?: ListCursorCodec,
-  context?: CursorContext,
+  codec: ListCursorCodec | undefined,
+  context: CursorContext | undefined,
 ): string {
-  if (codec === undefined) return encodeListCursor(cursor);
-  if (context === undefined) {
-    throw new ValidationError('Signed cursor context is required');
+  if (codec === undefined || context === undefined) {
+    throw new ValidationError('Signed cursor codec and context are required');
+  }
+  if (context.resource !== cursor.kind) {
+    throw new ValidationError('Signed cursor context does not match the resource');
   }
   const payload: ListCursorPayload = {
     ...cursor,
@@ -465,7 +463,7 @@ export async function listDocuments(
     )
     .limit(limit + 1);
   const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
-    ? await query.offset(Math.max(opts.offset, 0))
+    ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
     : await query;
   const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
   const hasExtra = queriedRows.length > limit;
@@ -575,7 +573,7 @@ export const ticketRepo = {
       )
       .limit(limit + 1);
     const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
-      ? await query.offset(Math.max(opts.offset, 0))
+      ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
       : await query;
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
@@ -707,76 +705,6 @@ function median(values: number[]): number {
   return Math.round(value);
 }
 
-// Rebinding an email to a new clerk id reassigns every record owned by the old
-// identity (documents, tickets, chats, audit trail, settings). Only adopt a row
-// when the email is verified AND the row is provably fresh; otherwise fail
-// closed so recycled emails can never inherit another account's data or role.
-async function rebindEmailIdentity(
-  client: Client,
-  input: { clerkUserId: string; email: string; name?: string | null; imageUrl?: string | null; emailVerified?: boolean | undefined },
-): Promise<UserRow> {
-  const existing = await client.query.users.findFirst({ where: eq(users.email, input.email) });
-  if (!existing) {
-    logger.error('[userRepo] email-conflict rebind refused: conflicting row no longer exists', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to another account; refusing to reassign it.`);
-  }
-  if (existing.clerkUserId === input.clerkUserId) return existing as UserRow;
-  if (input.emailVerified !== true) {
-    logger.error('[userRepo] email-conflict rebind refused: email not verified', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-      existingClerkUserId: existing.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} and email verification is not confirmed; refusing to reassign the account.`);
-  }
-  if (await userHasOwnedHistory(client, existing.clerkUserId)) {
-    logger.error('[userRepo] email-conflict rebind refused: existing account owns data', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-      existingClerkUserId: existing.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} which owns data; refusing to reassign its history.`);
-  }
-  const [row] = await client
-    .update(users)
-    .set({
-      clerkUserId: input.clerkUserId,
-      email: input.email,
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
-    })
-    .where(eq(users.email, input.email))
-    .returning();
-  if (!row) {
-    logger.error('[userRepo] email-conflict rebind failed: conflicting row vanished before update', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-    });
-    throw new Error(`Failed to reassign email ${input.email} to Clerk user ${input.clerkUserId}.`);
-  }
-  return row as UserRow;
-}
-
-async function userHasOwnedHistory(client: Client, clerkUserId: string): Promise<boolean> {
-  if (await client.query.documents.findFirst({ where: eq(documents.uploadedBy, clerkUserId) })) return true;
-  if (await client.query.tickets.findFirst({ where: eq(tickets.userId, clerkUserId) })) return true;
-  if (await client.query.chatEvents.findFirst({ where: eq(chatEvents.userId, clerkUserId) })) return true;
-  if (await client.query.chatConversations.findFirst({ where: eq(chatConversations.userId, clerkUserId) })) return true;
-  if (await client.query.qualityReviews.findFirst({ where: eq(qualityReviews.reviewerId, clerkUserId) })) return true;
-  if (
-    await client.query.auditEvents.findFirst({
-      where: or(
-        eq(auditEvents.actorId, clerkUserId),
-        and(eq(auditEvents.targetType, 'user'), eq(auditEvents.targetId, clerkUserId)),
-      ),
-    })
-  ) return true;
-  return (await client.query.appSettings.findFirst({ where: eq(appSettings.updatedBy, clerkUserId) })) != null;
-}
-
 export const userRepo = {
   async upsertFromClerk(input: {
     clerkUserId: string;
@@ -816,7 +744,9 @@ export const userRepo = {
       const wrapped = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
       const pgErr = wrapped.code === '23505' ? wrapped : wrapped.cause;
       if (pgErr?.code === '23505' && pgErr.constraint === 'users_email_unique') {
-        return rebindEmailIdentity(client, input);
+        throw new ConflictError(
+          'This email address is already associated with another account; automatic identity rebinding is disabled.',
+        );
       }
       throw err;
     }
@@ -911,7 +841,7 @@ export const userRepo = {
       )
       .limit(limit + 1);
     const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
-      ? await query.offset(Math.max(opts.offset, 0))
+      ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
       : await query;
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
@@ -1085,7 +1015,7 @@ export const auditRepo = {
       )
       .limit(limit + 1);
     const queriedRows = !isBackward && input.cursor === undefined && input.offset !== undefined
-      ? await query.offset(Math.max(input.offset, 0))
+      ? await query.offset(Math.min(Math.max(input.offset, 0), MAX_LEGACY_LIST_OFFSET))
       : await query;
     const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
     const hasExtra = queriedRows.length > limit;
