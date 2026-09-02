@@ -3,9 +3,22 @@
 export type IngestStatus = 'queued' | 'ingesting' | 'done' | 'failed';
 
 import type { AppConfig } from './app-config';
+import type { AdminListCursor, CursorContext, ListCursorCodec } from './pagination';
+
+export type DocumentListCursor = Extract<AdminListCursor, { kind: 'documents' }>;
+export type TicketListCursor = Extract<AdminListCursor, { kind: 'tickets' }>;
+export type UserListCursor = Extract<AdminListCursor, { kind: 'users' }>;
+export type AuditListCursor = Extract<AdminListCursor, { kind: 'audit' }>;
+
+export interface CursorPageInfo {
+  nextCursor: string | null;
+  previousCursor: string | null;
+}
 
 export interface DocumentRow {
   id: number;
+  /** Stable identity retained when the numeric compatibility id stays the same. */
+  documentUid?: string;
   fileName: string;
   fileHash: string;
   uploadedBy: string;
@@ -96,8 +109,13 @@ export interface DocumentRepository {
     search?: string | undefined;
     includeDeleted?: boolean | undefined;
     limit: number;
-    offset: number;
-  }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number }>;
+    offset?: number | undefined;
+    cursor?: DocumentListCursor | undefined;
+    before?: DocumentListCursor | undefined;
+    /** Signed cursor adapter and its normalized request binding. */
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
+  }): Promise<{ documents: (DocumentRow & { hasBlob: boolean })[]; total: number } & CursorPageInfo>;
   countChunksForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countChunksForAll(): Promise<number>;
   countPendingIngest(): Promise<number>;
@@ -143,6 +161,9 @@ export interface DocumentChunk {
 export interface RetrievedChunkRow {
   id: number;
   documentId: number;
+  /** Stable identity used by citations and re-ingest upserts. */
+  documentUid?: string;
+  chunkUid?: string;
   fileName: string | null;
   page: number | null;
   sectionTitle: string | null;
@@ -160,6 +181,11 @@ export interface ContentParser {
   extractText(buffer: Uint8Array): Promise<string>;
 }
 
+/** Performs bounded structural validation before a PDF is durably stored. */
+export interface PdfValidator {
+  validate(buffer: Uint8Array, opts?: { signal?: AbortSignal | undefined }): Promise<void>;
+}
+
 /** A chunking strategy that turns structured pages into DocumentChunk[]. */
 export interface ChunkingStrategy {
   splitPages(pages: Array<{ page: number; text: string }>): Promise<DocumentChunk[]>;
@@ -175,6 +201,8 @@ export interface InsertChunkInput {
   sectionTitle?: string | null | undefined;
   source?: string | null | undefined;
   title?: string | null | undefined;
+  /** Structural parent index before the database self-reference is resolved. */
+  parentChunkIndex?: number | null | undefined;
   parentChunkId?: number | null | undefined;
   kind?: 'parent' | 'child' | 'summary' | undefined;
   embeddingModel?: string | null | undefined;
@@ -185,7 +213,7 @@ export interface InsertChunkInput {
 export interface VectorSearch {
   searchByVector(
     embedding: number[],
-    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+    opts: { threshold: number; limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
 }
 
@@ -193,25 +221,29 @@ export interface VectorSearch {
 export interface LexicalSearch {
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number } },
+    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
 }
 
 /** Relational chunk CRUD (parent/child self-FK resolution, ranges, counts). */
 export interface ChunkStore {
   /** Fetch chunks by ids. Caller overrides `similarity`; used to resolve child→parent. */
-  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  getByIds(ids: number[], opts?: { signal?: AbortSignal }): Promise<RetrievedChunkRow[]>;
   /** Fetch chunks in `[start, end]` range. Used by window parent-child mode. */
   getByDocAndRange(
     documentId: number,
     start: number,
     end: number,
+    opts?: { signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   /** Batched getByDocAndRange. Returns map keyed by `documentId:start:end`. */
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
+    opts?: { signal?: AbortSignal },
   ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(rows: InsertChunkInput[]): Promise<void>;
+  /** Upsert a complete document chunk set by stable UID, then remove stale rows. */
+  replaceMany?(documentId: number, rows: InsertChunkInput[]): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
   countForDocuments(documentIds: number[]): Promise<Map<number, number>>;
   countForAll(): Promise<number>;
@@ -223,20 +255,22 @@ export interface ChunkStore {
 export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore {
   searchByVector(
     embedding: number[],
-    opts: { threshold: number; limit: number; filter?: { documentId?: number } },
+    opts: { threshold: number; limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number } },
+    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
-  getByIds(ids: number[]): Promise<RetrievedChunkRow[]>;
+  getByIds(ids: number[], opts?: { signal?: AbortSignal }): Promise<RetrievedChunkRow[]>;
   getByDocAndRange(
     documentId: number,
     start: number,
     end: number,
+    opts?: { signal?: AbortSignal },
   ): Promise<RetrievedChunkRow[]>;
   getByDocAndRanges(
     ranges: Array<{ documentId: number; start: number; end: number }>,
+    opts?: { signal?: AbortSignal },
   ): Promise<Map<string, RetrievedChunkRow[]>>;
   insertMany(rows: InsertChunkInput[]): Promise<void>;
   deleteByDocumentId(documentId: number): Promise<void>;
@@ -255,9 +289,13 @@ export interface TicketRepository {
       assignee?: string | null | undefined;
       search?: string | undefined;
       limit: number;
-      offset: number;
+      offset?: number | undefined;
+      cursor?: TicketListCursor | undefined;
+      before?: TicketListCursor | undefined;
+      cursorCodec?: ListCursorCodec | undefined;
+      cursorContext?: CursorContext | undefined;
     },
-  ): Promise<{ rows: TicketRow[]; total: number }>;
+  ): Promise<{ rows: TicketRow[]; total: number } & CursorPageInfo>;
   latest(): Promise<{ id: number; ticketId: string } | null>;
   insert(input: {
     ticketId: string;
@@ -297,8 +335,12 @@ export interface UserRepository {
   list(opts: {
     search?: string | undefined;
     limit: number;
-    offset: number;
-  }): Promise<{ rows: UserRow[]; total: number }>;
+    offset?: number | undefined;
+    cursor?: UserListCursor | undefined;
+    before?: UserListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
+  }): Promise<{ rows: UserRow[]; total: number } & CursorPageInfo>;
   countAll(): Promise<number>;
   countAdmins(): Promise<number>;
   /** Count admin rows while holding row locks so concurrent demotions serialize on the same count. */
@@ -346,7 +388,11 @@ export interface AuditListFilter {
   documentId?: number | undefined;
   ticketId?: string | undefined;
   limit: number;
-  offset: number;
+  offset?: number | undefined;
+  cursor?: AuditListCursor | undefined;
+  before?: AuditListCursor | undefined;
+  cursorCodec?: ListCursorCodec | undefined;
+  cursorContext?: CursorContext | undefined;
 }
 
 export interface AuditLog {
@@ -378,7 +424,7 @@ export interface AuditLog {
   list(input: AuditListFilter): Promise<{
     events: AuditEventRecord[];
     total: number;
-  }>;
+  } & CursorPageInfo>;
 }
 
 /** Per-turn chat metrics. `mode`: 'agentic' or 'vector'. */
@@ -561,24 +607,18 @@ export interface ThumbsDownDoc {
   down: number;
 }
 
-/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
-export interface ChatEventsRepo {
+export interface ChatEventWriter {
   record(event: ChatEventInput): void;
   flush(): Promise<void>;
-  
   patchMeta(turnId: string, patch: Record<string, unknown>): boolean;
-  
   updateEventMeta(turnId: string, patch: Record<string, unknown>): Promise<boolean>;
-  
+}
+
+export interface ChatEventReader {
   getQualitySamples(limit: number, filter: { blocked?: boolean }): Promise<ChatEvent[]>;
   getDailyTrends(days: number): Promise<ChatDailyTrendRow[]>;
-  
   getDailyQuality(days: number): Promise<ChatDailyQualityRow[]>;
-  
-  getJudgeAverages(days?: number): Promise<{
-    avgFaithfulness: number;
-    avgRetrievalRelevance: number;
-  }>;
+  getJudgeAverages(days?: number): Promise<{ avgFaithfulness: number; avgRetrievalRelevance: number }>;
   getMetrics(range?: ChatEventRange): Promise<ChatEventMetrics>;
   getUsageOverTime(days: number): Promise<ChatEventDailyUsage[]>;
   getModeComparison(range?: ChatEventRange): Promise<ModeComparison[]>;
@@ -586,11 +626,20 @@ export interface ChatEventsRepo {
   getDocumentUtility(limit: number, range?: ChatEventRange): Promise<DocumentUtilityRow[]>;
   getZeroHitDocuments(limit: number): Promise<ZeroHitDocument[]>;
   getTurnsToTicket(range?: ChatEventRange): Promise<TurnsToTicket>;
+}
+
+export interface ChatEventRetention {
   refreshDailyStats(): Promise<void>;
+}
+
+export interface ChatEventPurge {
   purgeOlderThan(cutoff: Date): Promise<{ deletedCount: number }>;
   purgeUserData(userId: string): Promise<{ deletedCount: number }>;
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
 }
+
+/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
+export type ChatEventsRepo = ChatEventWriter & ChatEventReader & ChatEventRetention & ChatEventPurge;
 
 export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
 
@@ -681,15 +730,83 @@ export interface RateLimiter {
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 
+/** The result of trying to become the producer for one cache key. */
+export type LeaseAcquireResult =
+  | { kind: 'acquired'; handle: LeaseHandle }
+  | { kind: 'held' }
+  | { kind: 'unavailable' };
+
+/** Result of extending an owned lease. */
+export type LeaseRenewResult =
+  | { kind: 'renewed' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' }
+  | { kind: 'unsupported' };
+
+/** Result of releasing an owned lease. */
+export type LeaseReleaseResult =
+  | { kind: 'released' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' };
+
+/** Result of atomically publishing a value while ownership is still valid. */
+export type LeasePublishResult =
+  | { kind: 'published' }
+  | { kind: 'not-owner' }
+  | { kind: 'unavailable' }
+  | { kind: 'unsupported' };
+
+/**
+ * Opaque ownership handle returned by a cache coordination provider.
+ *
+ * Provider tokens (for example Redis values) stay inside the adapter. The
+ * application can only renew or release the ownership represented by this
+ * handle and cannot accidentally mix a token with another cache key.
+ */
+export interface LeaseHandle {
+  /** Adapters may disable renewal when the legacy provider cannot extend TTL. */
+  readonly renewalSupported?: boolean;
+  renew(ttlSec: number): Promise<LeaseRenewResult>;
+  /** Distributed adapters use this to fence stale producers at publication. */
+  publish?(value: string, ttlSec: number): Promise<LeasePublishResult>;
+  release(): Promise<LeaseReleaseResult>;
+}
+
+/** Whether a coordination provider is process-local or shared by instances. */
+export type CacheLeaseScope = 'local' | 'distributed';
+
+/** Explicit single-flight coordination for one answer-cache provider. */
+export interface CacheLeaseCoordinator {
+  readonly scope: CacheLeaseScope;
+  acquire(key: string, ttlSec: number): Promise<LeaseAcquireResult>;
+}
+
+/** Descriptive aliases for callers that refer to this port as single-flight. */
+export type CacheCoordination = CacheLeaseCoordinator;
+export type SingleFlightCoordinator = CacheLeaseCoordinator;
+
+/**
+ * Legacy token-shaped lease kept for source compatibility with older adapters.
+ * New callers must use `AnswerCache.coordination`, whose handle hides tokens.
+ */
+export interface AnswerCacheLease {
+  tryAcquire(key: string, ttlSec: number): Promise<string | null>;
+  release(key: string, token: string): Promise<void>;
+}
+
 /** Cache for query-keyed answers. Callers MUST pin model ids into the key. */
 export interface AnswerCache {
   get(key: string): Promise<string | null>;
   set(key: string, answer: string, ttlSec: number): Promise<void>;
+  /** Explicit ownership coordination; absent only for legacy/test adapters. */
+  coordination?: CacheLeaseCoordinator;
+  /** @deprecated Use `coordination`; retained for older adapter consumers. */
+  lease?: AnswerCacheLease;
 }
 
 export interface EmbeddingService {
-  embed(value: string): Promise<number[]>;
-  embedBatch(values: string[]): Promise<number[][]>;
+  embed(value: string, opts?: { signal?: AbortSignal }): Promise<number[]>;
+  embedBatch(values: string[], opts?: { signal?: AbortSignal }): Promise<number[][]>;
 }
 
 /** A reranked document with original index and relevance score. */

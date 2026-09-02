@@ -43,16 +43,16 @@ function assertDimension(modelId: string, embeddings: number[][], vectorDim?: nu
 function createOpenAIEmbeddingService(vectorDim?: number): EmbeddingService {
   const getProviderOptions = () => getOpenAIEmbeddingOptions(vectorDim);
   return {
-    async embed(value: string): Promise<number[]> {
+    async embed(value: string, opts: { signal?: AbortSignal } = {}): Promise<number[]> {
       const model = getOpenAIEmbeddingModel();
-      const embeddings = await embedBatchWithModel([value], model, getProviderOptions());
+      const embeddings = await embedBatchWithModel([value], model, getProviderOptions(), opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings[0] ?? [];
     },
 
-    async embedBatch(values: string[]): Promise<number[][]> {
+    async embedBatch(values: string[], opts: { signal?: AbortSignal } = {}): Promise<number[][]> {
       const model = getOpenAIEmbeddingModel();
-      const embeddings = await embedBatchWithModel(values, model, getProviderOptions());
+      const embeddings = await embedBatchWithModel(values, model, getProviderOptions(), opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings;
     },

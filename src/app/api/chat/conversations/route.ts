@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { getComposition, respondResult } from '@/composition';
-import { CHAT_HISTORY_RATE_LIMIT } from '@app/domain';
+import { CHAT_HISTORY_RATE_LIMIT, MAX_LEGACY_LIST_OFFSET } from '@app/domain';
 
 export async function GET(req: Request) {
   const { userId } = await auth();
@@ -18,15 +18,15 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  function intParam(key: string): number | undefined {
+  function intParam(key: string, max?: number): number | undefined {
     const raw = url.searchParams.get(key);
     if (raw === null || raw === '') return undefined;
     const value = Number(raw);
     if (!Number.isSafeInteger(value) || value < 0) return undefined;
-    return Math.min(value, 100);
+    return max === undefined ? value : Math.min(value, max);
   }
-  const limitParam = intParam('limit');
-  const offsetParam = intParam('offset');
+  const limitParam = intParam('limit', 100);
+  const offsetParam = intParam('offset', MAX_LEGACY_LIST_OFFSET);
   const result = await comp.listConversations({
     userId,
     ...(limitParam !== undefined ? { limit: limitParam } : {}),

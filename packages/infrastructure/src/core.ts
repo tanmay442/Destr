@@ -17,6 +17,7 @@ import type {
   SettingsRepo,
   TicketRepository,
   UserRepository,
+  ListCursorCodec,
 } from '@app/domain';
 import { logger } from '@app/domain';
 import { loadEnvConfig, defaultProcessEnv } from './config/env';
@@ -34,6 +35,7 @@ import {
   createQualityReviewsRepo,
   createChatHistoryRepo,
   resolveVectorDim,
+  defaultHasher,
 } from './db';
 import {
   getEmbeddingService,
@@ -47,6 +49,8 @@ import './auth/upstash-rate-limiter';
 import './auth/upstash-answer-cache';
 import { createRateLimiter } from './auth/lru-rate-limiter';
 import { createAnswerCache } from './auth/in-memory-answer-cache';
+import { createSignedListCursorCodec } from './pagination/signed-cursor';
+import { parseCursorSigningConfig } from './config/cursor';
 
 export interface CoreDepsOptions {
   env?: EnvSource;
@@ -73,19 +77,21 @@ export interface CoreDeps {
   ingestQueue: IngestQueue;
   rateLimiter: RateLimiter;
   answerCache: AnswerCache;
+  cursorCodec: ListCursorCodec;
   resolveReranker: (provider: string) => Reranker | undefined;
   availableRerankers: () => Map<string, RerankerStatus>;
 }
 
 function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
   const config = loadEnvConfig(env);
+  const cursorCodec = createSignedListCursorCodec(parseCursorSigningConfig(env));
   const vectorDim = resolveVectorDim(env);
   const dbClient = env === defaultProcessEnv ? db : createDbClient({ env, vectorDim });
   return {
     config,
     dbClient,
     documentRepo: createDocumentRepo(dbClient),
-    chunkRepo: createChunkRepo(dbClient, vectorDim),
+    chunkRepo: createChunkRepo(dbClient, vectorDim, defaultHasher),
     ticketRepo: createTicketRepo(dbClient),
     userRepo: createUserRepo(dbClient),
     auditRepo: createAuditRepo(dbClient),
@@ -102,6 +108,7 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),
     answerCache: createAnswerCache(options.onAnswerCacheInitError),
+    cursorCodec,
     resolveReranker,
     availableRerankers,
   };

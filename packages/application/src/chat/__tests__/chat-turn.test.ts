@@ -83,6 +83,10 @@ function makeDeps(overrides: DepsOverrides = {}) {
   const answerCache = {
     get: vi.fn(async () => null as string | null),
     set: vi.fn<(key: string, value: string, ttlSec: number) => Promise<void>>(async () => undefined),
+    lease: {
+      tryAcquire: vi.fn(async () => `test-token-${Math.random()}`),
+      release: vi.fn(async () => undefined),
+    },
   };
   const answerCacheKey = vi.fn((query: string, ctx: { userId?: string; fingerprint?: string }) =>
     `rag:answer:${query}-${ctx.userId ?? ''}-${ctx.fingerprint ?? ''}`,
@@ -127,6 +131,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
     agenticSearch: overrides.agenticSearch ?? agenticSearch,
     hallucinationGrader: overrides.hallucinationGrader ?? (() => null),
     answerCache: overrides.answerCache ?? answerCache,
+    ...(overrides.turnResultCache ? { turnResultCache: overrides.turnResultCache } : {}),
     answerCacheKey: overrides.answerCacheKey ?? answerCacheKey,
     rateLimit: overrides.rateLimit ?? rateLimit,
     createTicket: overrides.createTicket ?? createTicket,
@@ -301,6 +306,57 @@ describe('chatTurn', () => {
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.cacheHit).toBe(true);
     expect(event?.mode).toBe('vector');
+  });
+
+  it('replays a completed turn by turn ID without calling the model again', async () => {
+    const values = new Map<string, string>();
+    const turnResultCache = {
+      get: vi.fn(async (key: string) => values.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string) => {
+        values.set(key, value);
+      }),
+    };
+    const { deps, fakes } = makeDeps({ turnResultCache });
+    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'once' }));
+
+    const first = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(first.kind).toBe('stream');
+    if (first.kind !== 'stream') return;
+    await readParts(first.stream);
+
+    const second = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(second.kind).toBe('stream');
+    if (second.kind !== 'stream') return;
+    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(await readParts(second.stream)).toContainEqual({ type: 'text-delta', id: 'cached', delta: 'once' });
+    expect(turnResultCache.set).toHaveBeenCalledWith(
+      expect.stringContaining('rag:turn-result:'),
+      expect.stringContaining('turn-result'),
+      86_400,
+    );
+    expect(fakes.record.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ cacheHit: true }));
+  });
+
+  it('rejects reuse of a turn ID for a different request', async () => {
+    const values = new Map<string, string>();
+    const turnResultCache = {
+      get: vi.fn(async (key: string) => values.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string) => {
+        values.set(key, value);
+      }),
+    };
+    const { deps } = makeDeps({ turnResultCache });
+    const first = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(first.kind).toBe('stream');
+    if (first.kind !== 'stream') return;
+    await readParts(first.stream);
+
+    const conflictBody = {
+      ...BASIC_BODY,
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'A different question' }] }],
+    };
+    const second = await run({ request: makeRequest(conflictBody), userId: 'user_test' }, deps);
+    expect(second).toEqual({ kind: 'idempotency-conflict' });
   });
 
   it('writes a freshly generated grounded first-turn answer to the cache on miss', async () => {
@@ -517,7 +573,7 @@ describe('chatTurn', () => {
     await captured.current?.searchDocumentation?.execute({ query: 'vague' });
     closeLlm();
     await readParts(result.stream);
-    expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague');
+    expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', { signal: expect.any(AbortSignal) });
     expect(fakes.searchChunks).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect((event?.meta as Record<string, unknown>)?.rewritten).toBe(true);
@@ -531,7 +587,10 @@ describe('chatTurn', () => {
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
     await captured.current?.searchDocumentation?.execute({ query: 'plain' });
-    expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', { limit: undefined });
+    expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', {
+      limit: undefined,
+      signal: expect.any(AbortSignal),
+    });
     expect(fakes.agenticSearch).not.toHaveBeenCalled();
   });
 
@@ -697,6 +756,36 @@ describe('chatTurn', () => {
     const opts = streamTextMock.mock.calls[0]?.[0] as { system: string };
     expect(opts.system).toMatch(/Pre-fetched Reference Data/);
     expect(opts.system).toContain('The dental plan covers two cleanings per year.');
+  });
+
+  it('reuses a normalized exact-match prefetch once and records that path', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await captured.current?.searchDocumentation?.execute({ query: '  how do i reset my password?  ' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'exact_match_reused' }));
+    expect(event.meta?.reformulationCount).toBe(0);
+  });
+
+  it('performs a new search for a reformulated prefetch query and records it', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await captured.current?.searchDocumentation?.execute({ query: 'password recovery policy' });
+    closeLlm();
+    await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(2);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'query_changed' }));
+    expect(event.meta?.reformulationCount).toBe(1);
   });
 
   it('does not pre-fetch on a follow-up turn even when enabled', async () => {
@@ -1037,6 +1126,26 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
 });
 
 describe('§T6 soft turn deadline', () => {
+  it('arms an immediately expiring signal when the soft budget is already exhausted', async () => {
+    const dateNow = vi.spyOn(Date, 'now');
+    dateNow.mockReturnValueOnce(1_000).mockReturnValue(1_100);
+    let timeoutMs: number | undefined;
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
+      timeoutMs = delay;
+      return new AbortController().signal;
+    });
+    try {
+      const { deps } = makeDeps();
+      deps.turnSoftDeadlineMs = 40;
+      const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+      expect(result.kind).toBe('stream');
+      expect(timeoutMs).toBe(0);
+    } finally {
+      timeout.mockRestore();
+      dateNow.mockRestore();
+    }
+  });
+
   it('ends a slow generation with graceful guardrail + notice, skipping cache and judge', async () => {
     streamTextMock.mockImplementation((opts: { abortSignal?: AbortSignal }) => ({
       toUIMessageStream: () =>

@@ -7,18 +7,26 @@ const outOfScopeTopicSchema = z.object({
   handling: z.string().min(1),
 });
 
+const agentPersonaSchema = z.object({
+  name: z.string().min(1).optional(),
+  tone: toneSchema.default('friendly'),
+});
+
+const brandingSchema = z.object({
+  title: z.string().min(1).default('Destr'),
+  description: z
+    .string()
+    .min(1)
+    .default('Grounded AI assistant with tool-use capabilities.'),
+});
+
 export const appConfigSchema = z.object({
   orgName: z.string().min(1).default('Your Company'),
   audience: z
     .string()
     .min(1)
     .default('your users'),
-  agentPersona: z
-    .object({
-      name: z.string().min(1).optional(),
-      tone: toneSchema.default('friendly'),
-    })
-    .default({ name: 'Destr', tone: 'friendly' }),
+  agentPersona: agentPersonaSchema.default({ name: 'Destr', tone: 'friendly' }),
   customInstructions: z.string().optional(),
   outOfScopeTopics: z
     .array(outOfScopeTopicSchema)
@@ -60,21 +68,10 @@ export const appConfigSchema = z.object({
       },
     ]),
   adminEmails: z.array(z.email()).default([]),
-  branding: z
-    .object({
-      title: z.string().min(1).default('Destr'),
-      description: z
-        .string()
-        .min(1)
-        .default(
-          'Grounded AI assistant with tool-use capabilities.',
-        ),
-    })
-    .default({
-      title: 'Destr',
-      description:
-        'Grounded AI assistant with tool-use capabilities.',
-    }),
+  branding: brandingSchema.default({
+    title: 'Destr',
+    description: 'Grounded AI assistant with tool-use capabilities.',
+  }),
   seedDocsDir: z.string().min(1).default('./documents'),
   prefetchFirstTurn: z.boolean().default(false),
   chunkingStrategy: z
@@ -106,29 +103,58 @@ export const appConfigSchema = z.object({
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
-function deepPartial(schema: typeof appConfigSchema): z.ZodType<Partial<AppConfig>>;
-function deepPartial(schema: z.core.SomeType): z.core.SomeType;
-function deepPartial(schema: z.core.SomeType): z.core.SomeType {
-  if (schema instanceof z.ZodObject) {
-    const out: Record<string, z.core.SomeType> = {};
-    for (const [key, field] of Object.entries(schema.shape)) {
-      out[key] = deepPartial(field);
-    }
-    return z.object(out);
-  }
-  if (schema instanceof z.ZodArray) {
-    return z.optional(z.array(deepPartial(schema.element)));
-  }
-  if (schema instanceof z.ZodOptional) {
-    return z.optional(deepPartial(schema.unwrap()));
-  }
-  if (schema instanceof z.ZodNullable) {
-    return z.optional(z.nullable(deepPartial(schema.unwrap())));
-  }
-  if (schema instanceof z.ZodDefault) {
-    return z.optional(deepPartial(schema.unwrap()));
-  }
-  return z.optional(schema);
-}
+type DeepPartial<T> = T extends readonly (infer Element)[]
+  ? Array<DeepPartial<Element>>
+  : T extends object
+    ? { [Key in keyof T]?: DeepPartial<T[Key]> | undefined }
+    : T;
 
-export const partialAppConfigSchema = deepPartial(appConfigSchema) satisfies z.ZodType<Partial<AppConfig>>;
+const appConfigShape = appConfigSchema.shape;
+
+const partialAgentPersonaSchema = z.object({
+  name: agentPersonaSchema.shape.name,
+  tone: agentPersonaSchema.shape.tone.removeDefault().optional(),
+}).strict();
+
+const partialOutOfScopeTopicSchema = z.object({
+  topic: outOfScopeTopicSchema.shape.topic.optional(),
+  handling: outOfScopeTopicSchema.shape.handling.optional(),
+}).strict();
+
+const partialBrandingSchema = z.object({
+  title: brandingSchema.shape.title.removeDefault().optional(),
+  description: brandingSchema.shape.description.removeDefault().optional(),
+}).strict();
+
+export const partialAppConfigSchema = z.object({
+  orgName: appConfigShape.orgName.removeDefault().optional(),
+  audience: appConfigShape.audience.removeDefault().optional(),
+  agentPersona: partialAgentPersonaSchema.optional(),
+  customInstructions: appConfigShape.customInstructions,
+  outOfScopeTopics: z.array(partialOutOfScopeTopicSchema).optional(),
+  adminEmails: appConfigShape.adminEmails.removeDefault().optional(),
+  branding: partialBrandingSchema.optional(),
+  seedDocsDir: appConfigShape.seedDocsDir.removeDefault().optional(),
+  prefetchFirstTurn: appConfigShape.prefetchFirstTurn.removeDefault().optional(),
+  chunkingStrategy: appConfigShape.chunkingStrategy.removeDefault().optional(),
+  parentChunkSize: appConfigShape.parentChunkSize.removeDefault().optional(),
+  childChunkSize: appConfigShape.childChunkSize.removeDefault().optional(),
+  parentChildMode: appConfigShape.parentChildMode.removeDefault().optional(),
+  parentChildWindow: appConfigShape.parentChildWindow.removeDefault().optional(),
+  retrievalMode: appConfigShape.retrievalMode.removeDefault().optional(),
+  agentStepBudget: appConfigShape.agentStepBudget.removeDefault().optional(),
+  agenticRetrieveLimit: appConfigShape.agenticRetrieveLimit.removeDefault().optional(),
+  agenticMaxRetries: appConfigShape.agenticMaxRetries.removeDefault().optional(),
+  similarityThreshold: appConfigShape.similarityThreshold.removeDefault().optional(),
+  hybridEnabled: appConfigShape.hybridEnabled.removeDefault().optional(),
+  agenticQueryRewriteEnabled: appConfigShape.agenticQueryRewriteEnabled.removeDefault().optional(),
+  hallucinationCheckEnabled: appConfigShape.hallucinationCheckEnabled.removeDefault().optional(),
+  judgeSampleRate: appConfigShape.judgeSampleRate.removeDefault().optional(),
+  rerankerProvider: appConfigShape.rerankerProvider.removeDefault().optional(),
+  auxModel: appConfigShape.auxModel,
+  answerCacheEnabled: appConfigShape.answerCacheEnabled.removeDefault().optional(),
+  answerCacheTtlSec: appConfigShape.answerCacheTtlSec.removeDefault().optional(),
+  captureQueryText: appConfigShape.captureQueryText.removeDefault().optional(),
+  chatHistoryRetentionDays: appConfigShape.chatHistoryRetentionDays.removeDefault().optional(),
+  retrievalModeRolloutPercent: appConfigShape.retrievalModeRolloutPercent.removeDefault().optional(),
+}).strict() satisfies z.ZodType<DeepPartial<AppConfig>>;

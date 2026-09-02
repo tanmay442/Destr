@@ -5,15 +5,15 @@ import type {
   streamText,
   tool,
   InferUIMessageChunk,
-  UIMessage,
 } from 'ai';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CHAT_MAX_BODY_BYTES,
   CHAT_RATE_LIMIT,
   logger,
+  MAX_DURATION_MS,
   sanitizeText,
   TURN_DEADLINE_BANNER_MESSAGE,
   TURN_DEADLINE_TEXT,
@@ -24,7 +24,11 @@ import {
   type Result,
 } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import { buildSystemPrompt } from '../prompt/build-system-prompt';
+import {
+  buildStableSystemPrompt,
+  buildSystemPrompt,
+  SYSTEM_PROMPT_PREFIX_VERSION,
+} from '../prompt/build-system-prompt';
 import type { AgenticResult } from '../rag/agentic-search';
 import type { RetrievedChunk } from '../rag/search';
 import { cacheFingerprint } from './cache-key';
@@ -34,21 +38,65 @@ import { buildAssistantMessageLike, type MessageLike } from './history';
 import { dedupeCitations } from './dedupe-citations';
 import { citationDocumentIds, type EmittedCitation } from './emit-citations';
 import { addGroundingEvidence, createGroundingEvidence, formatGroundingReference, type GroundingEvidence } from './grounding-evidence';
-import { ChatRequestSchema } from './request-schema';
+import { createChatRequestSchema } from './request-schema';
 import { resolveTurnId } from './turn-id';
+import {
+  compactModelHistory,
+  toChatUIMessages,
+  type ChatInputMessage,
+  type ChatUIMessage,
+} from './message-types';
+import {
+  createCacheLease,
+  waitForCachedAnswer,
+  type CacheLease,
+  type CacheLeaseOptions,
+  type CacheLeasePolicy,
+  type CacheLeaseTelemetry,
+} from './cache-lease';
+import {
+  legacyTurnRequestFingerprint,
+  turnRequestFingerprint,
+  TURN_FINGERPRINT_VERSION,
+} from './turn-fingerprint';
+
+type UIMessage = ChatUIMessage;
+
+const TURN_RESULT_CACHE_TTL_SEC = 86_400;
 
 interface CachedAnswerPayload {
   text: string;
   citations: EmittedCitation[];
+  requestFingerprint?: string;
+  fingerprintVersion?: number;
+  guardrail?: {
+    outOfDomain: boolean;
+    offerTicket: boolean;
+    notice?: boolean;
+    message?: string;
+    isEmpty?: boolean;
+    resultState?: string;
+  };
 }
 
-function parseCachedAnswer(value: string): CachedAnswerPayload {
+function parseCachedAnswer(value: string): CachedAnswerPayload;
+function parseCachedAnswer(value: string, expectedKind: 'turn-result'): CachedAnswerPayload | null;
+function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedAnswerPayload | null {
   try {
     const parsed: unknown = JSON.parse(value);
     if (typeof parsed === 'object' && parsed !== null) {
-      const candidate = parsed as { v?: unknown; text?: unknown; citations?: unknown };
+      const candidate = parsed as {
+        v?: unknown;
+        kind?: unknown;
+        text?: unknown;
+        citations?: unknown;
+        requestFingerprint?: unknown;
+        fingerprintVersion?: unknown;
+        guardrail?: unknown;
+      };
       if (
         candidate.v === 1 &&
+        (expectedKind === undefined || candidate.kind === expectedKind) &&
         typeof candidate.text === 'string' &&
         Array.isArray(candidate.citations) &&
         candidate.citations.every(
@@ -58,12 +106,25 @@ function parseCachedAnswer(value: string): CachedAnswerPayload {
             typeof (c as Record<string, unknown>).snippet === 'string',
         )
       ) {
-        return { text: candidate.text, citations: candidate.citations as EmittedCitation[] };
+        const result: CachedAnswerPayload = {
+          text: candidate.text,
+          citations: candidate.citations as EmittedCitation[],
+        };
+        if (typeof candidate.requestFingerprint === 'string') {
+          result.requestFingerprint = candidate.requestFingerprint;
+        };
+        if (typeof candidate.fingerprintVersion === 'number') {
+          result.fingerprintVersion = candidate.fingerprintVersion;
+        }
+        if (typeof candidate.guardrail === 'object' && candidate.guardrail !== null) {
+          result.guardrail = candidate.guardrail as NonNullable<CachedAnswerPayload['guardrail']>;
+        }
+        return result;
       }
     }
   } catch {
   }
-  return { text: value, citations: [] };
+  return expectedKind === undefined ? { text: value, citations: [] } : null;
 }
 
 export type AiSdk = {
@@ -74,26 +135,106 @@ export type AiSdk = {
   createUIMessageStream: typeof createUIMessageStream;
 };
 
+/** Provider-neutral usage facts returned by an infrastructure model adapter. */
+export interface ChatModelUsageTelemetry {
+  inputTokens: number | null;
+  inputTokensStatus: 'reported' | 'unsupported';
+  cachedInputTokens: number | null;
+  cachedInputTokensStatus: 'reported' | 'unsupported';
+  cacheReadTokens: number | null;
+  cacheReadStatus: 'reported' | 'unsupported';
+  cacheWriteTokens: number | null;
+  cacheWriteStatus: 'reported' | 'unsupported';
+  cacheHitRatio: number | null;
+}
+
+/**
+ * The application receives a generic adapter callback. Provider-specific
+ * option keys, capability objects, and parsing remain inside infrastructure.
+ */
+export interface ChatModelRequestOptions {
+  providerOptions?: SharedV3ProviderOptions;
+  telemetry?: Record<string, unknown>;
+  parseUsage?: (usage: unknown, providerMetadata?: unknown) => ChatModelUsageTelemetry;
+}
+
+function parseTurnResult(
+  value: string,
+  requestFingerprint: { current: string; legacy: string },
+): { answer: CachedAnswerPayload } | { conflict: true } | null {
+  const answer = parseCachedAnswer(value, 'turn-result');
+  if (!answer) return null;
+  const expected = answer.fingerprintVersion === TURN_FINGERPRINT_VERSION
+    ? requestFingerprint.current
+    : requestFingerprint.legacy;
+  if (answer.requestFingerprint !== expected) return { conflict: true };
+  return { answer };
+}
+
+function createCachedAnswerStream(
+  ai: AiSdk,
+  cachedAnswer: CachedAnswerPayload,
+  historyPersisted: boolean,
+  conversationId: string | undefined,
+): ReadableStream<InferUIMessageChunk<UIMessage>> {
+  return ai.createUIMessageStream<UIMessage>({
+    execute: ({ writer }) => {
+      writer.write({ type: 'text-start', id: 'cached' });
+      writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
+      writer.write({ type: 'text-end', id: 'cached' });
+      for (const citation of dedupeCitations(cachedAnswer.citations)) {
+        writer.write({ type: 'data-citation', data: citation });
+      }
+      if (cachedAnswer.guardrail) {
+        writer.write({ type: 'data-guardrail', data: cachedAnswer.guardrail });
+      }
+      if (historyPersisted && conversationId) {
+        writer.write({
+          type: 'data-conversation-persisted',
+          data: { conversationId },
+        });
+      }
+    },
+  });
+}
+
 export interface ChatTurnDeps {
   ai: AiSdk;
   getChatModel(): LanguageModelV3;
   getChatModelId(): string;
+  /** Trusted origins from which the configured model provider may fetch files. */
+  allowedChatFileOrigins?: ReadonlySet<string>;
+  getChatModelRequestOptions?: (input: {
+    stablePromptPrefix: string;
+    prefixVersion: string;
+  }) => ChatModelRequestOptions | undefined;
+  /** Provider-neutral retrieval adapter identity; raw queries are never included. */
+  getRetrievalProvider?: () => string;
   getEmbeddingModelId(): string;
   getRuntimeConfig(): Promise<AppConfig>;
   searchChunks(
     cfg: AppConfig,
     query: string,
-    opts: { limit?: number | undefined },
+    opts: { limit?: number | undefined; signal?: AbortSignal | undefined },
   ): Promise<Result<RetrievedChunk[]>>;
-  agenticSearch(cfg: AppConfig, query: string): Promise<Result<AgenticResult>>;
+  agenticSearch(
+    cfg: AppConfig,
+    query: string,
+    opts?: { signal?: AbortSignal | undefined },
+  ): Promise<Result<AgenticResult>>;
   hallucinationGrader(
     cfg: AppConfig,
   ): ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   answerCache: AnswerCache;
+  turnResultCache?: AnswerCache;
   answerCacheKey(
     query: string,
     ctx: { embeddingModel: string; chatModel: string; userId?: string; fingerprint?: string },
   ): string;
+  /** Strict in production; degraded is an explicit local-development mode. */
+  cacheLeasePolicy?: CacheLeasePolicy;
+  /** Receives rate-limited lease availability/ownership diagnostics. */
+  onCacheLeaseTelemetry?: (event: CacheLeaseTelemetry) => void;
   rateLimit: RateLimiter;
   createTicket(input: {
     userId: string;
@@ -147,6 +288,9 @@ export type ChatTurnResult =
       meta: { turnId: string | null; mode: 'vector' | 'agentic'; cacheHit: boolean };
     }
   | { kind: 'rate-limited'; retryAfterSec: string | undefined }
+  | { kind: 'cache-wait-timeout' }
+  | { kind: 'cache-unavailable' }
+  | { kind: 'idempotency-conflict' }
   | { kind: 'payload-too-large' }
   | { kind: 'invalid-request'; issues: z.ZodIssue[] };
 
@@ -238,6 +382,8 @@ async function readBoundedJson(request: Request): Promise<{ value: unknown; tooL
 
 interface TurnMetrics {
   retrieveMs: number;
+  prefetchMs: number | null;
+  prefetchStatus: 'disabled' | 'performed' | 'exact_match_reused' | 'query_changed';
   firstTokenMs: number | null;
   hallucinationMs: number | null;
   hitCount: number | null;
@@ -245,6 +391,28 @@ interface TurnMetrics {
   ticketCreated: boolean;
   ticketId: string | null;
   rewritten: boolean;
+  reformulationCount: number;
+}
+
+interface GenerationUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonnegativeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function parseGenerationUsage(value: unknown): GenerationUsage {
+  if (!isRecord(value)) return { inputTokens: null, outputTokens: null };
+  return {
+    inputTokens: nonnegativeNumber(value.inputTokens),
+    outputTokens: nonnegativeNumber(value.outputTokens),
+  };
 }
 
 function buildChatTools(deps: ChatTurnDeps, opts: {
@@ -257,6 +425,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
   isEmptyRef: { value: boolean };
   resultStateRef: { value: AgenticResultState | null };
   metrics: TurnMetrics;
+  prefetched?: { query: string; matches: RetrievedChunk[] } | undefined;
 }) {
   const {
     cfg,
@@ -268,8 +437,11 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     isEmptyRef,
     resultStateRef,
     metrics,
+    prefetched,
   } = opts;
   let ticketOpenedInTurn = false;
+  let prefetchedConsumed = false;
+  let prefetchQueryChanged = false;
   return {
     searchDocumentation: deps.ai.tool({
       description:
@@ -295,10 +467,37 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
         const t0 = performance.now();
+        const canReusePrefetch =
+          !prefetchedConsumed &&
+          prefetched !== undefined &&
+          prefetched.query.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
+        if (canReusePrefetch) {
+          prefetchedConsumed = true;
+          metrics.prefetchStatus = 'exact_match_reused';
+          matches = prefetched.matches;
+          for (const match of matches) {
+            if (metrics.maxSimilarity === null || match.similarity > metrics.maxSimilarity) {
+              metrics.maxSimilarity = match.similarity;
+            }
+          }
+          metrics.hitCount = (metrics.hitCount ?? 0) + matches.length;
+          return matches.map((match) => ({
+            content: formatGroundingReference(match),
+            similarity: match.similarity,
+            documentTitle: match.title ?? undefined,
+            section: match.sectionTitle ?? undefined,
+          }));
+        }
+        if (prefetched !== undefined && !prefetchQueryChanged) {
+          prefetchQueryChanged = true;
+          metrics.prefetchStatus = 'query_changed';
+          metrics.reformulationCount += 1;
+        }
         if (effectiveMode === 'agentic') {
-          const r = await deps.agenticSearch(cfg, query);
+          const r = await deps.agenticSearch(cfg, query, { signal: request.signal });
           if (!r.ok) {
             logger.error('Agentic retrieval failed', { error: r.error });
+            metrics.retrieveMs += Math.round(performance.now() - t0);
             return [];
           }
           if (deps.traceEnabled) {
@@ -314,12 +513,16 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             isEmptyRef.value = r.value.isEmpty;
             resultStateRef.value = r.value.resultState;
           }
-          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) metrics.rewritten = true;
+          if (r.value.rewrittenQuery && r.value.rewrittenQuery !== query) {
+            metrics.rewritten = true;
+            metrics.reformulationCount += 1;
+          }
           matches = r.value.chunks;
         } else {
-          const r = await deps.searchChunks(cfg, query, { limit });
+          const r = await deps.searchChunks(cfg, query, { limit, signal: request.signal });
           if (!r.ok) {
             logger.error('RAG retrieval failed', { error: r.error });
+            metrics.retrieveMs += Math.round(performance.now() - t0);
             return [];
           }
           if (deps.traceEnabled) {
@@ -427,12 +630,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     return { kind: 'payload-too-large' };
   }
   const raw = body.value;
-  const parsed = ChatRequestSchema.safeParse(raw);
+  const parsed = createChatRequestSchema(deps.allowedChatFileOrigins).safeParse(raw);
   if (!parsed.success) {
     return { kind: 'invalid-request', issues: parsed.error.issues };
   }
-  const messages = parsed.data.messages as unknown as UIMessage[];
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const inputMessages: ChatInputMessage[] = parsed.data.messages;
+  const messages = toChatUIMessages(inputMessages);
+  const lastUserMessage = [...inputMessages].reverse().find((m) => m.role === 'user');
   const lastUserText = lastUserMessage
     ? lastUserMessage.parts
         .filter((p) => p.type === 'text')
@@ -444,6 +648,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
+  const turnRequestHash = {
+    current: turnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      retry: parsed.data.retry,
+      semanticContext: cacheFingerprint(cfg, cfg.retrievalMode),
+      messages: inputMessages,
+    }),
+    legacy: legacyTurnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      messages: inputMessages,
+    }),
+  };
 
   const isFirstTurn = messages.length <= 1;
 
@@ -457,7 +673,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const persistedMode: ChatEventInput['mode'] = effectiveMode === 'normal' ? 'vector' : 'agentic';
   const queryText = cfg.captureQueryText ? lastUserText || null : null;
-  const metrics: TurnMetrics = { retrieveMs: 0, firstTokenMs: null, hallucinationMs: null, hitCount: null, maxSimilarity: null, ticketCreated: false, ticketId: null, rewritten: false };
+  const metrics: TurnMetrics = {
+    retrieveMs: 0,
+    prefetchMs: null,
+    prefetchStatus: 'disabled',
+    firstTokenMs: null,
+    hallucinationMs: null,
+    hitCount: null,
+    maxSimilarity: null,
+    ticketCreated: false,
+    ticketId: null,
+    rewritten: false,
+    reformulationCount: 0,
+  };
 
   const cacheable = cfg.answerCacheEnabled && isFirstTurn && lastUserText.trim() !== '';
   const cacheKey = cacheable
@@ -468,9 +696,142 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         fingerprint: cacheFingerprint(cfg, effectiveMode),
       })
     : null;
-  if (cacheKey) {
+  const turnResultCache = deps.turnResultCache;
+  const turnResultKey = turnResultCache && turnId
+    ? `rag:turn-result:${encodeURIComponent(userId)}:${turnId}`
+    : null;
+  let cacheLease: CacheLease | null = null;
+  let turnLease: CacheLease | null = null;
+  const releaseLeases = async (): Promise<void> => {
+    const leases = [cacheLease, turnLease].filter((lease): lease is CacheLease => lease !== null);
+    cacheLease = null;
+    turnLease = null;
+    const results = await Promise.all(leases.map((lease) => lease.releaseResult()));
+    for (const result of results) {
+      if (result.kind === 'unavailable') {
+        logger.warn('chat.cache.lease_release_unavailable', { turnId });
+      }
+    }
+  };
+  let leasesEscaped = false;
+  const cacheLeaseOptions: CacheLeaseOptions = {
+    policy: deps.cacheLeasePolicy ?? 'degraded',
+    onTelemetry: deps.onCacheLeaseTelemetry ?? ((event: CacheLeaseTelemetry): void => {
+      logger.warn('chat.cache.lease_coordination', {
+        operation: event.operation,
+        result: event.result,
+        policy: event.policy,
+      });
+    }),
+  };
+
+  try {
+    if (turnResultCache && turnResultKey) {
+      let turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
+      let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+      if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+      if (!turnState) {
+        const lease = createCacheLease(
+          turnResultCache,
+          turnResultKey,
+          Math.ceil(MAX_DURATION_MS / 1000),
+          cacheLeaseOptions,
+        );
+        const leaseResult = await lease.acquireResult();
+        if (leaseResult.kind === 'acquired') {
+          turnLease = lease;
+          turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
+          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+        } else if (leaseResult.kind === 'held') {
+          const remainingWaitMs = Math.max(
+            0,
+            MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+          );
+          turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
+            timeoutMs: remainingWaitMs,
+            signal: request.signal,
+          });
+          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+          if (!turnState) return { kind: 'cache-wait-timeout' };
+        } else {
+          return { kind: 'cache-unavailable' };
+        }
+      }
+      if (turnState && 'answer' in turnState) {
+        const cachedAnswer = turnState.answer;
+        deps.eventSink.record({
+          turnId,
+          userId,
+          query: queryText,
+          mode: persistedMode,
+          cacheHit: true,
+          totalMs: Math.round(performance.now() - turnStart),
+          ...(cachedAnswer.citations.length > 0
+            ? {
+                citationCount: cachedAnswer.citations.length,
+                meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+              }
+            : {}),
+        });
+        const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
+          conversationId: parsed.data.conversationId,
+          turnId,
+          retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
+          title: lastUserText,
+          userMessage: lastUserMessage,
+          assistantMessage: buildAssistantMessageLike({
+            turnId,
+            text: cachedAnswer.text,
+            citations: dedupeCitations(cachedAnswer.citations),
+            guardrail: cachedAnswer.guardrail ?? null,
+          }),
+        });
+        await releaseLeases();
+        const stream = createCachedAnswerStream(
+          deps.ai,
+          cachedAnswer,
+          historyPersisted,
+          parsed.data.conversationId,
+        );
+        leasesEscaped = true;
+        return {
+          kind: 'stream',
+          stream,
+          meta: { turnId, mode: persistedMode, cacheHit: true },
+        };
+      }
+    }
+
+    if (cacheKey) {
     if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
-    const cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    let cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    if (!cached) {
+      const lease = createCacheLease(
+        deps.answerCache,
+        cacheKey,
+        Math.ceil(MAX_DURATION_MS / 1000),
+        cacheLeaseOptions,
+      );
+      const leaseResult = await lease.acquireResult();
+      if (leaseResult.kind === 'acquired') {
+        cacheLease = lease;
+        cached = await deps.answerCache.get(cacheKey).catch(() => null);
+      } else if (leaseResult.kind === 'held') {
+        const remainingWaitMs = Math.max(
+          0,
+          MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+        );
+        cached = await waitForCachedAnswer(deps.answerCache, cacheKey, {
+          timeoutMs: remainingWaitMs,
+          signal: request.signal,
+        });
+        if (!cached) return { kind: 'cache-wait-timeout' };
+      } else {
+        return { kind: 'cache-unavailable' };
+      }
+    }
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
@@ -501,7 +862,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           guardrail: null,
         }),
       });
-      const stream = deps.ai.createUIMessageStream({
+      await releaseLeases();
+      const stream = deps.ai.createUIMessageStream<UIMessage>({
         execute: ({ writer }) => {
           writer.write({ type: 'text-start', id: 'cached' });
           writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
@@ -510,16 +872,17 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             writer.write({
               type: 'data-citation',
               data: src,
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           if (historyPersisted && parsed.data.conversationId) {
             writer.write({
               type: 'data-conversation-persisted',
               data: { conversationId: parsed.data.conversationId },
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
         },
       });
+      leasesEscaped = true;
       return {
         kind: 'stream',
         stream,
@@ -527,11 +890,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       };
     }
     if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
-  }
+    }
 
   let prefetch: RetrievedChunk[] | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
-    const prefetchResult = await deps.searchChunks(cfg, lastUserText, {});
+    const prefetchStartedAt = performance.now();
+    const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
+    metrics.prefetchMs = Math.round(performance.now() - prefetchStartedAt);
+    metrics.retrieveMs += metrics.prefetchMs;
+    metrics.prefetchStatus = 'performed';
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
@@ -539,6 +906,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       prefetch = addGroundingEvidence(groundingEvidence, prefetchResult.value);
     }
   }
+
+  const modelRequestOptions = deps.getChatModelRequestOptions?.({
+    stablePromptPrefix: buildStableSystemPrompt(cfg),
+    prefixVersion: SYSTEM_PROMPT_PREFIX_VERSION,
+  });
 
   const outOfDomainRef = { value: false };
   const isEmptyRef = { value: false };
@@ -553,7 +925,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
   const elapsedBeforeStream = Date.now() - requestStartedAt;
-  const softDeadlineMsRemaining = Math.max(1_000, softDeadlineMs - elapsedBeforeStream);
+  // An already-expired budget must abort immediately; a one-second floor here
+  // would let the model run past the application's hard wall-time boundary.
+  const softDeadlineMsRemaining = Math.max(0, softDeadlineMs - elapsedBeforeStream);
   const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsRemaining);
   let softDeadlineFired = false;
   softDeadlineSignal.addEventListener('abort', () => {
@@ -563,7 +937,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch),
-    messages: await deps.ai.convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
+    messages: await deps.ai.convertToModelMessages(compactModelHistory(messages), {
+      ignoreIncompleteToolCalls: true,
+    }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
     tools: buildChatTools(deps, {
@@ -576,10 +952,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       isEmptyRef,
       resultStateRef,
       metrics,
+      ...(prefetch ? { prefetched: { query: lastUserText, matches: prefetch } } : {}),
     }),
+    ...(modelRequestOptions?.providerOptions !== undefined
+      ? { providerOptions: modelRequestOptions.providerOptions }
+      : {}),
   });
 
-  const llmStream = result.toUIMessageStream({ originalMessages: messages });
+  const llmStream = result.toUIMessageStream<UIMessage>({ originalMessages: messages });
 
   const citationStream = new ReadableStream<InferUIMessageChunk<UIMessage>>({
     start(controller) {
@@ -591,16 +971,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (
-              metrics.firstTokenMs === null &&
-              typeof (value as { type?: unknown }).type === 'string' &&
-              String((value as { type?: unknown }).type).startsWith('text')
-            ) {
+            if (metrics.firstTokenMs === null && value.type.startsWith('text')) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
             }
-            const vt = (value as { type?: unknown; delta?: unknown }).type;
-            if (vt === 'text-delta' && typeof (value as { delta?: unknown }).delta === 'string') {
-              partialText += (value as { delta: string }).delta;
+            if (value.type === 'text-delta') {
+              partialText += value.delta;
             }
             controller.enqueue(value);
           }
@@ -610,22 +985,22 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             controller.enqueue({
               type: 'data-guardrail',
               data: { outOfDomain: false, notice: true, isEmpty: false, offerTicket: false, message: TURN_DEADLINE_BANNER_MESSAGE },
-            } as InferUIMessageChunk<UIMessage>);
+            });
             const tid = `deadline-${turnId}`;
-            controller.enqueue({ type: 'text-start', id: tid } as InferUIMessageChunk<UIMessage>);
+            controller.enqueue({ type: 'text-start', id: tid });
             controller.enqueue({
               type: 'text-delta',
               id: tid,
               delta: TURN_DEADLINE_TEXT,
-            } as InferUIMessageChunk<UIMessage>);
-            controller.enqueue({ type: 'text-end', id: tid } as InferUIMessageChunk<UIMessage>);
+            });
+            controller.enqueue({ type: 'text-end', id: tid });
           }
           const finalCitations = dedupeCitations(capturedCitations);
           for (const src of finalCitations) {
             controller.enqueue({
               type: 'data-citation',
               data: src,
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
           const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
@@ -655,6 +1030,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
           if (
             cacheKey &&
+            cacheLease?.isOwned() === true &&
             !timedOut &&
             shouldCache({
               citations: finalCitations,
@@ -671,8 +1047,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 if (deps.traceEnabled) {
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
                 }
-                await deps.answerCache.set(
-                  cacheKey,
+                await cacheLease?.publish(
                   JSON.stringify({ v: 1, text: finalAnswer, citations: finalCitations }),
                   cfg.answerCacheTtlSec,
                 );
@@ -681,7 +1056,52 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               logger.warn('Answer cache write skipped', { error: String(err) });
             }
           }
-          const usage = await Promise.resolve(result.usage).catch(() => null);
+          if (turnResultCache && turnResultKey && turnLease?.isOwned() === true && !timedOut) {
+            try {
+              const finalAnswer = await result.text;
+              if (finalAnswer && finalAnswer.trim() !== '') {
+                const guardrail = hallucinationBlocked
+                  ? {
+                      outOfDomain: finalOutOfDomain,
+                      offerTicket: true,
+                      isEmpty,
+                    }
+                  : undefined;
+                await turnLease?.publish(
+                  JSON.stringify({
+                    v: 1,
+                    kind: 'turn-result',
+                    requestFingerprint: turnRequestHash.current,
+                    fingerprintVersion: TURN_FINGERPRINT_VERSION,
+                    text: finalAnswer,
+                    citations: finalCitations,
+                    ...(guardrail ? { guardrail } : {}),
+                  }),
+                  TURN_RESULT_CACHE_TTL_SEC,
+                );
+              }
+            } catch (err) {
+              logger.warn('Turn result cache write skipped', { error: String(err) });
+            }
+          }
+          const usageCandidate = result.totalUsage !== undefined ? result.totalUsage : result.usage;
+          const usageValue = await Promise.resolve(usageCandidate).catch(() => null);
+          const parsedUsage = parseGenerationUsage(usageValue);
+          let promptCacheUsage: ChatModelUsageTelemetry | null = null;
+          if (modelRequestOptions?.parseUsage) {
+            try {
+              const providerMetadata = result.providerMetadata === undefined
+                ? undefined
+                : await Promise.resolve(result.providerMetadata).catch(() => undefined);
+              promptCacheUsage = modelRequestOptions.parseUsage(usageValue, providerMetadata);
+            } catch (cause: unknown) {
+              logger.warn('chat.model.prompt_cache_usage_parse_failed', {
+                error: String(cause),
+              });
+            }
+          }
+          const inputTokens = promptCacheUsage?.inputTokens ?? parsedUsage.inputTokens;
+          const outputTokens = parsedUsage.outputTokens;
           const totalMs = Math.round(performance.now() - turnStart);
           deps.eventSink.record({
             turnId,
@@ -697,14 +1117,33 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
             citationCount: finalCitations.length,
-            tokensIn: usage?.inputTokens ?? 0,
-            tokensOut: usage?.outputTokens ?? 0,
+            tokensIn: inputTokens,
+            tokensOut: outputTokens,
             meta: buildEventMeta({
               rewritten: metrics.rewritten,
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
               resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              modelTelemetry: modelRequestOptions?.telemetry,
+              promptCache: promptCacheUsage
+                ? {
+                    inputTokens: promptCacheUsage.inputTokens,
+                    inputTokensStatus: promptCacheUsage.inputTokensStatus,
+                    cachedInputTokens: promptCacheUsage.cachedInputTokens,
+                    cachedInputTokensStatus: promptCacheUsage.cachedInputTokensStatus,
+                    cacheReadTokens: promptCacheUsage.cacheReadTokens,
+                    cacheReadStatus: promptCacheUsage.cacheReadStatus,
+                    cacheWriteTokens: promptCacheUsage.cacheWriteTokens,
+                    cacheWriteStatus: promptCacheUsage.cacheWriteStatus,
+                    cacheHitRatio: promptCacheUsage.cacheHitRatio,
+                  }
+                : undefined,
+              prefetchStatus: metrics.prefetchStatus,
+              prefetchMs: metrics.prefetchMs,
+              reformulationCount: metrics.reformulationCount,
+              retrievalProvider: deps.getRetrievalProvider?.() ?? 'unknown',
+              retrievalMode: persistedMode,
               ...(timedOut ? { fallbackReason: 'turn_deadline' as const } : {}),
             }),
           });
@@ -712,6 +1151,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             event: 'chat.turn.timings',
             turnId,
             retrieveMs: metrics.retrieveMs,
+            prefetchMs: metrics.prefetchMs,
+            prefetchStatus: metrics.prefetchStatus,
+            reformulationCount: metrics.reformulationCount,
+            retrievalProvider: deps.getRetrievalProvider?.() ?? 'unknown',
+            retrievalMode: persistedMode,
             firstTokenMs: metrics.firstTokenMs,
             hallucinationMs: metrics.hallucinationMs,
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
@@ -747,7 +1191,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             controller.enqueue({
               type: 'data-conversation-persisted',
               data: { conversationId: parsed.data.conversationId },
-            } as InferUIMessageChunk<UIMessage>);
+            });
           }
           if (
             turnId &&
@@ -817,24 +1261,29 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }
             }
           } catch {}
+          await releaseLeases();
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
+        await releaseLeases();
         controller.close();
       })();
     },
   });
 
+  leasesEscaped = true;
   return {
     kind: 'stream',
     stream: citationStream,
     meta: { turnId, mode: persistedMode, cacheHit: false },
   };
+  } finally {
+    if (!leasesEscaped) await releaseLeases();
+  }
 }
 
 const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
 const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
-const MAX_DURATION_MS = 60_000;
 
 async function runHallucinationCheck(opts: {
   controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;

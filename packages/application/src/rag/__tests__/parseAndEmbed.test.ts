@@ -64,6 +64,22 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     }
   });
 
+  it('passes the request abort signal to the embedding service', async () => {
+    const signal = new AbortController().signal;
+    const deps = makeParseDeps();
+
+    const result = await parseAndEmbed(
+      { fileName: 'd.pdf', buffer: Buffer.from('x'), signal },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(
+      ['Alpha text.', 'Beta text.'],
+      { signal },
+    );
+  });
+
   it('skips the header when CCH_ENABLED=false even if a summarizer exists', async () => {
     const summarizer: DocSummarizer = {
       generateDocContext: vi.fn().mockResolvedValue({ title: 'My Doc', summary: 'About things.' }),

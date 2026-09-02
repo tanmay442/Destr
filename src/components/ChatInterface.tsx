@@ -296,7 +296,7 @@ const MessageItem = memo(function MessageItem({
           data-testid="chat-citations"
         >
           {citations.map((c, i) => {
-            const citationKey = c.data.id != null ? String(c.data.id) : `${message.id}-citation-${i}`;
+            const citationKey = c.data.chunkUid ?? (c.data.id != null ? String(c.data.id) : `${message.id}-citation-${i}`);
             const sim = c.data.similarity;
             const simPct = Math.round(sim * 100);
             const simTone =
@@ -378,7 +378,7 @@ const MessageItem = memo(function MessageItem({
 
 const QUICK_PROMPTS: Array<{ label: string; text: string }> = [
   { label: 'Reset password', text: 'How do I change my password?' },
-  { label: 'Invite teammate', text: 'How do I invite a teammate to my workspace?' },
+  { label: 'Invite teammate', text: 'How do I invite a teammate?' },
   { label: 'API rate limit', text: "What's the API rate limit on the Team plan?" },
   { label: 'Open a ticket', text: "I'd like to open a knowledge ticket." },
 ];

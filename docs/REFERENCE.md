@@ -77,7 +77,7 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 
 ## 4. Admin Console Subsystems
 
-- **Pagination**: all list tables (documents, users, tickets, audit) use server-side pagination at 30 rows/page with prev/next controls; out-of-range pages redirect to the last valid page.
+- **Pagination**: all list tables (documents, users, tickets, audit) use deterministic compound keyset pagination at 30 rows/page with cursor-based prev/next controls; direct numeric pages and API clients retain offset compatibility, and out-of-range pages redirect to the last valid page.
 
 ### Overview (`/admin`)
 - Metric cards: documents, chunks, tickets, open tickets, users; latest 10 audit events (per-request render, not a push stream).
@@ -92,16 +92,15 @@ Note: `@app/application` declares `ai` / `@ai-sdk/provider` dependencies for `ch
 - **Statuses**: `created`, `in_progress`, `closed` (no `resolved`). Transitions: `created → in_progress|closed`, `in_progress → closed|created`, `closed → ∅`.
 - **Ticket Drawer**: deep-linked `?ticket=<id>` mounts details, issue, assignees, notes thread, status controls.
 - **Admin-Only Assignment**: enforced server-side in the `updateTicket` use case; dropdowns list only admin-role users.
-- **Identifiers**: collision-resistant `TKT-<8-hex>` from `randomUUID` with retry on collision.
+- **Identifiers**: newly created tickets use collision-resistant `TKT-<16-lowercase-hex>` IDs from `randomUUID`; legacy `TKT-<8-hex>` and `TKT-<12-hex>` values remain routable. Only the ticket-ID unique constraint is retried, with a bounded attempt count.
 - **Filters**: assignee and text search beyond status.
 
 ### Analytics & Telemetry Engine (`/admin/analytics`)
-Five tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
-1. **Statistics**: turns, hallucination blocks, out-of-domain refusals, self-serve rate; 12-week SVG `LineChart` with 5% hallucination threshold; token-cost estimate; 7-day `ActivityBars`.
+Four tabs from `chat_events` + materialized `chat_daily_stats` (12-week trend window is a consumer default):
+1. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) over a trailing 7-day window (a `judgeSampleRate` fraction of answered turns is scored) — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
 2. **Performance**: cache-hit rate + trend; p50/p95 latency (`retrieve`, `generate`, `total`); Agentic vs Vector avg tokens/query; top-5 cache-buster queries; agentic retry rate.
-3. **Quality** (default tab): true-quality cards — sampled LLM-judge averages (faithfulness, retrieval relevance) over a trailing 7-day window (a `judgeSampleRate` fraction of answered turns is scored) — plus true-quality trends from daily aggregates; judge scores appear once live sampling has judged turns.
-4. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
-5. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
+3. **Feedback**: 👍/👎 distribution, per-document sentiment, thumbs-down hotspots, document utility rankings, zero-hit documents.
+4. **Tickets**: weekly ticket volume, turns-to-ticket distribution, first-response/resolution medians from `audit_events` histories.
 
 ### Quality Review Queue (`/admin/quality`)
 - Lists up to 20 recent **guardrail-blocked** turns (hallucination-check refusals), showing the query, retrieved chunk ids, and judge scores when sampled.
@@ -128,23 +127,33 @@ PostgreSQL with `pgvector`, managed via Drizzle ORM. Schema source: `packages/in
 
 | Table | Description | Key Columns |
 |---|---|---|
-| `documents` | Ingested PDF sources | `id`, `file_name`, `file_hash`, `uploaded_by`, `uploaded_at`, `blob`/`storage_key`, `ingest_status`, `deleted_at` |
-| `chunks` | Text chunks with embeddings + FTS vector | `id`, `document_id`, `chunk_index`, `kind` (parent/child/summary), `parent_chunk_id`, `page`, `title`, `content`, `embedding`, `content_hash`, `tsv` |
-| `tickets` | Support escalation tickets | serial `id` + unique `ticket_id` (`TKT-*`), `user_id`, `name`, `email`, `issue`, `status`, `assigned_to`, `notes`, `created_at` |
+| `documents` | Ingested PDF sources | `id`, `document_uid`, `file_name`, `file_hash`, `uploaded_by`, `uploaded_at`, `blob`/`storage_key`, `ingest_status`, `deleted_at` |
+| `chunks` | Text chunks with embeddings + FTS vector | `id`, `chunk_uid`, `document_id`, `chunk_index`, `kind` (parent/child/summary), `parent_chunk_id`, `page`, `title`, `content`, `embedding`, `content_hash`, `tsv` |
+| `tickets` | Support escalation tickets | bigint `id` (sequence-backed) + unique `ticket_id` (`TKT-*`), `user_id`, `name`, `email`, `issue`, `status`, `assigned_to`, `notes`, `created_at` |
 | `users` | Local mirror of Clerk identities + RBAC | `clerk_user_id` (PK), `email` (unique), `name`, `image_url`, `role`, `last_seen_at`, `created_at` |
 | `app_settings` | Single-row dynamic runtime config | `id` (fixed 1), `overrides` (JSONB), `version`, `updated_at`, `updated_by` |
-| `audit_events` | Central audit trail | `id`, `kind`, `action`, `actor_id`, `target_type`, `target_id`, `details` (JSONB), `source_ref`, `at` |
+| `audit_events` | Monthly range-partitioned central audit trail | bigint `id` (sequence-backed), composite PK `(id, at)`, `kind`, `action`, `actor_id`, `target_type`, `target_id`, `details` (JSONB), historical-only `source_ref`, `at` |
 | `audit_dead_letter` | Fallback store for failed audit writes | `id`, `kind`, `payload` (JSONB), `error`, `attempted_at`, `replayed` |
-| `chat_events` | Per-turn telemetry | `id`, `turn_id` (unique), `user_id`, `mode` (agentic/vector), `query`, `hit_count`, `max_similarity`, `out_of_domain`, `hallucination_blocked`, `ticket_created`, `citation_count`, `retrieve_ms`, `generate_ms`, `total_ms`, `cache_hit`, `tokens_in/out`, `meta` (JSONB — quality flags `fallbackReason`/`isEmpty`/`resultState`, sampled `judgeScores`; `fallbackReason` is written only for turn-deadline notices) |
-| `chat_feedback` | Sentiment votes | `turn_id` (PK, FK→`chat_events`), `feedback` (±1), `document_ids`, `chunk_ids`, `created_at` |
-| `quality_reviews` | Human verdicts on judge-flagged turns | `id` (serial PK), `turn_id` (FK→`chat_events.turn_id`, ON DELETE CASCADE), `reviewer_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `verdict` (`good`/`bad`/`docs_missing`), `note`, `created_at`; unique `(turn_id, reviewer_id)` |
+| `chat_turns` | Non-partitioned global turn registry | `turn_id` (PK), `created_at`, `user_id`; trigger-maintained identity/FK target |
+| `chat_events` | Monthly range-partitioned per-turn telemetry | bigint `id` (sequence-backed), composite PK `(id, created_at)`, `turn_id` (FK→`chat_turns`), `user_id`, `mode` (agentic/vector), timings, quality/cache/token fields, `meta` (JSONB) |
+| `chat_feedback` | Sentiment votes | `turn_id` (PK, FK→`chat_turns`, ON DELETE CASCADE), `feedback` (±1), `document_ids`, `chunk_ids`, `created_at` |
+| `quality_reviews` | Human verdicts on judge-flagged turns | bigint `id` (sequence-backed), `turn_id` (FK→`chat_turns`, ON DELETE CASCADE), `reviewer_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `verdict` (`good`/`bad`/`docs_missing`), `note`, `created_at`; unique `(turn_id, reviewer_id)` |
 | `chat_conversations` | Persisted user chats (one row per conversation) | `id` (uuid PK), `user_id` (FK→`users.clerk_user_id`, ON DELETE CASCADE), `title`, `message_count`, `created_at`, `updated_at` (last activity; retention key) |
-| `chat_messages` | Stored transcript messages per conversation | `id` (bigserial PK), `conversation_id` (FK→`chat_conversations`, ON DELETE CASCADE), `turn_id` (semantic link to `chat_events`, no FK), `role` (`user`/`assistant`), `content` (JSONB snapshot ≤256 KB), `created_at` |
+| `chat_messages` | 32-way hash-partitioned stored transcript messages | composite PK `(conversation_id, id)`, `conversation_id` (FK→`chat_conversations`, ON DELETE CASCADE), unique `(conversation_id, turn_id, role)`, `content` (JSONB snapshot ≤256 KB), `created_at` |
 | `chat_daily_stats` | Materialized view of daily aggregates (refreshed by the telemetry job) | `day`, `mode`, `total`, `p50_ms`, `p95_ms`, `hallucination_count`, `ood_count`, `tickets_created`, `self_serve_count`, `avg_max_similarity`, `unique_users`, `tokens_in/out` |
 
 Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chunks excluded) and GIN `tsvector` on `chunks.tsv`.
 
-### 5.1 Chat history retention & purge CLI
+- `documents.document_uid` is generated once and remains stable when a document row is replaced. `chunks.chunk_uid` is a deterministic SHA-256 identity over the document UID, chunk structure, and content hash.
+- Chunk replacement upserts by `chunk_uid` and removes only stale chunks. Numeric `chunks.id` values therefore remain valid for existing `chat_feedback.chunk_ids` references.
+
+### 5.1 High-growth identifier width
+
+Migration `0028_high_growth_identifier_width` widens the sequence-backed primary keys on `chat_events`, `audit_events`, `quality_reviews`, and `tickets` from `serial`/`int4` to `bigint`. Their owned sequences and `nextval` defaults are retained, and repository boundaries reject values outside JavaScript's safe-integer range before an ID is used in a cursor, response, or deletion batch. IDs are serialized as JSON numbers only while they remain safe integers; raw JavaScript `bigint` values are never emitted.
+
+`documents.id`, `chunks.id`, `chunks.document_id`, `chunks.parent_chunk_id`, and the integer ID arrays in `chat_feedback` remain `int4` by deliberate scope. A deployment's documented corpus operating ceiling is millions of chunks and remains below PostgreSQL's signed 32-bit maximum (2,147,483,647); operations must alert well before that ceiling. Widening those keys is a separate migration because it must preserve every chunk/document foreign key and feedback reference.
+
+### 5.2 Chat history retention & purge CLI
 
 - **Retention**: saved chats (`chat_conversations` / `chat_messages`) auto-expire based on last activity (`updated_at`) after an admin-configured window (`chatHistoryRetentionDays`, editable in `/admin/settings`: Off / 30 / 120 / 365 days, default 120). **Off** (`0`) disables purging entirely.
 - **`purge-chat-history [--days=N]`** (`rag-agent` CLI, modeled on `purge-chat-events`): deletes conversations whose last activity predates the cutoff (messages cascade). Supports `--dry-run`, and asks for confirmation unless `--yes` is passed; windows under one day are refused without `--allow-sub-day` (or `--force`); while the admin window is Off, an explicit `--days` is mandatory for a one-off run. Each run writes an audit event (`kind='chat'`, `action='history_purged'`, actor `cli`) with the deleted counts.
@@ -159,13 +168,27 @@ Indexes: HNSW `vector_cosine_ops` on `chunks.embedding` (partial — parent chun
 
 ### Chat Grounding Evidence
 - Retrieval evidence is accumulated for the full turn across first-turn prefetch and repeated `searchDocumentation` calls. A later empty search does not erase evidence already found.
-- Chunks are deduplicated by chunk id, with a content-and-source-metadata fallback when an id is unavailable. At most 30 unique chunks are retained per turn.
+- Chunks are deduplicated by stable chunk UID, then by numeric chunk id, with a content-and-source-metadata fallback when no id is available. At most 30 unique chunks are retained per turn.
 - The model, citations, and hallucination checker use the same bounded chunk content. UI citation snippets remain shorter for display.
 
 ### Turn Answer Cache
 - **Deterministic keying**: normalizes whitespace/casing/punctuation; incorporates embedding + chat model identifiers and the runtime retrieval fingerprint (mode, similarity threshold, hybrid flag, reranker). Keys are `rag:answer:<sha256>`, namespaced per user — a cached answer is never served cross-user.
-- **Providers**: `InMemoryAnswerCache` (LRU + TTL, 5,000-key sweep) for local dev; `UpstashAnswerCache` (Redis, TTL in **seconds** per `ANSWER_CACHE_TTL_SEC`, default 3600; value base64-wrapped) when Upstash is configured. Cache read/write failures are swallowed so caching never breaks the request path.
+- **Providers**: `InMemoryAnswerCache` (LRU + TTL, 5,000-key cap, and 256 active local leases) for local dev; `UpstashAnswerCache` (Redis, TTL in **seconds** per `ANSWER_CACHE_TTL_SEC`, default 3600; value base64-wrapped) when Upstash is configured. Cache read/write failures are swallowed so caching never breaks the request path.
+- **Single-flight policy**: `CacheLeaseCoordinator` returns `acquired`, `held`, or `unavailable` and keeps provider tokens behind an opaque handle. Production defaults to strict coordination (`CACHE_LEASE_MODE=strict`); a distributed lease outage returns a bounded 503 instead of silently becoming cross-instance-unsafe. Set `CACHE_LEASE_MODE=degraded` only for an explicit process-local development/degraded deployment; the fallback emits rate-limited structured telemetry. Lease ownership is renewed while long-running work is active and released after that work settles, including when the request aborts.
 - **Cache exclusion (`shouldCache`)**: turns that were guardrail-blocked, hit the empty/out-of-domain wall, created a ticket, or whose hallucination check timed out are never cached, so a failed turn can't poison answers for later identical queries.
+- **Fenced publication**: distributed producers publish through a Redis Lua compare-and-set that verifies the opaque lease token and writes the cached value atomically. A producer whose lease expired cannot overwrite the newer owner's result.
+
+### Provider prompt-cache matrix
+
+| Chat provider | Native behavior | Explicit request option | Cache telemetry |
+|---|---|---|---|
+| OpenAI | Automatic stable-prefix caching | Deterministic `promptCacheKey` groups the versioned stable prefix | Cached-input/read details when reported |
+| Google | Explicit cached-content reuse | `GOOGLE_CACHED_CONTENT` resource name, when configured | Cached-content/read/write details when reported |
+| Ollama | No native prompt-cache contract claimed | None | Unsupported fields remain `null`, never a synthetic zero |
+
+Stable instructions and deployment configuration precede dynamic prefetch evidence. Identical configuration produces a byte-for-byte stable prefix identified by `system-v1`; retrieval evidence is appended afterward. Event metadata records provider/model identity, prefix version, capability facts, input/cache token metrics with `reported` versus `unsupported` status, prefetch latency/status, reformulation count, and retrieval provider/mode. Raw user queries continue to follow `captureQueryText`; timing logs do not add query text.
+
+Chat file URLs accepted by the production composition must match an origin in `CHAT_FILE_ALLOWED_ORIGINS`. An empty list rejects all file parts. Only list origins whose DNS and storage are operationally controlled; this avoids relying on request-time hostname checks against DNS rebinding.
 
 ---
 
@@ -192,6 +215,10 @@ EVAL_REAL=1 pnpm eval   # live model evaluation against keyed providers (schedul
 
 The authoritative list of environment variables is `.env.example` (with per-var comments). This section documents the behavior of the environment-driven deployment features. Env vars are intentionally **not** covered in the README.
 
+### Deployment isolation
+
+Destr serves one customer per deployment. Do not share the Clerk instance, Postgres database, blob bucket or prefix, Redis data set, or queue configuration between customers. The knowledge corpus, settings, administration, tickets, audit data, and analytics are deployment-wide. User IDs scope saved conversations, feedback, cache entries, and rate limits; they do not create tenant boundaries. See [ADR 0001](adr/0001-single-tenant-per-deployment.md).
+
 ### 8.1 Clerk Custom-Domain Proxy & CSP (`CLERK_PROXY_URL` / `NEXT_PUBLIC_CLERK_PROXY_URL`)
 
 When the Clerk instance runs behind a custom proxy domain (e.g. `clerk.example.com`), that origin serves the Clerk JS bundle, all frontend API calls, and the sign-in/account-portal iframes. `next.config.ts` derives the CSP from these variables:
@@ -205,7 +232,7 @@ When the Clerk instance runs behind a custom proxy domain (e.g. `clerk.example.c
 ### 8.2 CSP baseline (static directives)
 
 Regardless of the proxy mode, the CSP in `next.config.ts` always allows, in addition to `'self'`:
-- `'unsafe-inline' 'unsafe-eval'` (required by the Clerk JS bundle) in `script-src`
+- `'unsafe-inline'` (required by Next.js/Clerk) in `script-src` and `style-src` — `unsafe-eval` is not allowed
 - `https://challenges.cloudflare.com` in `script-src` / `connect-src` / `frame-src` (Cloudflare Turnstile bot protection)
 - `https://*.clerk.services` in `connect-src`
 - `https://vercel.live`, `https://*.clerk.accounts.dev`, Google OAuth and R2 preview origins in the directives where they were already present
@@ -224,9 +251,37 @@ The root layout (`src/app/layout.tsx`) renders the `google-site-verification` me
 
 Every tool that runs DDL prefers `MIGRATION_DATABASE_URL ?? DATABASE_URL` (`scripts/migrate.ts`, `scripts/apply-migration.mjs`, `drizzle.config.ts`). The app never holds the owner credential, so a leaked `DATABASE_URL` can no longer drop tables, plant triggers, or create roles.
 
-**Row-Level Security.** RLS is enabled on all app tables (`app_settings`, `audit_dead_letter`, `audit_events`, `chat_conversations`, `chat_events`, `chat_feedback`, `chat_messages`, `chunks`, `documents`, `quality_reviews`, `tickets`, `users`) with one policy each (`rag_app_full_access`, `FOR ALL TO rag_app`). `_migrations` stays owner-only with no RLS. Any other role (including one holding a plain `SELECT` grant) sees **zero rows** — verified live with a probe role. If a fresh database is provisioned from scratch, replay the equivalent DDL as the owner: create `rag_app`, grant DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY … TO rag_app`.
+**Runtime database configuration.** `DATABASE_URL` and `DATABASE_POOL_MAX` are parsed once by the infrastructure composition boundary. The pool maximum accepts positive integers from 1 through 20; invalid values use the environment default and values above 20 are clamped to 20. Production Neon defaults to 5 connections. Runtime `pg`/Neon pools also set a 30-second server-side `statement_timeout` backstop. Neon URLs without `sslmode` are normalized to `verify-full`; explicit `sslmode=disable` and `sslmode=allow` are rejected. A non-pooled Neon hostname emits one redacted warning per normalized host.
 
-**Manual runbook step for the chat history and quality tables.** Migrations apply the DDL but not the live GRANT/RLS state — after applying `0018_chat_history.sql` (and likewise `0020_military_mathemanic.sql`/`0021_misty_harbor.sql` for `quality_reviews`), run the following as the DDL-capable owner (same pattern as the original rollout):
+**Database request cancellation.** Signal-bearing searches on plain PostgreSQL run on one checked-out backend. On request abort, a separate physical connection calls `pg_cancel_backend`; the checked-out connection is released only after the query and cancellation settle. This prevents a late cancellation from targeting a later borrower and works even when `DATABASE_POOL_MAX=1`. The live regression test repeats `pg_sleep(10)`, verifies prompt cancellation and disappearance from `pg_stat_activity`, then proves the pool remains usable. Neon HTTP/WebSocket execution does not expose an equivalent backend PID, so Neon uses lazy pre-abort prevention plus the 30-second `statement_timeout` backstop; immediate server cancellation is not claimed there.
+
+**Signed admin pagination cursors.** Admin document, ticket, user, and audit
+lists use v2 cursors in the production composition. The cursor payload contains
+the resource, compound sort position, snapshot total, normalized filter/sort
+binding, issuance time, and expiry, and is authenticated with HMAC-SHA-256.
+`CURSOR_SIGNING_SECRET` is required to contain at least 32 UTF-8 bytes in
+production. Set `CURSOR_SIGNING_PREVIOUS_SECRET` while rotating keys; both the
+current and previous keys are accepted for the overlap window. `CURSOR_TTL_SEC`
+defaults to 15 minutes and is capped at 24 hours. Unsigned v1 cursors are
+intentionally rejected. A malformed, tampered, expired, wrong-resource, or
+filter/sort-mismatched cursor returns a controlled 400 response; pagination is
+never silently reset to the first page. The admin authorization check runs
+independently of cursor verification.
+
+> **Note — `CURSOR_SIGNING_SECRET` standalone operational note.**
+> This secret is **not** like `DATABASE_URL` or an encryption key. It only signs pagination bookmarks.
+> * **Should you save it?** Keep it in Vercel (`Production` + `Preview` env) and GitHub (`Actions secret` for CI). No file in git. A password manager copy is optional — you can always regenerate.
+> * **If you lose it:** no data is lost. Existing `?cursor=...` links from the last `CURSOR_TTL_SEC` window (15 min by default) become `400 invalid cursor` — users reload page 1 and continue.
+> * **Fix:** generate a new 32+ byte value (`openssl rand -base64 32`) and set it again:
+>   ```bash
+>   gh secret set CURSOR_SIGNING_SECRET --body "NEW_VALUE"
+>   vercel env add CURSOR_SIGNING_SECRET production,preview --value "NEW_VALUE" --sensitive --yes --project rag_agent
+>   ```
+>   Redeploy. For zero-downtime, deploy `NEW_VALUE` as `CURSOR_SIGNING_SECRET` and old as `CURSOR_SIGNING_PREVIOUS_SECRET` for one TTL window, then remove the previous.
+
+**Row-Level Security.** Repository migrations do not create `rag_app`, grant privileges, enable RLS, or create policies. These are owner-managed provisioning steps. A `rag_app_full_access` policy with `USING (true)` limits which database role can access deployment data; it does not isolate customers or users inside a deployment.
+
+Apply the role, grants, RLS setting, and policy to every app table after provisioning and whenever a migration adds a table. `_migrations` stays owner-only. For example, the chat history and quality tables require:
 
 ```sql
 ALTER TABLE chat_conversations ENABLE ROW LEVEL SECURITY;
@@ -242,11 +297,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON quality_reviews TO rag_app;
 GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 ```
 
-**Skipping this step makes the app see zero rows silently** — RLS is default-deny, so without a policy (and grants) for `rag_app` every history query returns nothing. Verify afterwards that `rag_app` reads and writes normally while a role without a policy sees zero rows.
+If RLS is enabled without a matching policy, `rag_app` sees zero rows. If grants are missing, queries fail with permission errors. After each production migration, connect with `DATABASE_URL` and test a read plus a rolled-back write. As the owner, verify every app table has RLS and a `rag_app` policy in `pg_class` and `pg_policies`. A probe role with only `SELECT` grants and no policy must see zero rows. These checks validate database-role hardening, not multi-tenant isolation.
 
 **Migration flow (where DDL runs):**
 1. **Local dev** — `pnpm db:migrate` applies DDL; `pnpm build` runs only the production build, while `pnpm build:with-db` applies migrations first. All migration commands use `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
-2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates a fresh Neon test branch (the setup script writes an owner-grade `DATABASE_URL` into `.env.test`); the "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
+2. **CI (GitHub Actions)** — `.github/workflows/ci.yml`: the "Prepare test database" step migrates the pinned `pgvector/pgvector:pg16` service container via `DATABASE_URL` (`postgres://postgres:ragagent_ci@127.0.0.1:5432/ragagent`); the Neon test-branch flow that would write an owner-grade `DATABASE_URL` into `.env.test` is disabled/commented (E2E disabled). The "Migrate production database" step (master branch only) runs with `MIGRATION_DATABASE_URL` from GitHub secrets.
 3. **Vercel production builds** — `vercel.json` runs `next build` only; it never applies migrations. Production DDL runs in the approval-gated `deploy` job in `.github/workflows/ci.yml` with `MIGRATION_DATABASE_URL`. Vercel still needs `DATABASE_URL` at runtime.
 
 ### 8.5 QStash ingest queue reliability (DLQ + sweeper)

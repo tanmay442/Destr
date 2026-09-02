@@ -54,15 +54,12 @@ describe('parseArgs', () => {
     expect(parseArgs(['--dir', './x'])).toEqual({ dir: './x', userId: undefined });
   });
 
-  it('treats a trailing --dir with no value as the default', () => {
-    expect(parseArgs(['--dir'])).toEqual({ dir: './documents', userId: undefined });
+  it('rejects a trailing --dir with no value', () => {
+    expect(() => parseArgs(['--dir'])).toThrow('Missing value for --dir');
   });
 
-  it('does not consume a flag-looking value after --dir', () => {
-    expect(parseArgs(['--dir', '--something'])).toEqual({
-      dir: './documents',
-      userId: undefined,
-    });
+  it('rejects a flag-looking value after --dir', () => {
+    expect(() => parseArgs(['--dir', '--something'])).toThrow('Missing value for --dir');
   });
 
   it('captures a positional userId after --dir=VALUE', () => {

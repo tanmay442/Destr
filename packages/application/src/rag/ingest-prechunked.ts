@@ -1,9 +1,17 @@
 import { randomUUID } from 'crypto';
-import { err, ok, type Result, ValidationError, ExternalServiceError, ConflictError } from '@app/domain';
+import {
+  err,
+  ok,
+  type Result,
+  ValidationError,
+  ExternalServiceError,
+  ConflictError,
+  UPLOAD_CHUNKED_MAX_PDF_BYTES,
+} from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, BlobStorage, TransactionRunner, ParsedChunk, MarkdownParser,
-  DocSummarizer,
+  DocSummarizer, PdfValidator,
 } from '@app/domain';
 import {
   writeChunks,
@@ -17,6 +25,7 @@ import { CCH_ENABLED, CCH_CONTEXT_CHARS } from '@app/domain';
 
 const MAX_PRECHUNKED_CHUNKS = 5000;
 const MAX_PRECHUNKED_DELIMITER_LENGTH = 200;
+const PDF_VALIDATION_TIMEOUT_MS = 15_000;
 
 function safeBlobName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
@@ -32,6 +41,7 @@ export interface PrechunkedIngestInput {
   pdfBuffer?: Buffer | undefined;
   /** Blob filename for the PDF when it differs from `fileName`. */
   pdfFileName?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface PrechunkedIngestDeps {
@@ -41,6 +51,8 @@ export interface PrechunkedIngestDeps {
   hasher: Hasher;
   /** Stores the companion PDF and links it to the document row. */
   blobStorage?: BlobStorage;
+  /** Validates a companion PDF structurally before hashing, embedding, or storage. */
+  pdfValidator?: PdfValidator;
   /** Makes the upsert + chunk-replace sequence atomic. */
   runner?: TransactionRunner;
   /** Optional Contextual-Chunk-Header summarizer. */
@@ -57,24 +69,57 @@ function isDocumentNameConflict(error: unknown): boolean {
   return pgError?.code === '23505' && (pgError.constraint === 'documents_name_key' || pgError.constraint === 'documents_file_name_unique');
 }
 
+function canonicalHashInput(chunks: ParsedChunk[], pdfBuffer: Buffer | undefined): Buffer {
+  const canonical = {
+    schema: 'prechunked-file-v1',
+    chunks: chunks.map((chunk) => ({
+      content: chunk.content,
+      page: chunk.page ?? null,
+      sectionTitle: chunk.sectionTitle ?? null,
+      source: chunk.source ?? null,
+    })),
+    companionPdfBytes: pdfBuffer?.byteLength ?? null,
+  };
+  const chunkMetadata = Buffer.from(JSON.stringify(canonical), 'utf8');
+  return pdfBuffer === undefined
+    ? chunkMetadata
+    : Buffer.concat([chunkMetadata, Buffer.from('\n--companion-pdf--\n', 'utf8'), pdfBuffer]);
+}
+
 export async function ingestPrechunked(
   input: PrechunkedIngestInput,
   deps: PrechunkedIngestDeps,
 ): Promise<Result<IngestResult>> {
-  const { fileName, chunks, uploadedBy, pdfBuffer, pdfFileName } = input;
+  const { fileName, chunks, uploadedBy, pdfBuffer, pdfFileName, signal } = input;
   if (chunks.length === 0) {
     return err(new ValidationError(`No chunks parsed from ${fileName}`));
   }
   if (chunks.length > MAX_PRECHUNKED_CHUNKS) {
     return err(new ValidationError(`${fileName} has ${chunks.length} segments; maximum is ${MAX_PRECHUNKED_CHUNKS}`));
   }
+  if (pdfBuffer) {
+    if (pdfBuffer.byteLength > UPLOAD_CHUNKED_MAX_PDF_BYTES) {
+      return err(new ValidationError(
+        `Companion PDF exceeds ${UPLOAD_CHUNKED_MAX_PDF_BYTES} bytes`,
+      ));
+    }
+    if (!deps.pdfValidator) {
+      return err(new ValidationError('Companion PDF validation is unavailable'));
+    }
+    try {
+      await deps.pdfValidator.validate(pdfBuffer, {
+        signal: AbortSignal.timeout(PDF_VALIDATION_TIMEOUT_MS),
+      });
+    } catch (cause: unknown) {
+      return err(new ValidationError('Companion PDF is invalid or unsupported', {
+        reason: cause instanceof Error ? cause.message : 'validation failed',
+      }));
+    }
+  }
 
-  // Dedup hash covers the markdown AND any companion PDF, so re-uploading one
-  // with different content for the other is never treated as unchanged.
-  const markdownSource = Buffer.from(chunks.map((chunk) => chunk.content).join('\n'));
-  const fileHash = pdfBuffer
-    ? deps.hasher.sha256(Buffer.concat([markdownSource, pdfBuffer]))
-    : deps.hasher.sha256(markdownSource);
+  // Dedup hash covers chunk boundaries, provenance metadata, and any companion
+  // PDF, so changes to segmentation or citations are reprocessed as well.
+  const fileHash = deps.hasher.sha256(canonicalHashInput(chunks, pdfBuffer));
 
   let header = '';
   let title: string | null = null;
@@ -89,9 +134,10 @@ export async function ingestPrechunked(
   }
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(
-      chunks.map((c) => (header ? header + c.content : c.content)),
-    );
+    const values = chunks.map((c) => (header ? header + c.content : c.content));
+    embeddings = signal === undefined
+      ? await deps.embeddings.embedBatch(values)
+      : await deps.embeddings.embedBatch(values, { signal });
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
@@ -186,6 +232,7 @@ export interface UploadPrechunkedMarkdownInput {
   uploadedBy: string;
   pdfBuffer?: Buffer | undefined;
   pdfFileName?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 /**
@@ -206,6 +253,7 @@ export async function uploadPrechunkedMarkdown(
       uploadedBy: input.uploadedBy,
       pdfBuffer: input.pdfBuffer,
       pdfFileName: input.pdfFileName,
+      signal: input.signal,
     },
     deps,
   );

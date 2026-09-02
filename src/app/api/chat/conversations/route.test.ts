@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok, err, RateLimitedError } from '@app/domain';
+import { ok, err, RateLimitedError, MAX_LEGACY_LIST_OFFSET } from '@app/domain';
 
 const { authMock, listMock, rateLimitMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
@@ -60,6 +60,25 @@ describe('GET /api/chat/conversations', () => {
   it('forwards numeric limit and offset', async () => {
     await route.GET(get('?limit=10&offset=25'));
     expect(listMock).toHaveBeenCalledWith({ userId: 'user_1', limit: 10, offset: 25 });
+  });
+
+  it('does not clamp conversation offsets to the page-size limit', async () => {
+    await route.GET(get('?limit=100&offset=200'));
+    expect(listMock).toHaveBeenCalledWith({ userId: 'user_1', limit: 100, offset: 200 });
+  });
+
+  it('caps the limit independently from the offset', async () => {
+    await route.GET(get('?limit=1000&offset=200'));
+    expect(listMock).toHaveBeenCalledWith({ userId: 'user_1', limit: 100, offset: 200 });
+  });
+
+  it('caps pathological offsets without breaking deep conversation pages', async () => {
+    await route.GET(get(`?limit=100&offset=${MAX_LEGACY_LIST_OFFSET + 1}`));
+    expect(listMock).toHaveBeenCalledWith({
+      userId: 'user_1',
+      limit: 100,
+      offset: MAX_LEGACY_LIST_OFFSET,
+    });
   });
 
   it('ignores non-numeric pagination values', async () => {

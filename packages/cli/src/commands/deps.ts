@@ -49,6 +49,7 @@ export async function buildUploadDeps(): Promise<UploadIngestDeps> {
     embeddings: base.embeddings,
     hasher: base.hasher,
     blobStorage: base.blobStorage,
+    pdfValidator: Pdf.unpdfValidator,
     markdownParser,
   };
 }

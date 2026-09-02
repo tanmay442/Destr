@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
-import { ValidationError, logger } from '@app/domain';
+import { createListCursorContext, ConflictError, ValidationError } from '@app/domain';
 import {
   insertDocument,
   listDocuments,
@@ -15,10 +15,29 @@ import {
   ticketRepo,
   userRepo,
 } from '../repositories';
-import { isNeonUrl, redactDatabaseUrl } from '../pool';
+import { enforceNeonTlsVerification, isNeonUrl, redactDatabaseUrl } from '../pool';
 import { VECTOR_DIM } from '../schema-vector';
+import { createSignedListCursorCodec } from '../../pagination/signed-cursor';
 
 const dialect = new PgDialect();
+const paginationTimestamp = new Date('2026-04-01T12:00:00.000Z');
+const timestamp = paginationTimestamp;
+const paginationCursorCodec = createSignedListCursorCodec({
+  secret: 'pagination-test-signing-secret-with-at-least-32-bytes',
+  ttlMs: 15 * 60 * 1000,
+});
+const documentCursorContext = createListCursorContext('documents', { search: null, includeDeleted: false });
+const ticketCursorContext = createListCursorContext('tickets', { status: null, assignee: null, search: null });
+const userCursorContext = createListCursorContext('users', { search: null });
+const auditCursorContext = createListCursorContext('audit', {
+  kind: null,
+  action: null,
+  actorId: null,
+  from: null,
+  to: null,
+  documentId: null,
+  ticketId: null,
+});
 
 function makeExecuteClient(rows: unknown[]) {
   const executed: SQL[] = [];
@@ -227,12 +246,12 @@ describe('insertDocument', () => {
     expect(state.lastUpdate).toMatchObject({ fileHash: 'h2', uploadedBy: 'u2' });
   });
 
-  it('resurrects a soft-deleted row by deleting chunks then restoring the document', async () => {
+  it('resurrects a soft-deleted row without deleting stable chunks before replacement', async () => {
     const { client, state, doc } = makeDocClient();
     state.existing = { ...doc, deletedAt: new Date('2026-01-01T00:00:00Z') };
     const row = await insertDocument({ fileName: 'x.pdf', fileHash: 'h2', uploadedBy: 'u2' }, client);
     expect(row.id).toBe(42);
-    expect(state.deletes).toBe(1);
+    expect(state.deletes).toBe(0);
     expect(state.updates).toBe(1);
     expect(state.inserts).toBe(0);
     expect(state.lastUpdate).toMatchObject({
@@ -312,11 +331,158 @@ describe('auditRepo.list', () => {
   it('accepts non-conflicting filters and returns the queried rows', async () => {
     const client = makeSelectClient();
     const result = await auditRepo.list({ kind: 'document', documentId: 5, limit: 20, offset: 0 }, client);
-    expect(result).toEqual({ events: [], total: 0 });
+    expect(result).toEqual({ events: [], total: 0, nextCursor: null, previousCursor: null });
     await expect(auditRepo.list({ kind: 'ticket', ticketId: 'T-1', limit: 10, offset: 0 }, client)).resolves.toEqual({
       events: [],
       total: 0,
+      nextCursor: null,
+      previousCursor: null,
     });
+  });
+});
+
+describe('keyset list pagination', () => {
+  type QueryCall = {
+    where?: unknown;
+    orderBy: unknown[];
+    limit?: number;
+  };
+
+  function makePaginatedSelectClient(dataRows: unknown[], count = dataRows.length) {
+    const calls: QueryCall[] = [];
+    let selectIndex = 0;
+
+    function makeChain(rows: unknown[]): {
+      from: () => ReturnType<typeof makeChain>;
+      leftJoin: () => ReturnType<typeof makeChain>;
+      where: (condition?: unknown) => ReturnType<typeof makeChain>;
+      orderBy: (...orders: unknown[]) => ReturnType<typeof makeChain>;
+      limit: (value: number) => ReturnType<typeof makeChain>;
+      offset: (value: number) => Promise<unknown[]>;
+      then: (resolve: (value: unknown[]) => unknown) => Promise<unknown>;
+    } {
+      const call: QueryCall = { orderBy: [] };
+      calls.push(call);
+      const chain = {
+        from: () => chain,
+        leftJoin: () => chain,
+        where: (condition?: unknown) => {
+          call.where = condition;
+          return chain;
+        },
+        orderBy: (...orders: unknown[]) => {
+          call.orderBy = orders;
+          return chain;
+        },
+        limit: (value: number) => {
+          call.limit = value;
+          return chain;
+        },
+        offset: async () => rows,
+        then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
+      };
+      return chain;
+    }
+
+    const client = {
+      select: () => {
+        const rows = selectIndex++ === 0 ? dataRows : [{ count }];
+        return makeChain(rows);
+      },
+    };
+    return { client: client as never, calls };
+  }
+
+  it('keeps the nearest rows when a backward document query has an extra row', async () => {
+    const { client, calls } = makePaginatedSelectClient([
+      { id: 4, uploadedAt: timestamp },
+      { id: 5, uploadedAt: timestamp },
+      { id: 6, uploadedAt: timestamp },
+    ], 6);
+    const result = await listDocuments({
+      limit: 2,
+      before: { kind: 'documents', sortAt: timestamp, id: 3, total: 6 },
+      cursorCodec: paginationCursorCodec,
+      cursorContext: documentCursorContext,
+    }, client);
+
+    expect(result.documents.map((row) => row.id)).toEqual([5, 4]);
+    expect(result.total).toBe(6);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+    expect(calls[0]?.limit).toBe(3);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps the nearest rows when a backward ticket query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { id: 4, createdAt: timestamp },
+      { id: 5, createdAt: timestamp },
+      { id: 6, createdAt: timestamp },
+    ], 6);
+    const result = await ticketRepo.list({
+      limit: 2,
+      before: { kind: 'tickets', sortAt: timestamp, id: 3, total: 6 },
+      cursorCodec: paginationCursorCodec,
+      cursorContext: ticketCursorContext,
+    }, client);
+
+    expect(result.rows.map((row) => row.id)).toEqual([5, 4]);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('keeps the nearest rows when a backward user query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { clerkUserId: 'user_3', createdAt: timestamp },
+      { clerkUserId: 'user_2', createdAt: timestamp },
+      { clerkUserId: 'user_1', createdAt: timestamp },
+    ], 6);
+    const result = await userRepo.list({
+      limit: 2,
+      before: { kind: 'users', sortAt: timestamp, clerkUserId: 'user_4', total: 6 },
+      cursorCodec: paginationCursorCodec,
+      cursorContext: userCursorContext,
+    }, client);
+
+    expect(result.rows.map((row) => row.clerkUserId)).toEqual(['user_2', 'user_3']);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('keeps the nearest rows when a backward audit query has an extra row', async () => {
+    const { client } = makePaginatedSelectClient([
+      { id: 4, at: timestamp, kind: 'document', action: 'created', actorId: null },
+      { id: 5, at: timestamp, kind: 'document', action: 'created', actorId: null },
+      { id: 6, at: timestamp, kind: 'document', action: 'created', actorId: null },
+    ], 6);
+    const result = await auditRepo.list({
+      limit: 2,
+      before: { kind: 'audit', sortAt: timestamp, id: 3, total: 6 },
+      cursorCodec: paginationCursorCodec,
+      cursorContext: auditCursorContext,
+    }, client);
+
+    expect(result.events.map((event) => event.id)).toEqual([5, 4]);
+    expect(result.nextCursor).not.toBeNull();
+    expect(result.previousCursor).not.toBeNull();
+  });
+
+  it('passes compound cursor predicates to forward queries', async () => {
+    const { client, calls } = makePaginatedSelectClient([
+      { id: 2, uploadedAt: timestamp },
+    ], 2);
+    await listDocuments({
+      limit: 2,
+      cursor: { kind: 'documents', sortAt: timestamp, id: 3, total: 2 },
+      cursorCodec: paginationCursorCodec,
+      cursorContext: documentCursorContext,
+    }, client);
+
+    const query = dialect.sqlToQuery(calls[0]!.where as SQL);
+    expect(query.sql).toContain('"documents"."uploaded_at" < $1');
+    expect(query.sql).toContain('"documents"."id" < $3');
+    expect(calls[0]!.orderBy).toHaveLength(2);
   });
 });
 
@@ -352,6 +518,20 @@ describe('isNeonUrl', () => {
 
   it('throws a descriptive error for a malformed URL', () => {
     expect(() => isNeonUrl('not a url')).toThrow(/Invalid DATABASE_URL/);
+  });
+});
+
+describe('enforceNeonTlsVerification', () => {
+  it.each(['prefer', 'require', 'verify-ca'])('upgrades Neon sslmode=%s to verify-full', (sslMode) => {
+    const result = enforceNeonTlsVerification(
+      `postgres://user:pass@ep-example-pooler.us-east-1.aws.neon.tech/db?sslmode=${sslMode}`,
+    );
+    expect(new URL(result).searchParams.get('sslmode')).toBe('verify-full');
+  });
+
+  it('does not change non-Neon connection strings', () => {
+    const url = 'postgres://user:pass@localhost:5432/db?sslmode=require';
+    expect(enforceNeonTlsVerification(url)).toBe(url);
   });
 });
 
@@ -463,37 +643,12 @@ describe('userRepo.upsertFromClerk email-conflict handling', () => {
     createdAt: new Date('2026-01-01T00:00:00Z'),
   };
 
-  const EMPTY_HISTORY = {
-    documents: false,
-    tickets: false,
-    chatEvents: false,
-    chatConversations: false,
-    qualityReviews: false,
-    auditEvents: false,
-    appSettings: false,
-  } as const;
-
   function makeClerkClient(state: {
-    existingUser: UserRowLike | null;
     conflictOnce?: boolean;
     wrappedConflict?: boolean;
-    history: Record<keyof typeof EMPTY_HISTORY, boolean>;
     insertResult?: UserRowLike;
-    rebindResult?: UserRowLike;
   }) {
-    let updatePatch: Record<string, unknown> | null = null;
-    let updateCalls = 0;
     const client = {
-      query: {
-        users: { findFirst: async () => state.existingUser },
-        documents: { findFirst: async () => (state.history.documents ? {} : null) },
-        tickets: { findFirst: async () => (state.history.tickets ? {} : null) },
-        chatEvents: { findFirst: async () => (state.history.chatEvents ? {} : null) },
-        chatConversations: { findFirst: async () => (state.history.chatConversations ? {} : null) },
-        qualityReviews: { findFirst: async () => (state.history.qualityReviews ? {} : null) },
-        auditEvents: { findFirst: async () => (state.history.auditEvents ? {} : null) },
-        appSettings: { findFirst: async () => (state.history.appSettings ? {} : null) },
-      },
       insert: () => ({
         values: () => ({
           onConflictDoUpdate: () => ({
@@ -512,27 +667,12 @@ describe('userRepo.upsertFromClerk email-conflict handling', () => {
           }),
         }),
       }),
-      update: () => ({
-        set: (patch: Record<string, unknown>) => ({
-          where: () => {
-            updateCalls++;
-            updatePatch = patch;
-            return { returning: async () => [state.rebindResult ?? { ...VICTIM, clerkUserId: 'user_attacker' }] };
-          },
-        }),
-      }),
     };
-    return {
-      client: client as never,
-      updatePatch: () => updatePatch,
-      updateCalls: () => updateCalls,
-    };
+    return { client: client as never };
   }
 
-  it('upserts by clerkUserId on the normal path without touching the rebind logic', async () => {
-    const { client, updateCalls } = makeClerkClient({
-      existingUser: null,
-      history: EMPTY_HISTORY,
+  it('upserts by clerkUserId on the normal path', async () => {
+    const { client } = makeClerkClient({
       insertResult: { ...VICTIM, clerkUserId: 'user_fresh', email: 'fresh@x.com', role: 'user' },
     });
     const row = await userRepo.upsertFromClerk(
@@ -540,100 +680,21 @@ describe('userRepo.upsertFromClerk email-conflict handling', () => {
       client,
     );
     expect(row.clerkUserId).toBe('user_fresh');
-    expect(updateCalls()).toBe(0);
   });
 
-  it.each(Object.keys(EMPTY_HISTORY) as Array<keyof typeof EMPTY_HISTORY>)(
-    'fails closed on an email conflict when the existing row owns %s history',
-    async (table) => {
-      const errorSpy = vi.spyOn(logger, 'error');
-      const { client, updateCalls } = makeClerkClient({
-        existingUser: VICTIM,
-        conflictOnce: true,
-        history: { ...EMPTY_HISTORY, [table]: true },
-      });
-      const err = await userRepo
-        .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user', emailVerified: true }, client)
-        .catch((e) => e);
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/owns data; refusing/);
-      expect(updateCalls()).toBe(0);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[userRepo]'),
-        expect.objectContaining({ email: 'shared@x.com', existingClerkUserId: 'user_victim' }),
-      );
-      errorSpy.mockRestore();
-    },
-  );
-
-  it('refuses to rebind an unverified email even when the account is history-free', async () => {
-    const { client, updateCalls } = makeClerkClient({
-      existingUser: VICTIM,
+  it.each([
+    ['unverified', undefined],
+    ['verified', true],
+  ] as const)('fails closed on an email conflict even when the email is %s', async (_verification, emailVerified) => {
+    const { client } = makeClerkClient({
       conflictOnce: true,
       wrappedConflict: true,
-      history: EMPTY_HISTORY,
     });
-    const err = await userRepo
-      .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user' }, client)
-      .catch((e) => e);
-    expect((err as Error).message).toMatch(/verification is not confirmed; refusing/);
-    expect(updateCalls()).toBe(0);
-  });
-
-  it('rebinds only a verified, history-free account and preserves its role', async () => {
-    const { client, updatePatch, updateCalls } = makeClerkClient({
-      existingUser: VICTIM,
-      conflictOnce: true,
-      history: EMPTY_HISTORY,
-      rebindResult: { ...VICTIM, clerkUserId: 'user_attacker', name: 'New', imageUrl: 'https://x/y.png' },
-    });
-    const row = await userRepo.upsertFromClerk(
-      {
+    await expect(userRepo.upsertFromClerk({
         clerkUserId: 'user_attacker',
         email: 'shared@x.com',
-        name: 'New',
-        imageUrl: 'https://x/y.png',
         role: 'user',
-        emailVerified: true,
-      },
-      client,
-    );
-    expect(updateCalls()).toBe(1);
-    expect(updatePatch()).toMatchObject({
-      clerkUserId: 'user_attacker',
-      email: 'shared@x.com',
-      name: 'New',
-      imageUrl: 'https://x/y.png',
-    });
-    expect(updatePatch()).not.toHaveProperty('role');
-    expect(row.clerkUserId).toBe('user_attacker');
-    expect(row.role).toBe('admin');
-  });
-
-  it('fails closed when the conflicting email row disappears mid-sync', async () => {
-    const { client, updateCalls } = makeClerkClient({
-      existingUser: null,
-      conflictOnce: true,
-      history: EMPTY_HISTORY,
-    });
-    const err = await userRepo
-      .upsertFromClerk({ clerkUserId: 'user_attacker', email: 'shared@x.com', role: 'user', emailVerified: true }, client)
-      .catch((e) => e);
-    expect((err as Error).message).toMatch(/refusing to reassign/);
-    expect(updateCalls()).toBe(0);
-  });
-
-  it('returns the existing row unchanged when it already belongs to the caller', async () => {
-    const { client, updateCalls } = makeClerkClient({
-      existingUser: VICTIM,
-      conflictOnce: true,
-      history: EMPTY_HISTORY,
-    });
-    const row = await userRepo.upsertFromClerk(
-      { clerkUserId: 'user_victim', email: 'shared@x.com', role: 'user', emailVerified: true },
-      client,
-    );
-    expect(row.clerkUserId).toBe('user_victim');
-    expect(updateCalls()).toBe(0);
+        emailVerified,
+      }, client)).rejects.toBeInstanceOf(ConflictError);
   });
 });

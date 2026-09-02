@@ -1,6 +1,7 @@
 import { err, ok, type Result, ExternalServiceError } from '@app/domain';
 import type {
   DocumentRepository, ChunkRepository, TicketRepository, UserRepository,
+  ListCursorCodec,
   ChatEventsRepo, ChatEventMetrics, ChatEventDailyUsage, ChatEventRange,
   ModeComparison, CacheBusterQuery,
   ChatFeedbackRepo, DocumentUtilityRow, ZeroHitDocument,
@@ -9,6 +10,7 @@ import type {
 } from '@app/domain';
 import { requireAdminActor } from './authz';
 import { MAX_LIST_LIMIT } from '@app/domain';
+import { createListCursorContext } from '@app/domain';
 
 const DEFAULT_DOCUMENT_LIMIT = 20;
 
@@ -196,13 +198,23 @@ export async function getAnalyticsSummary(
     chunks: ChunkRepository;
     tickets: TicketRepository;
     users: UserRepository;
+    cursorCodec?: ListCursorCodec | undefined;
   },
 ): Promise<Result<AnalyticsSummary>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   try {
     const [docCount, chunkCount, ticketCount, openTicketCount, usersCount] = await Promise.all([
-      deps.documents.list({ limit: 1, offset: 0 }).then((r) => r.total),
+      deps.documents.list({
+        limit: 1,
+        offset: 0,
+        ...(deps.cursorCodec !== undefined
+          ? {
+              cursorCodec: deps.cursorCodec,
+              cursorContext: createListCursorContext('documents', { search: null, includeDeleted: false }),
+            }
+          : {}),
+      }).then((r) => r.total),
       deps.chunks.countForAll(),
       deps.tickets.countAll(),
       deps.tickets.countOpen(),

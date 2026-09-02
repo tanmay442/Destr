@@ -1,22 +1,41 @@
 import { err, ok, type Result, NotFoundError, ValidationError, ForbiddenError, ExternalServiceError, logger } from '@app/domain';
-import type { UserRepository, TransactionRunner } from '@app/domain';
+import type { UserRepository, TransactionRunner, CursorPageInfo, ListCursorCodec } from '@app/domain';
 import type { AuditLog } from '@app/domain';
 import { MAX_LIST_LIMIT } from '@app/domain';
-import { sanitizePagination } from '../service-result';
+import { decodeCursorAtBoundary, sanitizePagination, wrapServiceCall } from '../service-result';
 import { logUserRoleChange } from './audit';
 import { safeAudit } from '../audit-reliability';
+import { createListCursorContext } from '@app/domain';
 
 export async function listUsers(
-  input: { search?: string | undefined; limit?: number; offset?: number },
-  deps: { users: UserRepository },
-): Promise<Result<{ users: Array<{ clerkUserId: string; email: string; name: string | null; role: string; lastSeenAt: Date | null; createdAt: Date }>; total: number }>> {
-  try {
+  input: { search?: string | undefined; limit?: number; offset?: number; cursor?: unknown; before?: unknown },
+  deps: { users: UserRepository; cursorCodec: ListCursorCodec },
+): Promise<Result<{ users: Array<{ clerkUserId: string; email: string; name: string | null; role: string; lastSeenAt: Date | null; createdAt: Date }>; total: number } & CursorPageInfo>> {
+  return wrapServiceCall(async () => {
+    const search = input.search?.trim() || undefined;
+    const cursorContext = createListCursorContext('users', { search: search ?? null });
+    const cursor = decodeCursorAtBoundary(input.cursor, 'users', deps.cursorCodec, cursorContext);
+    const before = decodeCursorAtBoundary(input.before, 'users', deps.cursorCodec, cursorContext);
+    if (cursor !== undefined && before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const r = await deps.users.list({ search: input.search, limit, offset });
-    return ok({ users: r.rows, total: r.total });
-  } catch (e) {
-    return err(new ExternalServiceError('Failed to list users', e));
-  }
+    const result = await deps.users.list({
+      search,
+      limit,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(cursor === undefined && before === undefined ? { offset } : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
+    });
+    return ok({
+      users: result.rows,
+      total: result.total,
+      nextCursor: result.nextCursor ?? null,
+      previousCursor: result.previousCursor ?? null,
+    });
+  }, 'Failed to list users');
 }
 
 export async function setUserRole(

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { PDF_PARSE_MAX_BYTES } from '@app/infrastructure/config';
+import { config as loadEnv } from 'dotenv';
+import { PDF_PARSE_MAX_BYTES as DEFAULT_PDF_PARSE_MAX_BYTES } from '@app/domain';
+import { loadEnvConfig } from '@app/infrastructure/config';
 import { createBlobStorage } from '@app/infrastructure/storage';
 import { warn, getRepoRoot } from './common';
 import { buildIngestDeps } from './deps';
@@ -12,33 +14,42 @@ export interface SeedParseResult {
   yes?: boolean | undefined;
 }
 
+function parseRequiredValue(value: string | undefined, option: string): string {
+  if (value === undefined || value === '' || value.startsWith('--')) {
+    throw new Error(`Missing value for ${option}`);
+  }
+  return value;
+}
+
 export function parseSeedArgs(argv: string[]): SeedParseResult {
   let dir: string | undefined;
   let yes: boolean | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a.startsWith('--dir=')) {
-      dir = a.slice('--dir='.length);
-    } else if (a === '--dir') {
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        dir = next;
-        i++;
-      }
-    } else if (a === '--yes' || a === '-y') {
+    const argument = argv[i]!;
+    if (argument.startsWith('--dir=')) {
+      dir = parseRequiredValue(argument.slice('--dir='.length), '--dir');
+    } else if (argument === '--dir') {
+      dir = parseRequiredValue(argv[++i], '--dir');
+    } else if (argument === '--yes' || argument === '-y') {
       yes = true;
-    } else if (!a.startsWith('--')) {
-      positional.push(a);
+    } else if (argument.startsWith('--')) {
+      throw new Error(`Unknown option: ${argument}`);
+    } else {
+      positional.push(argument);
     }
   }
 
+  if (positional.length > 1) {
+    throw new Error(`Unexpected argument: ${positional[1]}`);
+  }
   if (!dir && process.env.SEED_DOCS_DIR) dir = process.env.SEED_DOCS_DIR;
   if (!dir) dir = './documents';
-  const res: SeedParseResult = { dir, userId: positional[0] };
-  if (yes) res.yes = true;
-  return res;
+  const userId = positional[0] || process.env.SEED_USER_ID || undefined;
+  const result: SeedParseResult = { dir, userId };
+  if (yes) result.yes = true;
+  return result;
 }
 
 export interface SeedOptions {
@@ -65,10 +76,21 @@ function safeSeedName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
 
+function isPdf(buffer: Buffer): boolean {
+  return buffer.length >= 4 && buffer.toString('utf8', 0, 4) === '%PDF';
+}
+
+function getPdfParseMaxBytes(): number {
+  const configured = loadEnvConfig({ get: (key) => process.env[key] }).PDF_PARSE_MAX_BYTES;
+  return typeof configured === 'number' && Number.isFinite(configured)
+    ? configured
+    : DEFAULT_PDF_PARSE_MAX_BYTES;
+}
+
 function isNonLocalDbUrl(url?: string): boolean {
   if (!url) return false;
   try {
-    const hostname = new URL(url).hostname;
+    const hostname = new URL(url).hostname.replace(/^\[|\]$/g, '');
     return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1';
   } catch {
     return true;
@@ -76,7 +98,7 @@ function isNonLocalDbUrl(url?: string): boolean {
 }
 
 export async function runSeed(opts: SeedOptions = {}): Promise<SeedResult> {
-  const userId = opts.userId ?? 'seed-script';
+  const userId = opts.userId ?? process.env.SEED_USER_ID ?? 'seed-script';
   const fixturesDir = opts.fixturesDir ?? './documents';
 
   let files: string[];
@@ -133,16 +155,22 @@ export async function runSeed(opts: SeedOptions = {}): Promise<SeedResult> {
   for (const name of files) {
     try {
       const buffer = readFileSync(join(fixturesDir, name));
-      if (buffer.length > PDF_PARSE_MAX_BYTES) {
-        throw new Error(`File size (${buffer.length} bytes) exceeds maximum allowed size (${PDF_PARSE_MAX_BYTES} bytes)`);
+      const maxPdfParseBytes = getPdfParseMaxBytes();
+      if (buffer.length > maxPdfParseBytes) {
+        throw new Error(`File size (${buffer.length} bytes) exceeds maximum allowed size (${maxPdfParseBytes} bytes)`);
+      }
+      if (!isPdf(buffer)) {
+        throw new Error('Only PDF files are supported');
       }
 
       const result = await ingestFile({ fileName: name, buffer, uploadedBy: userId });
-      try {
-        await storeBlob(result.documentId, buffer, name);
-      } catch (blobErr) {
-        await deleteDocument(result.documentId).catch(() => {});
-        throw blobErr;
+      if (result.status !== 'unchanged') {
+        try {
+          await storeBlob(result.documentId, buffer, name);
+        } catch (blobErr) {
+          await deleteDocument(result.documentId).catch(() => {});
+          throw blobErr;
+        }
       }
 
       console.log(
@@ -165,7 +193,10 @@ if (isMainModule()) {
   const envPath = resolve(REPO_ROOT, '.env.local');
 
   try {
-    process.loadEnvFile(envPath);
+    const loaded = loadEnv({ path: envPath });
+    if (loaded.error && existsSync(envPath)) {
+      warn(`Failed to load .env.local: ${loaded.error.message}`);
+    }
   } catch (err) {
     if (existsSync(envPath)) {
       warn(

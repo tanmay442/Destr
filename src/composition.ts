@@ -13,10 +13,12 @@ import {
   getTicketIntelligence,
   listAudit, logSettingsChange,
   prepareIngest,
+  replaceDocumentChunks,
   uploadPrechunkedMarkdown,
   reingestAll,
   agenticSearch,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
+  type CacheLeasePolicy, type CacheLeaseTelemetry,
   type AgenticDeps,
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
@@ -35,11 +37,10 @@ const authAdapter = Auth.createAuthAdapter();
 const requireAdmin = authAdapter.requireAdmin;
 const requireSession = authAdapter.requireSession;
 const getAppSession = authAdapter.getAppSession;
-import { createHash } from 'node:crypto';
 import { getRuntimeConfig, registerSettingsRepoProvider } from './lib/config/runtime';
 import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
-import { MAX_LIST_LIMIT } from '@app/domain';
+import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import { after } from 'next/server';
 
 const core = buildCoreDeps({
@@ -62,16 +63,43 @@ configureLogger(core.config.LOG_LEVEL as LogLevel);
 const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
 const systemClock = { now: () => new Date() };
-const systemHasher = { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') };
+const systemHasher = Db.defaultHasher;
 
 const bind = <Args extends unknown[], T>(
   fn: (...args: Args) => Promise<Result<T>>,
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage } = core;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec } = core;
 const ingestQueue = core.ingestQueue;
-const rateLimiter = core.rateLimiter;
+const rateLimiter = Auth.createFallbackRateLimiter({
+  primary: core.rateLimiter,
+  fallback: Auth.lruRateLimiter,
+  onFallback: ({ key, error }) => {
+    logger.warn('[rate-limit] provider failed; using the bounded local limiter', {
+      key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
+});
+
+/**
+ * Cross-instance single-flight is required in production. A process-local
+ * coordinator is only enabled explicitly for local/degraded deployments.
+ */
+const configuredCacheLeasePolicy = process.env.CACHE_LEASE_MODE;
+const cacheLeasePolicy: CacheLeasePolicy = configuredCacheLeasePolicy === 'degraded'
+  ? 'degraded'
+  : configuredCacheLeasePolicy === 'strict' || process.env.NODE_ENV === 'production'
+    ? 'strict'
+    : 'degraded';
+const onCacheLeaseTelemetry = (event: CacheLeaseTelemetry): void => {
+  logger.warn('chat.cache.lease_coordination', {
+    operation: event.operation,
+    result: event.result,
+    policy: event.policy,
+  });
+};
 
 if (process.env.NODE_ENV === 'production' && (process.env.BLOB_STORAGE_PROVIDER ?? 'filesystem') === 'filesystem') {
   logger.warn('BLOB_STORAGE_PROVIDER=filesystem with NODE_ENV=production: PDFs are written to the ephemeral local filesystem and will be lost between invocations. Use r2 or s3 in production.');
@@ -91,6 +119,7 @@ type QueuedIngestStatus = 'done' | 'already-done' | 'busy' | 'stale';
 async function ingestQueuedDocumentStandalone(
   documentId: number,
   queuedFileHash?: string,
+  signal?: AbortSignal | undefined,
 ): Promise<Result<{ status: QueuedIngestStatus; chunks: number }>> {
   const doc = await documentRepo.findById(documentId);
   if (!doc) return err(new NotFoundError(`Document not found: ${documentId}`));
@@ -153,7 +182,10 @@ async function ingestQueuedDocumentStandalone(
 
   let prepared: Awaited<ReturnType<typeof prepareIngest>>;
   try {
-    prepared = await prepareIngest({ documentId, fileName: doc.fileName, buffer }, await resolveIngestDeps());
+    prepared = await prepareIngest(
+      { documentId, fileName: doc.fileName, buffer, signal },
+      await resolveIngestDeps(),
+    );
   } catch (error) {
     await requeue();
     return err(new ExternalServiceError('Ingest preparation failed', error));
@@ -172,8 +204,7 @@ async function ingestQueuedDocumentStandalone(
         fresh.storageKey !== doc.storageKey ||
         fresh.ingestStatus !== 'ingesting'
       ) throw new StaleIngestError();
-      await tx.chunks.deleteByDocumentId(documentId);
-      await tx.chunks.insertMany(prepared.value.rows);
+      await replaceDocumentChunks(tx.chunks, documentId, prepared.value.rows);
       if (tx.documents.updateIngestStatusIfCurrent) {
         const completed = await tx.documents.updateIngestStatusIfCurrent(
           documentId,
@@ -232,7 +263,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
   return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
 }
 
-function getAgenticDeps(cfg: AppConfig): AgenticDeps {
+function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
   const aux = Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
@@ -246,6 +277,7 @@ function getAgenticDeps(cfg: AppConfig): AgenticDeps {
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
     similarityThreshold: cfg.similarityThreshold,
     hybridEnabled: cfg.hybridEnabled,
+    signal,
   };
 }
 
@@ -275,7 +307,7 @@ function createComposition() {
         },
         getSearchDeps(cfg),
       ),
-    agenticSearch: async (cfg: AppConfig, query: string) => {
+    agenticSearch: async (cfg: AppConfig, query: string, opts: { signal?: AbortSignal | undefined } = {}) => {
       if (process.env.AGENTIC_ENABLED === 'false') {
         const fallback = await bind(
           searchChunks,
@@ -289,6 +321,7 @@ function createComposition() {
             lexicalWeight: LEXICAL_WEIGHT,
             rerankTopN: RERANK_TOP_N,
             candidateLimit: CANDIDATE_POOL,
+            signal: opts.signal,
           },
           getSearchDeps(cfg),
         );
@@ -305,7 +338,7 @@ function createComposition() {
         });
       }
       try {
-        return await agenticSearch(query, getAgenticDeps(cfg));
+        return await agenticSearch(query, getAgenticDeps(cfg, opts.signal));
       } catch (e) {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
@@ -315,7 +348,7 @@ function createComposition() {
     getAgenticDeps,
     resolveReranker,
     availableRerankers,
-    listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, userDeps),
+    listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, { ...userDeps, cursorCodec }),
     setUserRole: (input: Parameters<typeof setUserRole>[0]) =>
       bind(setUserRole, input, { ...userDeps, ...auditDeps, runner: txRunner, syncClerkRole: Auth.syncClerkUserRole }),
     touchLastSeen: (id: string) => bind(touchLastSeen, id, userDeps),
@@ -334,14 +367,14 @@ function createComposition() {
       }),
     enforceRateLimit: (input: Parameters<typeof enforceRateLimit>[0]) => bind(enforceRateLimit, input, rateLimitDeps),
     listDocuments: (input: Parameters<typeof listDocuments>[0]) =>
-      bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps }),
+      bind(listDocuments, input, { documents: documentRepo, chunks: chunkRepo, ...userDeps, cursorCodec }),
     uploadPdf: async (input: Parameters<typeof uploadPdf>[0]) =>
       bind(uploadPdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
       bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
-    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps }),
+    listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
     createTicket: (input: Parameters<typeof createTicket>[0]) =>
@@ -349,7 +382,7 @@ function createComposition() {
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
-    replacePdf: async (input: { documentId: number; fileName: string; buffer: Buffer; actorId: string }) =>
+    replacePdf: async (input: Parameters<typeof replacePdf>[0]) =>
       bind(replacePdf, input, { ...(await resolveIngestDeps()), asyncIngest, ...auditDeps, runner: txRunner, blobStorage, ingestQueue, ...userDeps }),
     uploadChunkedMarkdown: (input: {
       fileName: string;
@@ -358,6 +391,7 @@ function createComposition() {
       uploadedBy: string;
       pdfBuffer?: Buffer | undefined;
       pdfFileName?: string | undefined;
+      signal?: AbortSignal | undefined;
     }) =>
       bind(uploadPrechunkedMarkdown, input, {
         documents: documentRepo,
@@ -365,17 +399,18 @@ function createComposition() {
         embeddings: embeddingService,
         hasher: systemHasher,
         blobStorage,
+        pdfValidator: Pdf.unpdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
         summarizer: Llm.createDocSummarizer(Llm.getChatModel),
         cchEnabled: CCH_ENABLED,
       }),
-    ingestQueuedDocument: (documentId: number, fileHash?: string) =>
-      ingestQueuedDocumentStandalone(documentId, fileHash),
+    ingestQueuedDocument: (documentId: number, fileHash?: string, signal?: AbortSignal | undefined) =>
+      ingestQueuedDocumentStandalone(documentId, fileHash, signal),
     recountChunksForDocument: (id: number) => bind(recountChunksForDocument, id, { chunks: chunkRepo }),
     recountChunksForAllDocuments: () => bind(recountChunksForAllDocuments, { chunks: chunkRepo }),
     reingestAll: () =>
-      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo }),
+      reingestAll({ documents: documentRepo, queue: reingestQueue, chunks: chunkRepo, cursorCodec }),
     sweepStaleQueued: () => {
       const failDocumentIfStale = documentRepo.failDocumentIfStale;
       return Queue.createQueuedSweeper({
@@ -404,7 +439,7 @@ function createComposition() {
     },
     countPendingIngest: () => documentRepo.countPendingIngest(),
     getAnalyticsSummary: (input: { actorId: string }) =>
-      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps }),
+      bind(getAnalyticsSummary, input, { documents: documentRepo, chunks: chunkRepo, tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     getChatAnalytics: (input: Parameters<typeof getChatAnalytics>[0]) =>
       bind(getChatAnalytics, input, { ...userDeps, chatEvents: chatEventBatcher }),
     getAnalyticsTrends: (input: Parameters<typeof getAnalyticsTrends>[0]) =>
@@ -430,22 +465,46 @@ function createComposition() {
         captureQueryText: runtime.captureQueryText,
       });
     },
-    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps }),
+    listAudit: (input: Parameters<typeof listAudit>[0]) => bind(listAudit, input, { ...auditDeps, ...userDeps, cursorCodec }),
     db: core.dbClient,
     schema: Db.schema,
     blobStorage,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
+    allowedChatFileOrigins: new Set(
+      (process.env.CHAT_FILE_ALLOWED_ORIGINS ?? '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    ),
+    getChatModelRequestOptions: (input: { stablePromptPrefix: string; prefixVersion: string }) => {
+      const adapter = Llm.getChatModelAdapter();
+      const providerOptions = adapter.buildProviderOptions(input);
+      return {
+        ...(providerOptions !== undefined ? { providerOptions } : {}),
+        telemetry: {
+          provider: adapter.provider,
+          model: adapter.modelId,
+          promptPrefixVersion: input.prefixVersion,
+          promptCache: { ...adapter.capabilities },
+        },
+        parseUsage: adapter.parseUsage,
+      };
+    },
+    getRetrievalProvider: () => 'pgvector',
     getEmbeddingModelId: Llm.getEmbeddingModelId,
     answerCacheKey,
+    cacheLeasePolicy,
+    onCacheLeaseTelemetry,
     answerCache: core.answerCache,
+    turnResultCache: core.answerCache,
     settingsRepo,
     chatEventBatcher,
     chatFeedbackRepo,
     qualityReviewsRepo,
     chatHistoryRepo,
     session: Auth.clerkSessionStore,
-    rateLimit: async (key: string, opts: { limit: number; windowMs: number }) =>
+    rateLimit: (key: string, opts: { limit: number; windowMs: number }) =>
       rateLimiter.check(key, opts),
   };
 }
@@ -536,7 +595,10 @@ export function parseQueryPagination(
   const rawOffset = Number(url.searchParams.get('offset') ?? defaults.offset ?? 0);
   return {
     limit: Math.min(Math.max(Math.floor(Number.isFinite(rawLimit) ? rawLimit : (defaults.limit ?? 25)), 1), MAX_LIST_LIMIT),
-    offset: Math.max(Math.floor(Number.isFinite(rawOffset) ? rawOffset : (defaults.offset ?? 0)), 0),
+    offset: Math.min(
+      Math.max(Math.floor(Number.isFinite(rawOffset) ? rawOffset : (defaults.offset ?? 0)), 0),
+      MAX_LEGACY_LIST_OFFSET,
+    ),
   };
 }
 

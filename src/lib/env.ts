@@ -32,6 +32,11 @@ const ENV_VAR_VALUES: EnvVarValueSpec[] = [
     description: 'One of: filesystem, r2, s3',
     allowed: ['filesystem', 'r2', 's3'],
   },
+  {
+    name: 'CACHE_LEASE_MODE',
+    description: 'One of: strict, degraded',
+    allowed: ['strict', 'degraded'],
+  },
 ];
 
 function providerIs(provider: string, envVar: string): boolean {
@@ -45,6 +50,12 @@ const ENV_VARS: EnvVarSpec[] = [
     name: 'DATABASE_URL',
     required: true,
     description: 'Neon Serverless Postgres connection string',
+  },
+  {
+    name: 'CURSOR_SIGNING_SECRET',
+    required: true,
+    description: 'At least 32 bytes used to authenticate pagination cursors',
+    condition: () => process.env.NODE_ENV === 'production',
   },
   {
     name: 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',

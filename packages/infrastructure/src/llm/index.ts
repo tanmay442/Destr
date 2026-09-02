@@ -24,7 +24,35 @@ import {
 } from './registries';
 import { getChatModel } from './model';
 
-export { getChatModel } from './model';
+export {
+  getChatModel,
+  getChatModelAdapter,
+  getChatModelCapabilities,
+  getChatModelProviderOptions,
+  getChatModelTelemetry,
+  parseChatModelUsage,
+  type ChatModelAdapter,
+} from './model';
+export {
+  OPENAI_PROMPT_CACHE_CAPABILITIES,
+  GOOGLE_PROMPT_CACHE_CAPABILITIES,
+  OLLAMA_PROMPT_CACHE_CAPABILITIES,
+  buildOpenAIPromptCacheOptions,
+  buildGooglePromptCacheOptions,
+  parsePromptCacheUsage,
+  type PromptCacheCapabilities,
+  type PromptCacheMetricStatus,
+  type PromptCacheRequestContext,
+  type PromptCacheStrategy,
+  type PromptCacheUsage,
+} from './prompt-cache';
+export {
+  EMBEDDING_RETRY_BUDGET_MS,
+  createRetryBudget,
+  isRetryBudgetExceeded,
+  RetryBudgetExceededError,
+  type RetryBudget,
+} from './retry';
 
 export function getEmbeddingService(vectorDim?: number): EmbeddingService {
   const provider = process.env.EMBEDDING_PROVIDER ?? 'google';

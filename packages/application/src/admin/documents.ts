@@ -18,10 +18,13 @@ import type {
   BlobStorage,
   IngestQueue,
   IngestStatus,
+  CursorPageInfo,
+  ListCursorCodec,
 } from '@app/domain';
 import {
   parseAndEmbed,
   writeChunks,
+  replaceDocumentChunks,
   claimDocumentByName,
   nameStillClaimed,
   UPLOAD_CONFLICT_MESSAGE,
@@ -29,7 +32,13 @@ import {
 } from '../rag/ingest';
 import type { IngestDeps, IngestResult } from '../rag/ingest';
 import { RESTORE_WINDOW_MS, MAX_LIST_LIMIT } from '@app/domain';
-import { wrapServiceCall, serviceResult, sanitizePagination } from '../service-result';
+import {
+  decodeCursorAtBoundary,
+  wrapServiceCall,
+  serviceResult,
+  sanitizePagination,
+} from '../service-result';
+import { createListCursorContext } from '@app/domain';
 import { requireAdminActor } from './authz';
 
 function isDocumentNameConflict(error: unknown): boolean {
@@ -57,6 +66,8 @@ interface ListDocumentsInput {
   includeDeleted?: boolean | undefined;
   limit?: number;
   offset?: number;
+  cursor?: unknown;
+  before?: unknown;
 }
 
 export async function listDocuments(
@@ -65,6 +76,7 @@ export async function listDocuments(
     documents: DocumentRepository;
     chunks: ChunkRepository;
     users: UserRepository;
+    cursorCodec: ListCursorCodec;
   },
 ): Promise<
   Result<{
@@ -82,17 +94,30 @@ export async function listDocuments(
       hasBlob: boolean;
     }>;
     total: number;
-  }>
+  } & CursorPageInfo>
 > {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
+    const search = input.search?.trim() || undefined;
+    const includeDeleted = input.includeDeleted === true;
+    const includeDeletedOption = includeDeleted;
+    const cursorContext = createListCursorContext('documents', { search: search ?? null, includeDeleted });
+    const cursor = decodeCursorAtBoundary(input.cursor, 'documents', deps.cursorCodec, cursorContext);
+    const before = decodeCursorAtBoundary(input.before, 'documents', deps.cursorCodec, cursorContext);
+    if (cursor !== undefined && before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const { limit, offset } = sanitizePagination(input.limit, input.offset, MAX_LIST_LIMIT);
-    const { documents, total } = await deps.documents.list({
-      search: input.search,
-      includeDeleted: input.includeDeleted,
+    const { documents, total, nextCursor, previousCursor } = await deps.documents.list({
+      search,
+      includeDeleted: includeDeletedOption,
       limit,
-      offset,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(cursor === undefined && before === undefined ? { offset } : {}),
+      cursorCodec: deps.cursorCodec,
+      cursorContext,
     });
     const ids = documents.map((d) => d.id);
     const chunkCounts =
@@ -112,7 +137,12 @@ export async function listDocuments(
       uploaderName: uploaderMap.get(d.uploadedBy) ?? null,
       chunkCount: chunkCounts.get(d.id) ?? 0,
     }));
-    return ok({ documents: result, total });
+    return ok({
+      documents: result,
+      total,
+      nextCursor: nextCursor ?? null,
+      previousCursor: previousCursor ?? null,
+    });
   }, 'Failed to list documents');
 }
 
@@ -183,26 +213,66 @@ async function putUncommittedBlob(
 }
 
 export async function uploadPdf(
-  input: { fileName: string; buffer: Buffer; actorId: string },
+  input: { fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
   if (!authz.ok) return authz;
   return wrapServiceCall(async () => {
+    // Hash once at the upload boundary and carry it through every ingest path.
+    // The queued worker may independently verify the stored blob later, but
+    // this request must not hash the same full buffer in each branch.
+    const fileHash = deps.hasher.sha256(input.buffer);
+    const unchanged = await completeUnchangedUpload(input, fileHash, deps);
+    if (unchanged !== null) return unchanged;
     if (input.buffer.length >= ASYNC_INGEST_THRESHOLD && deps.asyncIngest) {
-      return queuePdfForIngest(input, deps, (newId) => ({ action: 'upload', documentId: newId }));
+      return queuePdfForIngest(input, fileHash, deps, (newId) => ({ action: 'upload', documentId: newId }));
     }
-    return uploadPdfSync(input, deps);
+    return uploadPdfSync(input, fileHash, deps);
   }, 'Failed to upload PDF');
 }
 
-async function uploadPdfSync(
+async function completeUnchangedUpload(
   input: { fileName: string; buffer: Buffer; actorId: string },
+  fileHash: string,
+  deps: Pick<IngestDeps, 'documents'> & { runner: TransactionRunner },
+): Promise<Result<IngestResult> | null> {
+  const candidate = await deps.documents.findByName(input.fileName, { includeDeleted: true });
+  if (candidate?.fileHash !== fileHash) return null;
+
+  return deps.runner.run(async (tx) => {
+    const claim = await claimDocumentByName(input.fileName, fileHash, tx.documents);
+    if (claim.kind !== 'unchanged') return null;
+    if (claim.restore) {
+      await tx.documents.restore(claim.documentId);
+      await tx.audit.logDocumentEvent({
+        action: 'restore',
+        documentId: claim.documentId,
+        actorId: input.actorId,
+      });
+    }
+    return ok({ documentId: claim.documentId, chunks: 0, status: 'unchanged' });
+  });
+}
+
+async function uploadPdfSync(
+  input: { fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
+  fileHash: string,
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage },
 ): Promise<Result<IngestResult>> {
-  const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
+  let parsed: Awaited<ReturnType<typeof parseAndEmbed>>;
+  try {
+    parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer, signal: input.signal }, deps);
+  } catch (cause) {
+    await cleanupUncommittedBlob(key, deps);
+    throw cause;
+  }
+  if (!parsed.ok) {
+    await cleanupUncommittedBlob(key, deps);
+    return parsed;
+  }
   let oldStorageKey: string | null = null;
   let result: Result<IngestResult>;
   try {
@@ -220,8 +290,6 @@ async function uploadPdfSync(
       } else {
         oldStorageKey = claim.oldStorageKey;
       }
-      const parsed = await parseAndEmbed({ fileName: input.fileName, buffer: input.buffer }, deps);
-      if (!parsed.ok) return parsed;
       const outcome = await writeChunks(
         tx.documents,
         tx.chunks,
@@ -270,10 +338,10 @@ async function uploadPdfSync(
 
 async function queuePdfForIngest(
   input: { fileName: string; buffer: Buffer; actorId: string },
+  fileHash: string,
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue },
   auditFor: (newDocumentId: number) => { action: 'upload' | 'replace'; documentId: number },
 ): Promise<Result<IngestResult>> {
-  const fileHash = deps.hasher.sha256(input.buffer);
   const key = newBlobKey(input.fileName);
   await putUncommittedBlob(key, input.buffer, deps);
   let previous: RowPrevious = { fileHash: null, status: null, storageKey: null };
@@ -423,7 +491,7 @@ export async function hardDeleteDocument(
 }
 
 export async function replacePdf(
-  input: { documentId: number; fileName: string; buffer: Buffer; actorId: string },
+  input: { documentId: number; fileName: string; buffer: Buffer; actorId: string; signal?: AbortSignal | undefined },
   deps: IngestDeps & { audit: AuditLog; runner: TransactionRunner; blobStorage: BlobStorage; ingestQueue: IngestQueue; users: UserRepository; asyncIngest: boolean },
 ): Promise<Result<IngestResult>> {
   const authz = await requireAdminActor(input.actorId, deps);
@@ -451,7 +519,7 @@ export async function replacePdf(
     if (!useAsync) {
       try {
         parsed = await parseAndEmbed(
-          { fileName: input.fileName, buffer: input.buffer },
+          { fileName: input.fileName, buffer: input.buffer, signal: input.signal },
           deps,
         );
       } catch (cause) {
@@ -479,8 +547,9 @@ export async function replacePdf(
           await tx.documents.update(input.documentId, patch);
         }
         if (parsed) {
-          await tx.chunks.deleteByDocumentId(input.documentId);
-          await tx.chunks.insertMany(
+          await replaceDocumentChunks(
+            tx.chunks,
+            input.documentId,
             parsed.value.rows.map((r) => ({
               documentId: input.documentId,
               content: r.content,

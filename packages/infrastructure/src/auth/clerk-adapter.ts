@@ -126,6 +126,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/admin/ingest-worker(.*)',
   '/api/admin/ingest-dead-letter(.*)',
   '/api/admin/queue/sweep(.*)',
+  '/api/admin/purge/cron',
   '/api/admin/analytics/rollup',
   '/api/cron/refresh-quality',
   '/api/health',

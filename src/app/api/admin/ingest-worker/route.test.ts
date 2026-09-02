@@ -114,9 +114,10 @@ describe('POST /api/admin/ingest-worker', () => {
   it('returns 200 on a happy-path ingest (status done)', async () => {
     verifyMock.mockResolvedValue(true);
     ingestQueuedDocumentMock.mockResolvedValue(ok({ status: 'done', chunks: 7 }));
-    const res = await route.POST(signedPost(JSON.stringify({ documentId: 5 })));
+    const req = signedPost(JSON.stringify({ documentId: 5 }));
+    const res = await route.POST(req);
     expect(res.status).toBe(200);
-    expect(ingestQueuedDocumentMock).toHaveBeenCalledWith(5);
+    expect(ingestQueuedDocumentMock).toHaveBeenCalledWith(5, undefined, req.signal);
     const json = await res.json();
     expect(json).toMatchObject({ ok: true, status: 'done', chunks: 7 });
   });

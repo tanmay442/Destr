@@ -93,12 +93,12 @@ export function respondResult<T>(result: Result<T>): Response {
 
 export type BoundedReadResult =
   | { ok: true; bytes: Uint8Array }
-  | { ok: false; reason: 'too-large' | 'error' };
+  | { ok: false; reason: 'too-large' | 'aborted' | 'error' };
 
 export async function readBoundedBytes(req: Request, maxBytes: number): Promise<BoundedReadResult> {
   const body = req.body;
   if (!body) return { ok: true, bytes: new Uint8Array(0) };
-  if (req.signal.aborted) return { ok: false, reason: 'error' };
+  if (req.signal.aborted) return { ok: false, reason: 'aborted' };
   const reader = body.getReader();
   const abortHandler = (): void => {
     reader.cancel().catch(() => undefined);
@@ -110,7 +110,7 @@ export async function readBoundedBytes(req: Request, maxBytes: number): Promise<
     while (true) {
       if (req.signal.aborted) {
         await reader.cancel().catch(() => undefined);
-        return { ok: false, reason: 'error' };
+        return { ok: false, reason: 'aborted' };
       }
       const { done, value } = await reader.read();
       if (done) break;
@@ -124,7 +124,7 @@ export async function readBoundedBytes(req: Request, maxBytes: number): Promise<
       }
     }
   } catch {
-    return { ok: false, reason: 'error' };
+    return { ok: false, reason: req.signal.aborted ? 'aborted' : 'error' };
   } finally {
     req.signal.removeEventListener('abort', abortHandler);
     reader.releaseLock();
@@ -141,7 +141,7 @@ export async function readBoundedBytes(req: Request, maxBytes: number): Promise<
 export async function readBoundedText(
   req: Request,
   maxBytes: number,
-): Promise<{ ok: true; text: string } | { ok: false; reason: 'too-large' | 'error' }> {
+): Promise<{ ok: true; text: string } | { ok: false; reason: 'too-large' | 'aborted' | 'error' }> {
   const read = await readBoundedBytes(req, maxBytes);
   if (!read.ok) return read;
   return { ok: true, text: new TextDecoder().decode(read.bytes) };

@@ -50,6 +50,8 @@ export async function GET(req: Request) {
     return respond(new ValidationError('Date range too large'));
   }
   const { limit, offset } = parseQueryPagination(url, { limit: 50 });
+  const cursor = url.searchParams.get('cursor');
+  const before = url.searchParams.get('before');
   const result = await comp.listAudit({
     kind,
     action: url.searchParams.get('action')?.slice(0, 200) ?? undefined,
@@ -59,7 +61,9 @@ export async function GET(req: Request) {
     documentId,
     ticketId: ticketIdFilter,
     limit,
-    offset,
+    ...(cursor !== null ? { cursor } : {}),
+    ...(before !== null ? { before } : {}),
+    ...(cursor === null && before === null ? { offset } : {}),
     actorId: auth.session.user.id,
   });
   return respondResult(result);

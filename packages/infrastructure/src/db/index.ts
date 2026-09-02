@@ -1,6 +1,7 @@
 export * from './client';
 export * from './schema';
 export * from './schema-vector';
+export * from './stable-identities';
 export * from './repositories';
 export * from './settings-repo';
 export * from './chat-events-repo';

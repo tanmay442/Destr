@@ -34,16 +34,20 @@ function formatRelative(d: Date | null): string {
 export default async function UsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ search?: string; page?: string }>;
+  searchParams: Promise<{ search?: string; page?: string; cursor?: string; before?: string }>;
 }) {
   const params = await searchParams;
   const search = params.search?.trim() ?? '';
   const page = parsePageParam(params.page);
-  const offset = (page - 1) * PAGE_SIZE;
+  const cursor = params.cursor;
+  const before = params.before;
+  const offset = cursor === undefined && before === undefined ? (page - 1) * PAGE_SIZE : undefined;
   const result = unwrap(await getComposition().listUsers({
     search: search || undefined,
     limit: PAGE_SIZE,
-    offset,
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(before !== undefined ? { before } : {}),
+    ...(offset !== undefined ? { offset } : {}),
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   if (page > totalPages) {
@@ -56,7 +60,7 @@ export default async function UsersPage({
       <div className="flex flex-col gap-1">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Users</h2>
         <p className="text-sm text-muted-foreground">
-          Promote or demote workspace members. Search by name or email.
+          Promote or demote users in this deployment. Search by name or email.
         </p>
       </div>
       <form
@@ -153,7 +157,9 @@ export default async function UsersPage({
         totalPages={totalPages}
         total={result.total}
         pathname="/admin/users"
-        query={Object.fromEntries(Object.entries(params).filter(([k, v]) => k !== 'page' && v !== undefined)) as Record<string, string>}
+        nextCursor={result.nextCursor}
+        previousCursor={result.previousCursor}
+        query={{ search: search || undefined }}
       />
     </section>
   );

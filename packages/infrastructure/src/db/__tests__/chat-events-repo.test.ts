@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { eq, isNull, or, sql, SQL } from 'drizzle-orm';
 import { ChatEventBatcher } from '../chat-events-repo';
-import { chatEvents, chatFeedback, auditEvents, tickets, users, auditDeadLetter } from '../schema';
+import { chatEvents, chatFeedback, chatTurns, qualityReviews, auditEvents, tickets, users, auditDeadLetter } from '../schema';
 import { db } from '../client';
 import type { ChatEventInput } from '@app/domain';
 
@@ -64,6 +64,81 @@ function makeFakeClient(opts: { failChatInsert?: boolean } = {}) {
 }
 
 const sample: ChatEventInput = { userId: 'u1', query: 'q', mode: 'vector' };
+
+function makeTransactionalPurgeClient(options: { failChild?: unknown } = {}) {
+  const state = {
+    transactions: 0,
+    commits: 0,
+    rollbacks: 0,
+    selectCalls: 0,
+    selectedConditions: [] as unknown[],
+    orderBy: [] as unknown[],
+    limits: [] as number[],
+    locks: [] as unknown[],
+    deletedTables: [] as unknown[],
+    parentDeleteCount: 0,
+  };
+  const selectedRows = [{ id: 1, turnId: uuid(1) }];
+  const tx = {
+    select() {
+      return {
+        from() {
+          return {
+            where(condition: unknown) {
+              state.selectedConditions.push(condition);
+              return {
+                orderBy(column: unknown) {
+                  state.orderBy.push(column);
+                  return {
+                    limit(value: number) {
+                      state.limits.push(value);
+                      return {
+                        for(strength: string, config: unknown) {
+                          state.locks.push({ strength, config });
+                          const rows = state.selectCalls === 0 ? selectedRows : [];
+                          state.selectCalls += 1;
+                          return Promise.resolve(rows);
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    delete(table: unknown) {
+      state.deletedTables.push(table);
+      return {
+        where: () => {
+          if (options.failChild && table === options.failChild) throw new Error('child delete failed');
+          if (table === chatEvents) {
+            state.parentDeleteCount += 1;
+            return { returning: async () => [{ id: 1 }] };
+          }
+          return [];
+        },
+      };
+    },
+  };
+  const client = {
+    ...tx,
+    async transaction<T>(callback: (inner: typeof tx) => Promise<T>): Promise<T> {
+      state.transactions += 1;
+      try {
+        const result = await callback(tx);
+        state.commits += 1;
+        return result;
+      } catch (error: unknown) {
+        state.rollbacks += 1;
+        throw error;
+      }
+    },
+  };
+  return { client: client as never, state };
+}
 
 describe('ChatEventBatcher', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -527,6 +602,36 @@ let insertCalls = 0;
     await batcher.flush();
     expect(inserts).toHaveLength(1);
   });
+
+  it('purges each direct-Drizzle batch in an ordered SKIP LOCKED transaction', async () => {
+    const { client, state } = makeTransactionalPurgeClient();
+
+    await expect(new ChatEventBatcher(client).purgeOlderThan(new Date('2026-01-01T00:00:00.000Z')))
+      .resolves.toEqual({ deletedCount: 1 });
+
+    expect(state.transactions).toBe(2);
+    expect(state.commits).toBe(2);
+    expect(state.rollbacks).toBe(0);
+    expect(state.orderBy).toEqual([chatEvents.id, chatEvents.id]);
+    expect(state.limits).toEqual([2_000, 2_000]);
+    expect(state.locks).toEqual([
+      { strength: 'update', config: { skipLocked: true } },
+      { strength: 'update', config: { skipLocked: true } },
+    ]);
+    expect(state.deletedTables).toEqual([chatFeedback, qualityReviews, chatEvents]);
+  });
+
+  it('rolls back a batch when dependent cleanup fails before parent deletion', async () => {
+    const { client, state } = makeTransactionalPurgeClient({ failChild: chatFeedback });
+
+    await expect(new ChatEventBatcher(client).purgeOlderThan(new Date('2026-01-01T00:00:00.000Z')))
+      .rejects.toThrow('child delete failed');
+
+    expect(state.transactions).toBe(1);
+    expect(state.commits).toBe(0);
+    expect(state.rollbacks).toBe(1);
+    expect(state.parentDeleteCount).toBe(0);
+  });
 });
 
 async function dbReachable(): Promise<boolean> {
@@ -547,6 +652,63 @@ const ROLLBACK = new Error('ROLLBACK');
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 suite('ChatEventBatcher purge, anonymize & metrics (real SQL)', () => {
+  it('claims global turn uniqueness through the registry without scanning event partitions', async () => {
+    const turnId = crypto.randomUUID();
+    const firstCreatedAt = new Date();
+    const secondCreatedAt = new Date(Date.UTC(
+      firstCreatedAt.getUTCFullYear(),
+      firstCreatedAt.getUTCMonth() + 1,
+      2,
+    ));
+
+    try {
+      const attempts = await Promise.allSettled([
+        db.insert(chatEvents).values({ turnId, mode: 'vector', createdAt: firstCreatedAt }),
+        db.insert(chatEvents).values({ turnId, mode: 'agentic', createdAt: secondCreatedAt }),
+      ]);
+
+      expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+      expect(await db.select().from(chatEvents).where(eq(chatEvents.turnId, turnId))).toHaveLength(1);
+      expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(1);
+
+      const functionDefinition = await db.execute(sql`
+        SELECT pg_get_functiondef('destr_register_chat_turn()'::regprocedure) AS definition
+      `);
+      const definition = String(functionDefinition.rows[0]?.definition ?? '').toLowerCase();
+      expect(definition).toContain('returning turn_id into claimed_turn_id');
+      expect(definition).not.toContain('from chat_events');
+    } finally {
+      await db.delete(chatEvents).where(eq(chatEvents.turnId, turnId));
+      await db.delete(chatTurns).where(eq(chatTurns.turnId, turnId));
+    }
+  });
+
+  it('rolls back a registry claim when the event insert fails', async () => {
+    const turnId = crypto.randomUUID();
+
+    await expect(db.execute(sql`
+      INSERT INTO chat_events (turn_id, mode)
+      VALUES (${turnId}, 'invalid-mode')
+    `)).rejects.toThrow();
+
+    expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(0);
+  });
+
+  it('removes the registry row directly when its event is deleted', async () => {
+    const turnId = crypto.randomUUID();
+    await db.insert(chatEvents).values({ turnId, mode: 'vector' });
+
+    await db.delete(chatEvents).where(eq(chatEvents.turnId, turnId));
+
+    expect(await db.select().from(chatTurns).where(eq(chatTurns.turnId, turnId))).toHaveLength(0);
+    const functionDefinition = await db.execute(sql`
+      SELECT pg_get_functiondef('destr_cleanup_chat_turn()'::regprocedure) AS definition
+    `);
+    expect(String(functionDefinition.rows[0]?.definition ?? '').toLowerCase())
+      .not.toContain('from chat_events');
+  });
+
   it('purgeUserData removes the user events and their feedback rows', async () => {
     try {
       await db.transaction(async (tx) => {

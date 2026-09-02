@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotFoundError, ConflictError, ForbiddenError } from '@app/domain';
 import type { TicketRepository, AuditLog, UserRepository, TicketRow } from '@app/domain';
-import { updateTicket, createTicket, VALID_TRANSITIONS, isTicketStatus } from '../tickets';
+import {
+  updateTicket,
+  createTicket,
+  VALID_TRANSITIONS,
+  isTicketStatus,
+  MAX_TICKET_CREATE_ATTEMPTS,
+} from '../tickets';
 
 function ticketRow(over: { ticketId: string; status: 'created' | 'in_progress' | 'closed'; notes?: string | null; assignedTo?: string | null }): TicketRow {
   return {
@@ -21,7 +27,7 @@ function ticketRow(over: { ticketId: string; status: 'created' | 'in_progress' |
 function makeMockRepos(overrides: { tickets?: Partial<TicketRepository>; audit?: Partial<AuditLog>; users?: Partial<UserRepository> } = {}) {
   const tickets = {
     findByTicketId: vi.fn().mockResolvedValue(null),
-    insert: vi.fn().mockResolvedValue({ ticketId: 'TKT-12345678', status: 'created' }),
+    insert: vi.fn().mockResolvedValue({ ticketId: 'TKT-123456789abcdef0', status: 'created' }),
     update: vi.fn().mockResolvedValue(null),
     list: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
     latest: vi.fn().mockResolvedValue(null),
@@ -414,10 +420,12 @@ describe('createTicket', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
+      expect(result.value.ticketId).toMatch(/^TKT-[a-f0-9]{16}$/);
       expect(result.value.status).toBe('created');
     }
-    expect(deps.tickets.insert).toHaveBeenCalledOnce();
+    expect(deps.tickets.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: expect.stringMatching(/^TKT-[a-f0-9]{16}$/) }),
+    );
     expect(deps.audit.logTicketEvent).toHaveBeenCalledOnce();
   });
 
@@ -429,7 +437,7 @@ describe('createTicket', () => {
     );
     expect(deps.audit.logTicketEvent).toHaveBeenCalledWith({
       action: 'create',
-      ticketId: 'TKT-12345678',
+      ticketId: 'TKT-123456789abcdef0',
       actorId: 'user_1',
     });
   });
@@ -447,6 +455,83 @@ describe('createTicket', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('external_service');
+    }
+    expect(deps.tickets.insert).toHaveBeenCalledOnce();
+  });
+
+  it('retries a recognized ticket-id unique collision', async () => {
+    const collision = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'tickets_ticket_id_unique',
+    });
+    const deps = makeMockRepos({
+      tickets: {
+        insert: vi.fn()
+          .mockRejectedValueOnce(collision)
+          .mockResolvedValueOnce({ ticketId: 'TKT-123456789abcdef0', status: 'created' }),
+      },
+    });
+    const result = await createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(deps.tickets.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it('recognizes a wrapped ticket-id unique collision', async () => {
+    const collision = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'tickets_ticket_id_unique',
+    });
+    const deps = makeMockRepos({
+      tickets: {
+        insert: vi.fn()
+          .mockRejectedValueOnce(new Error('wrapped', { cause: collision }))
+          .mockResolvedValueOnce({ ticketId: 'TKT-123456789abcdef0', status: 'created' }),
+      },
+    });
+    const result = await createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(deps.tickets.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry an unrelated unique violation', async () => {
+    const unrelated = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'users_email_unique',
+    });
+    const deps = makeMockRepos({
+      tickets: { insert: vi.fn().mockRejectedValue(unrelated) },
+    });
+    const result = await createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    expect(deps.tickets.insert).toHaveBeenCalledOnce();
+  });
+
+  it('honors the bounded collision retry limit', async () => {
+    const collision = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'tickets_ticket_id_unique',
+    });
+    const deps = makeMockRepos({
+      tickets: { insert: vi.fn().mockRejectedValue(collision) },
+    });
+    const result = await createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    expect(deps.tickets.insert).toHaveBeenCalledTimes(MAX_TICKET_CREATE_ATTEMPTS);
+    if (!result.ok) {
+      expect(result.error.message).toBe('Failed to create ticket');
+      expect(result.error.message).not.toContain('duplicate');
     }
   });
 

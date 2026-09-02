@@ -1,8 +1,9 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { registerChatProvider } from './registries';
+import { registerChatProvider, registerChatProviderAdapter } from './registries';
+import { OLLAMA_PROMPT_CACHE_CAPABILITIES, parsePromptCacheUsage } from './prompt-cache';
 
-function getOllamaChatModel(modelId?: string): LanguageModelV3 {
+export function getOllamaChatModel(modelId?: string): LanguageModelV3 {
   const baseURL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
   const provider = createOpenAI({ apiKey: 'ollama', baseURL: `${baseURL}/v1` });
   const resolved = modelId ?? process.env.OLLAMA_CHAT_MODEL ?? 'gemma4:e2b';
@@ -10,3 +11,7 @@ function getOllamaChatModel(modelId?: string): LanguageModelV3 {
 }
 
 registerChatProvider('ollama', getOllamaChatModel);
+registerChatProviderAdapter('ollama', {
+  capabilities: OLLAMA_PROMPT_CACHE_CAPABILITIES,
+  parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('ollama', usage, providerMetadata),
+});

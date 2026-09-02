@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ValidationError } from '@app/domain';
 import { insertChunks } from '../repositories';
+import { chunks } from '../schema';
 
 type Client = Parameters<typeof insertChunks>[1];
 
 type TestRow = {
   documentId: number;
+  chunkUid?: string;
   content: string;
   embedding: number[];
   chunkIndex?: number;
@@ -19,16 +21,23 @@ type TestRow = {
 };
 
 type ReturnedId = { id: number; chunkIndex: number };
+type InsertResult = Promise<void> & {
+  onConflictDoUpdate: (config: unknown) => InsertResult;
+  returning: () => Promise<ReturnedId[]>;
+};
 
 function makeFakeClient() {
   const calls: Array<{ rows: TestRow[]; isParent: boolean }> = [];
+  const upsertCalls: unknown[] = [];
   const parentIds: number[] = [];
   const builder = {
     values: vi.fn((rows: TestRow | TestRow[]) => {
       const arr = Array.isArray(rows) ? rows : [rows];
       const isParent = arr.length > 0 && arr[0]?.kind === 'parent';
-      const result = Promise.resolve(undefined) as Promise<void> & {
-        returning: () => Promise<ReturnedId[]>;
+      const result = Promise.resolve(undefined) as InsertResult;
+      result.onConflictDoUpdate = (config) => {
+        upsertCalls.push(config);
+        return result;
       };
       result.returning = async () =>
         arr.map((r) => {
@@ -41,7 +50,7 @@ function makeFakeClient() {
     }),
   };
   const insert = vi.fn(() => builder);
-  return { insert, calls, parentIds };
+  return { insert, calls, upsertCalls, parentIds };
 }
 
 const DIM = 768;
@@ -66,6 +75,26 @@ describe('insertChunks two-pass (parent-child)', () => {
     expect(childRows.every((r) => r.parentChunkId === 1000)).toBe(true);
 
     expect(client.calls[0]!.rows.every((r) => r.parentChunkId === null)).toBe(true);
+  });
+
+  it('derives stable hashes and uses the chunk UID as the conflict key', async () => {
+    const client = makeFakeClient();
+    const hasher = { sha256: vi.fn(() => 'A'.repeat(64)) };
+
+    await insertChunks(
+      [{ documentId: 1, content: 'flat', embedding: emb(), chunkIndex: 0, kind: 'child' }],
+      client as unknown as Client,
+      DIM,
+      hasher,
+    );
+
+    expect(client.calls[0]!.rows[0]).toMatchObject({
+      contentHash: 'a'.repeat(64),
+      chunkUid: 'a'.repeat(64),
+    });
+    expect(client.upsertCalls).toHaveLength(1);
+    expect(client.upsertCalls[0]).toMatchObject({ target: chunks.chunkUid });
+    expect(hasher.sha256).toHaveBeenCalledTimes(2);
   });
 
   it('single-pass when there are no parent chunks', async () => {

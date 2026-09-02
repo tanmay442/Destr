@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ingestPrechunked, type PrechunkedIngestDeps } from '../ingest-prechunked';
-import { ConflictError } from '@app/domain';
+import { ConflictError, UPLOAD_CHUNKED_MAX_PDF_BYTES, ValidationError } from '@app/domain';
 import type { ParsedChunk } from '@app/domain';
 
 function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDeps {
@@ -47,6 +47,7 @@ function makeDeps(overrides?: Partial<PrechunkedIngestDeps>): PrechunkedIngestDe
     embeddings: { embed: vi.fn(), embedBatch },
     hasher: { sha256: vi.fn().mockReturnValue('hash-123') },
     blobStorage,
+    pdfValidator: { validate: vi.fn().mockResolvedValue(undefined) },
     ...overrides,
   };
 }
@@ -111,6 +112,22 @@ describe('ingestPrechunked', () => {
     ]);
   });
 
+  it('passes the request abort signal to embedding', async () => {
+    const signal = new AbortController().signal;
+    const deps = makeDeps();
+
+    const result = await ingestPrechunked(
+      { fileName: 'doc.md', chunks: CHUNKS, uploadedBy: 'user', signal },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(
+      ['Getting started body.', 'Auth body.'],
+      { signal },
+    );
+  });
+
   it('stores the companion PDF blob only when provided', async () => {
     const deps = makeDeps();
     const pdf = Buffer.from('%PDF-1.4');
@@ -129,6 +146,44 @@ describe('ingestPrechunked', () => {
     await ingestPrechunked({ fileName: 'doc2.md', chunks: CHUNKS, uploadedBy: 'user' }, depsNoPdf);
     expect(depsNoPdf.blobStorage!.put).not.toHaveBeenCalled();
     expect(depsNoPdf.documents.setStorageKey).toHaveBeenCalledWith(1, null);
+  });
+
+  it('rejects an invalid companion PDF before embedding or durable storage', async () => {
+    const deps = makeDeps({
+      pdfValidator: { validate: vi.fn().mockRejectedValue(new Error('malformed PDF')) },
+    });
+    const result = await ingestPrechunked(
+      {
+        fileName: 'doc.md',
+        chunks: CHUNKS,
+        uploadedBy: 'user',
+        pdfBuffer: Buffer.from('%PDF-garbage'),
+      },
+      deps,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(ValidationError);
+    expect(deps.embeddings.embedBatch).not.toHaveBeenCalled();
+    expect(deps.blobStorage?.put).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized companion PDF before invoking the parser', async () => {
+    const validate = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({ pdfValidator: { validate } });
+    const result = await ingestPrechunked(
+      {
+        fileName: 'doc.md',
+        chunks: CHUNKS,
+        uploadedBy: 'user',
+        pdfBuffer: Buffer.alloc(UPLOAD_CHUNKED_MAX_PDF_BYTES + 1),
+      },
+      deps,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(validate).not.toHaveBeenCalled();
+    expect(deps.embeddings.embedBatch).not.toHaveBeenCalled();
   });
 
   it('deletes the companion PDF blob when the transaction/writeChunks fails (M5)', async () => {
@@ -206,12 +261,26 @@ describe('ingestPrechunked', () => {
   it('dedup hash covers the markdown even when a companion PDF is present (regression: PDF-only hash)', async () => {
     const makeHashing = () => ({ sha256: vi.fn((b: Buffer) => Buffer.from(b).toString('hex')) });
     const pdf = Buffer.from('%PDF-1.4-same-pdf');
+    const canonicalHashInput = (chunks: ParsedChunk[], companionPdf: Buffer) => {
+      const metadata = Buffer.from(JSON.stringify({
+        schema: 'prechunked-file-v1',
+        chunks: chunks.map((chunk) => ({
+          content: chunk.content,
+          page: chunk.page ?? null,
+          sectionTitle: chunk.sectionTitle ?? null,
+          source: chunk.source ?? null,
+        })),
+        companionPdfBytes: companionPdf.byteLength,
+      }), 'utf8');
+      return Buffer.concat([
+        metadata,
+        Buffer.from('\n--companion-pdf--\n', 'utf8'),
+        companionPdf,
+      ]).toString('hex');
+    };
 
     const depsA = makeDeps({ hasher: makeHashing() });
-    const resultAHash = Buffer.concat([
-      Buffer.from(CHUNKS.map((c) => c.content).join('\n')),
-      pdf,
-    ]).toString('hex');
+    const resultAHash = canonicalHashInput(CHUNKS, pdf);
     depsA.documents.findByName = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({
       id: 1, fileName: 'doc.md', fileHash: resultAHash, uploadedBy: 'user',
       uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
@@ -225,10 +294,7 @@ describe('ingestPrechunked', () => {
     const CHUNKS_CHANGED: typeof CHUNKS = [{ content: 'Completely different body.', page: 1 }];
     const depsB = makeDeps({ hasher: makeHashing() });
     depsB.embeddings = { embed: vi.fn(), embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]) };
-    const expectedHash = Buffer.concat([
-      Buffer.from('Completely different body.'),
-      pdf,
-    ]).toString('hex');
+    const expectedHash = canonicalHashInput(CHUNKS_CHANGED, pdf);
     depsB.documents.findByName = vi.fn().mockResolvedValueOnce({
       id: 1, fileName: 'doc.md', fileHash: 'stored-hash-from-previous-upload', uploadedBy: 'user',
       uploadedAt: new Date(), storageKey: null, ingestStatus: 'done' as const, deletedAt: null,
@@ -245,6 +311,53 @@ describe('ingestPrechunked', () => {
       expect(resultB.value.status).not.toBe('unchanged');
       expect(depsB.chunks.insertMany).toHaveBeenCalled();
     }
+  });
+
+  it('changes the dedup hash when chunk boundaries or provenance metadata change', async () => {
+    const hashInputs: Buffer[] = [];
+    let findCount = 0;
+    const deps = makeDeps({
+      documents: {
+        ...makeDeps().documents,
+        findByName: vi.fn().mockImplementation(async () => {
+          findCount += 1;
+          if (findCount === 1) return null;
+          return {
+            id: 1,
+            fileName: 'doc.md',
+            fileHash: `hash-${Math.max(1, Math.ceil((findCount - 1) / 2))}`,
+            uploadedBy: 'user',
+            uploadedAt: new Date(),
+            storageKey: null,
+            ingestStatus: 'done' as const,
+            deletedAt: null,
+          };
+        }),
+      },
+      hasher: {
+        sha256: vi.fn((value: Buffer) => {
+          hashInputs.push(value);
+          return `hash-${hashInputs.length}`;
+        }),
+      },
+    });
+    const first: ParsedChunk[] = [
+      { content: 'left\n', page: 1, sectionTitle: 'Intro', source: 'manual.pdf' },
+      { content: 'right', page: 2, sectionTitle: 'Details', source: 'manual.pdf' },
+    ];
+    const second: ParsedChunk[] = [
+      { content: 'left', page: 1, sectionTitle: 'Intro', source: 'manual.pdf' },
+      { content: '\nright', page: 99, sectionTitle: 'Details', source: 'manual.pdf' },
+    ];
+
+    const firstResult = await ingestPrechunked({ fileName: 'doc.md', chunks: first, uploadedBy: 'user' }, deps);
+    const secondResult = await ingestPrechunked({ fileName: 'doc.md', chunks: second, uploadedBy: 'user' }, deps);
+
+    expect(firstResult.ok).toBe(true);
+    expect(secondResult.ok).toBe(true);
+    expect(hashInputs).toHaveLength(2);
+    expect(hashInputs[0]).not.toEqual(hashInputs[1]);
+    if (secondResult.ok) expect(secondResult.value.status).toBe('updated');
   });
 
   it('returns a conflict and deletes the blob when a concurrent writer wins the name', async () => {

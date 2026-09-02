@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AppConfig } from '@app/domain';
-import { buildSystemPrompt } from './build-system-prompt';
+import { buildStableSystemPrompt, buildSystemPrompt } from './build-system-prompt';
 import type { RetrievedChunk } from '../rag/search';
 
 function makeCfg(): AppConfig {
@@ -86,5 +86,12 @@ describe('buildSystemPrompt', () => {
     const customAt = prompt.indexOf('# Additional Instructions');
     const outOfScopeAt = prompt.indexOf('# Out-of-Scope Topics');
     expect(customAt).toBeGreaterThan(outOfScopeAt);
+  });
+
+  it('keeps the stable prefix byte-for-byte identical when retrieval changes', () => {
+    const stable = buildStableSystemPrompt(makeCfg());
+    const withPrefetch = buildSystemPrompt(makeCfg(), [prefetchChunk()]);
+    expect(withPrefetch.startsWith(`${stable}\n\n`)).toBe(true);
+    expect(buildStableSystemPrompt(makeCfg())).toBe(stable);
   });
 });

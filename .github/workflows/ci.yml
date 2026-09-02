@@ -94,6 +94,7 @@ jobs:
           SKIP_ENV_VALIDATION: '1'
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CURSOR_SIGNING_SECRET: ${{ secrets.CURSOR_SIGNING_SECRET }}
 
       # ---- E2E (DISABLED) ----------------------------------------------
       # E2E tests are disabled — Neon branch provisioning is flaky

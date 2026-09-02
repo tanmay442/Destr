@@ -3,14 +3,15 @@ import type {
   DocumentRepository, ChunkRepository, EmbeddingService,
   Hasher, PdfParser, TextSplitter, TransactionRunner,
   ContentParser, ChunkingStrategy, DocumentChunk, DocSummarizer,
-  IngestStatus,
+  IngestStatus, InsertChunkInput,
 } from '@app/domain';
 import { CCH_ENABLED, CCH_CONTEXT_CHARS, RESTORE_WINDOW_MS } from '@app/domain';
 
-interface IngestFileInput {
+export interface IngestFileInput {
   fileName: string;
   buffer: Buffer;
   uploadedBy: string;
+  signal?: AbortSignal | undefined;
 }
 
 export interface IngestResult {
@@ -154,6 +155,16 @@ function embeddingInput(c: DocumentChunk): string {
   return c.embeddingPrefix ? c.embeddingPrefix + c.content : c.content;
 }
 
+function embedBatch(
+  embeddings: EmbeddingService,
+  values: string[],
+  signal: AbortSignal | undefined,
+): Promise<number[][]> {
+  return signal === undefined
+    ? embeddings.embedBatch(values)
+    : embeddings.embedBatch(values, { signal });
+}
+
 function toPreparedRows(
   docChunks: DocumentChunk[],
   embeddings: number[][],
@@ -177,7 +188,7 @@ function toPreparedRows(
 
 /** Parse + split + embed as a single, reusable step (no DB writes). */
 export async function parseAndEmbed(
-  input: { fileName: string; buffer: Buffer },
+  input: { fileName: string; buffer: Buffer; signal?: AbortSignal | undefined },
   deps: ParseDeps,
 ): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
   let docChunks: DocumentChunk[];
@@ -210,7 +221,7 @@ export async function parseAndEmbed(
   if (hasParents && embeddable.length > 0) {
     let embedEmbeddings: number[][];
     try {
-      embedEmbeddings = await deps.embeddings.embedBatch(embeddable.map(embeddingInput));
+      embedEmbeddings = await embedBatch(deps.embeddings, embeddable.map(embeddingInput), input.signal);
     } catch (cause) {
       return err(new ExternalServiceError('Embedding API failed', cause));
     }
@@ -229,7 +240,7 @@ export async function parseAndEmbed(
 
   let embeddings: number[][];
   try {
-    embeddings = await deps.embeddings.embedBatch(docChunks.map(embeddingInput));
+    embeddings = await embedBatch(deps.embeddings, docChunks.map(embeddingInput), input.signal);
   } catch (cause) {
     return err(new ExternalServiceError('Embedding API failed', cause));
   }
@@ -238,6 +249,21 @@ export async function parseAndEmbed(
   }
 
   return ok({ chunks: docChunks.length, rows: toPreparedRows(docChunks, embeddings, 0) });
+}
+
+export async function replaceDocumentChunks(
+  chunks: Pick<ChunkRepository, 'deleteByDocumentId' | 'insertMany'> & {
+    replaceMany?: ((documentId: number, rows: InsertChunkInput[]) => Promise<void>) | undefined;
+  },
+  documentId: number,
+  rows: InsertChunkInput[],
+): Promise<void> {
+  if (chunks.replaceMany) {
+    await chunks.replaceMany(documentId, rows);
+    return;
+  }
+  await chunks.deleteByDocumentId(documentId);
+  await chunks.insertMany(rows);
 }
 
 /** Write the upsert-then-replace-chunks sequence. Exported so other ingest
@@ -259,8 +285,9 @@ export async function writeChunks(
     { resurrectDeleted: input.resurrectDeleted },
   );
   if (input.storageKey !== undefined) await documents.setStorageKey(row.id, input.storageKey);
-  await chunks.deleteByDocumentId(row.id);
-  await chunks.insertMany(
+  await replaceDocumentChunks(
+    chunks,
+    row.id,
     rows.map((r) => ({
       documentId: row.id,
       content: r.content,
@@ -283,10 +310,10 @@ export async function ingestFile(
   input: IngestFileInput,
   deps: IngestDeps,
 ): Promise<Result<IngestResult>> {
-  const { fileName, buffer, uploadedBy } = input;
+  const { fileName, buffer, uploadedBy, signal } = input;
   const fileHash = deps.hasher.sha256(buffer);
 
-  const parsed = await parseAndEmbed({ fileName, buffer }, deps);
+  const parsed = await parseAndEmbed({ fileName, buffer, signal }, deps);
   if (!parsed.ok) return parsed;
 
   const write = async (
@@ -327,7 +354,7 @@ export async function ingestFile(
 
 /** Parse/split/embed for an existing `queued` row; caller inserts chunks + flips status atomically. */
 export async function prepareIngest(
-  input: { documentId: number; fileName: string; buffer: Buffer },
+  input: { documentId: number; fileName: string; buffer: Buffer; signal?: AbortSignal | undefined },
   deps: ParseDeps,
 ): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
   const parsed = await parseAndEmbed(input, deps);

@@ -79,6 +79,38 @@ describe('ingestFile', () => {
     ]);
   });
 
+  it('passes the request abort signal through the synchronous embedding path', async () => {
+    const signal = new AbortController().signal;
+    const deps = makeDeps();
+
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user', signal },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(
+      ['Sample PDF text content.'],
+      { signal },
+    );
+  });
+
+  it('uses stable chunk replacement when the repository supports it', async () => {
+    const deps = makeDeps();
+    const replaceMany = vi.fn().mockResolvedValue(undefined);
+    deps.chunks.replaceMany = replaceMany;
+
+    const result = await ingestFile(
+      { fileName: 'test.pdf', buffer: Buffer.from('%PDF-1.4...'), uploadedBy: 'user' },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(replaceMany).toHaveBeenCalledWith(1, expect.any(Array));
+    expect(deps.chunks.deleteByDocumentId).not.toHaveBeenCalled();
+    expect(deps.chunks.insertMany).not.toHaveBeenCalled();
+  });
+
   it('replaces a same-name document in place without deleting the row', async () => {
     const deleteById = vi.fn().mockResolvedValue(undefined);
     const deleteByDocumentId = vi.fn().mockResolvedValue(undefined);

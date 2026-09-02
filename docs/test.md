@@ -8,10 +8,10 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **142 files** | Full local run against Docker Postgres: all passed, no skips |
-| **Total Test Cases** | **1,418 tests** | Full local run against Docker Postgres: all passed, no skips |
-| **Architecture Modules** | **536 modules** | 1,400 dependencies checked with **0 violations** |
-| **Suite Run Duration** | **~26s** | Full suite execution including transform, setup, import, and runner |
+| **Total Test Files** | **164 files** | Full local run against Docker Postgres: all passed, no skips |
+| **Total Test Cases** | **1,534 tests** | Full local run against Docker Postgres: all passed, no skips |
+| **Architecture Modules** | **581 modules** | 1,550 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~19s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
@@ -78,13 +78,10 @@ Multi-implementation ports are validated through **shared contract-assertion har
 
 ---
 
-## Core & Parity Test Suites
+## Core & Supporting Test Suites
 
 - **Composition Singleton (`packages/infrastructure/src/core.test.ts`)**:
   Validates `buildCoreDeps()` singleton semantics, default environment memoization, and custom environment isolation.
-
-- **Chat Turn Use-Case Parity (`src/app/api/chat/chat-turn.parity.test.ts`)**:
-  Validates 100% side-by-side behavioral parity between legacy inline chat routing and the decoupled `@app/application/chat` turn use-case, including a persistence case asserting both paths save identical chat history.
 
 - **Answer Cache Golden Key (`src/app/api/chat/cache-key.golden.test.ts`)**:
   Pins cache key generation stability across text normalization, model changes, and configuration fingerprints.
@@ -95,6 +92,8 @@ Multi-implementation ports are validated through **shared contract-assertion har
 
 - **Chat Route & Tools (`src/app/api/chat/route.test.ts`)**:
   Auth checks (401/429), `searchDocumentation` and `createKnowledgeTicket` tool execution, citation emission, duplicate-result filtering across repeated searches, first-turn prefetching, and answer cache hit/miss semantics.
+- **Chat Turn (`packages/application/src/chat/__tests__/chat-turn.test.ts`):**
+  Turn-result idempotency, request-fingerprint conflicts, bounded history, cache leases, guardrails, ticket limits, and request-abort propagation.
 - **Grounding Evidence (`packages/application/src/chat/__tests__/grounding-evidence.test.ts`)**:
   Per-turn chunk identity deduplication, fallback identity for incomplete test data, bounded model/grader context, and citation aggregation.
 - **Agentic Retrieval (`packages/application/src/rag/agentic-search.test.ts`)**:
@@ -106,6 +105,10 @@ Multi-implementation ports are validated through **shared contract-assertion har
   - **Quality review queue (`packages/infrastructure/src/db/__tests__/quality-reviews-repo.test.ts`)**: verdicts (`good`/`bad`/`docs_missing`), one review per turn per reviewer, sampled-turn listing.
 - **Admin Document & Ingestion (`packages/application/src/admin/__tests__/`)**:
   Soft delete, restoration, re-ingest pagination, pre-chunked Markdown parsing, CCH header injection.
+- **Admin List Cursor Pagination (`packages/domain/src/pagination.test.ts`, `packages/application/src/admin/__tests__/pagination.test.ts`, `packages/infrastructure/src/db/__tests__/repositories.test.ts`, `src/components/admin/Pagination.test.tsx`)**:
+  Cursor validation and resource-kind checks, compound-key tie handling, forward and backward keyset traversal, offset compatibility, and cursor links that preserve filters.
+- **Signed Filter-Bound Cursor v2 (`packages/infrastructure/src/pagination/signed-cursor.test.ts`, `packages/infrastructure/src/config/cursor.test.ts`)**:
+  HMAC round trips, authenticated totals, one-byte and signature tampering, resource/filter/sort mismatches, expiry, previous-key rotation, explicit unsigned-v1 rejection, maximum length, and random-input totality. The domain context test also proves normalized filter key order and whitespace produce one binding while changed filters do not.
 - **Ingest Status Poller (`src/app/api/admin/documents/status/route.test.ts`)**:
   Auth gating and single aggregate pending-count query (`countPendingIngest`), replacing the previous full-table walk.
 - **Ticket Management (`packages/application/src/admin/__tests__/tickets.test.ts`)**:
@@ -140,14 +143,24 @@ When writing new tests that assert "absent credential" errors, always stub the v
 
 ### Database-Backed Tests (local setup)
 
-DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`, the db integration/repositories tests) probe `DATABASE_URL` with a `SELECT 1` and **skip** when it is unset or unreachable — they never fail on a machine without a database. To run them locally:
+DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`, the db integration/repositories tests, `pgvector-contracts`, `audit-backfill`) probe `DATABASE_URL` with a `SELECT 1` and **skip** when it is unset or unreachable — they never fail on a machine without a database. Without a database `pnpm test` reports `158 passed | 6 skipped (164)` and `78 skipped` tests — the 78 are 40× `pgvector-contracts`, 12× `chat-history`, 11× `chat-events`, 4× `audit-backfill`, 4× `db-integration`, 4× `settings-repo`, 1× `query-cancellation`, 1× `chat-feedback`, 1× `quality-reviews`. To run the full suite pass `DATABASE_URL`:
 
 ```bash
+# one-liner (no shell export needed):
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test
+
+# full local flow for a fresh clone (DB password matches docker-compose.yml / .env.example):
 pnpm dev:db                 # docker compose up -d db (pgvector on 127.0.0.1:5432)
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm db:migrate   # apply drizzle/ migrations (needs DATABASE_URL or MIGRATION_DATABASE_URL)
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test  # 164 passed | 1534 passed, 0 skipped
+# or export once and reuse:
 export DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent
-MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate   # apply drizzle/ migrations
-DATABASE_URL=$DATABASE_URL pnpm test  # DB-gated suites now execute instead of skipping
+MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate
+pnpm test
+pnpm gate                   # test + typecheck + lint + arch (DB-gated tests now run)
 ```
+
+The chat-event purge unit tests cover ordered `FOR UPDATE SKIP LOCKED` selection and child-delete rollback with an injected transaction client. The live purge/concurrency checks in `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` remain database-gated; a skipped suite is not evidence that PostgreSQL locking or cancellation passed. `packages/infrastructure/src/db/query-cancellation.test.ts` covers lazy pre-abort behavior and, when `DATABASE_URL` is reachable, repeats a live node-postgres `pg_sleep(10)` cancellation, checks `pg_stat_activity`, and verifies the pool remains healthy. Neon uses the documented statement-timeout fallback rather than claiming backend-PID cancellation.
 
 Vitest loads `.env.test` when present, and its values take precedence over inherited shell variables so the branch created by `test:ci` is tested. Remove `.env.test` to use the local shell URL above. The password matches `.env.example` / `docker-compose.yml`. Migration tooling prefers `MIGRATION_DATABASE_URL` and falls back to `DATABASE_URL`; against a fresh local volume either works, since the compose user owns the database.
 

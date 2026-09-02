@@ -1,6 +1,11 @@
-/** Env-independent defaults. Re-exported at runtime by `@app/infrastructure/config`; keep both in sync. */
+/** Env-independent defaults consumed by domain and infrastructure configuration. */
 export const CHAT_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 export const CHAT_MAX_BODY_BYTES = 1_000_000;
+export const CHAT_FILE_MAX_URL_LENGTH = 2_048;
+export const CHAT_FILE_MAX_FILENAME_LENGTH = 255;
+export const CHAT_FILE_MAX_PER_MESSAGE = 8;
+export const CHAT_FILE_MAX_PER_REQUEST = 16;
+export const CHAT_FILE_METADATA_MAX_BYTES = 64_000;
 export const UPLOAD_CHUNKED_MAX_MD_BYTES = 25_000_000;
 export const UPLOAD_CHUNKED_MAX_PDF_BYTES = 100_000_000;
 export const BLOB_GET_MAX_BYTES = UPLOAD_CHUNKED_MAX_PDF_BYTES;
@@ -17,7 +22,12 @@ export const EMBEDDING_BATCH_CONCURRENCY = 3;
 export const EMBEDDING_BATCH_SIZE = 50;
 export const MAX_AUDIT_LIMIT = 200;
 export const MAX_LIST_LIMIT = 100;
+/** Maximum offset accepted by compatibility/legacy list pagination. */
+export const MAX_LEGACY_LIST_OFFSET = 100_000;
 export const MAX_TICKET_NOTES_LENGTH = 10_000;
+export const TICKET_ID_PREFIX = 'TKT-';
+/** New ticket IDs use 64 bits of entropy; legacy 8- and 12-hex IDs remain valid. */
+export const TICKET_ID_HEX_LENGTH = 16;
 export const INGEST_CHUNK_SIZE = 800;
 export const PARENT_CHUNK_SIZE = 1800;
 export const CHILD_CHUNK_SIZE = 400;
@@ -54,3 +64,4 @@ export const MAX_STORED_MESSAGE_BYTES = 256_000;
 export const MAX_CONVERSATION_TITLE_LENGTH = 120;
 export const MAX_RESUME_MESSAGES = 200;
 export const CHAT_HISTORY_RATE_LIMIT = { limit: 60, windowMs: 60_000 };
+export const MAX_DURATION_MS = 60_000;

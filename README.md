@@ -24,6 +24,8 @@
 
 **Destr** is an enterprise-grade RAG knowledge agent featuring tool-calling chat, hybrid vector + lexical search, grounded citation tracking, agentic retrieval fallback (empty results trigger a fresh rewrite-and-retry pass before an out-of-domain wall replaces empty replies), and real-time administrative telemetry. Answer quality is continuously monitored via sampled LLM judges plus an admin review queue. Chats persist per signed-in account across sessions and devices, with automatic expiry on an admin-configured retention window.
 
+Destr is single-tenant by deployment. Each customer deployment must use separate Clerk, Postgres, blob storage, Redis, and queue resources. Documents, settings, administration, and analytics are deployment-wide.
+
 ---
 
 ## Quick Start
@@ -88,9 +90,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-Latest full local run against Docker Postgres:
-- **142 test files** and **1,418 tests**, all passing with no skips.
-- **536 architecture modules** and **1,400 dependencies** checked with **0 violations** (`pnpm arch`).
+Latest full local run against Docker Postgres (`DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test`):
+- **164 test files** and **1,534 tests**, all passing with no skips (without `DATABASE_URL`, 78 DB-gated tests across 9 suites are skipped: `158 passed | 6 skipped`).
+- **581 architecture modules** and **1,550 dependencies** checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 

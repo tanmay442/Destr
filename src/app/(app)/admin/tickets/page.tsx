@@ -27,6 +27,8 @@ export default async function TicketsPage({
     assignee?: string;
     q?: string;
     page?: string;
+    cursor?: string;
+    before?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -34,7 +36,9 @@ export default async function TicketsPage({
   const assignee = params.assignee?.trim() || undefined;
   const search = params.q?.trim() || undefined;
   const page = parsePageParam(params.page);
-  const offset = (page - 1) * PAGE_SIZE;
+  const cursor = params.cursor;
+  const before = params.before;
+  const offset = cursor === undefined && before === undefined ? (page - 1) * PAGE_SIZE : undefined;
   const comp = getComposition();
   const session = await getAppSession();
   const actorId = session?.user.id ?? '';
@@ -44,7 +48,9 @@ export default async function TicketsPage({
       assignee: assignee === undefined ? undefined : assignee,
       search,
       limit: PAGE_SIZE,
-      offset,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(offset !== undefined ? { offset } : {}),
       actorId,
     }),
     comp.listUsers({ limit: 100 }),
@@ -212,6 +218,8 @@ export default async function TicketsPage({
         totalPages={totalPages}
         total={result.total}
         pathname="/admin/tickets"
+        nextCursor={result.nextCursor}
+        previousCursor={result.previousCursor}
         query={{ status, assignee, q: search }}
       />
     </section>

@@ -1,46 +1,54 @@
 import { Pool as NeonPool } from '@neondatabase/serverless';
 import pg from 'pg';
 
-const POOL_OPTS = {
-  max: 20,
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 10_000,
-} as const;
+import {
+  defaultDatabaseEnv,
+  parseDatabaseConfig,
+  parseDatabaseConnection,
+  type DatabaseConfig,
+} from '../config/database';
 
-export function redactDatabaseUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    parsed.password = '';
-    return parsed.toString();
-  } catch {
-    return url.replace(/:[^@]*@/, ':****@');
-  }
-}
+/**
+ * Upper bound for one runtime statement. Request abort is not propagated by
+ * Drizzle's `execute` API, so this server-side backstop prevents a detached
+ * query from occupying a backend indefinitely. Long-running maintenance jobs
+ * should use their own owner/migration connection rather than this pool.
+ */
+export const DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS = 30_000;
 
 // Neon's serverless driver can't reach plain TCP Postgres; route Neon URLs to it, everything else via `pg`.
-export function isNeonUrl(url: string): boolean {
+export function isPooledNeonUrl(url: string): boolean {
   if (!url) return false;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid DATABASE_URL: "${redactDatabaseUrl(url)}". Expected a valid postgres connection string.`);
-  }
-  const host = parsed.hostname;
-  return host.endsWith('.neon.tech') || host.endsWith('.neon.app');
+  return parseDatabaseConnection(url)?.isPooledNeon ?? false;
 }
 
-function buildNeonPool(url: string): NeonPool {
+export function isNeonUrl(url: string): boolean {
+  if (!url) return false;
+  return parseDatabaseConnection(url)?.isNeon ?? false;
+}
+
+export function enforceNeonTlsVerification(url: string): string {
+  if (!url) return url;
+  return parseDatabaseConnection(url)?.connectionString ?? url;
+}
+
+function buildNeonPool(config: DatabaseConfig & { databaseUrl: string }): NeonPool {
   return new NeonPool({
-    connectionString: url,
-    ...POOL_OPTS,
+    connectionString: config.databaseUrl,
+    max: config.poolMax,
+    statement_timeout: DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
   });
 }
 
-function buildPgPool(url: string): pg.Pool {
+function buildPgPool(config: DatabaseConfig & { databaseUrl: string }): pg.Pool {
   return new pg.Pool({
-    connectionString: url,
-    ...POOL_OPTS,
+    connectionString: config.databaseUrl,
+    max: config.poolMax,
+    statement_timeout: DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
   });
 }
 
@@ -68,15 +76,39 @@ export function buildMissingPool(): NeonPool {
 
 const pools = new Map<string, NeonPool | pg.Pool>();
 
-export function getPool(url: string): NeonPool | pg.Pool {
-  const existing = pools.get(url);
+function hasDatabaseUrl(config: DatabaseConfig): config is DatabaseConfig & { databaseUrl: string } {
+  return typeof config.databaseUrl === 'string' && config.databaseUrl !== '';
+}
+
+/**
+ * Pool construction depends on more than the connection string. Keep each
+ * effective pool configuration isolated so a later caller cannot inherit a
+ * previously constructed pool with a different capacity or driver policy.
+ */
+function poolCacheKey(config: DatabaseConfig & { databaseUrl: string }): string {
+  return JSON.stringify({
+    databaseUrl: config.databaseUrl,
+    poolMax: config.poolMax,
+    driver: config.isNeon ? 'neon' : 'pg',
+    isPooledNeon: config.isPooledNeon,
+    sslMode: config.sslMode ?? null,
+  });
+}
+
+export function getPool(input: string | DatabaseConfig): NeonPool | pg.Pool {
+  const config = typeof input === 'string'
+    ? parseDatabaseConfig(defaultDatabaseEnv, { databaseUrl: input })
+    : input;
+  if (!hasDatabaseUrl(config)) return buildMissingPool();
+  const cacheKey = poolCacheKey(config);
+  const existing = pools.get(cacheKey);
   if (existing) return existing;
-  const pool = isNeonUrl(url)
-    ? (buildNeonPool(url) as unknown as NeonPool | pg.Pool)
-    : (buildPgPool(url) as unknown as NeonPool | pg.Pool);
-  pools.set(url, pool);
+  const pool = config.isNeon ? buildNeonPool(config) : buildPgPool(config);
+  pools.set(cacheKey, pool);
   return pool;
 }
+
+export { redactDatabaseUrl } from '../config/database';
 
 export async function closePool(): Promise<void> {
   const openPools = [...pools.values()];
@@ -85,4 +117,3 @@ export async function closePool(): Promise<void> {
     openPools.map((pool) => (pool as unknown as { end: () => Promise<void> }).end()),
   );
 }
-

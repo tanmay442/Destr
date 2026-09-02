@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ChatRequestSchema } from '../request-schema';
+import { ChatRequestSchema, createChatRequestSchema } from '../request-schema';
 
 describe('ChatRequestSchema multi-turn round-trip', () => {
   const baseMessage = (role: 'user' | 'assistant', parts: unknown[]) => ({
@@ -45,6 +45,7 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
   it('strips data-citation and data-guardrail control parts', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [
+        baseMessage('user', [{ type: 'text', text: 'question' }]),
         baseMessage('assistant', [
           { type: 'text', text: 'answer' },
           { type: 'data-citation', data: { similarity: 0.9, snippet: 'x' } },
@@ -54,12 +55,29 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     });
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.messages[0]!.parts).toEqual([{ type: 'text', text: 'answer' }]);
+    expect(result.data.messages[1]!.parts).toEqual([{ type: 'text', text: 'answer' }]);
+  });
+
+  it('allows historical assistant tool/data/control-only messages after a usable user message', () => {
+    const result = ChatRequestSchema.safeParse({
+      messages: [
+        baseMessage('user', [{ type: 'text', text: 'question' }]),
+        baseMessage('assistant', [
+          { type: 'tool-call', toolCallId: 't1', toolName: 'searchDocumentation', input: {} },
+          { type: 'data-citation', data: { similarity: 0.9, snippet: 'x' } },
+          { type: 'step-start' },
+        ]),
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.messages[1]!.parts).toEqual([]);
   });
 
   it('keeps reasoning and file parts', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [
+        baseMessage('user', [{ type: 'text', text: 'question' }]),
         baseMessage('assistant', [
           { type: 'reasoning', text: 'chain of thought' },
           { type: 'file', url: 'https://example.com/f.pdf', filename: 'f.pdf', mediaType: 'application/pdf' },
@@ -68,19 +86,102 @@ describe('ChatRequestSchema multi-turn round-trip', () => {
     });
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.messages[0]!.parts).toEqual([
+    expect(result.data.messages[1]!.parts).toEqual([
       { type: 'reasoning', text: 'chain of thought' },
       { type: 'file', url: 'https://example.com/f.pdf', filename: 'f.pdf', mediaType: 'application/pdf' },
     ]);
+  });
+
+  it('rejects unsafe file URLs and unsupported media types', () => {
+    const file = (url: string, mediaType = 'application/pdf') =>
+      baseMessage('user', [{ type: 'file', url, filename: 'f.pdf', mediaType }]);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://127.0.0.1/file')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://169.254.169.254/latest')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://[::ffff:127.0.0.1]/file')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://[::ffff:169.254.169.254]/latest')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://[::127.0.0.1]/file')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('http://[ff02::1]/file')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('https://user:pass@example.com/file')] }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ messages: [file('https://example.com/file', 'text/html')] }).success).toBe(false);
+  });
+
+  it('requires an explicitly trusted origin at the production parsing seam', () => {
+    const fileRequest = {
+      messages: [baseMessage('user', [
+        { type: 'file', url: 'https://files.example.com/f.pdf', filename: 'f.pdf', mediaType: 'application/pdf' },
+      ])],
+    };
+    expect(createChatRequestSchema(new Set()).safeParse(fileRequest).success).toBe(false);
+    expect(createChatRequestSchema(new Set(['https://files.example.com'])).safeParse(fileRequest).success).toBe(true);
+    expect(createChatRequestSchema(new Set(['https://other.example.com'])).safeParse(fileRequest).success).toBe(false);
+  });
+
+  it('bounds files per message and per request', () => {
+    const file = (index: number) => ({
+      type: 'file',
+      url: `https://example.com/${index}.pdf`,
+      filename: `${index}.pdf`,
+      mediaType: 'application/pdf',
+    });
+    expect(ChatRequestSchema.safeParse({
+      messages: [baseMessage('user', Array.from({ length: 9 }, (_, index) => file(index)))],
+    }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({
+      messages: [
+        baseMessage('user', Array.from({ length: 8 }, (_, index) => file(index))),
+        baseMessage('assistant', Array.from({ length: 8 }, (_, index) => file(index + 8))),
+      ],
+    }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({
+      messages: [
+        baseMessage('user', Array.from({ length: 8 }, (_, index) => file(index))),
+        baseMessage('assistant', Array.from({ length: 8 }, (_, index) => file(index + 8))),
+        baseMessage('user', [file(17)]),
+      ],
+    }).success).toBe(false);
   });
 
   it('strips rather than rejects an unsupported part type', () => {
     const result = ChatRequestSchema.safeParse({
       messages: [baseMessage('user', [{ type: 'bogus-part', text: 'x' }])],
     });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a last user message that becomes empty after unsupported parts are stripped', () => {
+    const result = ChatRequestSchema.safeParse({
+      messages: [
+        baseMessage('user', [{ type: 'text', text: 'earlier question' }]),
+        baseMessage('assistant', [{ type: 'text', text: 'answer' }]),
+        baseMessage('user', [
+          { type: 'tool-call', toolCallId: 't2', toolName: 'searchDocumentation', input: {} },
+          { type: 'data-citation', data: { similarity: 0.9, snippet: 'not user input' } },
+          { type: 'step-start' },
+        ]),
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a last user message containing a file without text', () => {
+    const result = ChatRequestSchema.safeParse({
+      messages: [baseMessage('user', [{
+        type: 'file',
+        url: 'https://example.com/f.pdf',
+        filename: 'f.pdf',
+        mediaType: 'application/pdf',
+      }])],
+    });
     expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.messages[0]!.parts).toEqual([]);
+  });
+
+  it('rejects a request without any user message or usable user content', () => {
+    expect(ChatRequestSchema.safeParse({
+      messages: [baseMessage('assistant', [{ type: 'text', text: 'history' }])],
+    }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({
+      messages: [baseMessage('user', [{ type: 'reasoning', text: 'hidden' }])],
+    }).success).toBe(false);
   });
 
   it('rejects an empty messages array', () => {

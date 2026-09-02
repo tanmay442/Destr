@@ -1,30 +1,47 @@
-import { eq, desc, ilike, or, sql, isNull, and, lt } from 'drizzle-orm';
+import { eq, desc, asc, gt, ilike, or, sql, isNull, and, lt } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { db } from './client';
 import {
   documents,
-  chunks,
   tickets,
   users,
   auditEvents,
   auditDeadLetter,
-  chatEvents,
-  chatConversations,
-  qualityReviews,
-  appSettings,
   type Document,
 } from './schema';
-import type { TicketRow, UserRow, IngestStatus, AuditEventInput, AuditEventRecord, AuditKind, AuditListFilter, TicketResponseTimes, ChatEventRange } from '@app/domain';
-import { ValidationError, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT, logger } from '@app/domain';
+import type {
+  AdminListCursor,
+  TicketRow,
+  UserRow,
+  IngestStatus,
+  AuditEventInput,
+  AuditEventRecord,
+  AuditKind,
+  AuditListFilter,
+  TicketResponseTimes,
+  ChatEventRange,
+  DocumentListCursor,
+  Hasher,
+  TicketListCursor,
+  UserListCursor,
+  CursorContext,
+  ListCursorCodec,
+  ListCursorPayload,
+} from '@app/domain';
+import { ConflictError, ValidationError, MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT, MAX_AUDIT_LIMIT } from '@app/domain';
 import { createChunkStore, countChunksForDocuments, countChunksForAll } from './chunk-store';
+import { defaultHasher } from './stable-identities';
 import { createVectorSearch } from './vector-search';
 import { createLexicalSearch } from './lexical-search';
 import { resolveVectorDim } from './schema-vector';
 import { invalidateRoleCache } from '../auth/role-cache';
+import { toSafeDatabaseId } from './safe-id';
 
 export { searchChunksByVector } from './vector-search';
 export { searchChunksByLexical } from './lexical-search';
 export {
   insertChunks,
+  replaceChunks,
   getChunksByIds,
   getChunksByDocAndRange,
   getChunksByDocAndRanges,
@@ -37,14 +54,53 @@ export {
 
 type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-function whereAnd(parts: ReturnType<typeof eq>[]) {
+function whereAnd(parts: SQL[]) {
   if (parts.length === 0) return undefined;
   if (parts.length === 1) return parts[0];
   return and(...parts);
 }
 
+function requiredOr(...parts: SQL[]): SQL {
+  const condition = or(...parts);
+  if (condition === undefined) throw new Error('Expected at least one SQL condition');
+  return condition;
+}
+
+function requiredAnd(...parts: SQL[]): SQL {
+  const condition = and(...parts);
+  if (condition === undefined) throw new Error('Expected at least one SQL condition');
+  return condition;
+}
+
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
+}
+
+function encodeRepositoryCursor(
+  cursor: AdminListCursor,
+  codec: ListCursorCodec | undefined,
+  context: CursorContext | undefined,
+): string {
+  if (codec === undefined || context === undefined) {
+    throw new ValidationError('Signed cursor codec and context are required');
+  }
+  if (context.resource !== cursor.kind) {
+    throw new ValidationError('Signed cursor context does not match the resource');
+  }
+  const payload: ListCursorPayload = {
+    ...cursor,
+    filterFingerprint: context.filterFingerprint,
+    sort: context.sort,
+  };
+  return codec.encode(payload);
+}
+
+function toTicketRow(row: typeof tickets.$inferSelect): TicketRow {
+  return {
+    ...row,
+    id: toSafeDatabaseId(row.id, 'tickets.id'),
+    status: row.status as TicketRow['status'],
+  };
 }
 
 export async function findDocumentByName(
@@ -119,7 +175,6 @@ async function tryInsert(
   if (existing && existing.deletedAt != null && resurrectDeleted) {
     const existingId = existing.id;
     const resurrect = async () => {
-      await client.delete(chunks).where(eq(chunks.documentId, existingId));
       const [row] = await client
         .update(documents)
         .set({
@@ -347,19 +402,48 @@ export async function listDocuments(
     search?: string | undefined;
     includeDeleted?: boolean | undefined;
     limit: number;
-    offset: number;
+    offset?: number | undefined;
+    cursor?: DocumentListCursor | undefined;
+    before?: DocumentListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
   },
   client: Client = db,
-): Promise<{ documents: Array<Document & { hasBlob: boolean }>; total: number }> {
-  const whereParts = [] as ReturnType<typeof eq>[];
-  if (!opts.includeDeleted) whereParts.push(isNull(documents.deletedAt));
-  if (opts.search) whereParts.push(ilike(documents.fileName, `%${escapeLikePattern(opts.search)}%`));
-  const where = whereAnd(whereParts);
+): Promise<{
+  documents: Array<Document & { hasBlob: boolean }>;
+  total: number;
+  nextCursor: string | null;
+  previousCursor: string | null;
+}> {
+  if (opts.cursor !== undefined && opts.before !== undefined) {
+    throw new ValidationError('Only one pagination cursor may be provided');
+  }
+  const filterParts: SQL[] = [];
+  if (!opts.includeDeleted) filterParts.push(isNull(documents.deletedAt));
+  if (opts.search) filterParts.push(ilike(documents.fileName, `%${escapeLikePattern(opts.search)}%`));
+  const filter = whereAnd(filterParts);
+  const pageParts = [...filterParts];
+  const isBackward = opts.before !== undefined;
+  const position = opts.cursor ?? opts.before;
+  if (position !== undefined) {
+    pageParts.push(
+      isBackward
+        ? requiredOr(
+            gt(documents.uploadedAt, position.sortAt),
+            requiredAnd(eq(documents.uploadedAt, position.sortAt), gt(documents.id, position.id)),
+          )
+        : requiredOr(
+            lt(documents.uploadedAt, position.sortAt),
+            requiredAnd(eq(documents.uploadedAt, position.sortAt), lt(documents.id, position.id)),
+          ),
+    );
+  }
+  const pageFilter = whereAnd(pageParts);
   const limit = Math.min(Math.max(opts.limit, 1), 500);
-  const offset = Math.max(opts.offset, 0);
-  const rows = await client
+  const query = client
     .select({
       id: documents.id,
+      documentUid: documents.documentUid,
       fileName: documents.fileName,
       fileHash: documents.fileHash,
       uploadedBy: documents.uploadedBy,
@@ -371,43 +455,103 @@ export async function listDocuments(
       deletedAt: documents.deletedAt,
     })
     .from(documents)
-    .where(where)
-    .orderBy(desc(documents.uploadedAt), desc(documents.id))
-    .limit(limit)
-    .offset(offset);
-  const total = (await client
+    .where(pageFilter)
+    .orderBy(
+      ...(isBackward
+        ? [asc(documents.uploadedAt), asc(documents.id)]
+        : [desc(documents.uploadedAt), desc(documents.id)]),
+    )
+    .limit(limit + 1);
+  const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+    ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
+    : await query;
+  const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+  const hasExtra = queriedRows.length > limit;
+  const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
+  const total = position?.total ?? (await client
     .select({ count: sql<number>`count(*)::int` })
     .from(documents)
-    .where(where))[0]?.count ?? 0;
-  return { documents: rows as unknown as Array<Document & { hasBlob: boolean }>, total };
+    .where(filter))[0]?.count ?? 0;
+  const firstRow = pageRows[0];
+  const lastRow = pageRows[pageRows.length - 1];
+  const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+  const hasPrevious = isBackward
+    ? hasExtra
+    : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+  return {
+    documents: pageRows as unknown as Array<Document & { hasBlob: boolean }>,
+    total,
+    nextCursor: hasNext && lastRow
+      ? encodeRepositoryCursor(
+          { kind: 'documents', sortAt: lastRow.uploadedAt, id: lastRow.id, total },
+          opts.cursorCodec,
+          opts.cursorContext,
+        )
+      : null,
+    previousCursor: hasPrevious && firstRow
+      ? encodeRepositoryCursor(
+          { kind: 'documents', sortAt: firstRow.uploadedAt, id: firstRow.id, total },
+          opts.cursorCodec,
+          opts.cursorContext,
+        )
+      : null,
+  };
 }
 
 export const ticketRepo = {
   async findByTicketId(ticketId: string, client: Client = db): Promise<TicketRow | null> {
     const row = await client.query.tickets.findFirst({ where: eq(tickets.ticketId, ticketId) });
-    return (row as TicketRow | undefined) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async findByTicketIdForUpdate(ticketId: string, client: Client = db): Promise<TicketRow | null> {
     const [row] = await client.select().from(tickets).where(eq(tickets.ticketId, ticketId)).for('update');
-    return (row as TicketRow | undefined) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async list(opts: {
     status?: 'created' | 'in_progress' | 'closed' | undefined;
     assignee?: string | null | undefined;
     search?: string | undefined;
     limit: number;
-    offset: number;
-  }, client: Client = db): Promise<{ rows: TicketRow[]; total: number }> {
-    const limit = Math.min(Math.max(opts.limit, 1), 500);
-    const offset = Math.max(opts.offset, 0);
-    const whereParts = [] as ReturnType<typeof eq>[];
-    if (opts.status) whereParts.push(eq(tickets.status, opts.status));
-    if (opts.assignee !== undefined && opts.assignee !== null) {
-      whereParts.push(eq(tickets.assignedTo, opts.assignee));
+    offset?: number | undefined;
+    cursor?: TicketListCursor | undefined;
+    before?: TicketListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
+  }, client: Client = db): Promise<{
+    rows: TicketRow[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
+    if (opts.cursor !== undefined && opts.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
     }
-    if (opts.search) whereParts.push(ilike(tickets.issue, `%${escapeLikePattern(opts.search)}%`));
-    const where = whereAnd(whereParts);
-    const rows = await client
+    const limit = Math.min(Math.max(opts.limit, 1), 500);
+    const filterParts: SQL[] = [];
+    if (opts.status) filterParts.push(eq(tickets.status, opts.status));
+    if (opts.assignee !== undefined && opts.assignee !== null) {
+      filterParts.push(eq(tickets.assignedTo, opts.assignee));
+    }
+    if (opts.search) filterParts.push(ilike(tickets.issue, `%${escapeLikePattern(opts.search)}%`));
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = opts.before !== undefined;
+    const position = opts.cursor ?? opts.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              gt(tickets.createdAt, position.sortAt),
+              requiredAnd(eq(tickets.createdAt, position.sortAt), gt(tickets.id, position.id)),
+            )
+          : requiredOr(
+              lt(tickets.createdAt, position.sortAt),
+              requiredAnd(eq(tickets.createdAt, position.sortAt), lt(tickets.id, position.id)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
+    const query = client
       .select({
         id: tickets.id,
         ticketId: tickets.ticketId,
@@ -421,15 +565,48 @@ export const ticketRepo = {
         createdAt: tickets.createdAt,
       })
       .from(tickets)
-      .where(where)
-      .orderBy(desc(tickets.createdAt), desc(tickets.id))
-      .limit(limit)
-      .offset(offset);
-    const total = (await client
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [asc(tickets.createdAt), asc(tickets.id)]
+          : [desc(tickets.createdAt), desc(tickets.id)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+      ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(tickets)
-      .where(where))[0]?.count ?? 0;
-    return { rows: rows as unknown as TicketRow[], total };
+      .where(filter))[0]?.count ?? 0;
+    const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+    const safePageRows = pageRows.map((row) => toTicketRow(row));
+    const firstSafeRow = safePageRows[0];
+    const lastSafeRow = safePageRows[safePageRows.length - 1];
+    return {
+      rows: safePageRows,
+      total,
+      nextCursor: hasNext && lastSafeRow
+        ? encodeRepositoryCursor(
+            { kind: 'tickets', sortAt: lastSafeRow.createdAt, id: lastSafeRow.id, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
+        : null,
+      previousCursor: hasPrevious && firstSafeRow
+        ? encodeRepositoryCursor(
+            { kind: 'tickets', sortAt: firstSafeRow.createdAt, id: firstSafeRow.id, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
+        : null,
+    };
   },
   async latest(client: Client = db): Promise<{ id: number; ticketId: string } | null> {
     const [latest] = await client
@@ -437,17 +614,19 @@ export const ticketRepo = {
       .from(tickets)
       .orderBy(desc(tickets.id))
       .limit(1);
-    return latest ?? null;
+    return latest
+      ? { id: toSafeDatabaseId(latest.id, 'tickets.id'), ticketId: latest.ticketId }
+      : null;
   },
   async insert(input: { ticketId: string; userId: string; name: string; email: string; issue: string }, client: Client = db): Promise<TicketRow> {
     const [row] = await client.insert(tickets).values(input).returning();
     if (!row) throw new Error('Failed to insert ticket');
-    return row as TicketRow;
+    return toTicketRow(row);
   },
   async update(ticketId: string, patch: Partial<Pick<TicketRow, 'status' | 'assignedTo' | 'notes'>>, client: Client = db): Promise<TicketRow | null> {
     if (Object.keys(patch).length === 0) return null;
     const [row] = await client.update(tickets).set(patch).where(eq(tickets.ticketId, ticketId)).returning();
-    return (row as TicketRow | null) ?? null;
+    return row ? toTicketRow(row) : null;
   },
   async countAll(client: Client = db): Promise<number> {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(tickets);
@@ -526,76 +705,6 @@ function median(values: number[]): number {
   return Math.round(value);
 }
 
-// Rebinding an email to a new clerk id reassigns every record owned by the old
-// identity (documents, tickets, chats, audit trail, settings). Only adopt a row
-// when the email is verified AND the row is provably fresh; otherwise fail
-// closed so recycled emails can never inherit another account's data or role.
-async function rebindEmailIdentity(
-  client: Client,
-  input: { clerkUserId: string; email: string; name?: string | null; imageUrl?: string | null; emailVerified?: boolean | undefined },
-): Promise<UserRow> {
-  const existing = await client.query.users.findFirst({ where: eq(users.email, input.email) });
-  if (!existing) {
-    logger.error('[userRepo] email-conflict rebind refused: conflicting row no longer exists', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to another account; refusing to reassign it.`);
-  }
-  if (existing.clerkUserId === input.clerkUserId) return existing as UserRow;
-  if (input.emailVerified !== true) {
-    logger.error('[userRepo] email-conflict rebind refused: email not verified', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-      existingClerkUserId: existing.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} and email verification is not confirmed; refusing to reassign the account.`);
-  }
-  if (await userHasOwnedHistory(client, existing.clerkUserId)) {
-    logger.error('[userRepo] email-conflict rebind refused: existing account owns data', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-      existingClerkUserId: existing.clerkUserId,
-    });
-    throw new Error(`Cannot sync Clerk user ${input.clerkUserId}: email ${input.email} is already bound to ${existing.clerkUserId} which owns data; refusing to reassign its history.`);
-  }
-  const [row] = await client
-    .update(users)
-    .set({
-      clerkUserId: input.clerkUserId,
-      email: input.email,
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl } : {}),
-    })
-    .where(eq(users.email, input.email))
-    .returning();
-  if (!row) {
-    logger.error('[userRepo] email-conflict rebind failed: conflicting row vanished before update', {
-      email: input.email,
-      clerkUserId: input.clerkUserId,
-    });
-    throw new Error(`Failed to reassign email ${input.email} to Clerk user ${input.clerkUserId}.`);
-  }
-  return row as UserRow;
-}
-
-async function userHasOwnedHistory(client: Client, clerkUserId: string): Promise<boolean> {
-  if (await client.query.documents.findFirst({ where: eq(documents.uploadedBy, clerkUserId) })) return true;
-  if (await client.query.tickets.findFirst({ where: eq(tickets.userId, clerkUserId) })) return true;
-  if (await client.query.chatEvents.findFirst({ where: eq(chatEvents.userId, clerkUserId) })) return true;
-  if (await client.query.chatConversations.findFirst({ where: eq(chatConversations.userId, clerkUserId) })) return true;
-  if (await client.query.qualityReviews.findFirst({ where: eq(qualityReviews.reviewerId, clerkUserId) })) return true;
-  if (
-    await client.query.auditEvents.findFirst({
-      where: or(
-        eq(auditEvents.actorId, clerkUserId),
-        and(eq(auditEvents.targetType, 'user'), eq(auditEvents.targetId, clerkUserId)),
-      ),
-    })
-  ) return true;
-  return (await client.query.appSettings.findFirst({ where: eq(appSettings.updatedBy, clerkUserId) })) != null;
-}
-
 export const userRepo = {
   async upsertFromClerk(input: {
     clerkUserId: string;
@@ -635,7 +744,9 @@ export const userRepo = {
       const wrapped = err as { code?: string; constraint?: string; cause?: { code?: string; constraint?: string } };
       const pgErr = wrapped.code === '23505' ? wrapped : wrapped.cause;
       if (pgErr?.code === '23505' && pgErr.constraint === 'users_email_unique') {
-        return rebindEmailIdentity(client, input);
+        throw new ConflictError(
+          'This email address is already associated with another account; automatic identity rebinding is disabled.',
+        );
       }
       throw err;
     }
@@ -673,28 +784,96 @@ export const userRepo = {
   async touchLastSeen(clerkUserId: string, client: Client = db): Promise<void> {
     await client.update(users).set({ lastSeenAt: sql`now()` }).where(eq(users.clerkUserId, clerkUserId));
   },
-  async list(opts: { search?: string | undefined; limit: number; offset: number }, client: Client = db): Promise<{ rows: UserRow[]; total: number }> {
+  async list(opts: {
+    search?: string | undefined;
+    limit: number;
+    offset?: number | undefined;
+    cursor?: UserListCursor | undefined;
+    before?: UserListCursor | undefined;
+    cursorCodec?: ListCursorCodec | undefined;
+    cursorContext?: CursorContext | undefined;
+  }, client: Client = db): Promise<{
+    rows: UserRow[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
+    if (opts.cursor !== undefined && opts.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
     const search = opts.search?.trim();
-    const where = search
-      ? or(
+    const filterParts: SQL[] = [];
+    if (search) {
+      filterParts.push(
+        requiredOr(
           ilike(users.email, `%${escapeLikePattern(search)}%`),
           ilike(users.name, `%${escapeLikePattern(search)}%`),
-        )
-      : undefined;
+        ),
+      );
+    }
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = opts.before !== undefined;
+    const position = opts.cursor ?? opts.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              lt(users.createdAt, position.sortAt),
+              requiredAnd(eq(users.createdAt, position.sortAt), lt(users.clerkUserId, position.clerkUserId)),
+            )
+          : requiredOr(
+              gt(users.createdAt, position.sortAt),
+              requiredAnd(eq(users.createdAt, position.sortAt), gt(users.clerkUserId, position.clerkUserId)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
     const limit = Math.min(Math.max(opts.limit, 1), MAX_LIST_LIMIT);
-    const offset = Math.max(opts.offset, 0);
-    const rows = (await client
+    const query = client
       .select()
       .from(users)
-      .where(where)
-      .orderBy(users.createdAt)
-      .limit(limit)
-      .offset(offset)) as UserRow[];
-    const [totalRow] = await client
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [desc(users.createdAt), desc(users.clerkUserId)]
+          : [asc(users.createdAt), asc(users.clerkUserId)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && opts.cursor === undefined && opts.offset !== undefined
+      ? await query.offset(Math.min(Math.max(opts.offset, 0), MAX_LEGACY_LIST_OFFSET))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = (isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit)) as UserRow[];
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(users)
-      .where(where);
-    return { rows, total: totalRow?.count ?? 0 };
+      .where(filter))[0]?.count ?? 0;
+    const firstRow = pageRows[0];
+    const lastRow = pageRows[pageRows.length - 1];
+    const hasNext = isBackward ? pageRows.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (opts.cursor !== undefined || (opts.offset ?? 0) > 0) && pageRows.length > 0;
+    return {
+      rows: pageRows,
+      total,
+      nextCursor: hasNext && lastRow
+        ? encodeRepositoryCursor(
+            { kind: 'users', sortAt: lastRow.createdAt, clerkUserId: lastRow.clerkUserId, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
+        : null,
+      previousCursor: hasPrevious && firstRow
+        ? encodeRepositoryCursor(
+            { kind: 'users', sortAt: firstRow.createdAt, clerkUserId: firstRow.clerkUserId, total },
+            opts.cursorCodec,
+            opts.cursorContext,
+          )
+        : null,
+    };
   },
   async countAll(client: Client = db): Promise<number> {
     const [row] = await client.select({ count: sql<number>`count(*)::int` }).from(users);
@@ -762,7 +941,12 @@ export const auditRepo = {
       client,
     );
   },
-  async list(input: AuditListFilter, client: Client = db): Promise<{ events: AuditEventRecord[]; total: number }> {
+  async list(input: AuditListFilter, client: Client = db): Promise<{
+    events: AuditEventRecord[];
+    total: number;
+    nextCursor: string | null;
+    previousCursor: string | null;
+  }> {
     if (input.kind !== undefined && !['document', 'ticket', 'user', 'settings'].includes(input.kind)) {
       throw new ValidationError(`Invalid audit kind: ${input.kind}`);
     }
@@ -775,22 +959,41 @@ export const auditRepo = {
     if (input.documentId !== undefined && input.kind !== undefined && input.kind !== 'document') {
       throw new ValidationError('Cannot filter by documentId with kind different from document');
     }
-    const parts = [] as ReturnType<typeof eq>[];
-    if (input.kind) parts.push(eq(auditEvents.kind, input.kind));
-    if (input.action) parts.push(eq(auditEvents.action, input.action));
-    if (input.actorId) parts.push(eq(auditEvents.actorId, input.actorId));
-    if (input.from) parts.push(sql`${auditEvents.at} >= ${input.from}` as unknown as ReturnType<typeof eq>);
-    if (input.to) parts.push(sql`${auditEvents.at} <= ${input.to}` as unknown as ReturnType<typeof eq>);
+    if (input.cursor !== undefined && input.before !== undefined) {
+      throw new ValidationError('Only one pagination cursor may be provided');
+    }
+    const filterParts: SQL[] = [];
+    if (input.kind) filterParts.push(eq(auditEvents.kind, input.kind));
+    if (input.action) filterParts.push(eq(auditEvents.action, input.action));
+    if (input.actorId) filterParts.push(eq(auditEvents.actorId, input.actorId));
+    if (input.from) filterParts.push(sql`${auditEvents.at} >= ${input.from}`);
+    if (input.to) filterParts.push(sql`${auditEvents.at} <= ${input.to}`);
     if (input.documentId !== undefined) {
-      parts.push(eq(auditEvents.kind, 'document'), eq(auditEvents.targetId, String(input.documentId)));
+      filterParts.push(eq(auditEvents.kind, 'document'), eq(auditEvents.targetId, String(input.documentId)));
     }
     if (input.ticketId !== undefined) {
-      parts.push(eq(auditEvents.kind, 'ticket'), eq(auditEvents.targetId, input.ticketId));
+      filterParts.push(eq(auditEvents.kind, 'ticket'), eq(auditEvents.targetId, input.ticketId));
     }
-    const where = whereAnd(parts);
+    const filter = whereAnd(filterParts);
+    const pageParts = [...filterParts];
+    const isBackward = input.before !== undefined;
+    const position = input.cursor ?? input.before;
+    if (position !== undefined) {
+      pageParts.push(
+        isBackward
+          ? requiredOr(
+              gt(auditEvents.at, position.sortAt),
+              requiredAnd(eq(auditEvents.at, position.sortAt), gt(auditEvents.id, position.id)),
+            )
+          : requiredOr(
+              lt(auditEvents.at, position.sortAt),
+              requiredAnd(eq(auditEvents.at, position.sortAt), lt(auditEvents.id, position.id)),
+            ),
+      );
+    }
+    const pageFilter = whereAnd(pageParts);
     const limit = Math.min(Math.max(input.limit, 1), MAX_AUDIT_LIMIT);
-    const offset = Math.max(input.offset, 0);
-    const rows = await client
+    const query = client
       .select({
         id: auditEvents.id,
         kind: auditEvents.kind,
@@ -804,26 +1007,58 @@ export const auditRepo = {
       })
       .from(auditEvents)
       .leftJoin(users, eq(users.clerkUserId, auditEvents.actorId))
-      .where(where)
-      .orderBy(desc(auditEvents.at), desc(auditEvents.id))
-      .limit(limit)
-      .offset(offset);
-    const total = (await client
+      .where(pageFilter)
+      .orderBy(
+        ...(isBackward
+          ? [asc(auditEvents.at), asc(auditEvents.id)]
+          : [desc(auditEvents.at), desc(auditEvents.id)]),
+      )
+      .limit(limit + 1);
+    const queriedRows = !isBackward && input.cursor === undefined && input.offset !== undefined
+      ? await query.offset(Math.min(Math.max(input.offset, 0), MAX_LEGACY_LIST_OFFSET))
+      : await query;
+    const orderedRows = isBackward ? [...queriedRows].reverse() : queriedRows;
+    const hasExtra = queriedRows.length > limit;
+    const pageRows = isBackward ? orderedRows.slice(-limit) : orderedRows.slice(0, limit);
+    const total = position?.total ?? (await client
       .select({ count: sql<number>`count(*)::int` })
       .from(auditEvents)
-      .where(where))[0]?.count ?? 0;
-    const events = rows.map((r) => ({
-      id: r.id,
-      kind: r.kind as AuditKind,
-      action: r.action,
-      actorId: r.actorId,
-      actorName: r.actorName ?? null,
-      targetType: r.targetType ?? null,
-      targetId: r.targetId ?? null,
-      details: (r.details ?? {}) as Record<string, unknown>,
-      at: r.at instanceof Date ? r.at : new Date(r.at),
+      .where(filter))[0]?.count ?? 0;
+    const events = pageRows.map((row) => ({
+      id: toSafeDatabaseId(row.id, 'audit_events.id'),
+      kind: row.kind as AuditKind,
+      action: row.action,
+      actorId: row.actorId,
+      actorName: row.actorName ?? null,
+      targetType: row.targetType ?? null,
+      targetId: row.targetId ?? null,
+      details: (row.details ?? {}) as Record<string, unknown>,
+      at: row.at instanceof Date ? row.at : new Date(row.at),
     }));
-    return { events, total };
+    const firstEvent = events[0];
+    const lastEvent = events[events.length - 1];
+    const hasNext = isBackward ? events.length > 0 : hasExtra;
+    const hasPrevious = isBackward
+      ? hasExtra
+      : (input.cursor !== undefined || (input.offset ?? 0) > 0) && events.length > 0;
+    return {
+      events,
+      total,
+      nextCursor: hasNext && lastEvent
+        ? encodeRepositoryCursor(
+            { kind: 'audit', sortAt: lastEvent.at, id: lastEvent.id, total },
+            input.cursorCodec,
+            input.cursorContext,
+          )
+        : null,
+      previousCursor: hasPrevious && firstEvent
+        ? encodeRepositoryCursor(
+            { kind: 'audit', sortAt: firstEvent.at, id: firstEvent.id, total },
+            input.cursorCodec,
+            input.cursorContext,
+          )
+        : null,
+    };
   },
   async recordDeadLetter(
     input: { kind: AuditKind; payload: unknown; error: string },
@@ -888,6 +1123,14 @@ export function createChunkRepositoryCompat(
     getByDocAndRange: (documentId, start, end) => store.getByDocAndRange(documentId, start, end),
     getByDocAndRanges: (ranges) => store.getByDocAndRanges(ranges),
     insertMany: (rows) => store.insertMany(rows),
+    replaceMany: async (documentId, rows) => {
+      if (store.replaceMany) {
+        await store.replaceMany(documentId, rows);
+        return;
+      }
+      await store.deleteByDocumentId(documentId);
+      await store.insertMany(rows);
+    },
     deleteByDocumentId: (documentId) => store.deleteByDocumentId(documentId),
     countForDocuments: (ids) => store.countForDocuments(ids),
     countForAll: () => store.countForAll(),
@@ -896,9 +1139,13 @@ export function createChunkRepositoryCompat(
   };
 }
 
-export function createChunkRepo(client: Client, vectorDim?: number): ChunkRepository {
+export function createChunkRepo(
+  client: Client,
+  vectorDim?: number,
+  hasher: Hasher = defaultHasher,
+): ChunkRepository {
   return createChunkRepositoryCompat(
-    createChunkStore(client, vectorDim),
+    createChunkStore(client, vectorDim, hasher),
     createVectorSearch(client, vectorDim),
     createLexicalSearch(client),
   );
@@ -947,10 +1194,14 @@ export function createUserRepo(client: Client = db): UserRepository {
   };
 }
 
-export function createRepositoryAdapters(client: Client = db, vectorDim?: number) {
+export function createRepositoryAdapters(
+  client: Client = db,
+  vectorDim?: number,
+  hasher: Hasher = defaultHasher,
+) {
   return {
     documents: createDocumentRepo(client),
-    chunks: createChunkRepo(client, vectorDim),
+    chunks: createChunkRepo(client, vectorDim, hasher),
     audit: createAuditRepo(client),
     tickets: createTicketRepo(client),
     users: createUserRepo(client),

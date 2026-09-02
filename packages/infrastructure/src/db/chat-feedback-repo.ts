@@ -1,6 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
-import { chatEvents, chatFeedback } from './schema';
+import { chatEvents, chatFeedback, chatTurns } from './schema';
 import type {
   ChatFeedbackRepo,
   ChatEventRange,
@@ -39,6 +39,11 @@ export class ChatFeedbackRepository implements ChatFeedbackRepo {
         select ${chatEvents.turnId} as turn_id, ${chatEvents.userId} as user_id
         from ${chatEvents}
         where ${chatEvents.turnId} = ${input.turnId}
+          and ${chatEvents.createdAt} = (
+            select ${chatTurns.createdAt}
+            from ${chatTurns}
+            where ${chatTurns.turnId} = ${input.turnId}
+          )
       ),
       upserted as (
         insert into ${chatFeedback} (turn_id, feedback, document_ids, chunk_ids)

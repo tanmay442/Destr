@@ -30,11 +30,15 @@ export default async function AuditPage({
     documentId?: string;
     ticketId?: string;
     page?: string;
+    cursor?: string;
+    before?: string;
   }>;
 }) {
   const params = await searchParams;
   const page = parsePageParam(params.page);
-  const offset = (page - 1) * PAGE_SIZE;
+  const cursor = params.cursor;
+  const before = params.before;
+  const offset = cursor === undefined && before === undefined ? (page - 1) * PAGE_SIZE : undefined;
   const documentIdRaw = params.documentId ? Number(params.documentId) : undefined;
   const documentId = Number.isInteger(documentIdRaw) ? documentIdRaw : undefined;
   const kind = parseKind(params.kind);
@@ -51,7 +55,9 @@ export default async function AuditPage({
     documentId,
     ticketId: params.ticketId,
     limit: PAGE_SIZE,
-    offset,
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(before !== undefined ? { before } : {}),
+    ...(offset !== undefined ? { offset } : {}),
     actorId,
   }));
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
@@ -90,6 +96,8 @@ export default async function AuditPage({
         page={page}
         totalPages={totalPages}
         total={result.total}
+        nextCursor={result.nextCursor}
+        previousCursor={result.previousCursor}
         pathname="/admin/audit"
         query={{
           kind,
