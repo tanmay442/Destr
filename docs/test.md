@@ -8,10 +8,10 @@ This project uses **Vitest** for unit, integration, and contract testing, **Type
 
 | Metric | Count / Status | Notes |
 |---|---|---|
-| **Total Test Files** | **142 files** | Full local run against Docker Postgres: all passed, no skips |
-| **Total Test Cases** | **1,418 tests** | Full local run against Docker Postgres: all passed, no skips |
-| **Architecture Modules** | **536 modules** | 1,400 dependencies checked with **0 violations** |
-| **Suite Run Duration** | **~26s** | Full suite execution including transform, setup, import, and runner |
+| **Total Test Files** | **164 files** | Full local run against Docker Postgres: all passed, no skips |
+| **Total Test Cases** | **1,534 tests** | Full local run against Docker Postgres: all passed, no skips |
+| **Architecture Modules** | **581 modules** | 1,550 dependencies checked with **0 violations** |
+| **Suite Run Duration** | **~19s** | Full suite execution including transform, setup, import, and runner |
 | **Gate Script** | `pnpm gate` | Runs `Vitest` + `tsc --noEmit` + `eslint` + `dependency-cruiser` |
 
 ---
@@ -143,13 +143,21 @@ When writing new tests that assert "absent credential" errors, always stub the v
 
 ### Database-Backed Tests (local setup)
 
-DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`, the db integration/repositories tests) probe `DATABASE_URL` with a `SELECT 1` and **skip** when it is unset or unreachable — they never fail on a machine without a database. To run them locally:
+DB-backed suites (e.g. `packages/infrastructure/src/db/__tests__/chat-history-repo.test.ts`, the db integration/repositories tests, `pgvector-contracts`, `audit-backfill`) probe `DATABASE_URL` with a `SELECT 1` and **skip** when it is unset or unreachable — they never fail on a machine without a database. Without a database `pnpm test` reports `158 passed | 6 skipped (164)` and `78 skipped` tests — the 78 are 40× `pgvector-contracts`, 12× `chat-history`, 11× `chat-events`, 4× `audit-backfill`, 4× `db-integration`, 4× `settings-repo`, 1× `query-cancellation`, 1× `chat-feedback`, 1× `quality-reviews`. To run the full suite pass `DATABASE_URL`:
 
 ```bash
+# one-liner (no shell export needed):
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test
+
+# full local flow for a fresh clone (DB password matches docker-compose.yml / .env.example):
 pnpm dev:db                 # docker compose up -d db (pgvector on 127.0.0.1:5432)
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm db:migrate   # apply drizzle/ migrations (needs DATABASE_URL or MIGRATION_DATABASE_URL)
+DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test  # 164 passed | 1534 passed, 0 skipped
+# or export once and reuse:
 export DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent
-MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate   # apply drizzle/ migrations
-DATABASE_URL=$DATABASE_URL pnpm test  # DB-gated suites now execute instead of skipping
+MIGRATION_DATABASE_URL=$DATABASE_URL pnpm db:migrate
+pnpm test
+pnpm gate                   # test + typecheck + lint + arch (DB-gated tests now run)
 ```
 
 The chat-event purge unit tests cover ordered `FOR UPDATE SKIP LOCKED` selection and child-delete rollback with an injected transaction client. The live purge/concurrency checks in `packages/infrastructure/src/db/__tests__/chat-events-repo.test.ts` remain database-gated; a skipped suite is not evidence that PostgreSQL locking or cancellation passed. `packages/infrastructure/src/db/query-cancellation.test.ts` covers lazy pre-abort behavior and, when `DATABASE_URL` is reachable, repeats a live node-postgres `pg_sleep(10)` cancellation, checks `pg_stat_activity`, and verifies the pool remains healthy. Neon uses the documented statement-timeout fallback rather than claiming backend-PID cancellation.

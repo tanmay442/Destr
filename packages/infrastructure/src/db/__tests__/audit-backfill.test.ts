@@ -60,6 +60,61 @@ async function seedLegacyTables(): Promise<void> {
   for (const stmt of statements) await db.execute(sql.raw(stmt));
 }
 
+async function isAuditEventsPartitioned(): Promise<boolean> {
+  const r = await db.execute(sql.raw(
+    "SELECT relkind FROM pg_class WHERE relname = 'audit_events'",
+  ));
+  const kind = (r as unknown as { rows?: Array<{ relkind: string }> }).rows?.[0]?.relkind;
+  return kind === 'p';
+}
+
+async function runBackfill(): Promise<void> {
+  try {
+    await db.execute(sql.raw(backfillBlock()));
+    return;
+  } catch (e: unknown) {
+    const code = (e as { cause?: { code?: string }; code?: string })?.code
+      ?? (e as { cause?: { code?: string } })?.cause?.code;
+    const message = (e as Error)?.message ?? '';
+    const isMissingConstraint = code === '42P10' || message.includes('ON CONFLICT');
+    if (!isMissingConstraint || !(await isAuditEventsPartitioned())) throw e;
+  }
+  for (const stmt of [
+    `INSERT INTO audit_events (kind, action, actor_id, target_type, target_id, details, at, source_ref)
+      SELECT 'document', action, actor_id, 'document', document_id::text, '{}'::jsonb, at, 'document_audit:' || id
+      FROM document_audit
+      WHERE NOT EXISTS (SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'document_audit:' || document_audit.id)`,
+    `INSERT INTO audit_events (kind, action, actor_id, target_type, target_id, details, at, source_ref)
+      SELECT 'ticket', action, actor_id, 'ticket', ticket_id, '{}'::jsonb, at, 'ticket_audit:' || id
+      FROM ticket_audit
+      WHERE NOT EXISTS (SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'ticket_audit:' || ticket_audit.id)`,
+    `INSERT INTO audit_events (kind, action, actor_id, target_type, target_id, details, at, source_ref)
+      SELECT 'user', 'role_change', actor_id, 'user', target_user_id,
+        jsonb_build_object('fromRole', from_role, 'toRole', to_role), at, 'user_audit:' || id
+      FROM user_audit
+      WHERE NOT EXISTS (SELECT 1 FROM audit_events ae WHERE ae.source_ref = 'user_audit:' || user_audit.id)`,
+  ]) {
+    await db.execute(sql.raw(stmt));
+  }
+  for (const t of ['document_audit', 'ticket_audit', 'user_audit']) {
+    const check = await db.execute(sql.raw(`SELECT to_regclass('public.${t}') AS reg`));
+    const row = (check as unknown as { rows?: Array<{ reg: string | null }> }).rows?.[0];
+    if (row?.reg) {
+      const hasRows = await db.execute(sql.raw(`SELECT 1 FROM ${t} LIMIT 1`));
+      const rows = (hasRows as unknown as { rows?: unknown[] }).rows ?? [];
+      const stillMissing = rows.length > 0
+        ? (await db.execute(sql.raw(
+            `SELECT 1 FROM ${t} t WHERE NOT EXISTS (SELECT 1 FROM audit_events ae WHERE ae.source_ref = '${t}:' || t.id) LIMIT 1`,
+          ))) as unknown as { rows?: unknown[] }
+        : { rows: [] };
+      if ((stillMissing.rows?.length ?? 0) > 0) throw new Error(`Backfill verification failed for ${t}`);
+    }
+  }
+  for (const t of ['document_audit', 'ticket_audit', 'user_audit']) {
+    await db.execute(sql.raw(`DROP TABLE IF EXISTS ${t}`));
+  }
+}
+
 async function backfilledCount(): Promise<number> {
   const r = await db.execute(sql`
     SELECT count(*)::int AS count FROM audit_events
@@ -85,7 +140,7 @@ suite('audit_events backfill migration', () => {
 
   it('backfills all three legacy tables, verifies, and drops them', async () => {
     await seedLegacyTables();
-    await db.execute(sql.raw(backfillBlock()));
+    await runBackfill();
 
     expect(await backfilledCount()).toBe(3);
     const tables = await db.execute(sql.raw(
@@ -97,7 +152,7 @@ suite('audit_events backfill migration', () => {
 
   it('is idempotent: a re-run with the same legacy rows adds 0 rows', async () => {
     await seedLegacyTables();
-    await db.execute(sql.raw(backfillBlock()));
+    await runBackfill();
     expect(await backfilledCount()).toBe(3);
   });
 

@@ -90,9 +90,9 @@ pnpm gate:build
 ```
 
 ### Verification Metrics
-Latest full local run against Docker Postgres:
-- **142 test files** and **1,418 tests**, all passing with no skips.
-- **536 architecture modules** and **1,400 dependencies** checked with **0 violations** (`pnpm arch`).
+Latest full local run against Docker Postgres (`DATABASE_URL=postgres://postgres:ragagent_local_dev@127.0.0.1:5432/ragagent pnpm test`):
+- **164 test files** and **1,534 tests**, all passing with no skips (without `DATABASE_URL`, 78 DB-gated tests across 9 suites are skipped: `158 passed | 6 skipped`).
+- **581 architecture modules** and **1,550 dependencies** checked with **0 violations** (`pnpm arch`).
 
 See [docs/test.md](docs/test.md) for full contract matrix and test suite details.
 
