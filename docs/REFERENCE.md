@@ -268,6 +268,17 @@ filter/sort-mismatched cursor returns a controlled 400 response; pagination is
 never silently reset to the first page. The admin authorization check runs
 independently of cursor verification.
 
+> **Note — `CURSOR_SIGNING_SECRET` standalone operational note.**
+> This secret is **not** like `DATABASE_URL` or an encryption key. It only signs pagination bookmarks.
+> * **Should you save it?** Keep it in Vercel (`Production` + `Preview` env) and GitHub (`Actions secret` for CI). No file in git. A password manager copy is optional — you can always regenerate.
+> * **If you lose it:** no data is lost. Existing `?cursor=...` links from the last `CURSOR_TTL_SEC` window (15 min by default) become `400 invalid cursor` — users reload page 1 and continue.
+> * **Fix:** generate a new 32+ byte value (`openssl rand -base64 32`) and set it again:
+>   ```bash
+>   gh secret set CURSOR_SIGNING_SECRET --body "NEW_VALUE"
+>   vercel env add CURSOR_SIGNING_SECRET production,preview --value "NEW_VALUE" --sensitive --yes --project rag_agent
+>   ```
+>   Redeploy. For zero-downtime, deploy `NEW_VALUE` as `CURSOR_SIGNING_SECRET` and old as `CURSOR_SIGNING_PREVIOUS_SECRET` for one TTL window, then remove the previous.
+
 **Row-Level Security.** Repository migrations do not create `rag_app`, grant privileges, enable RLS, or create policies. These are owner-managed provisioning steps. A `rag_app_full_access` policy with `USING (true)` limits which database role can access deployment data; it does not isolate customers or users inside a deployment.
 
 Apply the role, grants, RLS setting, and policy to every app table after provisioning and whenever a migration adds a table. `_migrations` stays owner-only. For example, the chat history and quality tables require:
