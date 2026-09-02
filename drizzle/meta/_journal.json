@@ -218,6 +218,13 @@
       "when": 1788352930280,
       "tag": "0030_atomic_chat_turn_claim",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788364656111,
+      "tag": "0031_restore_partition_permissions",
+      "breakpoints": true
     }
   ]
 }

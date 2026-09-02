@@ -184,3 +184,20 @@ the pre-operation backup/PITR image, not reversing an applied migration file.
 ## Incidents and escalation
 
 Capture the database name, deployment, migration hash, UTC timestamps, query/transaction identifiers, lock graph, affected relation/partition, and redacted configuration. Never include credentials or message contents in incident notes. Escalate to the database/provider owner when there is sustained connection exhaustion, failed PITR/restore, replication/Neon endpoint trouble, missing partitions, unexplained foreign-key violations, or a purge that cannot make progress without risking user traffic.
+
+### Incident Record: 2026-09-02 Partition Migration Permission & Analytics Outage
+
+- **Symptoms**:
+  - Audit queries and mutations failed with `error: permission denied for table audit_events` (SQLSTATE 42501).
+  - Document deletions failed inside transactions with HTTP 502 (`An external service is temporarily unavailable`).
+  - Ticket actions failed with `updateTicketAction failed`.
+  - Settings mutations recorded dead-letter warnings (`[audit] write failed (kind=settings)`).
+  - Chat history persistence failed (`chat.history.persist_failed`).
+  - Analytics dashboard was completely blank (cost `$0`, tokens `0`, faithfulness/relevance `—`, empty performance charts).
+- **Root Cause**:
+  Migration `0029_physical_partitions.sql` dropped and recreated `audit_events`, `chat_events`, `chat_messages`, and `chat_daily_stats` to implement range and hash partitioning under the migration owner role (`MIGRATION_DATABASE_URL`). In PostgreSQL, `DROP TABLE` destroys all role grants and Row-Level Security (RLS) policies on those objects. The runtime web application connects as least-privilege role `rag_app` (`DATABASE_URL`), which had zero privileges on the recreated tables and view.
+- **Remediation & Fix**:
+  1. Applied migration `0031_restore_partition_permissions.sql` to grant `SELECT, INSERT, UPDATE, DELETE` on all tables in schema `public` and `USAGE, SELECT` on all sequences to `rag_app`.
+  2. Re-enabled RLS and recreated `rag_app_full_access` policies on `audit_events`, `chat_events`, `chat_messages`, `chat_turns`, and `quality_reviews`.
+  3. Configured `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rag_app` and sequences so future partitions provisioned by `scripts/manage-partitions.ts` automatically grant runtime access.
+  4. Executed `REFRESH MATERIALIZED VIEW chat_daily_stats` to populate historical metrics for analytics.

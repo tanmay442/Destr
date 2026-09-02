@@ -297,7 +297,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON quality_reviews TO rag_app;
 GRANT USAGE, SELECT ON SEQUENCE quality_reviews_id_seq TO rag_app;
 ```
 
-If RLS is enabled without a matching policy, `rag_app` sees zero rows. If grants are missing, queries fail with permission errors. After each production migration, connect with `DATABASE_URL` and test a read plus a rolled-back write. As the owner, verify every app table has RLS and a `rag_app` policy in `pg_class` and `pg_policies`. A probe role with only `SELECT` grants and no policy must see zero rows. These checks validate database-role hardening, not multi-tenant isolation.
+If RLS is enabled without a matching policy, `rag_app` sees zero rows. If grants are missing, queries fail with permission errors. When migrations drop and recreate tables (e.g. partition migration `0029`), migration `0031_restore_partition_permissions.sql` re-establishes grants, RLS, policies, and `ALTER DEFAULT PRIVILEGES` so dynamically created partition children inherit permissions. After each production migration, connect with `DATABASE_URL` and test a read plus a rolled-back write. As the owner, verify every app table has RLS and a `rag_app` policy in `pg_class` and `pg_policies`. A probe role with only `SELECT` grants and no policy must see zero rows. These checks validate database-role hardening, not multi-tenant isolation.
 
 **Migration flow (where DDL runs):**
 1. **Local dev** — `pnpm db:migrate` applies DDL; `pnpm build` runs only the production build, while `pnpm build:with-db` applies migrations first. All migration commands use `MIGRATION_DATABASE_URL ?? DATABASE_URL`; local `docker compose` DBs are owned by the local user, so `DATABASE_URL` alone is fine.
