@@ -1256,6 +1256,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }),
             );
           }
+          expMark('streamEnd', { clean: generationCompletedCleanly, timedOutDeadline: timedOut, partialLen: partialText.length, citations: finalCitations.length, firstTokenMs: metrics.firstTokenMs, retrieveMs: metrics.retrieveMs });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           try {
@@ -1304,7 +1305,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
-        expMark('streamEnd', { clean: generationCompletedCleanly, timedOut, partialLen: partialText.length, citations: finalCitations.length, firstTokenMs: metrics.firstTokenMs, retrieveMs: metrics.retrieveMs });
         await releaseLeases();
         controller.close();
       })();
