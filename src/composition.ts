@@ -250,7 +250,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   contentParser: core.contentParser,
   runner,
-  summarizer: Llm.createDocSummarizer(core.chatModelProvider),
+  summarizer: Llm.createDocSummarizer(core.chatModelProvider, core.env),
   cchEnabled: CCH_ENABLED,
 };
 
@@ -422,7 +422,7 @@ function createComposition() {
         pdfValidator: core.pdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
-        summarizer: Llm.createDocSummarizer(core.chatModelProvider),
+        summarizer: Llm.createDocSummarizer(core.chatModelProvider, core.env),
         cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number, fileHash?: string, signal?: AbortSignal | undefined) =>
@@ -490,8 +490,8 @@ function createComposition() {
     schema: Db.schema,
     blobStorage,
     modelGateway,
-    getEmbeddingModel: Llm.getEmbeddingModel,
-    getChatModel: Llm.getChatModel,
+    getEmbeddingModel: () => Llm.getEmbeddingModel(core.env),
+    getChatModel: (modelId?: string) => Llm.getChatModel(modelId, core.env),
     allowedChatFileOrigins: new Set(
       (process.env.CHAT_FILE_ALLOWED_ORIGINS ?? '')
         .split(',')
@@ -499,7 +499,7 @@ function createComposition() {
         .filter((origin) => origin.length > 0),
     ),
     getChatModelRequestOptions: (input: { stablePromptPrefix: string; prefixVersion: string }) => {
-      const adapter = Llm.getChatModelAdapter();
+      const adapter = Llm.getChatModelAdapter(undefined, core.env);
       const providerOptions = adapter.buildProviderOptions(input);
       return {
         ...(providerOptions !== undefined ? { providerOptions } : {}),
@@ -513,7 +513,7 @@ function createComposition() {
       };
     },
     getRetrievalProvider: () => 'pgvector',
-    getEmbeddingModelId: Llm.getEmbeddingModelId,
+    getEmbeddingModelId: () => core.embeddingModelId,
     answerCacheKey,
     cacheLeasePolicy,
     onCacheLeaseTelemetry,

@@ -162,7 +162,7 @@ export function getAuxModels(
       hallucinationGrader: undefined,
     };
   }
-  const aux = createAuxModels(auxModelId, modelProvider);
+  const aux = createAuxModels(auxModelId, modelProvider, env);
   return {
     queryRewriter: aux.queryRewriter,
     hallucinationGrader: aux.hallucinationGrader,

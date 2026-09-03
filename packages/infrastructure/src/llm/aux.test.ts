@@ -200,6 +200,15 @@ describe('getAuxModels selector', () => {
     expect(aux.hallucinationGrader).toBeDefined();
     process.env.AGENTIC_ENABLED = prev ?? '';
   });
+
+  it('forwards the injected env to the model provider', async () => {
+    const customEnv = { get: (key: string) => (key === 'AUX_MODEL' ? 'env-aux-model' : undefined) };
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
+    generateTextMock.mockResolvedValue({ text: 'rewritten' });
+    const aux = getAuxModels(true, undefined, modelProvider, customEnv);
+    await aux.queryRewriter!.rewrite('q');
+    expect(modelProvider).toHaveBeenCalledWith({ env: customEnv, modelId: 'env-aux-model' });
+  });
 });
 
 describe('createAuxModels with an injected model provider', () => {

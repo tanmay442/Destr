@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
-import { logger, type DocSummarizer } from '@app/domain';
+import { logger, type DocSummarizer, type EnvSource } from '@app/domain';
 import { getChatModel } from './model';
 import { defaultProcessEnv } from '../config/env';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
@@ -127,8 +127,9 @@ function setEntry(key: string, promise: Promise<{ title: string; summary: string
 async function generateDocContext(
   excerpt: string,
   modelProvider: ChatModelProvider,
+  env: EnvSource,
 ): Promise<{ title: string; summary: string }> {
-  const model = modelProvider({ env: defaultProcessEnv, modelId: CCH_MODEL || undefined });
+  const model = modelProvider({ env, modelId: CCH_MODEL || undefined });
   try {
     const result = await retryOnTransient(
       async () => {
@@ -164,6 +165,7 @@ async function generateDocContext(
  */
 export function createDocSummarizer(
   modelProvider: ChatModelProvider = (deps: ChatModelDeps) => getChatModel(deps.modelId, deps.env),
+  env: EnvSource = defaultProcessEnv,
 ): DocSummarizer {
   return {
     generateDocContext(text: string): Promise<{ title: string; summary: string }> {
@@ -172,7 +174,7 @@ export function createDocSummarizer(
       if (cached) return cached.promise;
 
       const excerpt = text.slice(0, CCH_CONTEXT_CHARS);
-      const pending = generateDocContext(excerpt, modelProvider);
+      const pending = generateDocContext(excerpt, modelProvider, env);
       setEntry(key, pending);
       pending.then(
         (result) => {
