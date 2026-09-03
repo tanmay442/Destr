@@ -792,7 +792,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }
             : {}),
         });
-        const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
+        // EXP-TAIL: do NOT await Neon TX before first byte. Persist in background,
+        // return stream immediately to isolate history-TX TTFB cost.
+        expMark('turnCacheHit-persistStart', {});
+        const persistStart = performance.now();
+        void persistHistory(deps.historySink, cfg, userId, {
           conversationId: parsed.data.conversationId,
           turnId,
           retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -804,7 +808,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             citations: dedupeCitations(cachedAnswer.citations),
             guardrail: cachedAnswer.guardrail ?? null,
           }),
-        });
+        }).then(
+          (ok) => expMark('turnCacheHit-persistDone', { ms: Math.round(performance.now() - persistStart), persisted: ok }),
+          (e) => expMark('turnCacheHit-persistError', { ms: Math.round(performance.now() - persistStart), error: String(e) }),
+        );
+        const historyPersisted = false;
         await releaseLeases();
         const stream = createCachedAnswerStream(
           deps.ai,
@@ -874,7 +882,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             }
           : {}),
       });
-      const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
+      // EXP-TAIL: same as turn-result path — background persist, immediate stream.
+      expMark('answerCacheHit-persistStart', {});
+      const answerPersistStart = performance.now();
+      void persistHistory(deps.historySink, cfg, userId, {
         conversationId: parsed.data.conversationId,
         turnId,
         retryOfMessageId: lastUserMessage && parsed.data.retry === true ? lastUserMessage.id : undefined,
@@ -886,7 +897,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           citations: dedupeCitations(cachedAnswer.citations),
           guardrail: null,
         }),
-      });
+      }).then(
+        (ok) => expMark('answerCacheHit-persistDone', { ms: Math.round(performance.now() - answerPersistStart), persisted: ok }),
+        (e) => expMark('answerCacheHit-persistError', { ms: Math.round(performance.now() - answerPersistStart), error: String(e) }),
+      );
+      const historyPersisted = false;
       await releaseLeases();
       const stream = deps.ai.createUIMessageStream<UIMessage>({
         execute: ({ writer }) => {
