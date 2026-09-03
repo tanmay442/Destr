@@ -1005,6 +1005,22 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            const vtype = (value as { type?: unknown }).type;
+            if ((metrics as unknown as Record<string, unknown>).expFirstChunkAtMs === undefined) {
+              (metrics as unknown as Record<string, unknown>).expFirstChunkAtMs = Math.round(performance.now() - turnStart);
+              expMark('firstChunk', { chunkType: String(vtype) });
+            }
+            const counts = ((metrics as unknown as Record<string, unknown>).expChunkCounts ?? {}) as Record<string, number>;
+            counts[String(vtype)] = (counts[String(vtype)] ?? 0) + 1;
+            (metrics as unknown as Record<string, unknown>).expChunkCounts = counts;
+            if (typeof vtype === 'string' && vtype.startsWith('reasoning') && !(metrics as unknown as Record<string, unknown>).expReasoningStartMs) {
+              (metrics as unknown as Record<string, unknown>).expReasoningStartMs = Math.round(performance.now() - turnStart);
+              expMark('reasoningStart', { chunkType: String(vtype) });
+            }
+            if (typeof vtype === 'string' && vtype.startsWith('tool') && !(metrics as unknown as Record<string, unknown>).expToolStartMs) {
+              (metrics as unknown as Record<string, unknown>).expToolStartMs = Math.round(performance.now() - turnStart);
+              expMark('toolChunkStart', { chunkType: String(vtype) });
+            }
             if (metrics.firstTokenMs === null && value.type.startsWith('text')) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
               expMark('firstToken', { firstTokenMs: metrics.firstTokenMs, chunkType: value.type });
@@ -1256,7 +1272,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               }),
             );
           }
-          expMark('streamEnd', { clean: generationCompletedCleanly, timedOutDeadline: timedOut, partialLen: partialText.length, citations: finalCitations.length, firstTokenMs: metrics.firstTokenMs, retrieveMs: metrics.retrieveMs });
+          expMark('streamEnd', { clean: generationCompletedCleanly, timedOutDeadline: timedOut, partialLen: partialText.length, citations: finalCitations.length, firstTokenMs: metrics.firstTokenMs, retrieveMs: metrics.retrieveMs, chunkCounts: (metrics as unknown as Record<string, unknown>).expChunkCounts ?? {}, firstChunkMs: (metrics as unknown as Record<string, unknown>).expFirstChunkAtMs ?? null, reasoningStartMs: (metrics as unknown as Record<string, unknown>).expReasoningStartMs ?? null, toolStartMs: (metrics as unknown as Record<string, unknown>).expToolStartMs ?? null });
         } catch (err) {
           logger.error('Chat stream error', { error: err });
           try {
