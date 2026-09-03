@@ -467,6 +467,9 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
       execute: async ({ query, limit }) => {
         let matches: RetrievedChunk[];
         const t0 = performance.now();
+        const toolCallId = Math.random().toString(36).slice(2, 8);
+        logger.info('[exp-instr] tool searchDocumentation start', { toolCallId, query: query.slice(0, 120), limit, mode: effectiveMode });
+        console.log(`[exp-instr] tool searchDocumentation start ${toolCallId} mode=${effectiveMode} query=${query.slice(0, 80)}`);
         const canReusePrefetch =
           !prefetchedConsumed &&
           prefetched !== undefined &&
@@ -536,6 +539,8 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         }
         const uniqueMatches = addGroundingEvidence(groundingEvidence, matches);
         metrics.hitCount = (metrics.hitCount ?? 0) + uniqueMatches.length;
+        logger.info('[exp-instr] tool searchDocumentation done', { toolCallId, ms: Math.round(performance.now() - t0), hits: uniqueMatches.length, retrieveMs: metrics.retrieveMs });
+        console.log(`[exp-instr] tool searchDocumentation done ${toolCallId} ms=${Math.round(performance.now() - t0)} hits=${uniqueMatches.length}`);
         return uniqueMatches.map((m) => ({
           content: formatGroundingReference(m),
           similarity: m.similarity,
@@ -962,6 +967,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     softDeadlineFired = true;
   });
 
+  expMark('streamText-create', { model: deps.getChatModelId(), mode: effectiveMode, historyMsgs: messages.length });
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
     system: buildSystemPrompt(cfg, prefetch),
@@ -1001,6 +1007,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             if (done) break;
             if (metrics.firstTokenMs === null && value.type.startsWith('text')) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
+              expMark('firstToken', { firstTokenMs: metrics.firstTokenMs, chunkType: value.type });
             }
             if (value.type === 'text-delta') {
               partialText += value.delta;
@@ -1055,6 +1062,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             hallucinationTimedOut = hallucinationResult.timedOut;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
+          expMark('hallucination-done', { hallucinationMs: metrics.hallucinationMs, blocked: hallucinationBlocked, timedOut: hallucinationTimedOut, timedOutDeadline: timedOut, citations: finalCitations.length, hasEvidence: hasGroundingEvidence });
           const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
           if (
             cacheKey &&
@@ -1190,6 +1198,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             totalMs,
           });
           const persistedText = await Promise.resolve(result.text).catch(() => partialText);
+          expMark('text-ready', { len: (persistedText || partialText || '').length, partialLen: partialText.length, citations: finalCitations.length, timedOut });
+          const histStart = performance.now();
           const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -1215,6 +1225,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   : null,
             }),
           });
+          expMark('persistHistory-done', { ms: Math.round(performance.now() - histStart), persisted: historyPersisted, textLen: (persistedText || partialText || '').length });
           if (historyPersisted && parsed.data.conversationId) {
             controller.enqueue({
               type: 'data-conversation-persisted',
@@ -1293,6 +1304,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           controller.error(new Error('Chat stream interrupted'));
           return;
         }
+        expMark('streamEnd', { clean: generationCompletedCleanly, timedOut, partialLen: partialText.length, citations: finalCitations.length, firstTokenMs: metrics.firstTokenMs, retrieveMs: metrics.retrieveMs });
         await releaseLeases();
         controller.close();
       })();
