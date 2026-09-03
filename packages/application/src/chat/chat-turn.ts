@@ -706,9 +706,16 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     const leases = [cacheLease, turnLease].filter((lease): lease is CacheLease => lease !== null);
     cacheLease = null;
     turnLease = null;
-    const results = await Promise.all(leases.map((lease) => lease.releaseResult()));
+    const results = await Promise.allSettled(
+      leases.map((lease) => Promise.resolve().then(() => lease.releaseResult())),
+    );
     for (const result of results) {
-      if (result.kind === 'unavailable') {
+      if (result.status === 'rejected') {
+        logger.error('chat.cache.lease_release_failed', {
+          turnId,
+          error: String(result.reason),
+        });
+      } else if (result.value.kind === 'unavailable') {
         logger.warn('chat.cache.lease_release_unavailable', { turnId });
       }
     }
@@ -1090,9 +1097,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           let promptCacheUsage: ChatModelUsageTelemetry | null = null;
           if (modelRequestOptions?.parseUsage) {
             try {
-              const providerMetadata = result.providerMetadata === undefined
-                ? undefined
-                : await Promise.resolve(result.providerMetadata).catch(() => undefined);
+              const providerMetadata = await Promise.resolve(result.providerMetadata).catch(() => undefined);
               promptCacheUsage = modelRequestOptions.parseUsage(usageValue, providerMetadata);
             } catch (cause: unknown) {
               logger.warn('chat.model.prompt_cache_usage_parse_failed', {
@@ -1267,7 +1272,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         }
         await releaseLeases();
         controller.close();
-      })();
+      })().catch((cause: unknown) => {
+        logger.error('Chat stream worker error', { error: cause });
+        try {
+          controller.error(new Error('Chat stream interrupted'));
+        } catch {}
+      });
     },
   });
 

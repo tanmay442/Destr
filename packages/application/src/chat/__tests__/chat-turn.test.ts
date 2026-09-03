@@ -4,7 +4,14 @@ import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { AppConfig } from '@app/domain/app-config';
 import type { RetrievedChunk } from '../../rag/search';
 import type { AgenticResult } from '../../rag/agentic-search';
-import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
+import * as cacheLeaseModule from '../cache-lease';
+import {
+  chatTurn,
+  type ChatModelUsageTelemetry,
+  type ChatTurnDeps,
+  type ChatTurnRequest,
+  type ChatTurnResult,
+} from '../chat-turn';
 
 function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
   return {
@@ -263,6 +270,67 @@ describe('chatTurn', () => {
       'text-delta',
       'text-end',
     ]);
+  });
+
+  it('reads provider metadata once and tolerates metadata rejection after an aborted generation', async () => {
+    let providerMetadataReads = 0;
+    streamTextMock.mockImplementation(() => ({
+      toUIMessageStream: () => scriptedStream() as Readonly<unknown> as never,
+      text: Promise.resolve('Hello world'),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      get providerMetadata() {
+        providerMetadataReads += 1;
+        return Promise.reject(new Error('generation aborted'));
+      },
+    }));
+    const parseUsage = vi.fn(
+      (usage: unknown, providerMetadata: unknown): ChatModelUsageTelemetry => {
+        expect(usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+        expect(providerMetadata).toBeUndefined();
+        return {
+          inputTokens: null,
+          inputTokensStatus: 'unsupported',
+          cachedInputTokens: null,
+          cachedInputTokensStatus: 'unsupported',
+          cacheReadTokens: null,
+          cacheReadStatus: 'unsupported',
+          cacheWriteTokens: null,
+          cacheWriteStatus: 'unsupported',
+          cacheHitRatio: null,
+        };
+      },
+    );
+    const { deps } = makeDeps();
+    deps.getChatModelRequestOptions = () => ({ parseUsage });
+
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await expect(readParts(result.stream)).resolves.toHaveLength(4);
+    expect(providerMetadataReads).toBe(1);
+    expect(parseUsage).toHaveBeenCalledWith(
+      { inputTokens: 10, outputTokens: 5 },
+      undefined,
+    );
+  });
+
+  it('completes the stream when lease release rejects', async () => {
+    const { deps, fakes } = makeDeps();
+    const actualCreateCacheLease = cacheLeaseModule.createCacheLease;
+    const lease = actualCreateCacheLease(fakes.answerCache, 'test-release-rejection', 60);
+    const releaseResult = vi.spyOn(lease, 'releaseResult').mockRejectedValue(new Error('release failed'));
+    const createCacheLease = vi.spyOn(cacheLeaseModule, 'createCacheLease').mockReturnValue(lease);
+
+    try {
+      const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+      expect(result.kind).toBe('stream');
+      if (result.kind !== 'stream') return;
+      await expect(readParts(result.stream)).resolves.toHaveLength(4);
+      expect(releaseResult).toHaveBeenCalledTimes(1);
+    } finally {
+      createCacheLease.mockRestore();
+      releaseResult.mockRestore();
+    }
   });
 
   it('rejects when the rate limiter denies the turn', async () => {
