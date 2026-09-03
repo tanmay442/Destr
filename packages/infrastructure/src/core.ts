@@ -7,10 +7,12 @@ import type {
   QualityReviewsRepo,
   ChatHistoryRepo,
   ChunkRepository,
+  Clock,
   ContentParser,
   DocumentRepository,
   EmbeddingService,
   EnvSource,
+  Hasher,
   IngestQueue,
   PdfValidator,
   RateLimiter,
@@ -18,6 +20,8 @@ import type {
   RuntimeConfig,
   SettingsRepo,
   TicketRepository,
+  TransactionContext,
+  TransactionRunner,
   UserRepository,
   ListCursorCodec,
 } from '@app/domain';
@@ -36,6 +40,7 @@ import {
   createChatFeedbackRepo,
   createQualityReviewsRepo,
   createChatHistoryRepo,
+  createRepositoryAdapters,
   resolveVectorDim,
   defaultHasher,
 } from './db';
@@ -90,6 +95,9 @@ export interface CoreDeps {
   embeddingService: EmbeddingService;
   contentParser: ContentParser;
   pdfValidator: PdfValidator;
+  clock: Clock;
+  hasher: Hasher;
+  runner: TransactionRunner;
   blobStorage: BlobStorage;
   ingestQueue: IngestQueue;
   rateLimiter: RateLimiter;
@@ -129,6 +137,13 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     embeddingService: getEmbeddingService(vectorDim, env),
     contentParser: createContentParser(env),
     pdfValidator: createPdfValidator(env),
+    clock: { now: () => new Date() },
+    hasher: defaultHasher,
+    runner: {
+      async run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T> {
+        return dbClient.transaction(async (tx) => fn(createRepositoryAdapters(tx, vectorDim, defaultHasher)));
+      },
+    },
     blobStorage: createBlobStorage(),
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),

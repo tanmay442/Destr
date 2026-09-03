@@ -22,7 +22,7 @@ function buildBaseDeps() {
     contentParser: core.contentParser,
     pdfValidator: core.pdfValidator,
     blobStorage: core.blobStorage,
-    hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
+    hasher: { sha256: (b: Uint8Array) => createHash('sha256').update(b).digest('hex') },
   };
 }
 

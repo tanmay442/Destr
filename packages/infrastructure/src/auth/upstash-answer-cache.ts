@@ -11,6 +11,7 @@ import type {
   LeaseRenewResult,
 } from '@app/domain';
 import { registerAnswerCacheProvider } from './answer-cache-registry';
+import { decodeBase64, encodeBase64 } from './base64';
 
 /**
  * Answer cache backed by Upstash Redis. Values are base64-wrapped to ensure
@@ -87,7 +88,7 @@ function createRedisCoordinator(redis: Redis): CacheLeaseCoordinator {
               const published = await redis.eval(
                 ANSWER_CACHE_LEASE_PUBLISH_LUA,
                 [leaseKey(key), key],
-                [token, Buffer.from(value, 'utf8').toString('base64'), ttlSecOrDefault(durationSec)],
+                [token, encodeBase64(value), ttlSecOrDefault(durationSec)],
               );
               if (published === 1 || published === '1' || published === true) return { kind: 'published' };
               active = false;
@@ -180,7 +181,7 @@ export function createUpstashAnswerCache(): AnswerCache {
       try {
         const wrapped = await redis.get<string>(key);
         if (wrapped == null) return null;
-        return Buffer.from(wrapped, 'base64').toString('utf8');
+        return decodeBase64(wrapped);
       } catch {
         // A cache read failure must never break the request path.
         return null;
@@ -188,7 +189,7 @@ export function createUpstashAnswerCache(): AnswerCache {
     },
     async set(key, answer, ttlSec) {
       try {
-        await redis.set(key, Buffer.from(answer, 'utf8').toString('base64'), { ex: ttlSecOrDefault(ttlSec) });
+        await redis.set(key, encodeBase64(answer), { ex: ttlSecOrDefault(ttlSec) });
       } catch {
         // Best-effort cache write; never fail the request path.
       }

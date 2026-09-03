@@ -42,6 +42,25 @@ import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import { after } from 'next/server';
+import {
+  tool,
+  convertToModelMessages,
+  streamText,
+  stepCountIs,
+  createUIMessageStreamResponse,
+  createUIMessageStream,
+} from 'ai';
+
+const modelGateway = {
+  streamText,
+  tool,
+  stepCountIs,
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+};
+
+export type ModelGateway = typeof modelGateway;
 
 const core = buildCoreDeps({
   env: defaultProcessEnv,
@@ -62,15 +81,13 @@ configureLogger(core.config.LOG_LEVEL as LogLevel);
 
 const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
-const systemClock = { now: () => new Date() };
-const systemHasher = Db.defaultHasher;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec, clock, hasher, runner } = core;
 
 const bind = <Args extends unknown[], T>(
   fn: (...args: Args) => Promise<Result<T>>,
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = Auth.createFallbackRateLimiter({
   primary: core.rateLimiter,
@@ -156,7 +173,7 @@ async function ingestQueuedDocumentStandalone(
   };
   const requeue = () => updateStatusIfCurrent('ingesting', 'queued').catch(() => {});
 
-  let buffer: Buffer;
+  let buffer: Uint8Array;
   try {
     buffer = await blobStorage.get(doc.storageKey);
   } catch (error) {
@@ -164,7 +181,7 @@ async function ingestQueuedDocumentStandalone(
     return err(new ExternalServiceError('Blob read failed', error));
   }
 
-  const blobHash = systemHasher.sha256(buffer);
+  const blobHash = hasher.sha256(buffer);
   const current = await documentRepo.findById(documentId);
   if (
     !current ||
@@ -196,7 +213,7 @@ async function ingestQueuedDocumentStandalone(
   }
 
   try {
-    await Db.transactionRunner.run(async (tx) => {
+    await runner.run(async (tx) => {
       const fresh = await tx.documents.findById(documentId);
       if (
         !fresh ||
@@ -227,12 +244,12 @@ async function ingestQueuedDocumentStandalone(
 
 const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   documents: documentRepo, chunks: chunkRepo,
-  embeddings: embeddingService, hasher: systemHasher,
+  embeddings: embeddingService, hasher,
   // Legacy fallback only: the canonical path is contentParser + chunkingStrategy.
   // pdfParser/textSplitter stay wired for SEED_LEGACY_SPLITTER seed compat.
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   contentParser: core.contentParser,
-  runner: Db.transactionRunner,
+  runner,
   summarizer: Llm.createDocSummarizer(core.chatModelProvider),
   cchEnabled: CCH_ENABLED,
 };
@@ -289,7 +306,7 @@ const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 function createComposition() {
   const auditDeps = { audit: core.auditRepo };
   const userDeps = { users: core.userRepo };
-  const txRunner = Db.transactionRunner;
+  const txRunner = runner;
 
   return {
     ingestFile: async (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, await resolveIngestDeps()),
@@ -376,7 +393,7 @@ function createComposition() {
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
-      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
+      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
@@ -400,7 +417,7 @@ function createComposition() {
         documents: documentRepo,
         chunks: chunkRepo,
         embeddings: embeddingService,
-        hasher: systemHasher,
+        hasher,
         blobStorage,
         pdfValidator: core.pdfValidator,
         runner: txRunner,
@@ -472,6 +489,7 @@ function createComposition() {
     db: core.dbClient,
     schema: Db.schema,
     blobStorage,
+    modelGateway,
     getEmbeddingModel: Llm.getEmbeddingModel,
     getChatModel: Llm.getChatModel,
     allowedChatFileOrigins: new Set(

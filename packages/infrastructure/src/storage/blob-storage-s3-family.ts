@@ -54,7 +54,7 @@ async function readBoundedStream(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
   key: string,
-): Promise<Buffer> {
+): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
