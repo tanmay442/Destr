@@ -7,10 +7,12 @@ import type {
   QualityReviewsRepo,
   ChatHistoryRepo,
   ChunkRepository,
+  ContentParser,
   DocumentRepository,
   EmbeddingService,
   EnvSource,
   IngestQueue,
+  PdfValidator,
   RateLimiter,
   Reranker,
   RuntimeConfig,
@@ -49,6 +51,9 @@ import {
   type RerankerStatus,
 } from './llm';
 import { createBlobStorage } from './storage/blob-storage-factory';
+import { createContentParser, createPdfValidator } from './pdf/registries';
+import './pdf/unpdf-parser';
+import './pdf/unpdf-validator';
 import { createIngestQueue } from './queue';
 import './auth/upstash-rate-limiter';
 import './auth/upstash-answer-cache';
@@ -83,6 +88,8 @@ export interface CoreDeps {
   qualityReviewsRepo: QualityReviewsRepo;
   chatHistoryRepo: ChatHistoryRepo;
   embeddingService: EmbeddingService;
+  contentParser: ContentParser;
+  pdfValidator: PdfValidator;
   blobStorage: BlobStorage;
   ingestQueue: IngestQueue;
   rateLimiter: RateLimiter;
@@ -120,6 +127,8 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     qualityReviewsRepo: createQualityReviewsRepo(dbClient),
     chatHistoryRepo: createChatHistoryRepo(dbClient),
     embeddingService: getEmbeddingService(vectorDim, env),
+    contentParser: createContentParser(env),
+    pdfValidator: createPdfValidator(env),
     blobStorage: createBlobStorage(),
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),

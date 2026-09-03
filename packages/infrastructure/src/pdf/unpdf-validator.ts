@@ -1,5 +1,6 @@
 import { ParseError, type PdfValidator } from '@app/domain';
 import { unpdfParser } from './unpdf-parser';
+import { registerPdfValidatorProvider } from './registries';
 
 function abortError(): ParseError {
   return new ParseError('PDF validation timed out');
@@ -28,3 +29,5 @@ export const unpdfValidator: PdfValidator = {
     }
   },
 };
+
+registerPdfValidatorProvider('unpdf', () => unpdfValidator);

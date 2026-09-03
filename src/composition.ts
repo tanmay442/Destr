@@ -228,8 +228,10 @@ async function ingestQueuedDocumentStandalone(
 const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   documents: documentRepo, chunks: chunkRepo,
   embeddings: embeddingService, hasher: systemHasher,
+  // Legacy fallback only: the canonical path is contentParser + chunkingStrategy.
+  // pdfParser/textSplitter stay wired for SEED_LEGACY_SPLITTER seed compat.
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
-  contentParser: Pdf.unpdfParser,
+  contentParser: core.contentParser,
   runner: Db.transactionRunner,
   summarizer: Llm.createDocSummarizer(core.chatModelProvider),
   cchEnabled: CCH_ENABLED,
@@ -238,6 +240,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
 function buildChunkingStrategy(cfg: AppConfig) {
   return Chunking.getChunkingStrategy(cfg.chunkingStrategy, {
     embeddings: embeddingService,
+    modelId: core.embeddingModelId,
     parentSize: cfg.parentChunkSize,
     childSize: cfg.childChunkSize,
   });
@@ -399,7 +402,7 @@ function createComposition() {
         embeddings: embeddingService,
         hasher: systemHasher,
         blobStorage,
-        pdfValidator: Pdf.unpdfValidator,
+        pdfValidator: core.pdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
         summarizer: Llm.createDocSummarizer(core.chatModelProvider),

@@ -1,4 +1,5 @@
-import type { ChunkingStrategy, EmbeddingService } from '@app/domain';
+import type { ChunkingStrategy, EmbeddingService, EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 import { getEmbeddingModelId } from '../llm';
 import { documentAwareSplitter } from './strategies/document-aware';
 import { adaptiveRecursiveSplitter } from './strategies/recursive-adaptive';
@@ -16,6 +17,7 @@ export type ChunkingStrategyName =
 export interface ChunkingStrategyOptions {
   embeddings: EmbeddingService;
   modelId?: string | undefined;
+  env?: EnvSource | undefined;
   /** Parent-child strategy tunables. */
   parentSize?: number | undefined;
   childSize?: number | undefined;
@@ -27,7 +29,7 @@ export function getChunkingStrategy(
   name: ChunkingStrategyName,
   opts: ChunkingStrategyOptions,
 ): ChunkingStrategy {
-  const modelId = opts.modelId ?? getEmbeddingModelId();
+  const modelId = opts.modelId ?? getEmbeddingModelId(opts.env ?? defaultProcessEnv);
   switch (name) {
     case 'document-aware':
       return documentAwareSplitter(modelId, {
