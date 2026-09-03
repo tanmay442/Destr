@@ -734,18 +734,39 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }),
   };
 
+  // EXP-LEASE: non-blocking single-flight. Fresh turnIds (uuidv4 per submit,
+  // retry!==true) skip the turn-lease read/wait entirely — DB chat_turns trigger
+  // already guarantees global uniqueness. Only true retries wait, max 2s.
+  const EXP_LEASE_TTL_SEC = 15;
+  const EXP_MAX_WAIT_MS = 2_000;
+  const isRetryRequest = parsed.data.retry === true;
+
   try {
     if (turnResultCache && turnResultKey) {
+      if (!isRetryRequest) {
+        expMark('turnSkip-fresh', { reason: 'fresh turnId, DB trigger owns idempotency' });
+        // Still try to own the turn lease in background for later publish,
+        // but never block TTFB on it.
+        try {
+          const bgLease = createCacheLease(turnResultCache, turnResultKey, EXP_LEASE_TTL_SEC, cacheLeaseOptions);
+          const bgResult = await bgLease.acquireResult();
+          expMark('turnBgAcquire', { result: bgResult.kind });
+          if (bgResult.kind === 'acquired') turnLease = bgLease;
+          else await bgLease.releaseResult().catch(() => undefined);
+        } catch (e) {
+          expMark('turnBgAcquire-error', { error: String(e) });
+        }
+      } else {
       const t0 = performance.now();
       let turnResult = await turnResultCache.get(turnResultKey).catch((e) => { expMark('turnGet-error', { error: String(e) }); return null; });
-      expMark('turnGet', { hit: Boolean(turnResult), ms: Math.round(performance.now() - t0), isFirstTurn, cacheable: Boolean(cacheKey) });
+      expMark('turnGet', { hit: Boolean(turnResult), ms: Math.round(performance.now() - t0), isFirstTurn, cacheable: Boolean(cacheKey), isRetryRequest });
       let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
       if (turnState && 'conflict' in turnState) { expMark('turnConflict'); return { kind: 'idempotency-conflict' }; }
       if (!turnState) {
         const lease = createCacheLease(
           turnResultCache,
           turnResultKey,
-          Math.ceil(MAX_DURATION_MS / 1000),
+          EXP_LEASE_TTL_SEC,
           cacheLeaseOptions,
         );
         const a0 = performance.now();
@@ -757,11 +778,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
           if (turnState && 'conflict' in turnState) { expMark('turnConflict-after-acquire'); return { kind: 'idempotency-conflict' }; }
         } else if (leaseResult.kind === 'held') {
-          const remainingWaitMs = Math.max(
-            0,
-            MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+          const remainingWaitMs = Math.min(
+            EXP_MAX_WAIT_MS,
+            Math.max(0, MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000),
           );
-          expMark('turnWait-start', { remainingWaitMs });
+          expMark('turnWait-start', { remainingWaitMs, capped: true });
           const w0 = performance.now();
           turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
             timeoutMs: remainingWaitMs,
@@ -770,10 +791,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           expMark('turnWait-done', { hit: Boolean(turnResult), ms: Math.round(performance.now() - w0) });
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
-          if (!turnState) { expMark('turnWait-timeout'); return { kind: 'cache-wait-timeout' }; }
+          if (!turnState) { expMark('turnWait-proceed-anyway', { reason: 'duplicate work cheaper than 503' }); }
         } else {
-          expMark('turnUnavailable');
-          return { kind: 'cache-unavailable' };
+          expMark('turnUnavailable-proceed', { reason: 'fail-open, keep generating' });
         }
       }
       if (turnState && 'answer' in turnState) {
@@ -819,6 +839,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           meta: { turnId, mode: persistedMode, cacheHit: true },
         };
       }
+      } // end else (retry path)
     }
 
     if (cacheKey) {
@@ -830,7 +851,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       const lease = createCacheLease(
         deps.answerCache,
         cacheKey,
-        Math.ceil(MAX_DURATION_MS / 1000),
+        EXP_LEASE_TTL_SEC,
         cacheLeaseOptions,
       );
       const a0 = performance.now();
@@ -840,21 +861,20 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         cacheLease = lease;
         cached = await deps.answerCache.get(cacheKey).catch(() => null);
       } else if (leaseResult.kind === 'held') {
-        const remainingWaitMs = Math.max(
-          0,
-          MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
+        const remainingWaitMs = Math.min(
+          EXP_MAX_WAIT_MS,
+          Math.max(0, MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000),
         );
-        expMark('answerWait-start', { remainingWaitMs });
+        expMark('answerWait-start', { remainingWaitMs, capped: true });
         const w0 = performance.now();
         cached = await waitForCachedAnswer(deps.answerCache, cacheKey, {
           timeoutMs: remainingWaitMs,
           signal: request.signal,
         });
         expMark('answerWait-done', { hit: Boolean(cached), ms: Math.round(performance.now() - w0) });
-        if (!cached) { expMark('answerWait-timeout'); return { kind: 'cache-wait-timeout' }; }
+        if (!cached) { expMark('answerWait-proceed-anyway', { reason: 'duplicate work cheaper than 503' }); }
       } else {
-        expMark('answerUnavailable');
-        return { kind: 'cache-unavailable' };
+        expMark('answerUnavailable-proceed', { reason: 'fail-open, keep generating' });
       }
     }
     if (cached) {
