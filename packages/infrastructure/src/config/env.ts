@@ -194,6 +194,10 @@ export function loadEnvConfig(env: EnvSource = defaultProcessEnv): RuntimeConfig
   return Object.freeze(resolveRuntimeConfig(env));
 }
 
+export function resetEnvConfigForTests(): void {
+  _defaultConfig = undefined;
+}
+
 const defaultConfig = loadEnvConfig();
 
 export const LOG_LEVEL: LogLevel = defaultConfig.LOG_LEVEL as LogLevel;

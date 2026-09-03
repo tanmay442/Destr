@@ -1,7 +1,11 @@
 import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 import {
   chatProviderAdapterRegistry,
   chatProviderRegistry,
+  type ChatModelDeps,
+  type ChatModelProvider,
   type ChatModelProviderAdapter,
 } from './registries';
 import type { PromptCacheRequestContext, PromptCacheUsage } from './prompt-cache';
@@ -18,23 +22,26 @@ export interface ChatModelAdapter {
   readonly parseUsage: (usage: unknown, providerMetadata?: unknown) => PromptCacheUsage;
 }
 
-function resolveProvider(): {
+function resolveProvider(env: EnvSource = defaultProcessEnv): {
   name: string;
   factory: NonNullable<ReturnType<typeof chatProviderRegistry.get>>;
   adapter: ChatModelProviderAdapter | undefined;
 } {
-  const name = process.env.CHAT_PROVIDER ?? 'openai';
+  const name = env.get('CHAT_PROVIDER') ?? 'openai';
   const factory = chatProviderRegistry.get(name);
   if (!factory) throw new Error(`Unknown CHAT_PROVIDER: ${name}`);
   return { name, factory, adapter: chatProviderAdapterRegistry.get(name) };
 }
 
+export const defaultChatModelProvider: ChatModelProvider = (deps: ChatModelDeps) =>
+  getChatModel(deps.modelId, deps.env);
+
 function noProviderOptions(): undefined {
   return undefined;
 }
 
-export function getChatModel(modelId?: string): LanguageModelV3 {
-  return getChatModelAdapter(modelId).model;
+export function getChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV3 {
+  return getChatModelAdapter(modelId, env).model;
 }
 
 /**
@@ -42,9 +49,9 @@ export function getChatModel(modelId?: string): LanguageModelV3 {
  * adapter is the only place that knows how a vendor expresses prompt-cache
  * controls or usage details.
  */
-export function getChatModelAdapter(modelId?: string): ChatModelAdapter {
-  const resolved = resolveProvider();
-  const model = resolved.factory(modelId);
+export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultProcessEnv): ChatModelAdapter {
+  const resolved = resolveProvider(env);
+  const model = resolved.factory({ env, ...(modelId !== undefined ? { modelId } : {}) });
   const adapter = resolved.adapter;
   return {
     model,
@@ -71,23 +78,24 @@ export function getChatModelAdapter(modelId?: string): ChatModelAdapter {
   };
 }
 
-export function getChatModelCapabilities(modelId?: string): ChatModelAdapter['capabilities'] {
-  return getChatModelAdapter(modelId).capabilities;
+export function getChatModelCapabilities(modelId?: string, env: EnvSource = defaultProcessEnv): ChatModelAdapter['capabilities'] {
+  return getChatModelAdapter(modelId, env).capabilities;
 }
 
 export function getChatModelProviderOptions(
   context: PromptCacheRequestContext,
   modelId?: string,
+  env: EnvSource = defaultProcessEnv,
 ): ReturnType<ChatModelAdapter['buildProviderOptions']> {
-  return getChatModelAdapter(modelId).buildProviderOptions(context);
+  return getChatModelAdapter(modelId, env).buildProviderOptions(context);
 }
 
-export function getChatModelTelemetry(modelId?: string): {
+export function getChatModelTelemetry(modelId?: string, env: EnvSource = defaultProcessEnv): {
   provider: string;
   model: string;
   capabilities: ChatModelAdapter['capabilities'];
 } {
-  const adapter = getChatModelAdapter(modelId);
+  const adapter = getChatModelAdapter(modelId, env);
   return {
     provider: adapter.provider,
     model: adapter.modelId,
@@ -99,6 +107,7 @@ export function parseChatModelUsage(
   usage: unknown,
   providerMetadata?: unknown,
   modelId?: string,
+  env: EnvSource = defaultProcessEnv,
 ): PromptCacheUsage {
-  return getChatModelAdapter(modelId).parseUsage(usage, providerMetadata);
+  return getChatModelAdapter(modelId, env).parseUsage(usage, providerMetadata);
 }

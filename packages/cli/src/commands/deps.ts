@@ -18,8 +18,11 @@ function buildBaseDeps() {
     documents: core.documentRepo,
     chunks: core.chunkRepo,
     embeddings: core.embeddingService,
+    embeddingModelId: core.embeddingModelId,
+    contentParser: core.contentParser,
+    pdfValidator: core.pdfValidator,
     blobStorage: core.blobStorage,
-    hasher: { sha256: (b: Buffer) => createHash('sha256').update(b).digest('hex') },
+    hasher: { sha256: (b: Uint8Array) => createHash('sha256').update(b).digest('hex') },
   };
 }
 
@@ -34,9 +37,9 @@ export async function buildIngestDeps(): Promise<IngestDeps> {
     hasher: base.hasher,
     pdfParser: Pdf.unpdfParser,
     textSplitter: Pdf.langchainSplitter,
-    contentParser: useStrategy ? Pdf.unpdfParser : undefined,
+    contentParser: useStrategy ? base.contentParser : undefined,
     chunkingStrategy: useStrategy
-      ? Chunking.getChunkingStrategy(strategyName, { embeddings: base.embeddings })
+      ? Chunking.getChunkingStrategy(strategyName, { embeddings: base.embeddings, modelId: base.embeddingModelId })
       : undefined,
   };
 }
@@ -49,7 +52,7 @@ export async function buildUploadDeps(): Promise<UploadIngestDeps> {
     embeddings: base.embeddings,
     hasher: base.hasher,
     blobStorage: base.blobStorage,
-    pdfValidator: Pdf.unpdfValidator,
+    pdfValidator: base.pdfValidator,
     markdownParser,
   };
 }

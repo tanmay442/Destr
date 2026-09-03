@@ -1,9 +1,10 @@
 import { generateText } from 'ai';
-import { logger } from '@app/domain';
+import { logger, type EnvSource } from '@app/domain';
 import { getChatModel } from './model';
+import { defaultProcessEnv } from '../config/env';
 import { AUX_MODEL } from '@app/infrastructure/config';
 import { retryOnTransient } from './retry';
-import type { ChatModelProvider } from './registries';
+import type { ChatModelDeps, ChatModelProvider } from './registries';
 
 const JUDGE_TIMEOUT_MS = 10_000;
 const JUDGE_RETRY_ATTEMPTS = 2;
@@ -15,6 +16,7 @@ const FAITHFULNESS_SYSTEM = `You are a faithfulness judge. Given DOCUMENTS and A
 export interface JudgeOptions {
   auxModelId?: string | undefined;
   modelProvider?: ChatModelProvider | undefined;
+  env?: EnvSource | undefined;
 }
 
 /** Retrieval-relevance verdict: are the retrieved chunks useful for the question? */
@@ -30,8 +32,10 @@ export interface FaithfulnessVerdict {
 }
 
 function resolveJudgeModel(opts: JudgeOptions) {
-  const provider = opts.modelProvider ?? getChatModel;
-  return provider(opts.auxModelId || AUX_MODEL || undefined);
+  const env = opts.env ?? defaultProcessEnv;
+  const provider: ChatModelProvider =
+    opts.modelProvider ?? ((deps: ChatModelDeps) => getChatModel(deps.modelId, deps.env));
+  return provider({ env, modelId: opts.auxModelId || env.get('AUX_MODEL') || AUX_MODEL || undefined });
 }
 
 async function askJudge(

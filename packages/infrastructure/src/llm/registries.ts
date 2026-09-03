@@ -1,4 +1,4 @@
-import type { EmbeddingService, Reranker } from '@app/domain';
+import type { EmbeddingService, EnvSource, Reranker } from '@app/domain';
 import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
 import { createProviderRegistry } from '../registry';
 import type {
@@ -7,7 +7,12 @@ import type {
   PromptCacheUsage,
 } from './prompt-cache';
 
-export type ChatModelProvider = (modelId?: string) => LanguageModelV3;
+export interface ChatModelDeps {
+  env: EnvSource;
+  modelId?: string | undefined;
+}
+
+export type ChatModelProvider = (deps: ChatModelDeps) => LanguageModelV3;
 
 export const chatProviderRegistry = createProviderRegistry<ChatModelProvider>();
 
@@ -37,7 +42,12 @@ export function registerChatProviderAdapter(
   chatProviderAdapterRegistry.register(key, adapter);
 }
 
-export type EmbeddingProviderFactory = (vectorDim?: number) => EmbeddingService;
+export interface EmbeddingServiceDeps {
+  env: EnvSource;
+  vectorDim?: number | undefined;
+}
+
+export type EmbeddingProviderFactory = (deps: EmbeddingServiceDeps) => EmbeddingService;
 
 export const embeddingProviderRegistry = createProviderRegistry<EmbeddingProviderFactory>();
 
@@ -45,7 +55,11 @@ export function registerEmbeddingProvider(key: string, factory: EmbeddingProvide
   embeddingProviderRegistry.register(key, factory);
 }
 
-export type RerankerProvider = () => Reranker | undefined;
+export interface RerankerDeps {
+  env: EnvSource;
+}
+
+export type RerankerProvider = (deps: RerankerDeps) => Reranker | undefined;
 
 export const rerankerProviderRegistry = createProviderRegistry<RerankerProvider>();
 
@@ -53,8 +67,12 @@ export function registerRerankerProvider(key: string, factory: RerankerProvider)
   rerankerProviderRegistry.register(key, factory);
 }
 
-export const embeddingModelIdRegistry = createProviderRegistry<() => string>();
+export interface EmbeddingModelIdDeps {
+  env: EnvSource;
+}
 
-export function registerEmbeddingModelIdProvider(key: string, factory: () => string): void {
+export const embeddingModelIdRegistry = createProviderRegistry<(deps: EmbeddingModelIdDeps) => string>();
+
+export function registerEmbeddingModelIdProvider(key: string, factory: (deps: EmbeddingModelIdDeps) => string): void {
   embeddingModelIdRegistry.register(key, factory);
 }

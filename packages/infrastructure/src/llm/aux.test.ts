@@ -30,6 +30,7 @@ vi.mock('./retry', async () => {
 
 import { createAuxModels } from './aux';
 import { getAuxModels } from './index';
+import type { ChatModelProvider } from './registries';
 
 let consoleError: ReturnType<typeof vi.spyOn>;
 let consoleWarn: ReturnType<typeof vi.spyOn>;
@@ -199,11 +200,20 @@ describe('getAuxModels selector', () => {
     expect(aux.hallucinationGrader).toBeDefined();
     process.env.AGENTIC_ENABLED = prev ?? '';
   });
+
+  it('forwards the injected env to the model provider', async () => {
+    const customEnv = { get: (key: string) => (key === 'AUX_MODEL' ? 'env-aux-model' : undefined) };
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
+    generateTextMock.mockResolvedValue({ text: 'rewritten' });
+    const aux = getAuxModels(true, undefined, modelProvider, customEnv);
+    await aux.queryRewriter!.rewrite('q');
+    expect(modelProvider).toHaveBeenCalledWith({ env: customEnv, modelId: 'env-aux-model' });
+  });
 });
 
 describe('createAuxModels with an injected model provider', () => {
   it('uses the injected provider instead of the default chat model', async () => {
-    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
     const aux = createAuxModels(undefined, modelProvider);
     generateTextMock.mockResolvedValue({ text: 'rewritten' });
     await aux.queryRewriter.rewrite('q');
@@ -212,10 +222,10 @@ describe('createAuxModels with an injected model provider', () => {
   });
 
   it('passes the aux model override to the injected provider', async () => {
-    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
     const aux = createAuxModels('custom-aux-model', modelProvider);
     generateTextMock.mockResolvedValue(groundedResult(false));
     await aux.hallucinationGrader.grade('docs', 'answer');
-    expect(modelProvider).toHaveBeenCalledWith('custom-aux-model');
+    expect(modelProvider).toHaveBeenCalledWith({ env: expect.anything(), modelId: 'custom-aux-model' });
   });
 });

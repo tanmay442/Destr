@@ -42,6 +42,25 @@ import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import { after } from 'next/server';
+import {
+  tool,
+  convertToModelMessages,
+  streamText,
+  stepCountIs,
+  createUIMessageStreamResponse,
+  createUIMessageStream,
+} from 'ai';
+
+const modelGateway = {
+  streamText,
+  tool,
+  stepCountIs,
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+};
+
+export type ModelGateway = typeof modelGateway;
 
 const core = buildCoreDeps({
   env: defaultProcessEnv,
@@ -62,15 +81,13 @@ configureLogger(core.config.LOG_LEVEL as LogLevel);
 
 const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
-const systemClock = { now: () => new Date() };
-const systemHasher = Db.defaultHasher;
+const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec, clock, hasher, runner } = core;
 
 const bind = <Args extends unknown[], T>(
   fn: (...args: Args) => Promise<Result<T>>,
   ...bound: Args
 ): Promise<Result<T>> => fn(...bound);
 
-const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec } = core;
 const ingestQueue = core.ingestQueue;
 const rateLimiter = Auth.createFallbackRateLimiter({
   primary: core.rateLimiter,
@@ -156,7 +173,7 @@ async function ingestQueuedDocumentStandalone(
   };
   const requeue = () => updateStatusIfCurrent('ingesting', 'queued').catch(() => {});
 
-  let buffer: Buffer;
+  let buffer: Uint8Array;
   try {
     buffer = await blobStorage.get(doc.storageKey);
   } catch (error) {
@@ -164,7 +181,7 @@ async function ingestQueuedDocumentStandalone(
     return err(new ExternalServiceError('Blob read failed', error));
   }
 
-  const blobHash = systemHasher.sha256(buffer);
+  const blobHash = hasher.sha256(buffer);
   const current = await documentRepo.findById(documentId);
   if (
     !current ||
@@ -196,7 +213,7 @@ async function ingestQueuedDocumentStandalone(
   }
 
   try {
-    await Db.transactionRunner.run(async (tx) => {
+    await runner.run(async (tx) => {
       const fresh = await tx.documents.findById(documentId);
       if (
         !fresh ||
@@ -227,17 +244,20 @@ async function ingestQueuedDocumentStandalone(
 
 const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   documents: documentRepo, chunks: chunkRepo,
-  embeddings: embeddingService, hasher: systemHasher,
+  embeddings: embeddingService, hasher,
+  // Legacy fallback only: the canonical path is contentParser + chunkingStrategy.
+  // pdfParser/textSplitter stay wired for SEED_LEGACY_SPLITTER seed compat.
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
-  contentParser: Pdf.unpdfParser,
-  runner: Db.transactionRunner,
-  summarizer: Llm.createDocSummarizer(Llm.getChatModel),
+  contentParser: core.contentParser,
+  runner,
+  summarizer: Llm.createDocSummarizer(core.chatModelProvider, core.env),
   cchEnabled: CCH_ENABLED,
 };
 
 function buildChunkingStrategy(cfg: AppConfig) {
   return Chunking.getChunkingStrategy(cfg.chunkingStrategy, {
     embeddings: embeddingService,
+    modelId: core.embeddingModelId,
     parentSize: cfg.parentChunkSize,
     childSize: cfg.childChunkSize,
   });
@@ -264,7 +284,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
-  const aux = Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel);
+  const aux = Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
@@ -286,7 +306,7 @@ const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 function createComposition() {
   const auditDeps = { audit: core.auditRepo };
   const userDeps = { users: core.userRepo };
-  const txRunner = Db.transactionRunner;
+  const txRunner = runner;
 
   return {
     ingestFile: async (input: Parameters<typeof ingestFile>[0]) => bind(ingestFile, input, await resolveIngestDeps()),
@@ -343,7 +363,7 @@ function createComposition() {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
     },
-    getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -373,7 +393,7 @@ function createComposition() {
     softDeleteDocument: (input: Parameters<typeof softDeleteDocument>[0]) =>
       bind(softDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, ...userDeps }),
     restoreDocument: (id: number, actorId: string) =>
-      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock: systemClock, runner: txRunner, ...userDeps }),
+      bind(restoreDocument, id, actorId, { documents: documentRepo, ...auditDeps, clock, runner: txRunner, ...userDeps }),
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
@@ -397,12 +417,12 @@ function createComposition() {
         documents: documentRepo,
         chunks: chunkRepo,
         embeddings: embeddingService,
-        hasher: systemHasher,
+        hasher,
         blobStorage,
-        pdfValidator: Pdf.unpdfValidator,
+        pdfValidator: core.pdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
-        summarizer: Llm.createDocSummarizer(Llm.getChatModel),
+        summarizer: Llm.createDocSummarizer(core.chatModelProvider, core.env),
         cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number, fileHash?: string, signal?: AbortSignal | undefined) =>
@@ -469,8 +489,9 @@ function createComposition() {
     db: core.dbClient,
     schema: Db.schema,
     blobStorage,
-    getEmbeddingModel: Llm.getEmbeddingModel,
-    getChatModel: Llm.getChatModel,
+    modelGateway,
+    getEmbeddingModel: () => Llm.getEmbeddingModel(core.env),
+    getChatModel: (modelId?: string) => Llm.getChatModel(modelId, core.env),
     allowedChatFileOrigins: new Set(
       (process.env.CHAT_FILE_ALLOWED_ORIGINS ?? '')
         .split(',')
@@ -478,7 +499,7 @@ function createComposition() {
         .filter((origin) => origin.length > 0),
     ),
     getChatModelRequestOptions: (input: { stablePromptPrefix: string; prefixVersion: string }) => {
-      const adapter = Llm.getChatModelAdapter();
+      const adapter = Llm.getChatModelAdapter(undefined, core.env);
       const providerOptions = adapter.buildProviderOptions(input);
       return {
         ...(providerOptions !== undefined ? { providerOptions } : {}),
@@ -492,7 +513,7 @@ function createComposition() {
       };
     },
     getRetrievalProvider: () => 'pgvector',
-    getEmbeddingModelId: Llm.getEmbeddingModelId,
+    getEmbeddingModelId: () => core.embeddingModelId,
     answerCacheKey,
     cacheLeasePolicy,
     onCacheLeaseTelemetry,
@@ -530,7 +551,9 @@ let _vectorCheckStarted = false;
 export function startVectorDimensionCheck(): void {
   if (_vectorCheckStarted) return;
   _vectorCheckStarted = true;
-  Db.validateVectorDimension().catch((e: unknown) => {
+  Db.validateVectorDimension(defaultProcessEnv, () =>
+    embeddingService.embed('embedding dimension probe'),
+  ).catch((e: unknown) => {
     logger.error('Embedding dimension validation failed at startup', { error: e });
   });
 }

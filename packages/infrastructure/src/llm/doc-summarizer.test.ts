@@ -7,6 +7,7 @@ vi.mock('./index', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-mo
 vi.mock('./model', () => ({ getChatModel: vi.fn().mockReturnValue({ id: 'fake-model' }) }));
 
 import { docSummarizer, createDocSummarizer, clearDocContextCache, getDocContextCacheSize } from './doc-summarizer';
+import type { ChatModelProvider } from './registries';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 
 describe('docSummarizer (Contextual Chunk Headers)', () => {
@@ -157,7 +158,7 @@ describe('docSummarizer (Contextual Chunk Headers)', () => {
   });
 
   it('uses an injected model provider instead of the default chat model', async () => {
-    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
     const summarizer = createDocSummarizer(modelProvider);
     generateText.mockResolvedValue({ text: '{"title":"Injected","summary":"S."}' });
 

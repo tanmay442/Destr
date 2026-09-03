@@ -13,7 +13,8 @@ vi.mock('@ai-sdk/openai', () => ({
 
 vi.mock('../../../db/schema-vector', () => ({ resolveVectorDim: () => 3 }));
 
-import { ollamaEmbeddingService } from '../../ollama-embedding-service';
+import { createOllamaEmbeddingService } from '../../ollama-embedding-service';
+import { defaultProcessEnv } from '../../../config/env';
 import { runEmbeddingServiceContract } from './embedding-service-contract';
 
 const DIMENSION = 3;
@@ -26,5 +27,8 @@ describe('ollama embedding service contract', () => {
     }));
   });
 
-  runEmbeddingServiceContract(() => ollamaEmbeddingService, { dimension: DIMENSION, vectorFor });
+  runEmbeddingServiceContract(
+    () => createOllamaEmbeddingService({ env: defaultProcessEnv, vectorDim: DIMENSION }),
+    { dimension: DIMENSION, vectorFor },
+  );
 });

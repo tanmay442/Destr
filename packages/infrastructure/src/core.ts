@@ -7,15 +7,21 @@ import type {
   QualityReviewsRepo,
   ChatHistoryRepo,
   ChunkRepository,
+  Clock,
+  ContentParser,
   DocumentRepository,
   EmbeddingService,
   EnvSource,
+  Hasher,
   IngestQueue,
+  PdfValidator,
   RateLimiter,
   Reranker,
   RuntimeConfig,
   SettingsRepo,
   TicketRepository,
+  TransactionContext,
+  TransactionRunner,
   UserRepository,
   ListCursorCodec,
 } from '@app/domain';
@@ -34,16 +40,25 @@ import {
   createChatFeedbackRepo,
   createQualityReviewsRepo,
   createChatHistoryRepo,
+  createRepositoryAdapters,
   resolveVectorDim,
   defaultHasher,
 } from './db';
 import {
+  getChatModel,
+  getEmbeddingModelId,
   getEmbeddingService,
   availableRerankers,
   resolveReranker,
+  resolveRerankerPlatform,
+  type ChatModelDeps,
+  type RerankerPlatform,
   type RerankerStatus,
 } from './llm';
 import { createBlobStorage } from './storage/blob-storage-factory';
+import { createContentParser, createPdfValidator } from './pdf/registries';
+import './pdf/unpdf-parser';
+import './pdf/unpdf-validator';
 import { createIngestQueue } from './queue';
 import './auth/upstash-rate-limiter';
 import './auth/upstash-answer-cache';
@@ -61,6 +76,11 @@ export interface CoreDepsOptions {
 
 export interface CoreDeps {
   config: RuntimeConfig;
+  env: EnvSource;
+  vectorDim: number;
+  embeddingModelId: string;
+  chatModelProvider: (deps: ChatModelDeps) => ReturnType<typeof getChatModel>;
+  rerankerPlatform: RerankerPlatform;
   dbClient: ReturnType<typeof createDbClient>;
   documentRepo: DocumentRepository;
   chunkRepo: ChunkRepository;
@@ -73,6 +93,11 @@ export interface CoreDeps {
   qualityReviewsRepo: QualityReviewsRepo;
   chatHistoryRepo: ChatHistoryRepo;
   embeddingService: EmbeddingService;
+  contentParser: ContentParser;
+  pdfValidator: PdfValidator;
+  clock: Clock;
+  hasher: Hasher;
+  runner: TransactionRunner;
   blobStorage: BlobStorage;
   ingestQueue: IngestQueue;
   rateLimiter: RateLimiter;
@@ -86,9 +111,15 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
   const config = loadEnvConfig(env);
   const cursorCodec = createSignedListCursorCodec(parseCursorSigningConfig(env));
   const vectorDim = resolveVectorDim(env);
+  const rerankerPlatform = resolveRerankerPlatform(env);
   const dbClient = env === defaultProcessEnv ? db : createDbClient({ env, vectorDim });
   return {
     config,
+    env,
+    vectorDim,
+    embeddingModelId: getEmbeddingModelId(env),
+    chatModelProvider: (deps) => getChatModel(deps.modelId, env),
+    rerankerPlatform,
     dbClient,
     documentRepo: createDocumentRepo(dbClient),
     chunkRepo: createChunkRepo(dbClient, vectorDim, defaultHasher),
@@ -103,14 +134,23 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     chatFeedbackRepo: createChatFeedbackRepo(dbClient),
     qualityReviewsRepo: createQualityReviewsRepo(dbClient),
     chatHistoryRepo: createChatHistoryRepo(dbClient),
-    embeddingService: getEmbeddingService(vectorDim),
+    embeddingService: getEmbeddingService(vectorDim, env),
+    contentParser: createContentParser(env),
+    pdfValidator: createPdfValidator(env),
+    clock: { now: () => new Date() },
+    hasher: defaultHasher,
+    runner: {
+      async run<T>(fn: (ctx: TransactionContext) => Promise<T>): Promise<T> {
+        return dbClient.transaction(async (tx) => fn(createRepositoryAdapters(tx, vectorDim, defaultHasher)));
+      },
+    },
     blobStorage: createBlobStorage(),
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),
     answerCache: createAnswerCache(options.onAnswerCacheInitError),
     cursorCodec,
-    resolveReranker,
-    availableRerankers,
+    resolveReranker: (provider: string) => resolveReranker(provider, env, rerankerPlatform),
+    availableRerankers: () => availableRerankers(env, rerankerPlatform),
   };
 }
 

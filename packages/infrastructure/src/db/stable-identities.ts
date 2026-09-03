@@ -16,7 +16,7 @@ export interface StableChunkIdentityInput {
 }
 
 export function hashChunkContent(content: string, hasher: Hasher = defaultHasher): string {
-  return hasher.sha256(Buffer.from(content, 'utf8')).toLowerCase();
+  return hasher.sha256(new TextEncoder().encode(content)).toLowerCase();
 }
 
 export function normalizeChunkContentHash(
@@ -39,5 +39,5 @@ export function chunkIdentityPayload(input: StableChunkIdentityInput): string {
 }
 
 export function createChunkUid(input: StableChunkIdentityInput, hasher: Hasher = defaultHasher): string {
-  return hasher.sha256(Buffer.from(chunkIdentityPayload(input), 'utf8')).toLowerCase();
+  return hasher.sha256(new TextEncoder().encode(chunkIdentityPayload(input))).toLowerCase();
 }

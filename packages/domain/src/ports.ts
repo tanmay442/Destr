@@ -175,7 +175,7 @@ export interface RetrievedChunkRow {
   chunkIndex: number;
 }
 
-/** Parses raw content (e.g. PDF bytes) into structured pages. Runtime-neutral: accepts `Uint8Array` (a `Buffer` satisfies it). */
+/** Parses raw content (e.g. PDF bytes) into structured pages. Runtime-neutral byte input. */
 export interface ContentParser {
   extractPages(buffer: Uint8Array): Promise<Array<{ page: number; text: string }>>;
   extractText(buffer: Uint8Array): Promise<string>;
@@ -638,7 +638,7 @@ export interface ChatEventPurge {
   anonymizeUserData(userId: string): Promise<{ updatedCount: number }>;
 }
 
-/** Per-turn metrics store. Buffers in memory, flushes on size/interval threshold. */
+/** Per-turn metrics store. Holds entries in memory, flushes on size/interval threshold. */
 export type ChatEventsRepo = ChatEventWriter & ChatEventReader & ChatEventRetention & ChatEventPurge;
 
 export type QualityReviewVerdict = 'good' | 'bad' | 'docs_missing';
@@ -849,8 +849,8 @@ export interface DocSummarizer {
 }
 
 export interface BlobStorage {
-  put(key: string, body: Buffer, contentType: string): Promise<void>;
-  get(key: string): Promise<Buffer>;
+  put(key: string, body: Uint8Array, contentType: string): Promise<void>;
+  get(key: string): Promise<Uint8Array>;
   stream(key: string): Promise<ReadableStream<Uint8Array>>;
   delete(key: string): Promise<void>;
   signedUrl?(key: string, ttlSec: number): Promise<string>;
@@ -862,7 +862,7 @@ export interface IngestQueue {
 }
 
 export interface PdfParser {
-  extractText(buffer: Buffer): Promise<string>;
+  extractText(buffer: Uint8Array): Promise<string>;
 }
 
 export interface TextSplitter {
@@ -886,7 +886,7 @@ export interface Clock {
 }
 
 export interface Hasher {
-  sha256(buf: Buffer): string;
+  sha256(buf: Uint8Array): string;
 }
 
 export interface SessionStore {

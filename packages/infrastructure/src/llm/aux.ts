@@ -1,10 +1,11 @@
 import { generateText, tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { logger, type QueryRewriter, type HallucinationGrader } from '@app/domain';
+import { logger, type EnvSource, type QueryRewriter, type HallucinationGrader } from '@app/domain';
 import { getChatModel } from './model';
+import { defaultProcessEnv } from '../config/env';
 import { AUX_MODEL } from '@app/infrastructure/config';
 import { AUX_REQUEST_TIMEOUT_MS, retryOnTransient, isDeadlineAbort } from './retry';
-import type { ChatModelProvider } from './registries';
+import type { ChatModelDeps, ChatModelProvider } from './registries';
 
 const AUX_RETRY_ATTEMPTS = 3;
 
@@ -74,9 +75,11 @@ export interface AuxModels {
 
 export function createAuxModels(
   auxModelId?: string,
-  modelProvider: ChatModelProvider = getChatModel,
+  modelProvider: ChatModelProvider = (deps: ChatModelDeps) => getChatModel(deps.modelId, deps.env),
+  env: EnvSource = defaultProcessEnv,
 ): AuxModels {
-  const model = () => modelProvider(auxModelId || AUX_MODEL || undefined);
+  const resolvedModelId = auxModelId || env.get('AUX_MODEL') || AUX_MODEL || undefined;
+  const model = () => modelProvider({ env, modelId: resolvedModelId });
 
   let turnDeadlineAt: number | null = null;
   const ensureTurnDeadline = (): number => {

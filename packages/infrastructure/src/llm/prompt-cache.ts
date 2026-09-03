@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SharedV3ProviderOptions } from '@ai-sdk/provider';
+import { defaultProcessEnv } from '../config/env';
 
 export type PromptCacheStrategy = 'automatic' | 'explicit' | 'telemetry' | 'none';
 
@@ -217,7 +218,7 @@ export function buildOpenAIPromptCacheOptions(
  */
 export function buildGooglePromptCacheOptions(
   _context: PromptCacheRequestContext,
-  cachedContent: string | undefined = process.env.GOOGLE_CACHED_CONTENT,
+  cachedContent: string | undefined = defaultProcessEnv.get('GOOGLE_CACHED_CONTENT'),
 ): SharedV3ProviderOptions | undefined {
   const value = cachedContent?.trim();
   if (!value) return undefined;

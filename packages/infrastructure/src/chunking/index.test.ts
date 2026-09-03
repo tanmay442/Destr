@@ -52,6 +52,16 @@ describe('getChunkingStrategy registry', () => {
     const chunks = await s.splitPages(pages);
     expect(chunks.every((c) => c.embeddingModel === 'test-model')).toBe(true);
   });
+
+  it('stamps every emitted chunk with the resolved model id on all strategies', async () => {
+    const names = ['document-aware', 'recursive-adaptive', 'semantic', 'pre-chunked', 'parent-child'] as const;
+    for (const name of names) {
+      const s = getChunkingStrategy(name, { embeddings: mockEmbeddings(), modelId: 'stamp-model' });
+      const chunks = await s.splitPages(pages);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.every((c) => c.embeddingModel === 'stamp-model')).toBe(true);
+    }
+  });
 });
 
 describe('document-aware strategy', () => {

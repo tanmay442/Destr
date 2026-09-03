@@ -53,6 +53,17 @@ describe('filesystem blob storage', () => {
     expect(Buffer.from(chunks).toString()).toBe('hello world');
   });
 
+  it('round-trips plain Uint8Array put/get with identical bytes and hash', async () => {
+    const { defaultHasher } = await import('../db/stable-identities');
+    const store = createFilesystemBlobStorage();
+    const input = new TextEncoder().encode('hello world');
+    expect(input).not.toBeInstanceOf(Buffer);
+    await store.put('docs/plain.bin', input, 'application/octet-stream');
+    const output = await store.get('docs/plain.bin');
+    expect(Array.from(output)).toEqual(Array.from(input));
+    expect(defaultHasher.sha256(output)).toBe(defaultHasher.sha256(input));
+  });
+
   it('ignores contentType on put', async () => {
     const store = createFilesystemBlobStorage();
     await expect(store.put('a', Buffer.from('x'), 'application/pdf')).resolves.toBeUndefined();

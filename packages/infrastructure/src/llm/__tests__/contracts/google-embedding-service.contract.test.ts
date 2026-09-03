@@ -12,7 +12,8 @@ vi.mock('@ai-sdk/google', () => ({
   createGoogleGenerativeAI: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'test-embed' })) })),
 }));
 
-import { googleEmbeddingService } from '../../google-embedding-service-port';
+import { createGoogleEmbeddingService } from '../../google-embedding-service';
+import { defaultProcessEnv } from '../../../config/env';
 import { runEmbeddingServiceContract } from './embedding-service-contract';
 
 const DIMENSION = 3;
@@ -34,5 +35,8 @@ describe('google embedding service contract', () => {
     vi.unstubAllEnvs();
   });
 
-  runEmbeddingServiceContract(() => googleEmbeddingService, { dimension: DIMENSION, vectorFor });
+  runEmbeddingServiceContract(
+    () => createGoogleEmbeddingService({ env: defaultProcessEnv, vectorDim: DIMENSION }),
+    { dimension: DIMENSION, vectorFor },
+  );
 });

@@ -116,6 +116,14 @@ type MockComposition = {
   getChatModel: ReturnType<typeof vi.fn>;
   getEmbeddingModel: ReturnType<typeof vi.fn>;
   getEmbeddingModelId: ReturnType<typeof vi.fn>;
+  modelGateway: {
+    streamText: typeof streamTextImpl;
+    tool: typeof tool;
+    stepCountIs: typeof stepCountIs;
+    convertToModelMessages: typeof convertToModelMessages;
+    createUIMessageStream: typeof createUIMessageStream;
+    createUIMessageStreamResponse: typeof createUIMessageStreamResponse;
+  };
   answerCacheKey: ReturnType<typeof vi.fn>;
   answerCache: {
     get: ReturnType<typeof vi.fn>;
@@ -136,14 +144,21 @@ type MockComposition = {
   };
 };
 
-const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => ({
-  compositionMock: {
+const { compositionMock, gatewayHolder } = vi.hoisted<{
+  compositionMock: MockComposition;
+  gatewayHolder: Record<string, unknown>;
+}>(() => {
+  const gatewayHolder: Record<string, unknown> = {};
+  return {
+    gatewayHolder,
+    compositionMock: {
     rateLimit: () => rateLimitResult,
     searchChunks: vi.fn(async () => ok(searchValue) as never),
     createTicket: createTicketMock,
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     getEmbeddingModelId: vi.fn(() => 'mock-embed'),
+    modelGateway: gatewayHolder as MockComposition['modelGateway'],
     answerCacheKey: vi.fn((query: string, opts?: { userId?: string; fingerprint?: string }) =>
       `rag:answer:${Buffer.from(query + (opts?.userId ?? '') + (opts?.fingerprint ?? '')).toString('hex').slice(0, 32)}`,
     ),
@@ -164,8 +179,9 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
       updateEventMeta: vi.fn(async () => true),
       patchMeta: vi.fn(),
     },
-  },
-}));
+    },
+  };
+});
 
 vi.mock('@/composition', () => ({
   getComposition: () => compositionMock as unknown as Composition,
@@ -186,6 +202,22 @@ vi.mock('ai', async () => {
 });
 
 import * as appHandler from './route';
+import {
+  tool,
+  stepCountIs,
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+} from 'ai';
+
+Object.assign(gatewayHolder, {
+  streamText: streamTextImpl,
+  tool,
+  stepCountIs,
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+});
 
 function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

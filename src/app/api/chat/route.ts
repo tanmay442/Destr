@@ -1,11 +1,3 @@
-import {
-  tool,
-  convertToModelMessages,
-  streamText,
-  stepCountIs,
-  createUIMessageStreamResponse,
-  createUIMessageStream,
-} from 'ai';
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { getComposition, assertSameOrigin, type Composition, TRACE_ENABLED } from '@/composition';
 import { chatTurn } from '@app/application/chat';
@@ -235,7 +227,13 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
   const result = await chatTurn(
     { request: boundedReq, userId, startedAt: turnStart },
     {
-      ai: { streamText, tool, stepCountIs, convertToModelMessages, createUIMessageStream },
+      ai: {
+        streamText: comp.modelGateway.streamText,
+        tool: comp.modelGateway.tool,
+        stepCountIs: comp.modelGateway.stepCountIs,
+        convertToModelMessages: comp.modelGateway.convertToModelMessages,
+        createUIMessageStream: comp.modelGateway.createUIMessageStream,
+      },
       getChatModel: () => comp.getChatModel(),
       getChatModelId: () => (comp.getChatModel() as { modelId?: string })?.modelId ?? 'unknown',
       ...(typeof comp.getChatModelRequestOptions === 'function'
@@ -327,7 +325,7 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       return NextResponse.json({ error: 'invalid_request', issues: result.issues }, { status: 400 });
     case 'stream':
       scheduleFlush(comp);
-      return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream: result.stream }), release);
+      return releaseSlotWhenStreamEnds(comp.modelGateway.createUIMessageStreamResponse({ stream: result.stream }), release);
   }
 }
 

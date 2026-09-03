@@ -20,7 +20,7 @@ export interface CursorSigningConfigOptions {
 export const defaultCursorEnv: EnvSource = { get: (key) => process.env[key] };
 
 function hasMinimumSecretBytes(value: string): boolean {
-  return Buffer.byteLength(value, 'utf8') >= MIN_CURSOR_SECRET_BYTES;
+  return new TextEncoder().encode(value).length >= MIN_CURSOR_SECRET_BYTES;
 }
 
 function parseSecret(

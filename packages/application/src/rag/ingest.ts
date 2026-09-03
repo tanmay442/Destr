@@ -9,7 +9,7 @@ import { CCH_ENABLED, CCH_CONTEXT_CHARS, RESTORE_WINDOW_MS } from '@app/domain';
 
 export interface IngestFileInput {
   fileName: string;
-  buffer: Buffer;
+  buffer: Uint8Array;
   uploadedBy: string;
   signal?: AbortSignal | undefined;
 }
@@ -188,7 +188,7 @@ function toPreparedRows(
 
 /** Parse + split + embed as a single, reusable step (no DB writes). */
 export async function parseAndEmbed(
-  input: { fileName: string; buffer: Buffer; signal?: AbortSignal | undefined },
+  input: { fileName: string; buffer: Uint8Array; signal?: AbortSignal | undefined },
   deps: ParseDeps,
 ): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
   let docChunks: DocumentChunk[];
@@ -354,7 +354,7 @@ export async function ingestFile(
 
 /** Parse/split/embed for an existing `queued` row; caller inserts chunks + flips status atomically. */
 export async function prepareIngest(
-  input: { documentId: number; fileName: string; buffer: Buffer; signal?: AbortSignal | undefined },
+  input: { documentId: number; fileName: string; buffer: Uint8Array; signal?: AbortSignal | undefined },
   deps: ParseDeps,
 ): Promise<Result<{ chunks: number; rows: PreparedChunk[] }>> {
   const parsed = await parseAndEmbed(input, deps);

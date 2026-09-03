@@ -12,7 +12,8 @@ vi.mock('@ai-sdk/openai', () => ({
   createOpenAI: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'test-embed' })) })),
 }));
 
-import { openAIEmbeddingService } from '../../openai-embedding-service';
+import { createOpenAIEmbeddingService } from '../../openai-embedding-service';
+import { defaultProcessEnv } from '../../../config/env';
 import { runEmbeddingServiceContract } from './embedding-service-contract';
 
 const DIMENSION = 3;
@@ -35,5 +36,8 @@ describe('openai embedding service contract', () => {
     vi.unstubAllEnvs();
   });
 
-  runEmbeddingServiceContract(() => openAIEmbeddingService, { dimension: DIMENSION, vectorFor });
+  runEmbeddingServiceContract(
+    () => createOpenAIEmbeddingService({ env: defaultProcessEnv, vectorDim: DIMENSION }),
+    { dimension: DIMENSION, vectorFor },
+  );
 });
