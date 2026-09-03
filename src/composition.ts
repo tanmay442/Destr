@@ -530,7 +530,9 @@ let _vectorCheckStarted = false;
 export function startVectorDimensionCheck(): void {
   if (_vectorCheckStarted) return;
   _vectorCheckStarted = true;
-  Db.validateVectorDimension().catch((e: unknown) => {
+  Db.validateVectorDimension(defaultProcessEnv, () =>
+    embeddingService.embed('embedding dimension probe'),
+  ).catch((e: unknown) => {
     logger.error('Embedding dimension validation failed at startup', { error: e });
   });
 }
