@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
 import { logger, type DocSummarizer } from '@app/domain';
 import { getChatModel } from './model';
+import { defaultProcessEnv } from '../config/env';
 import { CCH_CONTEXT_CHARS } from '@app/domain';
 import { CCH_MODEL } from '@app/infrastructure/config';
-import type { ChatModelProvider } from './registries';
+import type { ChatModelDeps, ChatModelProvider } from './registries';
 import { AUX_REQUEST_TIMEOUT_MS, retryOnTransient } from './retry';
 
 /** Cap on the model's output. A title + 1-3 sentence summary is short. */
@@ -127,7 +128,7 @@ async function generateDocContext(
   excerpt: string,
   modelProvider: ChatModelProvider,
 ): Promise<{ title: string; summary: string }> {
-  const model = modelProvider(CCH_MODEL || undefined);
+  const model = modelProvider({ env: defaultProcessEnv, modelId: CCH_MODEL || undefined });
   try {
     const result = await retryOnTransient(
       async () => {
@@ -161,7 +162,9 @@ async function generateDocContext(
  * in-flight promise is cached so concurrent ingests of identical documents
  * share a single request.
  */
-export function createDocSummarizer(modelProvider: ChatModelProvider = getChatModel): DocSummarizer {
+export function createDocSummarizer(
+  modelProvider: ChatModelProvider = (deps: ChatModelDeps) => getChatModel(deps.modelId, deps.env),
+): DocSummarizer {
   return {
     generateDocContext(text: string): Promise<{ title: string; summary: string }> {
       const key = createHash('sha256').update(text).digest('hex');

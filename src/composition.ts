@@ -231,7 +231,7 @@ const ingestDeps: Omit<IngestDeps, 'chunkingStrategy'> = {
   pdfParser: Pdf.unpdfParser, textSplitter: Pdf.langchainSplitter,
   contentParser: Pdf.unpdfParser,
   runner: Db.transactionRunner,
-  summarizer: Llm.createDocSummarizer(Llm.getChatModel),
+  summarizer: Llm.createDocSummarizer(core.chatModelProvider),
   cchEnabled: CCH_ENABLED,
 };
 
@@ -264,7 +264,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
 }
 
 function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
-  const aux = Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel);
+  const aux = Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
   }
@@ -343,7 +343,7 @@ function createComposition() {
         return err(new ExternalServiceError('Agentic retrieval unavailable', e));
       }
     },
-    getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, Llm.getChatModel).hallucinationGrader?.grade ?? null,
+    getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env).hallucinationGrader?.grade ?? null,
     getSearchDeps,
     getAgenticDeps,
     resolveReranker,
@@ -402,7 +402,7 @@ function createComposition() {
         pdfValidator: Pdf.unpdfValidator,
         runner: txRunner,
         markdownParser: Markdown.markdownParser,
-        summarizer: Llm.createDocSummarizer(Llm.getChatModel),
+        summarizer: Llm.createDocSummarizer(core.chatModelProvider),
         cchEnabled: CCH_ENABLED,
       }),
     ingestQueuedDocument: (documentId: number, fileHash?: string, signal?: AbortSignal | undefined) =>

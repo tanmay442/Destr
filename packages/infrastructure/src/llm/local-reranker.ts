@@ -1,15 +1,8 @@
 import path from 'node:path';
 import os from 'node:os';
-import type { RankedDocument, Reranker } from '@app/domain';
+import type { RankedDocument, Reranker, EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 import { registerRerankerProvider } from './registries';
-
-/**
- * Local cross-encoder reranker — runs on-device via `@xenova/transformers`
- * (no API key needed). Model is `Xenova/ms-marco-MiniLM-L-6-v2` by default,
- * overridable via `LOCAL_RERANK_MODEL`. Weights download on first use from
- * HuggingFace and are cached under `TRANSFORMERS_CACHE` (writable dir
- * required on read-only filesystems).
- */
 
 type CrossEncoder = {
   tokenizer: (
@@ -19,7 +12,6 @@ type CrossEncoder = {
   model: (inputs: Record<string, unknown>) => Promise<{ logits: { data: ArrayLike<number> } }>;
 };
 
-/** Sigmoid squash of the cross-encoder logit so scores land in the same 0..1 range as hosted rerankers. */
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
@@ -35,15 +27,15 @@ export async function checkLocalRerankerAvailable(): Promise<boolean> {
 }
 
 let encoderPromise: Promise<CrossEncoder> | null = null;
+let encoderKey: string | null = null;
 
-async function getEncoder(): Promise<CrossEncoder> {
-  if (!encoderPromise) {
+async function getEncoder(cacheDir: string, modelId: string): Promise<CrossEncoder> {
+  const key = `${cacheDir}|${modelId}`;
+  if (!encoderPromise || encoderKey !== key) {
+    encoderKey = key;
     encoderPromise = (async () => {
-      // Default FS is read-only except /tmp; point the cache at a writable dir.
       const transformers = await import('@xenova/transformers');
-      transformers.env.cacheDir =
-        process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'xenova-cache');
-      const modelId = process.env.LOCAL_RERANK_MODEL || 'Xenova/ms-marco-MiniLM-L-6-v2';
+      transformers.env.cacheDir = cacheDir;
       const { AutoTokenizer, AutoModelForSequenceClassification } = transformers;
       const [tokenizer, model] = await Promise.all([
         AutoTokenizer.from_pretrained(modelId),
@@ -59,31 +51,38 @@ async function getEncoder(): Promise<CrossEncoder> {
       };
     })().catch((cause) => {
       encoderPromise = null;
+      encoderKey = null;
       throw cause;
     });
   }
   return encoderPromise;
 }
 
-export const localReranker: Reranker = {
-  async rank(query: string, documents: string[]): Promise<RankedDocument[]> {
-    if (documents.length === 0) return [];
+export function createLocalReranker(env: EnvSource = defaultProcessEnv): Reranker {
+  return {
+    async rank(query: string, documents: string[]): Promise<RankedDocument[]> {
+      if (documents.length === 0) return [];
 
-    const { tokenizer, model } = await getEncoder();
-    const queries = documents.map(() => query);
-    const inputs = await tokenizer(queries, {
-      text_pair: documents,
-      padding: true,
-      truncation: true,
-    });
-    const { logits } = await model(inputs);
-    const scores = Array.from(logits.data as ArrayLike<number>);
+      const cacheDir = env.get('TRANSFORMERS_CACHE') || path.join(os.tmpdir(), 'xenova-cache');
+      const modelId = env.get('LOCAL_RERANK_MODEL') || 'Xenova/ms-marco-MiniLM-L-6-v2';
+      const { tokenizer, model } = await getEncoder(cacheDir, modelId);
+      const queries = documents.map(() => query);
+      const inputs = await tokenizer(queries, {
+        text_pair: documents,
+        padding: true,
+        truncation: true,
+      });
+      const { logits } = await model(inputs);
+      const scores = Array.from(logits.data as ArrayLike<number>);
 
-    return documents.map((_, index) => ({
-      index,
-      relevanceScore: sigmoid(scores[index] ?? 0),
-    }));
-  },
-};
+      return documents.map((_, index) => ({
+        index,
+        relevanceScore: sigmoid(scores[index] ?? 0),
+      }));
+    },
+  };
+}
 
-registerRerankerProvider('local', () => localReranker);
+export const localReranker: Reranker = createLocalReranker();
+
+registerRerankerProvider('local', (deps) => createLocalReranker(deps.env));

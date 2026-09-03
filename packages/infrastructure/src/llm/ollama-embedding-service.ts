@@ -1,47 +1,46 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { EmbeddingModelV3 } from '@ai-sdk/provider';
-import type { EmbeddingService } from '@app/domain';
+import type { EmbeddingService, EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 import { resolveVectorDim } from '../db/schema-vector';
 import { embedBatchWithModel } from './embedding-batch-helper';
-import { registerEmbeddingProvider, registerEmbeddingModelIdProvider } from './registries';
+import { registerEmbeddingProvider, registerEmbeddingModelIdProvider, type EmbeddingServiceDeps } from './registries';
 
-function getOllamaEmbeddingModelId(): string {
-  return process.env.OLLAMA_EMBEDDING_MODEL || 'embeddinggemma:latest';
+export function getOllamaEmbeddingModelId(env: EnvSource = defaultProcessEnv): string {
+  return env.get('OLLAMA_EMBEDDING_MODEL') || 'embeddinggemma:latest';
 }
 
-function getOllamaEmbeddingModel(): EmbeddingModelV3 {
-  const baseURL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+function getOllamaEmbeddingModel(env: EnvSource): EmbeddingModelV3 {
+  const baseURL = env.get('OLLAMA_BASE_URL') ?? 'http://localhost:11434';
   const provider = createOpenAI({ apiKey: 'ollama', baseURL: `${baseURL}/v1` });
-  return provider.textEmbedding(getOllamaEmbeddingModelId()) as EmbeddingModelV3;
+  return provider.textEmbedding(getOllamaEmbeddingModelId(env)) as EmbeddingModelV3;
 }
 
-/** Ollama embeddings cannot pin a dimension up front, so validate the output
- *  width against the vector column here — a clear config error before the
- *  expensive insert stage, not a DB-stage failure. */
-function assertDimension(modelId: string, embeddings: number[][], vectorDim?: number): void {
-  const expectedDimension = vectorDim ?? resolveVectorDim();
+function assertDimension(modelId: string, embeddings: number[][], vectorDim: number): void {
   for (const embedding of embeddings) {
-    if (embedding.length !== expectedDimension) {
+    if (embedding.length !== vectorDim) {
       throw new Error(
         `Ollama embedding model "${modelId}" returned ${embedding.length}-dimension vectors, but ` +
-          `EMBEDDING_DIMENSION=${expectedDimension} (vector column width). Set EMBEDDING_DIMENSION=${embedding.length} ` +
+          `EMBEDDING_DIMENSION=${vectorDim} (vector column width). Set EMBEDDING_DIMENSION=${embedding.length} ` +
           'or switch to a model that emits vectors of the expected width.',
       );
     }
   }
 }
 
-function createOllamaEmbeddingService(vectorDim?: number): EmbeddingService {
+export function createOllamaEmbeddingService(deps: EmbeddingServiceDeps): EmbeddingService {
+  const vectorDim = deps.vectorDim ?? resolveVectorDim(deps.env);
+  const env = deps.env;
   return {
     async embed(value: string, opts: { signal?: AbortSignal } = {}): Promise<number[]> {
-      const model = getOllamaEmbeddingModel();
+      const model = getOllamaEmbeddingModel(env);
       const embeddings = await embedBatchWithModel([value], model, undefined, opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings[0] ?? [];
     },
 
     async embedBatch(values: string[], opts: { signal?: AbortSignal } = {}): Promise<number[][]> {
-      const model = getOllamaEmbeddingModel();
+      const model = getOllamaEmbeddingModel(env);
       const embeddings = await embedBatchWithModel(values, model, undefined, opts);
       assertDimension(model.modelId, embeddings, vectorDim);
       return embeddings;
@@ -49,9 +48,5 @@ function createOllamaEmbeddingService(vectorDim?: number): EmbeddingService {
   };
 }
 
-export const ollamaEmbeddingService = createOllamaEmbeddingService();
-
-registerEmbeddingProvider('ollama', (vectorDim) =>
-  vectorDim === undefined ? ollamaEmbeddingService : createOllamaEmbeddingService(vectorDim),
-);
-registerEmbeddingModelIdProvider('ollama', getOllamaEmbeddingModelId);
+registerEmbeddingProvider('ollama', (deps) => createOllamaEmbeddingService(deps));
+registerEmbeddingModelIdProvider('ollama', (deps) => getOllamaEmbeddingModelId(deps.env));

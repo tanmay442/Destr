@@ -81,7 +81,7 @@ describe('judgeRelevance', () => {
   it('uses AUX_MODEL through getChatModel by default', async () => {
     generateTextMock.mockResolvedValue({ text: '{"score":1,"reason":"r"}' });
     await judgeRelevance('q', ['d']);
-    expect(getChatModelMock).toHaveBeenCalledWith(AUX_MODEL || undefined);
+    expect(getChatModelMock).toHaveBeenCalledWith(AUX_MODEL || undefined, expect.anything());
   });
 });
 
@@ -196,7 +196,7 @@ describe('dependency injection', () => {
     ) as unknown as ChatModelProvider;
     generateTextMock.mockResolvedValue({ text: '{"score":1,"reason":"r"}' });
     await judgeRelevance('q', ['d'], { auxModelId: 'custom-aux-model', modelProvider });
-    expect(modelProvider).toHaveBeenCalledWith('custom-aux-model');
+    expect(modelProvider).toHaveBeenCalledWith({ env: expect.anything(), modelId: 'custom-aux-model' });
     expect(getChatModelMock).not.toHaveBeenCalled();
   });
 
@@ -209,7 +209,7 @@ describe('dependency injection', () => {
     });
     await judgeFaithfulness('docs', 'answer', { modelProvider });
     expect(modelProvider).toHaveBeenCalledTimes(1);
-    expect(modelProvider).toHaveBeenCalledWith(AUX_MODEL || undefined);
+    expect(modelProvider).toHaveBeenCalledWith({ env: expect.anything(), modelId: AUX_MODEL || undefined });
     expect(getChatModelMock).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,8 @@
-import type { RankedDocument, Reranker } from '@app/domain';
+import type { RankedDocument, Reranker, EnvSource } from '@app/domain';
+import { defaultProcessEnv } from '../config/env';
 import { retryOnTransient } from './retry';
 import { registerRerankerProvider } from './registries';
 
-/** Cohere Rerank API endpoint. */
 const COHERE_RERANK_URL = 'https://api.cohere.ai/v1/rerank';
 const COHERE_RETRY_ATTEMPTS = 3;
 const COHERE_TIMEOUT_MS = 10_000;
@@ -16,58 +16,51 @@ interface CohereRerankResponse {
   results?: CohereRerankResult[];
 }
 
-/**
- * Hosted reranker backed by Cohere's Rerank API.
- *
- * Selected when `RERANKER_PROVIDER=cohere`. Requires `COHERE_API_KEY`; the
- * model is overridable via `COHERE_RERANK_MODEL` (default
- * `rerank-english-v3.0`). Returns one `RankedDocument` per input document,
- * carrying the original index and Cohere's `relevance_score` (0..1).
- *
- * Transient failures (429/5xx/timeout) are retried with exponential backoff;
- * other errors surface immediately so callers can fall back to cosine order.
- */
-export const cohereReranker: Reranker = {
-  async rank(query: string, documents: string[]): Promise<RankedDocument[]> {
-    if (documents.length === 0) return [];
+export function createCohereReranker(env: EnvSource = defaultProcessEnv): Reranker {
+  return {
+    async rank(query: string, documents: string[]): Promise<RankedDocument[]> {
+      if (documents.length === 0) return [];
 
-    const apiKey = process.env.COHERE_API_KEY;
-    if (!apiKey) {
-      throw new Error('COHERE_API_KEY must be set to use the Cohere reranker.');
-    }
-    const model = process.env.COHERE_RERANK_MODEL || 'rerank-english-v3.0';
+      const apiKey = env.get('COHERE_API_KEY');
+      if (!apiKey) {
+        throw new Error('COHERE_API_KEY must be set to use the Cohere reranker.');
+      }
+      const model = env.get('COHERE_RERANK_MODEL') || 'rerank-english-v3.0';
 
-    return retryOnTransient(
-      async () => {
-        const res = await fetch(COHERE_RERANK_URL, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${apiKey}`,
-            'content-type': 'application/json',
-            accept: 'application/json',
-          },
-          body: JSON.stringify({ model, query, documents, top_n: documents.length }),
-          signal: AbortSignal.timeout(COHERE_TIMEOUT_MS),
-        });
-
-        if (!res.ok) {
-          const body = (await res.text().catch(() => ''))
-            .replace(/[\u0000-\u001f\u007f]/g, '')
-            .trim()
-            .slice(0, 200);
-          throw Object.assign(new Error(`Cohere rerank failed (${res.status}): ${body}`), {
-            statusCode: res.status,
+      return retryOnTransient(
+        async () => {
+          const res = await fetch(COHERE_RERANK_URL, {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${apiKey}`,
+              'content-type': 'application/json',
+              accept: 'application/json',
+            },
+            body: JSON.stringify({ model, query, documents, top_n: documents.length }),
+            signal: AbortSignal.timeout(COHERE_TIMEOUT_MS),
           });
-        }
 
-        const json = (await res.json()) as CohereRerankResponse;
-        const results = json.results ?? [];
-        return results.map((r) => ({ index: r.index, relevanceScore: r.relevance_score }));
-      },
-      'Cohere rerank',
-      COHERE_RETRY_ATTEMPTS,
-    );
-  },
-};
+          if (!res.ok) {
+            const body = (await res.text().catch(() => ''))
+              .replace(new RegExp('[\\u0000-\\u001f\\u007f]', 'g'), '')
+              .trim()
+              .slice(0, 200);
+            throw Object.assign(new Error(`Cohere rerank failed (${res.status}): ${body}`), {
+              statusCode: res.status,
+            });
+          }
 
-registerRerankerProvider('cohere', () => (process.env.COHERE_API_KEY ? cohereReranker : undefined));
+          const json = (await res.json()) as CohereRerankResponse;
+          const results = json.results ?? [];
+          return results.map((r) => ({ index: r.index, relevanceScore: r.relevance_score }));
+        },
+        'Cohere rerank',
+        COHERE_RETRY_ATTEMPTS,
+      );
+    },
+  };
+}
+
+export const cohereReranker: Reranker = createCohereReranker();
+
+registerRerankerProvider('cohere', (deps) => (deps.env.get('COHERE_API_KEY') ? createCohereReranker(deps.env) : undefined));

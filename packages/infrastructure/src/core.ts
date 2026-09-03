@@ -38,9 +38,14 @@ import {
   defaultHasher,
 } from './db';
 import {
+  getChatModel,
+  getEmbeddingModelId,
   getEmbeddingService,
   availableRerankers,
   resolveReranker,
+  resolveRerankerPlatform,
+  type ChatModelDeps,
+  type RerankerPlatform,
   type RerankerStatus,
 } from './llm';
 import { createBlobStorage } from './storage/blob-storage-factory';
@@ -61,6 +66,11 @@ export interface CoreDepsOptions {
 
 export interface CoreDeps {
   config: RuntimeConfig;
+  env: EnvSource;
+  vectorDim: number;
+  embeddingModelId: string;
+  chatModelProvider: (deps: ChatModelDeps) => ReturnType<typeof getChatModel>;
+  rerankerPlatform: RerankerPlatform;
   dbClient: ReturnType<typeof createDbClient>;
   documentRepo: DocumentRepository;
   chunkRepo: ChunkRepository;
@@ -86,9 +96,15 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
   const config = loadEnvConfig(env);
   const cursorCodec = createSignedListCursorCodec(parseCursorSigningConfig(env));
   const vectorDim = resolveVectorDim(env);
+  const rerankerPlatform = resolveRerankerPlatform(env);
   const dbClient = env === defaultProcessEnv ? db : createDbClient({ env, vectorDim });
   return {
     config,
+    env,
+    vectorDim,
+    embeddingModelId: getEmbeddingModelId(env),
+    chatModelProvider: (deps) => getChatModel(deps.modelId, env),
+    rerankerPlatform,
     dbClient,
     documentRepo: createDocumentRepo(dbClient),
     chunkRepo: createChunkRepo(dbClient, vectorDim, defaultHasher),
@@ -103,14 +119,14 @@ function constructCoreDeps(options: CoreDepsOptions, env: EnvSource): CoreDeps {
     chatFeedbackRepo: createChatFeedbackRepo(dbClient),
     qualityReviewsRepo: createQualityReviewsRepo(dbClient),
     chatHistoryRepo: createChatHistoryRepo(dbClient),
-    embeddingService: getEmbeddingService(vectorDim),
+    embeddingService: getEmbeddingService(vectorDim, env),
     blobStorage: createBlobStorage(),
     ingestQueue: createIngestQueue(options.onQueueIngest ? { ingest: options.onQueueIngest } : {}),
     rateLimiter: createRateLimiter(),
     answerCache: createAnswerCache(options.onAnswerCacheInitError),
     cursorCodec,
-    resolveReranker,
-    availableRerankers,
+    resolveReranker: (provider: string) => resolveReranker(provider, env, rerankerPlatform),
+    availableRerankers: () => availableRerankers(env, rerankerPlatform),
   };
 }
 

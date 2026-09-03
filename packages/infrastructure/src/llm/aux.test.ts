@@ -30,6 +30,7 @@ vi.mock('./retry', async () => {
 
 import { createAuxModels } from './aux';
 import { getAuxModels } from './index';
+import type { ChatModelProvider } from './registries';
 
 let consoleError: ReturnType<typeof vi.spyOn>;
 let consoleWarn: ReturnType<typeof vi.spyOn>;
@@ -203,7 +204,7 @@ describe('getAuxModels selector', () => {
 
 describe('createAuxModels with an injected model provider', () => {
   it('uses the injected provider instead of the default chat model', async () => {
-    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
     const aux = createAuxModels(undefined, modelProvider);
     generateTextMock.mockResolvedValue({ text: 'rewritten' });
     await aux.queryRewriter.rewrite('q');
@@ -212,10 +213,10 @@ describe('createAuxModels with an injected model provider', () => {
   });
 
   it('passes the aux model override to the injected provider', async () => {
-    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as (modelId?: string) => import('@ai-sdk/provider').LanguageModelV3;
+    const modelProvider = vi.fn(() => ({ modelId: 'injected' })) as unknown as ChatModelProvider;
     const aux = createAuxModels('custom-aux-model', modelProvider);
     generateTextMock.mockResolvedValue(groundedResult(false));
     await aux.hallucinationGrader.grade('docs', 'answer');
-    expect(modelProvider).toHaveBeenCalledWith('custom-aux-model');
+    expect(modelProvider).toHaveBeenCalledWith({ env: expect.anything(), modelId: 'custom-aux-model' });
   });
 });
