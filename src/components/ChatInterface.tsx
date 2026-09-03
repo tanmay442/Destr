@@ -413,6 +413,7 @@ export function ChatInterface({
   onConversationPersisted?: () => void;
 }) {
   const [input, setInput] = useState('');
+  const [expDebug, setExpDebug] = useState<string>('exp-instr: idle — send a message to measure TTFB');
   const [turnIds, setTurnIds] = useState<Record<string, string>>(initialTurnIds);
   const [votes, setVotes] = useState<Record<string, FeedbackVote>>({});
   const [messageCount, setMessageCount] = useState(
@@ -476,10 +477,16 @@ export function ChatInterface({
       const turnId = uuidv4();
       userMessageId = uuidv4();
       pendingTurnIdRef.current.set(userMessageId, turnId);
+      const expStart = performance.now();
+      setExpDebug(`exp-instr: sending… turnId=${turnId.slice(0, 8)}`);
+      console.log('[exp-instr] client submit', { turnId, conversationId, textLen: trimmed.length });
       await sendMessage(
         { parts: [{ type: 'text', text: trimmed }], id: userMessageId, role: 'user' },
         { body: { turnId, conversationId } },
       );
+      const expMs = Math.round(performance.now() - expStart);
+      setExpDebug(`exp-instr: sendMessage resolved in ${expMs}ms turnId=${turnId.slice(0, 8)} status=streaming`);
+      console.log('[exp-instr] client sendMessage resolved', { turnId, ms: expMs });
       setInput('');
     } catch {
       if (userMessageId) {
@@ -830,6 +837,9 @@ export function ChatInterface({
           +{' '}
           <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">Enter</kbd>{' '}
           for a new line
+        </p>
+        <p className="mx-auto mt-1 max-w-3xl text-center font-mono text-[11px] text-warning" data-testid="chat-exp-debug">
+          {expDebug} · status={status} · open DevTools console + Vercel logs for [exp-instr]
         </p>
       </div>
     </div>

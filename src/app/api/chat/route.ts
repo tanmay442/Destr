@@ -197,9 +197,18 @@ function scheduleAfter(task: () => void): void {
 
 async function streamChatResponseUseCase(req: Request): Promise<Response> {
   const turnStart = performance.now();
+  const expWallStart = Date.now();
+  const expMark = (label: string, extra?: Record<string, unknown>) => {
+    const wallMs = Date.now() - expWallStart;
+    const perfMs = Math.round(performance.now() - turnStart);
+    logger.info('[exp-instr] chat-route phase', { label, wallMs, perfMs, ...extra });
+    console.log(`[exp-instr] chat-route ${label} wallMs=${wallMs} perfMs=${perfMs}`, extra ?? '');
+  };
   const turnSoftDeadlineMs = positiveIntEnv('CHAT_SOFT_DEADLINE_MS') ?? 50_000;
   const judgeMaxWallMs = positiveIntEnv('CHAT_JUDGE_MAX_WALL_MS') ?? 20_000;
+  expMark('start', { cacheLeasePolicy: String(process.env.CACHE_LEASE_MODE ?? '(default)'), nodeEnv: process.env.NODE_ENV ?? '?' });
   const { userId } = await auth();
+  expMark('auth', { hasUser: Boolean(userId) });
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -219,6 +228,7 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
     return new Response('Content-Type must be application/json', { status: 415 });
   }
   const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
+  expMark('readBoundedText', { ok: bounded.ok, reason: bounded.ok ? undefined : bounded.reason, bytes: bounded.ok ? bounded.text.length : 0 });
   if (!bounded.ok) {
     release();
     if (bounded.reason === 'too-large') return new Response('Payload too large', { status: 413 });
@@ -232,6 +242,11 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
     signal: req.signal,
   });
   const comp = getComposition();
+  expMark('composition', {
+    cacheLeasePolicy: String((comp as unknown as { cacheLeasePolicy?: unknown }).cacheLeasePolicy ?? '?'),
+    hasTurnResultCache: Boolean(comp.turnResultCache),
+  });
+  const chatTurnStart = performance.now();
   const result = await chatTurn(
     { request: boundedReq, userId, startedAt: turnStart },
     {
@@ -299,24 +314,28 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
   );
   switch (result.kind) {
     case 'rate-limited':
+      expMark('result', { kind: result.kind, chatTurnMs: Math.round(performance.now() - chatTurnStart) });
       release();
       return new Response('Too Many Requests', {
         status: 429,
         ...(result.retryAfterSec ? { headers: { 'Retry-After': result.retryAfterSec } } : {}),
       });
     case 'cache-wait-timeout':
+      expMark('result', { kind: result.kind, chatTurnMs: Math.round(performance.now() - chatTurnStart) });
       release();
       return new Response('The answer is still being generated. Please retry shortly.', {
         status: 503,
         headers: { 'Retry-After': '1' },
       });
     case 'cache-unavailable':
+      expMark('result', { kind: result.kind, chatTurnMs: Math.round(performance.now() - chatTurnStart) });
       release();
       return new Response('Chat coordination is temporarily unavailable. Please retry shortly.', {
         status: 503,
         headers: { 'Retry-After': '1' },
       });
     case 'idempotency-conflict':
+      expMark('result', { kind: result.kind, chatTurnMs: Math.round(performance.now() - chatTurnStart) });
       release();
       return new Response('The turn ID is already associated with a different request.', { status: 409 });
     case 'payload-too-large':
@@ -327,7 +346,19 @@ async function streamChatResponseUseCase(req: Request): Promise<Response> {
       return NextResponse.json({ error: 'invalid_request', issues: result.issues }, { status: 400 });
     case 'stream':
       scheduleFlush(comp);
-      return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream: result.stream }), release);
+      {
+        const chatTurnMs = Math.round(performance.now() - chatTurnStart);
+        const totalPreMs = Math.round(performance.now() - turnStart);
+        expMark('result', { kind: 'stream', cacheHit: result.meta.cacheHit, mode: result.meta.mode, chatTurnMs, totalPreMs });
+        const inner = createUIMessageStreamResponse({ stream: result.stream });
+        const headers = new Headers(inner.headers);
+        headers.set('X-Chat-Exp', 'instr');
+        headers.set('X-Chat-PreMs', String(totalPreMs));
+        headers.set('X-Chat-TurnMs', String(chatTurnMs));
+        headers.set('Server-Timing', `pre;dur=${totalPreMs}, chatTurn;dur=${chatTurnMs}`);
+        const withHeaders = new Response(inner.body, { status: inner.status, statusText: inner.statusText, headers });
+        return releaseSlotWhenStreamEnds(withHeaders, release);
+      }
   }
 }
 

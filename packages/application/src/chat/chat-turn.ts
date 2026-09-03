@@ -613,9 +613,17 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
 export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
   const turnStart = input.startedAt ?? performance.now();
   const requestStartedAt = Date.now();
+  const expMark = (label: string, extra?: Record<string, unknown>) => {
+    const wallMs = Date.now() - requestStartedAt;
+    const perfMs = Math.round(performance.now() - turnStart);
+    logger.info('[exp-instr] chat-turn phase', { label, wallMs, perfMs, ...extra });
+    console.log(`[exp-instr] chat-turn ${label} wallMs=${wallMs} perfMs=${perfMs}`, extra ?? '');
+  };
   const { request, userId } = input;
   const cfg = await deps.getRuntimeConfig();
+  expMark('config', { retrievalMode: cfg.retrievalMode, prefetchFirstTurn: cfg.prefetchFirstTurn, answerCacheEnabled: cfg.answerCacheEnabled });
   const limit = await deps.rateLimit.check(`chat:${userId}`, CHAT_RATE_LIMIT);
+  expMark('rateLimit', { ok: limit.ok });
   if (!limit.ok) {
     return {
       kind: 'rate-limited',
@@ -631,6 +639,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
   const raw = body.value;
   const parsed = createChatRequestSchema(deps.allowedChatFileOrigins).safeParse(raw);
+  expMark('validate', { ok: parsed.success, messages: typeof raw === 'object' && raw !== null ? (raw as { messages?: unknown[] }).messages?.length ?? 0 : 0 });
   if (!parsed.success) {
     return { kind: 'invalid-request', issues: parsed.error.issues };
   }
@@ -727,9 +736,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   try {
     if (turnResultCache && turnResultKey) {
-      let turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
+      const t0 = performance.now();
+      let turnResult = await turnResultCache.get(turnResultKey).catch((e) => { expMark('turnGet-error', { error: String(e) }); return null; });
+      expMark('turnGet', { hit: Boolean(turnResult), ms: Math.round(performance.now() - t0), isFirstTurn, cacheable: Boolean(cacheKey) });
       let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
-      if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+      if (turnState && 'conflict' in turnState) { expMark('turnConflict'); return { kind: 'idempotency-conflict' }; }
       if (!turnState) {
         const lease = createCacheLease(
           turnResultCache,
@@ -737,25 +748,31 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           Math.ceil(MAX_DURATION_MS / 1000),
           cacheLeaseOptions,
         );
+        const a0 = performance.now();
         const leaseResult = await lease.acquireResult();
+        expMark('turnAcquire', { result: leaseResult.kind, ms: Math.round(performance.now() - a0) });
         if (leaseResult.kind === 'acquired') {
           turnLease = lease;
           turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
-          if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+          if (turnState && 'conflict' in turnState) { expMark('turnConflict-after-acquire'); return { kind: 'idempotency-conflict' }; }
         } else if (leaseResult.kind === 'held') {
           const remainingWaitMs = Math.max(
             0,
             MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
           );
+          expMark('turnWait-start', { remainingWaitMs });
+          const w0 = performance.now();
           turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
             timeoutMs: remainingWaitMs,
             signal: request.signal,
           });
+          expMark('turnWait-done', { hit: Boolean(turnResult), ms: Math.round(performance.now() - w0) });
           turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
-          if (!turnState) return { kind: 'cache-wait-timeout' };
+          if (!turnState) { expMark('turnWait-timeout'); return { kind: 'cache-wait-timeout' }; }
         } else {
+          expMark('turnUnavailable');
           return { kind: 'cache-unavailable' };
         }
       }
@@ -806,7 +823,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
     if (cacheKey) {
     if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
+    const c0 = performance.now();
     let cached = await deps.answerCache.get(cacheKey).catch(() => null);
+    expMark('answerGet', { hit: Boolean(cached), ms: Math.round(performance.now() - c0) });
     if (!cached) {
       const lease = createCacheLease(
         deps.answerCache,
@@ -814,7 +833,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         Math.ceil(MAX_DURATION_MS / 1000),
         cacheLeaseOptions,
       );
+      const a0 = performance.now();
       const leaseResult = await lease.acquireResult();
+      expMark('answerAcquire', { result: leaseResult.kind, ms: Math.round(performance.now() - a0) });
       if (leaseResult.kind === 'acquired') {
         cacheLease = lease;
         cached = await deps.answerCache.get(cacheKey).catch(() => null);
@@ -823,12 +844,16 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           0,
           MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
         );
+        expMark('answerWait-start', { remainingWaitMs });
+        const w0 = performance.now();
         cached = await waitForCachedAnswer(deps.answerCache, cacheKey, {
           timeoutMs: remainingWaitMs,
           signal: request.signal,
         });
-        if (!cached) return { kind: 'cache-wait-timeout' };
+        expMark('answerWait-done', { hit: Boolean(cached), ms: Math.round(performance.now() - w0) });
+        if (!cached) { expMark('answerWait-timeout'); return { kind: 'cache-wait-timeout' }; }
       } else {
+        expMark('answerUnavailable');
         return { kind: 'cache-unavailable' };
       }
     }
@@ -895,10 +920,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   let prefetch: RetrievedChunk[] | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchStartedAt = performance.now();
+    expMark('prefetch-start', {});
     const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
     metrics.prefetchMs = Math.round(performance.now() - prefetchStartedAt);
     metrics.retrieveMs += metrics.prefetchMs;
     metrics.prefetchStatus = 'performed';
+    expMark('prefetch-done', { prefetchMs: metrics.prefetchMs, ok: prefetchResult.ok, hits: prefetchResult.ok ? prefetchResult.value.length : 0 });
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
       prefetch = null;
@@ -925,6 +952,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
   const elapsedBeforeStream = Date.now() - requestStartedAt;
+  expMark('preStream', { elapsedBeforeStream, softDeadlineMs, cacheHit: false, prefetchStatus: metrics.prefetchStatus, prefetchMs: metrics.prefetchMs });
   // An already-expired budget must abort immediately; a one-second floor here
   // would let the model run past the application's hard wall-time boundary.
   const softDeadlineMsRemaining = Math.max(0, softDeadlineMs - elapsedBeforeStream);
