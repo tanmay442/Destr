@@ -1,0 +1,268 @@
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
+import { db } from '../client';
+import { chatConversations, chatMessages, users } from '../schema';
+import type { AppendChatTurnInput, ChatHistoryRepo, ConversationSummary, StoredChatMessage } from '@app/domain';
+import { ConflictError, ForbiddenError, MAX_CONVERSATIONS_PER_USER, MAX_MESSAGES_PER_CONVERSATION, MAX_RESUME_MESSAGES } from '@app/domain';
+import type { Client } from './shared';
+import { PURGE_BATCH_SIZE, countOwnerConversations, messageKeyPredicate, toSummary } from './shared';
+
+export class ChatHistoryRepository implements ChatHistoryRepo {
+  constructor(private readonly client: Client = db) {}
+
+  async appendTurn(input: AppendChatTurnInput): Promise<{ conversationId: string }> {
+    return this.client.transaction(async (tx) => {
+      const conversationId = input.conversationId;
+
+      const inserted = await tx
+        .insert(chatConversations)
+        .values({ id: conversationId, userId: input.userId, title: input.title ?? '' })
+        .onConflictDoNothing({ target: chatConversations.id })
+        .returning({ id: chatConversations.id });
+      if (inserted.length > 0) {
+        await tx
+          .select({ clerkUserId: users.clerkUserId })
+          .from(users)
+          .where(eq(users.clerkUserId, input.userId))
+          .for('update');
+        if ((await countOwnerConversations(tx, input.userId)) > MAX_CONVERSATIONS_PER_USER) {
+          throw new ConflictError('Conversation limit reached');
+        }
+      } else {
+        const [owner] = await tx
+          .select({ userId: chatConversations.userId })
+          .from(chatConversations)
+          .where(eq(chatConversations.id, conversationId))
+          .limit(1)
+          .for('update');
+        if (!owner || owner.userId !== input.userId) throw new ForbiddenError('conversation access denied');
+      }
+
+      const [existingTurn] = await tx
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.turnId, input.turnId)))
+        .limit(1);
+      if (existingTurn) return { conversationId };
+
+      let removedByReplace = 0;
+      if (input.retryOfMessageId !== undefined) {
+        const [prevUser] = await tx
+          .select({ id: chatMessages.id })
+          .from(chatMessages)
+          .where(
+            and(
+              eq(chatMessages.conversationId, conversationId),
+              eq(chatMessages.role, 'user'),
+              sql`${chatMessages.content} ->> 'id' = ${input.retryOfMessageId}`,
+            ),
+          )
+          .orderBy(desc(chatMessages.id))
+          .limit(1);
+
+        let tail = true;
+        if (prevUser) {
+          const [laterUser] = await tx
+            .select({ id: chatMessages.id })
+            .from(chatMessages)
+            .where(
+              and(
+                eq(chatMessages.conversationId, conversationId),
+                eq(chatMessages.role, 'user'),
+                sql`${chatMessages.id} > ${prevUser.id}`,
+              ),
+            )
+            .limit(1);
+          tail = !laterUser;
+        }
+
+        if (prevUser && tail) {
+          const [nextAssistant] = await tx
+            .select({ id: chatMessages.id })
+            .from(chatMessages)
+            .where(
+              and(
+                eq(chatMessages.conversationId, conversationId),
+                eq(chatMessages.role, 'assistant'),
+                sql`${chatMessages.id} > ${prevUser.id}`,
+              ),
+            )
+            .orderBy(chatMessages.id)
+            .limit(1);
+
+          const droppedUser = await tx
+            .delete(chatMessages)
+            .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.id, prevUser.id)))
+            .returning({ id: chatMessages.id });
+          removedByReplace += droppedUser.length;
+          if (nextAssistant) {
+            const droppedAssistant = await tx
+              .delete(chatMessages)
+              .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.id, nextAssistant.id)))
+              .returning({ id: chatMessages.id });
+            removedByReplace += droppedAssistant.length;
+          }
+        }
+      }
+
+      const [messageCountRow] = await tx
+        .select({ total: sql<number>`count(*)::int` })
+        .from(chatMessages)
+        .where(eq(chatMessages.conversationId, conversationId));
+      if (Number(messageCountRow?.total ?? 0) + 2 > MAX_MESSAGES_PER_CONVERSATION) {
+        throw new ConflictError('This chat is full — start a new one');
+      }
+
+      const insertedRows = await tx
+        .insert(chatMessages)
+        .values([
+          { conversationId, turnId: input.turnId, role: 'user', content: input.userMessage },
+          { conversationId, turnId: input.turnId, role: 'assistant', content: input.assistantMessage },
+        ])
+        .onConflictDoNothing({
+          target: [chatMessages.conversationId, chatMessages.turnId, chatMessages.role],
+        })
+        .returning({ id: chatMessages.id });
+
+      const delta = insertedRows.length - removedByReplace;
+      if (delta !== 0 || insertedRows.length > 0) {
+        await tx
+          .update(chatConversations)
+          .set({
+            messageCount:
+              delta === 0 ? sql`${chatConversations.messageCount}` : sql`${chatConversations.messageCount} + ${delta}`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(chatConversations.id, conversationId));
+      }
+
+      return { conversationId };
+    });
+  }
+
+  async listConversations(userId: string, opts: { limit: number; offset: number }): Promise<ConversationSummary[]> {
+    const rows = await this.client
+      .select()
+      .from(chatConversations)
+      .where(eq(chatConversations.userId, userId))
+      .orderBy(desc(chatConversations.updatedAt), desc(chatConversations.id))
+      .limit(opts.limit)
+      .offset(opts.offset);
+    return rows.map(toSummary);
+  }
+
+  async getConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<{ conversation: ConversationSummary; messages: StoredChatMessage[] } | null> {
+    const [conversation] = await this.client
+      .select()
+      .from(chatConversations)
+      .where(and(eq(chatConversations.id, conversationId), eq(chatConversations.userId, userId)))
+      .limit(1);
+    if (!conversation) return null;
+    const latest = await this.client
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.conversationId, conversationId))
+      .orderBy(desc(chatMessages.id))
+      .limit(MAX_RESUME_MESSAGES);
+    return {
+      conversation: toSummary(conversation),
+      messages: latest.reverse().map((row) => ({
+        id: row.id,
+        turnId: row.turnId,
+        role: row.role as StoredChatMessage['role'],
+        content: row.content,
+        createdAt: row.createdAt,
+      })),
+    };
+  }
+
+  async renameConversation(userId: string, conversationId: string, title: string): Promise<boolean> {
+    const updated = await this.client
+      .update(chatConversations)
+      .set({ title })
+      .where(and(eq(chatConversations.id, conversationId), eq(chatConversations.userId, userId)))
+      .returning({ id: chatConversations.id });
+    return updated.length > 0;
+  }
+
+  async deleteConversation(userId: string, conversationId: string): Promise<boolean> {
+    const deleted = await this.client
+      .delete(chatConversations)
+      .where(and(eq(chatConversations.id, conversationId), eq(chatConversations.userId, userId)))
+      .returning({ id: chatConversations.id });
+    return deleted.length > 0;
+  }
+
+  async countConversations(userId: string): Promise<number> {
+    const [row] = await this.client
+      .select({ total: sql<number>`count(*)::int` })
+      .from(chatConversations)
+      .where(eq(chatConversations.userId, userId));
+    return Number(row?.total ?? 0);
+  }
+
+  async purgeOlderThan(cutoff: Date): Promise<{ deletedConversations: number; deletedMessages: number }> {
+    return this.purgeWhere(sql`${chatConversations.updatedAt} <= ${cutoff}`);
+  }
+
+  async purgeUserData(userId: string): Promise<{ deletedConversations: number; deletedMessages: number }> {
+    return this.purgeWhere(eq(chatConversations.userId, userId));
+  }
+
+  private async purgeWhere(
+    condition: SQL,
+  ): Promise<{ deletedConversations: number; deletedMessages: number }> {
+    let deletedConversations = 0;
+    let deletedMessages = 0;
+
+    while (true) {
+      const removed = await this.client.transaction(async (tx) => {
+        const batch = await tx
+          .select({ id: chatConversations.id })
+          .from(chatConversations)
+          .where(condition)
+          .orderBy(chatConversations.id)
+          .limit(PURGE_BATCH_SIZE)
+          .for('update', { skipLocked: true });
+        if (batch.length === 0) {
+          return { conversations: 0, messages: 0 };
+        }
+
+        const conversationIds = batch.map((row) => row.id);
+        let messages = 0;
+        while (true) {
+          const messageBatch = await tx
+            .select({ id: chatMessages.id, conversationId: chatMessages.conversationId })
+            .from(chatMessages)
+            .where(inArray(chatMessages.conversationId, conversationIds))
+            .orderBy(chatMessages.id)
+            .limit(PURGE_BATCH_SIZE);
+          if (messageBatch.length === 0) break;
+          const removedMessages = await tx
+            .delete(chatMessages)
+            .where(messageKeyPredicate(messageBatch))
+            .returning({ id: chatMessages.id });
+          messages += removedMessages.length;
+        }
+
+        const removedConversations = await tx
+          .delete(chatConversations)
+          .where(and(inArray(chatConversations.id, conversationIds), condition))
+          .returning({ id: chatConversations.id });
+        return { conversations: removedConversations.length, messages };
+      });
+      if (removed.conversations === 0) break;
+      deletedConversations += removed.conversations;
+      deletedMessages += removed.messages;
+    }
+
+    return { deletedConversations, deletedMessages };
+  }
+}
+
+export function createChatHistoryRepo(client: Client = db): ChatHistoryRepo {
+  return new ChatHistoryRepository(client);
+}

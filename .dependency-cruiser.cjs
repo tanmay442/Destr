@@ -97,13 +97,13 @@ module.exports = {
     {
       name: 'no-src-app-importing-infrastructure',
       severity: 'error',
-      from: { path: '^src/(?!composition\.ts$|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
+      from: { path: '^src/(?!composition\.ts$|composition/|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
       to: { path: '^packages/infrastructure' },
     },
     {
       name: 'no-src-app-importing-data-packages',
       severity: 'error',
-      from: { path: '^src/(?!composition\.ts$|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
+      from: { path: '^src/(?!composition\.ts$|composition/|proxy\.ts$|__tests__/|.*\.test\.[jt]sx?$)' },
       to: {
         dependencyTypes: ['npm'],
         path: 'node_modules/(drizzle-orm|pg|unpdf|@neondatabase|pdf-lib/)/',
