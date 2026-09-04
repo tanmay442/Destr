@@ -1,4 +1,5 @@
 import type { ChunkingStrategy } from '@app/domain';
+import { CHILD_CHUNK_SIZE } from '@app/domain';
 import { makeDocumentChunk, chunkBySentences, isHeadingLine, cleanTextArtifacts } from '../shared';
 
 interface SplitOptions {
@@ -38,10 +39,22 @@ function parseMarkdownBlocks(text: string, page: number): Block[] {
     current = null;
   };
 
-  const isHeading = (line: string): boolean => {
+  const isHeading = (line: string, prevBlank: boolean): boolean => {
     const t = line.trim();
     if (/:$/.test(t)) return false;
     if (/^\([^)]*\)$/.test(t)) return false;
+    const markdown = /^#{1,6}\s+/.test(t);
+    const numbered = /^\d+(?:\.\d+)*\.?\s+[A-Z]/.test(t);
+    if (/[.!?]$/.test(t) && !markdown) return false;
+    if (!prevBlank && !markdown && !numbered) {
+      const letters = t.replace(/[^A-Za-z]/g, '');
+      const allCaps = letters.length >= 3 && t === t.toUpperCase();
+      if (allCaps) {
+        const singleToken = !/\s/.test(t);
+        if (!singleToken) return false;
+        if (!t.includes('_')) return false;
+      }
+    }
     return isHeadingLine(line);
   };
 
@@ -53,13 +66,15 @@ function parseMarkdownBlocks(text: string, page: number): Block[] {
     current.lines.push(line);
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     const t = line.trim();
     if (t.length === 0) {
       flush();
       continue;
     }
-    if (isHeading(line)) {
+    const prevBlank = i === 0 || lines[i - 1]!.trim().length === 0;
+    if (isHeading(line, prevBlank)) {
       flush();
       const level = /^(#{1,6})\s/.test(line) ? line.match(/^#+/)![0].length : 1;
       pushLine('header', level, t.replace(/^#+\s+/, '').replace(/:\s*$/, '').trim() || t);
@@ -139,8 +154,8 @@ export function documentAwareSplitter(
   modelId: string,
   options: SplitOptions = {}
 ): ChunkingStrategy {
-  const MAX_SIZE = options.maxChunkSize ?? 800;
-  const OVERLAP = options.overlap ?? 100;
+  const MAX_SIZE = options.maxChunkSize ?? CHILD_CHUNK_SIZE;
+  const OVERLAP = options.overlap ?? Math.floor(CHILD_CHUNK_SIZE / 10);
 
   return {
     async splitPages(pages) {

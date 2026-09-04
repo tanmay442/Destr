@@ -209,6 +209,10 @@ export function SettingsClient() {
     'childChunkSize',
     'parentChildMode',
     'parentChildWindow',
+    'rsePenalty',
+    'rseMaxSegmentChunks',
+    'rseOverallMaxChunks',
+    'rseMinSegmentValue',
   ];
 
   const retrievalKeys = [

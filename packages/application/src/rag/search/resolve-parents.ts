@@ -1,5 +1,5 @@
 import { abortable } from './abort';
-import { toRetrievedChunk, type RetrievedChunk, type ScoredRow, type SearchDeps } from './search-types';
+import { scoreOf, toRetrievedChunk, type RetrievedChunk, type ScoredRow, type SearchDeps } from './search-types';
 
 async function resolveParents(
   hits: ScoredRow[],
@@ -26,10 +26,10 @@ async function resolveParents(
   for (const h of childHits) {
     const pid = h.parentChunkId as number;
     bestSimilarity.set(pid, Math.max(bestSimilarity.get(pid) ?? -Infinity, h.similarity));
-    const score = h.fusedScore ?? h.similarity;
+    const score = scoreOf(h);
     bestScore.set(pid, Math.max(bestScore.get(pid) ?? -Infinity, score));
     const prev = bestChild.get(pid);
-    if (!prev || score > (prev.fusedScore ?? prev.similarity)) bestChild.set(pid, h);
+    if (!prev || score > scoreOf(prev)) bestChild.set(pid, h);
   }
 
   const parentByIdHas = (id: number | null | undefined) => id != null && parentById.has(id);
@@ -59,11 +59,11 @@ async function resolveParents(
   // Orphaned children (parent missing) fall back to the child hit so recall is not silently lost.
   for (const h of childHits) {
     if (parentByIdHas(h.parentChunkId)) continue;
-    entries.push({ chunk: toRetrievedChunk(h), score: h.fusedScore ?? h.similarity });
+    entries.push({ chunk: toRetrievedChunk(h), score: scoreOf(h) });
   }
 
   for (const h of flatHits) {
-    entries.push({ chunk: toRetrievedChunk(h), score: h.fusedScore ?? h.similarity });
+    entries.push({ chunk: toRetrievedChunk(h), score: scoreOf(h) });
   }
 
   return entries

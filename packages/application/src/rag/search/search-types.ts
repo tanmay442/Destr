@@ -32,9 +32,14 @@ export interface RetrievedChunk {
 
 interface ScoredRow extends RetrievedChunkRow {
   fusedScore?: number;
+  rerankerScore?: number;
 }
 
 export type { ScoredRow };
+
+export function scoreOf(row: ScoredRow): number {
+  return row.rerankerScore ?? row.fusedScore ?? row.similarity;
+}
 
 export interface SearchDeps {
   chunks: ChunkRepository;
@@ -48,10 +53,18 @@ export interface SearchOpts {
   signal?: AbortSignal | undefined;
   threshold?: number | undefined;
   limit?: number | undefined;
-  /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`). */
-  mode?: 'parent' | 'window' | undefined;
+  /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`|`segment`). */
+  mode?: 'parent' | 'window' | 'segment' | undefined;
   /** Override `PARENT_CHILD_WINDOW` for this call. */
   parentChildWindow?: number | undefined;
+  /** RSE penalty subtracted from normalized relevance in `segment` mode. */
+  rsePenalty?: number | undefined;
+  /** Maximum chunks in one reconstructed segment. */
+  rseMaxSegmentChunks?: number | undefined;
+  /** Maximum chunks across segments per contiguous run. */
+  rseOverallMaxChunks?: number | undefined;
+  /** Minimum segment value required for emission. */
+  rseMinSegmentValue?: number | undefined;
   /** Broad candidate-pool size before reranking. Ignored when no reranker. */
   candidateLimit?: number | undefined;
   /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */

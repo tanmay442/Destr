@@ -117,6 +117,23 @@ export function ChunkingTab({
                 onReset={() => update('parentChildWindow', fieldMap.get('parentChildWindow')!.default)}
               />
             ) : null}
+            {[
+              'rsePenalty',
+              'rseMaxSegmentChunks',
+              'rseOverallMaxChunks',
+              'rseMinSegmentValue',
+            ].map((key) => {
+              const field = fieldMap.get(key);
+              return field ? (
+                <FieldControl
+                  key={key}
+                  field={field}
+                  value={values[key]}
+                  onChange={(v) => update(key, v)}
+                  onReset={() => update(key, field.default)}
+                />
+              ) : null;
+            })}
           </div>
 
           {extraChunkingFields.length > 0 ? (

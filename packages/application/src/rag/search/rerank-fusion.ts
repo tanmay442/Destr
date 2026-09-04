@@ -1,12 +1,12 @@
 import type { RetrievedChunkRow, Reranker } from '@app/domain';
 import { abortable } from './abort';
-import type { ScoredRow } from './search-types';
+import { scoreOf, type ScoredRow } from './search-types';
 
 function filterByThreshold(
-  rows: RetrievedChunkRow[],
+  rows: ScoredRow[],
   threshold: number,
   vectorIds: Set<number>,
-): RetrievedChunkRow[] {
+): ScoredRow[] {
   // The cosine threshold only applies to vector-retrieved rows; lexical-only
   // rows carry ts_rank scores, which are not comparable to cosine similarity.
   // When a reranker is present, lexical rows are gated by reranker relevance
@@ -23,13 +23,15 @@ async function rerankRows(
   threshold: number,
   vectorIds: Set<number>,
   signal?: AbortSignal,
-): Promise<RetrievedChunkRow[]> {
+): Promise<ScoredRow[]> {
   try {
     const ranked = await abortable(reranker.rank(query, rows.map((r) => r.content)), signal);
-    const ordered = [...ranked]
+    const ordered: ScoredRow[] = [...ranked]
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
-      .map((r) => rows[r.index])
-      .filter((r): r is RetrievedChunkRow => r != null);
+      .flatMap((rankedRow) => {
+        const row = rows[rankedRow.index];
+        return row ? [{ ...row, rerankerScore: rankedRow.relevanceScore }] : [];
+      });
     return filterByThreshold(ordered.length > 0 ? ordered : sortByRelevance(rows), threshold, vectorIds).slice(0, topN);
   } catch {
     return filterByThreshold(sortByRelevance(rows), threshold, vectorIds).slice(0, topN);
@@ -37,7 +39,7 @@ async function rerankRows(
 }
 
 function sortByRelevance(rows: ScoredRow[]): ScoredRow[] {
-  return [...rows].sort((a, b) => (b.fusedScore ?? b.similarity) - (a.fusedScore ?? a.similarity));
+  return [...rows].sort((a, b) => scoreOf(b) - scoreOf(a));
 }
 
 /** Reciprocal Rank Fusion: `score = Σ boost / (K + rank)`. Merges vector and lexical rankings. */

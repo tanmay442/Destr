@@ -1,4 +1,5 @@
 import type { ChunkingStrategy } from '@app/domain';
+import { CHILD_CHUNK_SIZE, PARENT_CHUNK_SIZE } from '@app/domain';
 import {
   chunkBySentences,
   buildSections,
@@ -9,8 +10,8 @@ import {
   type Section,
 } from '../shared';
 
-const DEFAULT_PARENT_SIZE = 2200;
-const DEFAULT_CHILD_SIZE = 700;
+const DEFAULT_PARENT_SIZE = PARENT_CHUNK_SIZE;
+const DEFAULT_CHILD_SIZE = CHILD_CHUNK_SIZE;
 const DEFAULT_OVERLAP = 130;
 const SECTION_MERGE_MAX = 80;
 
@@ -55,11 +56,13 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
   const childSize = opts.childSize ?? DEFAULT_CHILD_SIZE;
   const overlap = opts.overlap ?? DEFAULT_OVERLAP;
 
-  function groupIntoParents(sections: Section[]): Section[] {
+  function groupIntoParents(sections: Section[], runningTitle: string | null): { parents: Section[]; endTitle: string | null } {
     const parents: Section[] = [];
     let current: Section | null = null;
+    let title = runningTitle;
 
     for (const s of sections) {
+      if (s.title) title = s.title;
       const sanitizedText = cleanTextArtifacts(s.text);
       if (!sanitizedText) continue;
 
@@ -71,7 +74,7 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
         const subTexts = splitOversizedText(sanitizedText, parentSize);
         subTexts.forEach((partText, index) => {
           parents.push({
-            title: s.title ? `${s.title} (Part ${index + 1})` : null,
+            title: s.title ? `${s.title} (Part ${index + 1})` : title,
             text: partText,
           });
         });
@@ -86,12 +89,12 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
         current.text = candidate;
       } else {
         if (current) parents.push(current);
-        current = { title: s.title, text: sanitizedText };
+        current = { title: s.title ?? title, text: sanitizedText };
       }
     }
 
     if (current) parents.push(current);
-    return parents;
+    return { parents, endTitle: title };
   }
 
   return {
@@ -104,14 +107,15 @@ export function parentChildSplitter(modelId: string, opts: ParentChildOptions = 
       for (const { page, text } of pages) {
         let sections = buildSections(text);
         sections = mergeShortSections(sections, SECTION_MERGE_MAX);
-        const parents = groupIntoParents(sections);
+        const grouped = groupIntoParents(sections, lastTitle);
+        lastTitle = grouped.endTitle;
+        const parents = grouped.parents;
 
         for (const parent of parents) {
           if (parent.text.trim().length === 0) continue;
 
           const parentIndex = chunkIndex++;
-          const parentTitle = parent.title ?? lastTitle;
-          if (parent.title) lastTitle = parent.title;
+          const parentTitle = parent.title;
           const parentSource = parentTitle ? `Page ${page} — ${parentTitle}` : `Page ${page}`;
 
           chunks.push(

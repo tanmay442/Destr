@@ -17,6 +17,10 @@ import {
   RERANK_TOP_N as DEFAULT_RERANK_TOP_N,
   RRF_K as DEFAULT_RRF_K,
   LEXICAL_WEIGHT as DEFAULT_LEXICAL_WEIGHT,
+  RSE_IRRELEVANT_PENALTY as DEFAULT_RSE_PENALTY,
+  RSE_MAX_SEGMENT_CHUNKS as DEFAULT_RSE_MAX_SEGMENT,
+  RSE_OVERALL_MAX_CHUNKS as DEFAULT_RSE_OVERALL_MAX,
+  RSE_MIN_SEGMENT_VALUE as DEFAULT_RSE_MIN_VALUE,
   AUX_MODEL as DEFAULT_AUX_MODEL,
   OUT_OF_DOMAIN_THRESHOLD as DEFAULT_OUT_OF_DOMAIN_THRESHOLD,
   AGENT_STEP_BUDGET as DEFAULT_AGENT_STEP_BUDGET,
@@ -120,13 +124,17 @@ function resolveRuntimeConfig(env: EnvSource) {
   const INGEST_CHUNK_OVERLAP = Math.floor(INGEST_CHUNK_SIZE / 10);
   const PARENT_CHUNK_SIZE = positiveIntegerOrDefault(env.get('PARENT_CHUNK_SIZE'), DEFAULT_PARENT_CHUNK_SIZE, 'PARENT_CHUNK_SIZE');
   const CHILD_CHUNK_SIZE = positiveIntegerOrDefault(env.get('CHILD_CHUNK_SIZE'), DEFAULT_CHILD_CHUNK_SIZE, 'CHILD_CHUNK_SIZE');
-  const PARENT_CHILD_MODE = enumOrDefault(env.get('PARENT_CHILD_MODE'), ['parent', 'window'] as const, DEFAULT_PARENT_CHILD_MODE, 'PARENT_CHILD_MODE');
+  const PARENT_CHILD_MODE = enumOrDefault(env.get('PARENT_CHILD_MODE'), ['parent', 'window', 'segment'] as const, DEFAULT_PARENT_CHILD_MODE, 'PARENT_CHILD_MODE');
   const PARENT_CHILD_WINDOW = nonnegativeIntegerOrDefault(env.get('PARENT_CHILD_WINDOW'), DEFAULT_PARENT_CHILD_WINDOW, 'PARENT_CHILD_WINDOW');
   const RERANKER_PROVIDER = enumOrDefault(env.get('RERANKER_PROVIDER'), ['cosine', 'local', 'cohere'] as const, DEFAULT_RERANKER_PROVIDER, 'RERANKER_PROVIDER');
   const CANDIDATE_POOL = positiveIntegerOrDefault(env.get('CANDIDATE_POOL'), DEFAULT_CANDIDATE_POOL, 'CANDIDATE_POOL');
   const RERANK_TOP_N = positiveIntegerOrDefault(env.get('RERANK_TOP_N'), DEFAULT_RERANK_TOP_N, 'RERANK_TOP_N');
   const HYBRID_ENABLED = env.get('HYBRID_ENABLED') !== 'false';
   const RRF_K = positiveOrDefault(env.get('RRF_K'), DEFAULT_RRF_K, 'RRF_K');
+  const RSE_PENALTY = probabilityOrDefault(env.get('RSE_PENALTY'), DEFAULT_RSE_PENALTY, 'RSE_PENALTY');
+  const RSE_MAX_SEGMENT_CHUNKS = positiveIntegerOrDefault(env.get('RSE_MAX_SEGMENT_CHUNKS'), DEFAULT_RSE_MAX_SEGMENT, 'RSE_MAX_SEGMENT_CHUNKS');
+  const RSE_OVERALL_MAX_CHUNKS = positiveIntegerOrDefault(env.get('RSE_OVERALL_MAX_CHUNKS'), DEFAULT_RSE_OVERALL_MAX, 'RSE_OVERALL_MAX_CHUNKS');
+  const RSE_MIN_SEGMENT_VALUE = nonnegativeOrDefault(env.get('RSE_MIN_SEGMENT_VALUE'), DEFAULT_RSE_MIN_VALUE, 'RSE_MIN_SEGMENT_VALUE');
   const LEXICAL_WEIGHT = nonnegativeOrDefault(env.get('LEXICAL_WEIGHT'), DEFAULT_LEXICAL_WEIGHT, 'LEXICAL_WEIGHT');
   const AGENTIC_ENABLED = env.get('AGENTIC_ENABLED') !== 'false';
   const AUX_MODEL = env.get('AUX_MODEL') ?? DEFAULT_AUX_MODEL;
@@ -163,6 +171,10 @@ function resolveRuntimeConfig(env: EnvSource) {
     HYBRID_ENABLED,
     RRF_K,
     LEXICAL_WEIGHT,
+    RSE_PENALTY,
+    RSE_MAX_SEGMENT_CHUNKS,
+    RSE_OVERALL_MAX_CHUNKS,
+    RSE_MIN_SEGMENT_VALUE,
     AGENTIC_ENABLED,
     AUX_MODEL,
     OUT_OF_DOMAIN_THRESHOLD,
@@ -216,7 +228,7 @@ export const INGEST_CHUNK_SIZE: number = defaultConfig.INGEST_CHUNK_SIZE as numb
 export const INGEST_CHUNK_OVERLAP: number = defaultConfig.INGEST_CHUNK_OVERLAP as number;
 export const PARENT_CHUNK_SIZE: number = defaultConfig.PARENT_CHUNK_SIZE as number;
 export const CHILD_CHUNK_SIZE: number = defaultConfig.CHILD_CHUNK_SIZE as number;
-export const PARENT_CHILD_MODE: 'parent' | 'window' = defaultConfig.PARENT_CHILD_MODE as 'parent' | 'window';
+export const PARENT_CHILD_MODE: 'parent' | 'window' | 'segment' = defaultConfig.PARENT_CHILD_MODE as 'parent' | 'window' | 'segment';
 export const PARENT_CHILD_WINDOW: number = defaultConfig.PARENT_CHILD_WINDOW as number;
 export const RERANKER_PROVIDER: 'cosine' | 'local' | 'cohere' = defaultConfig.RERANKER_PROVIDER as 'cosine' | 'local' | 'cohere';
 export const CANDIDATE_POOL: number = defaultConfig.CANDIDATE_POOL as number;
@@ -224,6 +236,10 @@ export const RERANK_TOP_N: number = defaultConfig.RERANK_TOP_N as number;
 export const HYBRID_ENABLED: boolean = defaultConfig.HYBRID_ENABLED as boolean;
 export const RRF_K: number = defaultConfig.RRF_K as number;
 export const LEXICAL_WEIGHT: number = defaultConfig.LEXICAL_WEIGHT as number;
+export const RSE_PENALTY: number = defaultConfig.RSE_PENALTY as number;
+export const RSE_MAX_SEGMENT_CHUNKS: number = defaultConfig.RSE_MAX_SEGMENT_CHUNKS as number;
+export const RSE_OVERALL_MAX_CHUNKS: number = defaultConfig.RSE_OVERALL_MAX_CHUNKS as number;
+export const RSE_MIN_SEGMENT_VALUE: number = defaultConfig.RSE_MIN_SEGMENT_VALUE as number;
 export const AGENTIC_ENABLED: boolean = defaultConfig.AGENTIC_ENABLED as boolean;
 export const AUX_MODEL: string = defaultConfig.AUX_MODEL as string;
 export const OUT_OF_DOMAIN_THRESHOLD: number = defaultConfig.OUT_OF_DOMAIN_THRESHOLD as number;

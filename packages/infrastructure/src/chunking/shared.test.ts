@@ -6,6 +6,8 @@ import {
   cleanTextArtifacts,
   estimateTokens,
   tokensPerChar,
+  percentile,
+  semanticSplitCutoff,
 } from './shared';
 
 describe('splitSentences', () => {
@@ -122,11 +124,68 @@ describe('chunkBySentences', () => {
   });
 });
 
+describe('percentile', () => {
+  it('returns 0 for an empty sample and clamps the rank', () => {
+    expect(percentile([], 90)).toBe(0);
+    expect(percentile([1, 2, 3], 101)).toBe(3);
+    expect(percentile([1, 2, 3], -5)).toBe(1);
+  });
+
+  it('interpolates within a sorted sample without mutating it', () => {
+    const values = [3, 1, 2];
+    expect(percentile(values, 50)).toBe(2);
+    expect(percentile(values, 0)).toBe(1);
+    expect(percentile(values, 100)).toBe(3);
+    expect(values).toEqual([3, 1, 2]);
+  });
+});
+
+describe('semanticSplitCutoff', () => {
+  it('returns +Infinity when there are no distances', () => {
+    expect(semanticSplitCutoff([])).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('adapts to the sample spread instead of a fixed threshold', () => {
+    const tight = semanticSplitCutoff([0.11, 0.12, 0.11, 0.12, 0.5]);
+    const wide = semanticSplitCutoff([0.4, 0.45, 0.42, 0.44, 0.9]);
+    expect(tight).toBeLessThan(wide);
+  });
+
+  it('floors near-uniform documents at the absolute gap', () => {
+    expect(semanticSplitCutoff([0.01, 0.02, 0.015], 90, 0.1)).toBe(0.1);
+  });
+});
+
 describe('isHeadingLine', () => {
   it('treats short body sentences as non-headings', () => {
     expect(isHeadingLine('Yes.')).toBe(false);
     expect(isHeadingLine('See below.')).toBe(false);
     expect(isHeadingLine('42.')).toBe(false);
+  });
+
+  it('rejects quantities and footer fragments as numbered headings', () => {
+    expect(isHeadingLine('100 MB,')).toBe(false);
+    expect(isHeadingLine('2.3.')).toBe(false);
+    expect(isHeadingLine('URL.')).toBe(false);
+    expect(isHeadingLine('2.1 Web Application Errors')).toBe(true);
+    expect(isHeadingLine('4.2.1 Deployment Steps')).toBe(true);
+    expect(isHeadingLine('4. Upgrade')).toBe(false);
+    expect(isHeadingLine('4. Then')).toBe(false);
+    expect(isHeadingLine('4. If the')).toBe(false);
+    expect(isHeadingLine('4. Consider purchasing a rate limit boost or')).toBe(false);
+    expect(isHeadingLine('4. Click “Test')).toBe(false);
+    expect(isHeadingLine('4. Detailed Error Descriptions')).toBe(true);
+    expect(isHeadingLine('1. Introduction')).toBe(true);
+  });
+
+  it('rejects mid-table ALL-CAPS cells without blank separation', () => {
+    expect(isHeadingLine('API', false)).toBe(false);
+    expect(isHeadingLine('N/A N/A', false)).toBe(false);
+    expect(isHeadingLine('API', true)).toBe(true);
+    expect(isHeadingLine('ERR_1602_AUTH_FAILED', false)).toBe(true);
+    expect(isHeadingLine('Enterprise:', false)).toBe(false);
+    expect(isHeadingLine('Getting Started:')).toBe(true);
+    expect(isHeadingLine('A confirmation dialog appears:')).toBe(false);
   });
 
   it('treats markdown and all-caps lines as headings', () => {

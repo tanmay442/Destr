@@ -47,6 +47,10 @@ function descriptor(): FieldFixture[] {
     { key: 'auxModel', type: 'string', default: '', current: '', source: 'default', available: true, group: 'Retrieval', label: 'Aux Model Override', inputType: 'text', helpText: 'Model id for query rewriting, hallucination checking, and sampled quality judges.' },
     { key: 'judgeSampleRate', type: 'number', default: 0.02, current: 0.02, source: 'default', available: true, group: 'Retrieval', label: 'Judge Sample Rate', inputType: 'slider', min: 0, max: 1, step: 0.01 },
     { key: 'chunkingStrategy', type: 'enum', options: ['document-aware', 'semantic'], default: 'document-aware', current: 'document-aware', source: 'env-locked', readOnly: true, available: true, group: 'Chunking', label: 'Chunking Strategy', inputType: 'select' },
+    { key: 'rsePenalty', type: 'number', default: 0.2, current: 0.2, source: 'default', available: true, group: 'Chunking', label: 'RSE Penalty', inputType: 'slider', min: 0, max: 1, step: 0.05 },
+    { key: 'rseMaxSegmentChunks', type: 'number', default: 10, current: 10, source: 'default', available: true, group: 'Chunking', label: 'RSE Max Segment', inputType: 'slider', min: 1, max: 20, step: 1 },
+    { key: 'rseOverallMaxChunks', type: 'number', default: 15, current: 15, source: 'default', available: true, group: 'Chunking', label: 'RSE Overall Max', inputType: 'slider', min: 1, max: 30, step: 1 },
+    { key: 'rseMinSegmentValue', type: 'number', default: 0.3, current: 0.3, source: 'default', available: true, group: 'Chunking', label: 'RSE Min Value', inputType: 'slider', min: 0, max: 2, step: 0.05 },
     { key: 'embeddingModel', type: 'string', default: 'gemini-embedding-001', current: 'gemini-embedding-001', source: 'default', readOnly: true, available: true },
   ];
 }
@@ -103,6 +107,9 @@ describe('SettingsClient', () => {
     expect(screen.getByText('Similarity Threshold')).toBeInTheDocument();
     expect(screen.getByLabelText('Aux Model Override')).toBeInTheDocument();
     expect(screen.getByText('Hybrid Search')).toBeInTheDocument();
+    for (const label of ['RSE Penalty', 'RSE Max Segment', 'RSE Overall Max', 'RSE Min Value']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
   });
 
   it('renders env-locked fields disabled', async () => {

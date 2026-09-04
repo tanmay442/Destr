@@ -4,12 +4,14 @@ import {
   buildPageSpans,
   cosineSimilarity,
   pageForOffset,
+  semanticSplitCutoff,
   splitSentences,
   makeDocumentChunk,
 } from '../shared';
 import { adaptiveRecursiveSplitter } from './recursive-adaptive';
 
-const TOPIC_THRESHOLD = 0.3;
+const SEMANTIC_CUTOFF_PERCENTILE = 90;
+const SEMANTIC_MIN_ABSOLUTE_GAP = 0.1;
 const MIN_CHUNK = 300;
 const MAX_CHUNK = 600;
 /** Above this sentence count the semantic strategy gives up on embedding every
@@ -62,8 +64,13 @@ export function makeSemanticSplitter(embeddings: EmbeddingService, modelId: stri
 
       const segments: number[][] = [];
       let current: number[] = [];
+      const distances: number[] = [];
+      for (let i = 1; i < sentences.length; i++) {
+        distances.push(1 - cosineSimilarity(vectors[i - 1]!, vectors[i]!));
+      }
+      const cutoff = semanticSplitCutoff(distances, SEMANTIC_CUTOFF_PERCENTILE, SEMANTIC_MIN_ABSOLUTE_GAP);
       for (let i = 0; i < sentences.length; i++) {
-        if (i > 0 && cosineSimilarity(vectors[i - 1]!, vectors[i]!) < TOPIC_THRESHOLD && current.length > 0) {
+        if (i > 0 && distances[i - 1]! > cutoff && current.length > 0) {
           segments.push(current);
           current = [];
         }

@@ -38,6 +38,10 @@ describe('config/app.config env overrides', () => {
     vi.stubEnv('CHILD_CHUNK_SIZE', '500');
     vi.stubEnv('PARENT_CHILD_MODE', 'window');
     vi.stubEnv('PARENT_CHILD_WINDOW', '4');
+    vi.stubEnv('RSE_PENALTY', '0.5');
+    vi.stubEnv('RSE_MAX_SEGMENT_CHUNKS', '5');
+    vi.stubEnv('RSE_OVERALL_MAX_CHUNKS', '8');
+    vi.stubEnv('RSE_MIN_SEGMENT_VALUE', '0.7');
     vi.stubEnv('HYBRID_ENABLED', 'false');
     vi.stubEnv('AUX_MODEL', 'gpt-4o-mini');
     vi.resetModules();
@@ -53,6 +57,10 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.childChunkSize).toBe(500);
     expect(appConfig.parentChildMode).toBe('window');
     expect(appConfig.parentChildWindow).toBe(4);
+    expect(appConfig.rsePenalty).toBe(0.5);
+    expect(appConfig.rseMaxSegmentChunks).toBe(5);
+    expect(appConfig.rseOverallMaxChunks).toBe(8);
+    expect(appConfig.rseMinSegmentValue).toBe(0.7);
     expect(appConfig.hybridEnabled).toBe(false);
     expect(appConfig.auxModel).toBe('gpt-4o-mini');
   });
@@ -69,9 +77,13 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.agenticRetrieveLimit).toBe(10);
     expect(appConfig.agenticMaxRetries).toBe(1);
     expect(appConfig.parentChunkSize).toBe(1800);
-    expect(appConfig.childChunkSize).toBe(400);
+    expect(appConfig.childChunkSize).toBe(500);
     expect(appConfig.parentChildMode).toBe('parent');
     expect(appConfig.parentChildWindow).toBe(2);
+    expect(appConfig.rsePenalty).toBe(0.2);
+    expect(appConfig.rseMaxSegmentChunks).toBe(10);
+    expect(appConfig.rseOverallMaxChunks).toBe(15);
+    expect(appConfig.rseMinSegmentValue).toBe(0.3);
     expect(appConfig.hybridEnabled).toBe(true);
     expect(appConfig.auxModel).toBeUndefined();
   });

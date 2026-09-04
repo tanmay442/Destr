@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 import type { EmbeddingService } from '@app/domain';
 import { unpdfParser } from '../packages/infrastructure/src/pdf/unpdf-parser';
 import { getChunkingStrategy, type ChunkingStrategyName } from '../packages/infrastructure/src/chunking/index';
+import {
+  computeChunkMetrics,
+  formatMetricsRow,
+  metricsTableHeader,
+  type ChunkMetrics,
+} from './eval/chunk-metrics';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ALL_STRATEGIES: ChunkingStrategyName[] = [
@@ -150,16 +156,24 @@ async function main() {
   mkdirSync(args.out, { recursive: true });
 
   const embeddings = makeMockEmbeddings();
+  const allMetrics: Array<{ name: string; metrics: ChunkMetrics }> = [];
 
   for (const name of args.strategies) {
     console.log(`\n=== Running ${name} ===`);
     const strategy = getChunkingStrategy(name, { embeddings });
     const chunks = await strategy.splitPages(pages);
+    allMetrics.push({ name, metrics: computeChunkMetrics(chunks) });
     const md = toMarkdown(name, chunks);
     const outPath = join(args.out, `${name}.md`);
     writeFileSync(outPath, md, 'utf8');
     console.log(`  ${chunks.length} chunks -> ${outPath}`);
   }
+
+  console.log('\n' + metricsTableHeader());
+  for (const { name, metrics } of allMetrics) console.log(formatMetricsRow(name, metrics));
+  const metricsPath = join(args.out, 'metrics.json');
+  writeFileSync(metricsPath, JSON.stringify(Object.fromEntries(allMetrics.map((m) => [m.name, m.metrics])), null, 2), 'utf8');
+  console.log(`\nMetrics -> ${metricsPath}`);
 
   console.log('\nDone. Output written to:', args.out);
 }

@@ -260,6 +260,8 @@ function buildChunkingStrategy(cfg: AppConfig) {
     modelId: core.embeddingModelId,
     parentSize: cfg.parentChunkSize,
     childSize: cfg.childChunkSize,
+    overlap: Math.floor(cfg.childChunkSize / 10),
+    maxChunkSize: cfg.childChunkSize,
   });
 }
 
@@ -320,6 +322,10 @@ function createComposition() {
           hybridEnabled: cfg.hybridEnabled,
           mode: cfg.parentChildMode,
           parentChildWindow: cfg.parentChildWindow,
+          rsePenalty: o.rsePenalty ?? cfg.rsePenalty,
+          rseMaxSegmentChunks: o.rseMaxSegmentChunks ?? cfg.rseMaxSegmentChunks,
+          rseOverallMaxChunks: o.rseOverallMaxChunks ?? cfg.rseOverallMaxChunks,
+          rseMinSegmentValue: o.rseMinSegmentValue ?? cfg.rseMinSegmentValue,
           rrfK: o.rrfK ?? RRF_K,
           lexicalWeight: o.lexicalWeight ?? LEXICAL_WEIGHT,
           rerankTopN: o.rerankTopN ?? RERANK_TOP_N,

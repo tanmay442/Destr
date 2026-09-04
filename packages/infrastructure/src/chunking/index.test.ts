@@ -138,6 +138,42 @@ describe('document-aware strategy', () => {
     expect(p2!.source).toBe('Page 2 — 2.2.3 Overview');
   });
 
+  it('ignores single-token ALL-CAPS table cells mid-table', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      {
+        page: 1,
+        text: '## Errors\n\nName Kind\nWidget API\nGadget Web\nSome body text here describing the table shown above in full detail.',
+      },
+    ]);
+    expect(chunks.some((c) => c.sectionTitle === 'API')).toBe(false);
+    expect(chunks.some((c) => c.sectionTitle === 'Web')).toBe(false);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('Widget');
+    expect(body).toContain('Gadget');
+  });
+
+  it('keeps code-like ALL-CAPS tokens with digits or underscores as sections', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      {
+        page: 4,
+        text: 'source\nhost:port.\nOmniBoard\negress IPs.\nERR_1602_DATA_SOURCE_AUTH_FAILED\n\nData Source\nAuthentication\nFailed\nReset the credentials now please.',
+      },
+    ]);
+    expect(chunks.some((c) => c.sectionTitle === 'ERR_1602_DATA_SOURCE_AUTH_FAILED')).toBe(true);
+  });
+
+  it('rejects trailing-punctuation fragments such as URL. or page numbers', async () => {
+    const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
+    const chunks = await s.splitPages([
+      { page: 1, text: 'Read the docs at URL.\nMore body text follows here.\n1.\n2.3.\n4.5.\n6.\nTrailing body text here.' },
+    ]);
+    const titles = chunks.map((c) => c.sectionTitle).filter((t) => t !== null);
+    expect(titles).not.toContain('URL.');
+    expect(titles.every((t) => !/^\d+\.?$/.test(t!))).toBe(true);
+  });
+
   it('stamps a title from ALL-CAPS headings', async () => {
     const s = getChunkingStrategy('document-aware', { embeddings: mockEmbeddings() });
     const chunks = await s.splitPages([
@@ -299,6 +335,40 @@ describe('semantic strategy', () => {
     expect(chunks.every((c) => c.sectionTitle === null)).toBe(true);
     const lengths = chunks.map((c) => c.content.length);
     expect(new Set(lengths).size).toBeGreaterThan(1);
+  });
+
+  it('splits at the per-document topic shift instead of a fixed threshold', async () => {
+    const topical = {
+      embed: vi.fn(),
+      embedBatch: vi.fn().mockImplementation(async (values: string[]) =>
+        values.map((v) => (v.toLowerCase().includes('quantum') ? [0, 1, 0, 0] : [1, 0, 0, 0])),
+      ),
+    };
+    const s = getChunkingStrategy('semantic', { embeddings: topical });
+    const text =
+      'Cats are small pets. Cats like warm laps. Quantum entanglement links particles. Quantum states collapse on measurement.';
+    const chunks = await s.splitPages([{ page: 1, text }]);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    const body = chunks.map((c) => c.content).join('\n');
+    expect(body).toContain('Cats');
+    expect(body).toContain('Quantum');
+  });
+
+  it('keeps near-uniform text coherent instead of over-splitting', async () => {
+    const flat = {
+      embed: vi.fn(),
+      embedBatch: vi.fn().mockResolvedValue([
+        [1, 0, 0, 0],
+        [1, 0, 0, 0],
+        [1, 0, 0, 0],
+        [1, 0, 0, 0],
+      ]),
+    };
+    const s = getChunkingStrategy('semantic', { embeddings: flat });
+    const chunks = await s.splitPages([
+      { page: 1, text: 'The cat sat. The cat slept. The cat ate. The cat purred.' },
+    ]);
+    expect(chunks).toHaveLength(1);
   });
 
   it('throws when the embedding service returns fewer vectors than sentences', async () => {
