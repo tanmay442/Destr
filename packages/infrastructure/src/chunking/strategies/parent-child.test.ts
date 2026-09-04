@@ -63,4 +63,16 @@ describe('parent-child strategy', () => {
     expect(body).toContain('29.99');
     expect(body).toContain('42');
   });
+
+  it('carries the last section title across pages, not the first parent title', async () => {
+    const s = parentChildSplitter('m', { parentSize: 2000, childSize: 5000, overlap: 0 });
+    const body = 'x '.repeat(150).trim();
+    const chunks = await s.splitPages([
+      { page: 1, text: `# Alpha\n\n${body}\n\n# Beta\n\n${body}` },
+      { page: 2, text: body },
+    ]);
+    const page2 = chunks.filter((c) => c.page === 2);
+    expect(page2.length).toBeGreaterThan(0);
+    expect(page2.every((c) => c.sectionTitle === 'Beta')).toBe(true);
+  });
 });

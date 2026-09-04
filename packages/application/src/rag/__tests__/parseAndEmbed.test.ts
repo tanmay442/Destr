@@ -115,7 +115,7 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(result.value.rows[0]!.title).toBeNull();
   });
 
-  it('stores a zero-vector placeholder for parent blocks and skips their embedding call', async () => {
+  it('embeds parent lead slices instead of storing zero-vector placeholders', async () => {
     const contentParser: ContentParser = {
       extractPages: vi.fn().mockResolvedValue([{ page: 1, text: 'Parent block body. Child one. Child two.' }]),
       extractText: vi.fn(),
@@ -136,12 +136,44 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith(['Child one.', 'Child two.']);
+    expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
+      'Parent block body.',
+      'Child one.',
+      'Child two.',
+    ]);
     const [parent, child1, child2] = result.value.rows;
     expect(parent!.kind).toBe('parent');
-    expect(parent!.embedding).toEqual([0, 0, 0]);
-    expect(child1!.embedding).toEqual([1, 0, 0]);
-    expect(child2!.embedding).toEqual([2, 0, 0]);
+    expect(parent!.content).toBe('Parent block body.');
+    expect(parent!.embedding).toEqual([1, 0, 0]);
+    expect(child1!.embedding).toEqual([2, 0, 0]);
+    expect(child2!.embedding).toEqual([3, 0, 0]);
+  });
+
+  it('caps parent embedding input at the lead slice while storing full content', async () => {
+    const longBody = 'word '.repeat(600).trim();
+    const contentParser: ContentParser = {
+      extractPages: vi.fn().mockResolvedValue([{ page: 1, text: longBody }]),
+      extractText: vi.fn(),
+    };
+    const chunkingStrategy: ChunkingStrategy = {
+      splitPages: vi.fn().mockResolvedValue([
+        { content: longBody, chunkIndex: 0, page: 1, parentChunkId: null, kind: 'parent' },
+        { content: 'Child one.', chunkIndex: 1, page: 1, parentChunkId: 0, kind: 'child' },
+      ]),
+    };
+    const deps = makeParseDeps({ contentParser, chunkingStrategy });
+    deps.embeddings.embedBatch = vi
+      .fn()
+      .mockImplementation(async (texts: string[]) => texts.map((_, i) => [i + 1, 0, 0]));
+
+    const result = await parseAndEmbed({ fileName: 'd.pdf', buffer: Buffer.from('x') }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const embedded = vi.mocked(deps.embeddings.embedBatch).mock.calls[0]![0] as string[];
+    expect(embedded[0]!.length).toBeLessThanOrEqual(2000);
+    expect(result.value.rows[0]!.content).toBe(longBody);
+    expect(result.value.rows[0]!.content.length).toBeGreaterThan(2000);
   });
 
   it('embeds the CCH header via the strategy path but stores clean content, carrying sectionTitle + source', async () => {
@@ -165,8 +197,8 @@ describe('parseAndEmbed (Contextual Chunk Headers)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
-      'Document: My Doc\nSummary: About things.\n\nSection A body.',
-      'Document: My Doc\nSummary: About things.\n\nSection B body.',
+      'Document: My Doc\nSummary: About things.\nSection: Section A\n\nSection A body.',
+      'Document: My Doc\nSummary: About things.\nSection: Section B\n\nSection B body.',
     ]);
     expect(result.value.rows).toEqual([
       expect.objectContaining({

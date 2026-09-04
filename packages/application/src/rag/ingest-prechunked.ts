@@ -130,11 +130,16 @@ export async function ingestPrechunked(
     );
     title = ctx.title?.trim() || null;
     summary = ctx.summary?.trim() || null;
-    if (title) header = `Document: ${title}\nSummary: ${summary ?? ''}\n\n`;
+    if (title) header = `Document: ${title}\nSummary: ${summary ?? ''}\n`;
   }
+  const headerFor = (sectionTitle: string | null | undefined): string => {
+    if (!header) return '';
+    const section = sectionTitle?.trim() ? `Section: ${sectionTitle.trim()}\n` : '';
+    return `${header}${section}\n`;
+  };
   let embeddings: number[][];
   try {
-    const values = chunks.map((c) => (header ? header + c.content : c.content));
+    const values = chunks.map((c) => headerFor(c.sectionTitle) + c.content);
     embeddings = signal === undefined
       ? await deps.embeddings.embedBatch(values)
       : await deps.embeddings.embedBatch(values, { signal });

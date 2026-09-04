@@ -23,6 +23,27 @@ export function estimateTokens(text: string, modelId: string): number {
  *  512/768-token embedding limits once overlap and metadata are added). */
 export const CHILD_TOKEN_CAP = 400;
 
+export function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const rank = Math.min(100, Math.max(0, p));
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) return sorted[0]!;
+  const pos = (rank / 100) * (sorted.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
+}
+
+export function semanticSplitCutoff(
+  distances: number[],
+  percentileRank = 90,
+  absoluteFloor = 0.1,
+): number {
+  if (distances.length === 0) return Number.POSITIVE_INFINITY;
+  return Math.max(percentile(distances, percentileRank), absoluteFloor);
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
   let na = 0;

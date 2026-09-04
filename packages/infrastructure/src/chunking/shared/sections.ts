@@ -4,15 +4,52 @@ export interface Section {
 }
 
 /** Heuristic heading detection used to split a page into titled sections. */
-export function isHeadingLine(line: string): boolean {
+function looksLikeTitlePhrase(value: string): boolean {
+  if (/[“”"()[\]{}]/.test(value)) return false;
+  const words = value.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+  if (words.length === 0) return false;
+  const structuralSingleWords = new Set([
+    'appendix',
+    'conclusion',
+    'introduction',
+    'overview',
+    'references',
+    'summary',
+  ]);
+  if (words.length === 1) return structuralSingleWords.has(words[0]!.toLowerCase());
+  const minorWords = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to']);
+  let capitalized = 0;
+  for (const word of words) {
+    if (minorWords.has(word.toLowerCase())) continue;
+    if (word[0] !== word[0]!.toUpperCase()) return false;
+    capitalized++;
+  }
+  return capitalized >= 2;
+}
+
+export function isHeadingLine(line: string, prevBlank = true): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 120) return false;
   if (/^#{1,6}\s+/.test(t)) return true;
-  if (/^\d+(?:\.\d+)*\.?\s+[A-Z]/.test(t)) return true;
-  if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t)) return true;
+  if (/[.!?]$/.test(t)) return false;
+  const numbered = t.match(/^\d+(?:\.\d+)*\.?(?=\s+[A-Z])/);
+  if (numbered) {
+    const components = numbered[0].replace(/\.$/, '').split('.');
+    if (components.length > 1) return components.every((c) => c.length <= 2);
+    const title = t.slice(numbered[0].length).trim();
+    return Number(components[0]) < 20 && looksLikeTitlePhrase(title);
+  }
+  if (/^[A-Z][A-Za-z0-9' ]{2,}:\s*$/.test(t) && prevBlank) {
+    return looksLikeTitlePhrase(t.replace(/:\s*$/, ''));
+  }
   const letters = t.replace(/[^A-Za-z]/g, '');
-  if (letters.length >= 3 && t === t.toUpperCase() && /[A-Z]/.test(t) && !/[a-z]/.test(t)) return true;
-  return false;
+  if (letters.length < 3 || t !== t.toUpperCase() || /[a-z]/.test(t)) return false;
+  if (!/[A-Z]/.test(t)) return false;
+  if (!prevBlank) {
+    if (/\s/.test(t)) return false;
+    if (!t.includes('_')) return false;
+  }
+  return true;
 }
 
 /** Drop orphaned bullet/number artifact lines; keep any line with a letter.
@@ -43,13 +80,15 @@ export function buildSections(text: string): Section[] {
     const body = currentLines.join('\n').trim();
     if (body.length > 0) sections.push({ title: currentTitle, text: body });
   };
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     const t = line.trim();
     if (t.length === 0) {
       currentLines.push('');
       continue;
     }
-    if (isHeadingLine(line)) {
+    const prevBlank = i === 0 || lines[i - 1]!.trim().length === 0;
+    if (isHeadingLine(line, prevBlank)) {
       flush();
       currentTitle = t.replace(/^#+\s+/, '').replace(/:\s*$/, '').trim() || null;
       currentLines = [];

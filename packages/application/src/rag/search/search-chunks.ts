@@ -9,6 +9,10 @@ import {
   HYBRID_ENABLED,
   RRF_K,
   LEXICAL_WEIGHT,
+  RSE_IRRELEVANT_PENALTY,
+  RSE_MAX_SEGMENT_CHUNKS,
+  RSE_OVERALL_MAX_CHUNKS,
+  RSE_MIN_SEGMENT_VALUE,
 } from '@app/domain';
 import { sanitizePagination } from '../../service-result';
 import { throwIfAborted, abortable } from './abort';
@@ -24,6 +28,7 @@ import {
 } from './search-types';
 import { resolveParents } from './resolve-parents';
 import { resolveWindow } from './resolve-window';
+import { resolveSegments } from './resolve-segments';
 import { rerankRows, sortByRelevance, reciprocalRankFusion } from './rerank-fusion';
 
 export type { RetrievedChunk, SearchDeps, SearchOpts };
@@ -137,14 +142,40 @@ async function capAndResolve(
     ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds, opts.signal)
     : sortByRelevance(rows).slice(0, topN);
 
+  const mode = opts.mode ?? PARENT_CHILD_MODE;
   const resolved =
-    (opts.mode ?? PARENT_CHILD_MODE) === 'window'
+    mode === 'window'
       ? await resolveWindow(
           capped,
           deps,
           boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT),
           opts.signal,
         )
-      : await resolveParents(capped, deps, topN, opts.signal);
+      : mode === 'segment'
+        ? (
+            await resolveSegments(
+              capped,
+              deps,
+              {
+                penalty: boundedNonnegativeNumber(opts.rsePenalty, RSE_IRRELEVANT_PENALTY),
+                maxSegmentChunks: boundedPositiveInteger(
+                  opts.rseMaxSegmentChunks,
+                  RSE_MAX_SEGMENT_CHUNKS,
+                  MAX_SEARCH_LIMIT,
+                ),
+                overallMaxChunks: boundedPositiveInteger(
+                  opts.rseOverallMaxChunks,
+                  RSE_OVERALL_MAX_CHUNKS,
+                  MAX_SEARCH_LIMIT,
+                ),
+                minSegmentValue:
+                  typeof opts.rseMinSegmentValue === 'number' && Number.isFinite(opts.rseMinSegmentValue)
+                    ? opts.rseMinSegmentValue
+                    : RSE_MIN_SEGMENT_VALUE,
+              },
+              opts.signal,
+            )
+          ).slice(0, topN)
+        : await resolveParents(capped, deps, topN, opts.signal);
   return ok(resolved);
 }

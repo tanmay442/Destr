@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHILD_CHUNK_SIZE, PARENT_CHUNK_SIZE } from './constants';
 
 const toneSchema = z.enum(['friendly', 'formal', 'casual', 'concise']);
 
@@ -77,10 +78,14 @@ export const appConfigSchema = z.object({
   chunkingStrategy: z
     .enum(['document-aware', 'recursive-adaptive', 'semantic', 'parent-child'])
     .default('document-aware'),
-  parentChunkSize: z.coerce.number().int().positive().default(1800),
-  childChunkSize: z.coerce.number().int().positive().default(400),
-  parentChildMode: z.enum(['parent', 'window']).default('parent'),
+  parentChunkSize: z.coerce.number().int().positive().default(PARENT_CHUNK_SIZE),
+  childChunkSize: z.coerce.number().int().positive().default(CHILD_CHUNK_SIZE),
+  parentChildMode: z.enum(['parent', 'window', 'segment']).default('parent'),
   parentChildWindow: z.coerce.number().int().nonnegative().default(2),
+  rsePenalty: z.coerce.number().min(0).max(1).default(0.2),
+  rseMaxSegmentChunks: z.coerce.number().int().min(1).max(20).default(10),
+  rseOverallMaxChunks: z.coerce.number().int().min(1).max(30).default(15),
+  rseMinSegmentValue: z.coerce.number().min(0).max(2).default(0.3),
   retrievalMode: z.enum(['agentic', 'normal']).default('agentic'),
   agentStepBudget: z.coerce.number().int().positive().default(8),
   agenticRetrieveLimit: z.coerce.number().int().positive().default(10),
@@ -141,6 +146,10 @@ export const partialAppConfigSchema = z.object({
   childChunkSize: appConfigShape.childChunkSize.removeDefault().optional(),
   parentChildMode: appConfigShape.parentChildMode.removeDefault().optional(),
   parentChildWindow: appConfigShape.parentChildWindow.removeDefault().optional(),
+  rsePenalty: appConfigShape.rsePenalty.removeDefault().optional(),
+  rseMaxSegmentChunks: appConfigShape.rseMaxSegmentChunks.removeDefault().optional(),
+  rseOverallMaxChunks: appConfigShape.rseOverallMaxChunks.removeDefault().optional(),
+  rseMinSegmentValue: appConfigShape.rseMinSegmentValue.removeDefault().optional(),
   retrievalMode: appConfigShape.retrievalMode.removeDefault().optional(),
   agentStepBudget: appConfigShape.agentStepBudget.removeDefault().optional(),
   agenticRetrieveLimit: appConfigShape.agenticRetrieveLimit.removeDefault().optional(),

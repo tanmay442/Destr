@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { searchChunks } from '../search';
+import { searchChunks, getBestSegments } from '../search';
 import type { SearchDeps } from '../search';
 import type { RankedDocument, RetrievedChunkRow } from '@app/domain';
 
@@ -792,5 +792,186 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.map((r) => r.id)).toEqual([5, 7]);
+  });
+});
+
+describe('getBestSegments', () => {
+  it('bridges a sandwiched negative chunk when the run stays positive', () => {
+    expect(
+      getBestSegments([-0.2, 0.8, -0.2, 0.7, -0.2], {
+        maxLength: 10,
+        overallMaxLength: 30,
+        minimumValue: 0.3,
+      }),
+    ).toEqual([{ start: 1, end: 4, value: 1.3 }]);
+  });
+
+  it('never starts or ends on a negative chunk', () => {
+    expect(
+      getBestSegments([-0.2, 0.8], { maxLength: 10, overallMaxLength: 30, minimumValue: 0.3 }),
+    ).toEqual([{ start: 1, end: 2, value: 0.8 }]);
+  });
+
+  it('respects maxLength, overallMaxLength, and minimumValue', () => {
+    expect(
+      getBestSegments([0.8, 0.8, 0.8], { maxLength: 2, overallMaxLength: 2, minimumValue: 0.3 }),
+    ).toEqual([{ start: 0, end: 2, value: 1.6 }]);
+    expect(
+      getBestSegments([0.8, 0.8, 0.8], { maxLength: 2, overallMaxLength: 30, minimumValue: 0.3 }),
+    ).toEqual([
+      { start: 0, end: 2, value: 1.6 },
+      { start: 2, end: 3, value: 0.8 },
+    ]);
+    expect(
+      getBestSegments([0.8, 0.8, 0.8, 0.8], { maxLength: 2, overallMaxLength: 2, minimumValue: 0 }),
+    ).toEqual([{ start: 0, end: 2, value: 1.6 }]);
+    expect(
+      getBestSegments([0.1], { maxLength: 10, overallMaxLength: 30, minimumValue: 0.5 }),
+    ).toEqual([]);
+  });
+
+  it('never lets a segment exceed the remaining overall budget', () => {
+    expect(
+      getBestSegments([1, 1, 1, 1, 1], { maxLength: 5, overallMaxLength: 2, minimumValue: 0 }),
+    ).toEqual([{ start: 0, end: 2, value: 2 }]);
+  });
+});
+
+describe('searchChunks segment resolution', () => {
+  function flatRow(id: number, chunkIndex: number, content: string, similarity: number): RetrievedChunkRow {
+    return {
+      id,
+      documentId: 1,
+      fileName: 'd.pdf',
+      page: 1,
+      sectionTitle: null,
+      source: null,
+      title: null,
+      content,
+      similarity,
+      parentChunkId: null,
+      chunkIndex,
+    };
+  }
+
+  function segmentDeps(hits: RetrievedChunkRow[], ranges: Map<string, RetrievedChunkRow[]>): SearchDeps {
+    return {
+      chunks: {
+        insertMany: vi.fn(),
+        deleteByDocumentId: vi.fn(),
+        searchByVector: vi.fn().mockResolvedValue(hits),
+        searchByLexical: vi.fn().mockResolvedValue([]),
+        getByIds: vi.fn().mockResolvedValue([]),
+        getByDocAndRange: vi.fn().mockResolvedValue([]),
+        getByDocAndRanges: vi.fn().mockResolvedValue(ranges),
+        countForDocuments: vi.fn(),
+        countForAll: vi.fn(),
+        countForDocument: vi.fn(),
+        recountAll: vi.fn(),
+      },
+      embeddings: { embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]), embedBatch: vi.fn() },
+    };
+  }
+
+  it('stitches a sandwiched chunk the ranker missed into one segment', async () => {
+    const hits = [flatRow(105, 5, 'five', 0.9), flatRow(107, 7, 'seven', 0.85)];
+    const names = ['two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const rows = names.map((name, i) => flatRow(100 + (2 + i), 2 + i, name, 0));
+    const ranges = new Map<string, RetrievedChunkRow[]>([
+      ['1:2:8', rows.filter((n) => n.chunkIndex >= 2 && n.chunkIndex <= 8)],
+      ['1:4:10', rows.filter((n) => n.chunkIndex >= 4 && n.chunkIndex <= 10)],
+    ]);
+    const deps = segmentDeps(hits, ranges);
+    const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 3 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(1);
+    expect(result.value[0]!.content).toBe('five\n\nsix\n\nseven');
+    expect(result.value[0]!.id).toBe(105);
+    expect(result.value[0]!.similarity).toBe(0.9);
+  });
+
+  it('returns isolated hits as single-chunk segments (top-k fallback)', async () => {
+    const hits = [flatRow(105, 5, 'five', 0.9), flatRow(150, 50, 'fifty', 0.8)];
+    const row = (idx: number, name: string): RetrievedChunkRow => flatRow(100 + idx, idx, name, 0);
+    const ranges = new Map<string, RetrievedChunkRow[]>([
+      ['1:3:7', ['three', 'four', 'five', 'six', 'seven'].map((name, i) => row(3 + i, name))],
+      ['1:48:52', ['c48', 'c49', 'fifty', 'c51', 'c52'].map((name, i) => row(48 + i, name))],
+    ]);
+    const deps = segmentDeps(hits, ranges);
+    const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 2 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([105, 150]);
+    expect(result.value[0]!.content).toBe('five');
+    expect(result.value[1]!.content).toBe('fifty');
+  });
+
+  it('dedupes a parent block contained in its child segment', async () => {
+    const hits = [flatRow(104, 4, 'four', 0.9), flatRow(106, 6, 'child six body', 0.9)];
+    const parent = flatRow(200, 5, 'parent block child six body parent block', 0);
+    const window = [flatRow(104, 4, 'four', 0), parent, flatRow(106, 6, 'child six body', 0)];
+    const ranges = new Map<string, RetrievedChunkRow[]>([
+      ['1:1:7', window],
+      ['1:3:9', window],
+    ]);
+    const deps = segmentDeps(hits, ranges);
+    const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 3 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(1);
+    expect(result.value[0]!.content).toBe('four\n\nparent block child six body parent block');
+    expect(result.value[0]!.id).toBe(104);
+  });
+
+  it('preserves reranker ordering and keeps raw similarity in segment mode', async () => {
+    const hits = [flatRow(101, 1, 'higher cosine', 0.9), flatRow(120, 20, 'reranker winner', 0.5)];
+    const ranges = new Map<string, RetrievedChunkRow[]>([
+      ['1:-9:11', [hits[0]!]],
+      ['1:10:30', [hits[1]!]],
+    ]);
+    const deps = {
+      ...segmentDeps(hits, ranges),
+      reranker: {
+        rank: vi.fn().mockResolvedValue([
+          { index: 1, relevanceScore: 0.99 },
+          { index: 0, relevanceScore: 0.1 },
+        ]),
+      },
+    };
+
+    const result = await searchChunks(
+      'q',
+      { mode: 'segment', limit: 2, rseMaxSegmentChunks: 10 },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((r) => r.id)).toEqual([120, 101]);
+    expect(result.value.map((r) => r.similarity)).toEqual([0.5, 0.9]);
+  });
+
+  it('uses fused score for ordering without exposing it as similarity', async () => {
+    const vectorHit = flatRow(101, 1, 'vector hit', 0.91);
+    const sharedVector = flatRow(120, 20, 'shared hit', 0.72);
+    const sharedLexical = { ...sharedVector, similarity: 0.04 };
+    const ranges = new Map<string, RetrievedChunkRow[]>([
+      ['1:-9:11', [vectorHit]],
+      ['1:10:30', [sharedVector]],
+    ]);
+    const deps = segmentDeps([vectorHit, sharedVector], ranges);
+    deps.chunks.searchByLexical = vi.fn().mockResolvedValue([sharedLexical]);
+
+    const result = await searchChunks(
+      'q',
+      { mode: 'segment', limit: 2, rseMaxSegmentChunks: 10 },
+      deps,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]!.id).toBe(120);
+    expect(result.value[0]!.similarity).toBe(0.04);
   });
 });

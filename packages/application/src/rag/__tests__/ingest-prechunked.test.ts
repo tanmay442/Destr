@@ -103,8 +103,8 @@ describe('ingestPrechunked', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(deps.embeddings.embedBatch).toHaveBeenCalledWith([
-      'Document: Manual\nSummary: Product manual.\n\nGetting started body.',
-      'Document: Manual\nSummary: Product manual.\n\nAuth body.',
+      'Document: Manual\nSummary: Product manual.\nSection: Getting Started\n\nGetting started body.',
+      'Document: Manual\nSummary: Product manual.\nSection: Authentication\n\nAuth body.',
     ]);
     expect(deps.chunks.insertMany).toHaveBeenCalledWith([
       expect.objectContaining({ content: 'Getting started body.', title: 'Manual' }),
