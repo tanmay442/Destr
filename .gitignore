@@ -65,6 +65,9 @@ skills-lock.json
 scripts/chunk-output/
 
 docs/modularityport/
+
+# Local agent handoff/audit logs (shared in the workspace, never committed)
+docs/agentic-modernization-agent-logs/
 # Generated eval artifact (§C7) — uploaded as a CI artifact, not committed
 eval/golden-report.json
 eval/golden-report.mock.json
