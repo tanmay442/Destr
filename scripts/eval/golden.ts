@@ -1,6 +1,14 @@
 
+import { validateSyntheticMockLabelMembership } from './mock-corpus';
+
+export type GoldenQuestionCategory =
+  | 'exact_term'
+  | 'semantic_paraphrase'
+  | 'out_of_scope';
+
 export interface GoldenQuestion {
   id: string;
+  category: GoldenQuestionCategory;
   question: string;
   mustMention: string[];
   forbidden?: string[];
@@ -9,34 +17,58 @@ export interface GoldenQuestion {
   /** 'agentic' routes through agenticSearch; omit for normal-mode searchChunks. */
   mode?: 'agentic' | 'normal';
   /** Eval hits when any retrieved document id overlaps this list; omit = no doc check. */
-  expectedDocIds?: number[];
+  expectedDocIds?: readonly number[];
+  /** Explicit document labels used only by the CI-safe synthetic corpus. */
+  expectedMockDocIds?: readonly number[];
+  /** Explicit chunk labels used only by the CI-safe synthetic corpus. */
+  expectedMockChunkUids?: readonly string[];
 }
 
-export const goldenQuestions: GoldenQuestion[] = [
+type GoldenQuestionSeed = Omit<
+  GoldenQuestion,
+  'category' | 'expectedDocIds'
+>;
+
+function categoryFor(seed: GoldenQuestionSeed): GoldenQuestionCategory {
+  if (seed.refusalExpected === true) return 'out_of_scope';
+  return seed.mode === 'agentic' ? 'semantic_paraphrase' : 'exact_term';
+}
+
+const goldenQuestionSeeds = [
   {
     id: 'password-reset',
     question: 'How do I reset my password?',
     mustMention: ['password', 'reset'],
+    expectedMockDocIds: [101],
+    expectedMockChunkUids: ['chunk-synth-password-procedure'],
   },
   {
     id: 'dental-coverage',
     question: 'What does the dental plan cover?',
     mustMention: ['dental', 'cleaning'],
+    expectedMockDocIds: [102],
+    expectedMockChunkUids: ['chunk-synth-dental-coverage'],
   },
   {
     id: 'submit-claim',
     question: 'How do I submit an insurance claim?',
     mustMention: ['claim', 'portal'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
   },
   {
     id: 'dress-code',
     question: 'What is the dress code policy?',
     mustMention: ['dress', 'policy'],
+    expectedMockDocIds: [104],
+    expectedMockChunkUids: ['chunk-synth-dress-policy'],
   },
   {
     id: 'refund-policy',
     question: 'What is the refund policy?',
     mustMention: ['refund', 'policy'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'out-of-scope-medical',
@@ -49,61 +81,85 @@ export const goldenQuestions: GoldenQuestion[] = [
     id: 'password-requirements',
     question: 'What are the password requirements?',
     mustMention: ['password', 'requirements'],
+    expectedMockDocIds: [101],
+    expectedMockChunkUids: ['chunk-synth-password-procedure'],
   },
   {
     id: 'password-expiry',
     question: 'How often does my password expire?',
     mustMention: ['password', 'expire'],
+    expectedMockDocIds: [101],
+    expectedMockChunkUids: ['chunk-synth-password-procedure'],
   },
   {
     id: 'dental-cleanings',
     question: 'How many dental cleanings are covered per year?',
     mustMention: ['dental', 'cleaning'],
+    expectedMockDocIds: [102],
+    expectedMockChunkUids: ['chunk-synth-dental-coverage'],
   },
   {
     id: 'dental-orthodontics',
     question: 'Does the dental plan cover orthodontics?',
     mustMention: ['dental', 'orthodontics'],
+    expectedMockDocIds: [102],
+    expectedMockChunkUids: ['chunk-synth-dental-coverage'],
   },
   {
     id: 'claim-status',
     question: 'How do I check my claim status?',
     mustMention: ['claim', 'status'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
   },
   {
     id: 'claim-deadline',
     question: 'What is the deadline to file a claim?',
     mustMention: ['claim', 'deadline'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
   },
   {
     id: 'claim-portal-login',
     question: 'How do I log into the claim portal?',
     mustMention: ['claim', 'portal'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
   },
   {
     id: 'dress-code-remote',
     question: 'Is there a dress code for remote workers?',
     mustMention: ['dress', 'remote'],
+    expectedMockDocIds: [104],
+    expectedMockChunkUids: ['chunk-synth-dress-policy'],
   },
   {
     id: 'dress-code-friday',
     question: 'What is the dress code on Fridays?',
     mustMention: ['dress', 'code'],
+    expectedMockDocIds: [104],
+    expectedMockChunkUids: ['chunk-synth-dress-policy'],
   },
   {
     id: 'refund-timeline',
     question: 'How long does a refund take to process?',
     mustMention: ['refund', 'process'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'refund-eligibility',
     question: 'Am I eligible for a refund?',
     mustMention: ['refund', 'eligible'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'refund-partial',
     question: 'Can I get a partial refund?',
     mustMention: ['refund', 'partial'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'out-of-scope-legal',
@@ -138,55 +194,75 @@ export const goldenQuestions: GoldenQuestion[] = [
     id: 'password-change',
     question: 'How do I change my password?',
     mustMention: ['password', 'change'],
+    expectedMockDocIds: [101],
+    expectedMockChunkUids: ['chunk-synth-password-procedure'],
     mode: 'agentic',
   },
   {
     id: 'password-lockout',
     question: 'What happens after too many password attempts?',
     mustMention: ['password', 'attempts'],
+    expectedMockDocIds: [101],
+    expectedMockChunkUids: ['chunk-synth-password-procedure'],
   },
   {
     id: 'dental-xray',
     question: 'Are dental x-rays covered every year?',
     mustMention: ['dental', 'covered'],
+    expectedMockDocIds: [102],
+    expectedMockChunkUids: ['chunk-synth-dental-coverage'],
     mode: 'agentic',
   },
   {
     id: 'dental-enrollment',
     question: 'When can I enroll in the dental plan?',
     mustMention: ['enroll', 'dental'],
+    expectedMockDocIds: [102],
+    expectedMockChunkUids: ['chunk-synth-dental-coverage'],
   },
   {
     id: 'claim-appeal',
     question: 'How do I appeal a denied claim?',
     mustMention: ['appeal', 'claim'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
     mode: 'agentic',
   },
   {
     id: 'claim-receipt',
     question: 'Do I need a receipt for a claim?',
     mustMention: ['receipt', 'claim'],
+    expectedMockDocIds: [103],
+    expectedMockChunkUids: ['chunk-synth-claim-procedure'],
   },
   {
     id: 'dress-code-guests',
     question: 'Is there a dress code for visitors and guests?',
     mustMention: ['dress', 'guests'],
+    expectedMockDocIds: [104],
+    expectedMockChunkUids: ['chunk-synth-dress-policy'],
   },
   {
     id: 'refund-exchange',
     question: 'Can I exchange an item instead of a refund?',
     mustMention: ['exchange', 'refund'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
     mode: 'agentic',
   },
   {
     id: 'refund-shipping',
     question: 'Does a refund include shipping costs?',
     mustMention: ['shipping', 'refund'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'refund-window',
     question: 'How many days do I have to request a refund?',
     mustMention: ['days', 'refund'],
+    expectedMockDocIds: [105],
+    expectedMockChunkUids: ['chunk-synth-refund-policy'],
   },
   {
     id: 'nonsense-physics',
@@ -209,4 +285,11 @@ export const goldenQuestions: GoldenQuestion[] = [
     forbidden: ['lottery', 'numbers'],
     refusalExpected: true,
   },
-];
+] satisfies readonly GoldenQuestionSeed[];
+
+export const goldenQuestions: readonly GoldenQuestion[] = goldenQuestionSeeds.map((seed) => ({
+  ...seed,
+  category: categoryFor(seed),
+}));
+
+validateSyntheticMockLabelMembership(goldenQuestions);

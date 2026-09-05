@@ -2,7 +2,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
-import { normalizeOpenAIBaseURL } from './openai-base-url';
+import { getOpenAIOperationPath, normalizeOpenAIBaseURL } from './openai-base-url';
 import { registerChatProvider, registerChatProviderAdapter } from './registries';
 import {
   OPENAI_PROMPT_CACHE_CAPABILITIES,
@@ -21,7 +21,9 @@ export function getOpenAIChatModel(modelId?: string, env: EnvSource = defaultPro
     throw new Error('LLM_MODEL must be set (or pass an explicit model id) when CHAT_PROVIDER=openai.');
   }
   const provider = createOpenAI({ apiKey, baseURL: normalizeOpenAIBaseURL(baseURL) });
-  return provider.chat(resolved) as LanguageModelV3;
+  return getOpenAIOperationPath(baseURL) === '/responses'
+    ? provider.responses(resolved)
+    : provider.chat(resolved);
 }
 
 registerChatProvider('openai', (deps) => getOpenAIChatModel(deps.modelId, deps.env));
