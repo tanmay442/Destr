@@ -142,7 +142,7 @@ export function ModeComparisonCard({ mode }: { mode: ModeComparison }) {
             <dd className="font-medium text-foreground tabular-nums">{num(Math.round(mode.avgTokensPerQuery))}</dd>
           </div>
           <div className="flex flex-col gap-0.5">
-            <dt className="text-xs text-muted-foreground">Avg similarity</dt>
+            <dt className="text-xs text-muted-foreground">Avg retrieval score (legacy)</dt>
             <dd className="font-medium text-foreground tabular-nums">{mode.avgMaxSimilarity.toFixed(3)}</dd>
           </div>
           <div className="flex flex-col gap-0.5">

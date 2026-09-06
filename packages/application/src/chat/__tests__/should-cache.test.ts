@@ -10,7 +10,7 @@ const citations: EmittedCitation[] = [
   {
     id: 1,
     documentId: 10,
-    similarity: 0.9,
+    scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
     snippet: 'snippet',
     fileName: null,
     page: null,

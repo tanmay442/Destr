@@ -220,8 +220,8 @@ export function QualitySection({
                   </Card>
                   <Card className="gap-0 shadow-none">
                     <CardHeader className="gap-1 pb-4">
-                      <CardTitle className="text-sm">Avg similarity</CardTitle>
-                      <CardDescription>Best-match cosine, weekly.</CardDescription>
+                      <CardTitle className="text-sm">Avg retrieval score (legacy)</CardTitle>
+                      <CardDescription>Historical mixed-signal metric; new events preserve typed score provenance.</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <LineChart data={series((w) => w.avgMaxSimilarity)} formatValue={(v) => v.toFixed(3)} />

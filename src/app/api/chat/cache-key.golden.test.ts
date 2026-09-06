@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { answerCacheKey } from '@app/infrastructure';
-import { cacheFingerprint } from '@app/application/chat';
+import { cacheFingerprint, SEARCH_RESULT_CONTRACT_VERSION } from '@app/application/chat';
 import type { AppConfig } from '@app/domain/app-config';
 
 interface Fixture {
@@ -51,7 +51,7 @@ const baseCfg = {
 } as const;
 
 const FINGERPRINT_BASE =
-  '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
+  '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}';
 
 const FIXTURES: Fixture[] = [
   {
@@ -63,7 +63,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:df0e9d16800f072717a944273aa5d872',
+    key: 'rag:answer:ff5591f1af46d748c77405a532a3f328',
   },
   {
     name: 'query-normalization',
@@ -74,7 +74,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:ad7450732bd9cc90380f87d1d3f144ff',
+    key: 'rag:answer:b889e50775630992589fc0e483a9f2d9',
   },
   {
     name: 'punct-space',
@@ -85,7 +85,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:94a68777f93f2145aee08ea8b396fb88',
+    key: 'rag:answer:89382c9076ec68f335ff14dbba571f67',
   },
   {
     name: 'agentic-mode',
@@ -95,8 +95,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:cec121281727b41be77eb9e28a2edde2',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"agentic","retrievalMode":"agentic","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:f89abe15cbb234f7e828b64156b3ea45',
   },
   {
     name: 'agentic-inverted-rollout',
@@ -106,8 +106,8 @@ const FIXTURES: Fixture[] = [
     mode: 'agentic',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:c169a6478e39aec3c407598a44d9b8de',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"agentic","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:f81571e15e569931e95bad8543ee8002',
   },
   {
     name: 'different-user',
@@ -118,7 +118,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:57adcd99b2c9d7a6736a2410df9c1596',
+    key: 'rag:answer:5755e604741014d81a9e8d6bd2504824',
   },
   {
     name: 'different-chat-model',
@@ -129,7 +129,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:e6c4807d649415667e23dcf15d1b58ae',
+    key: 'rag:answer:866a19c0828cbd51c2ce19bd68cd9f33',
   },
   {
     name: 'different-embedding',
@@ -140,7 +140,7 @@ const FIXTURES: Fixture[] = [
     embeddingModel: 'text-embedding-3-large',
     chatModel: 'gpt-4o-mini',
     fingerprint: FINGERPRINT_BASE,
-    key: 'rag:answer:84e8baea01defa13ee0c04d6ddfbd33e',
+    key: 'rag:answer:f832253ef2aba5544ecec3a7da6eb4e8',
   },
   {
     name: 'reranker-cohere',
@@ -150,8 +150,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:b536e254c931f08282d2fec67992576d',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cohere","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:a7959ee1bc4ba6b3b9af36024de03146',
   },
   {
     name: 'hybrid-off',
@@ -161,8 +161,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:0dab443908a2c6208d4bede27f20b15b',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":false,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:4bb6c9f3a6580aee85271e2a3b8f2de2',
   },
   {
     name: 'threshold-diff',
@@ -172,8 +172,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:45d5a03310979f341c6d414089354c28',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:6f431dff81fd85dfc76a40ea0e0745dd',
   },
   {
     name: 'prefetch-on',
@@ -183,8 +183,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
-    key: 'rag:answer:29a6b3601d17856c9f725fc6b56bf38c',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":true,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"outOfScopeTopics":[]}',
+    key: 'rag:answer:0df174e3700a4978067ac20133cd09ad',
   },
   {
     name: 'prompt-config-sensitive',
@@ -198,8 +198,8 @@ const FIXTURES: Fixture[] = [
     mode: 'normal',
     embeddingModel: 'text-embedding-3-small',
     chatModel: 'gpt-4o-mini',
-    fingerprint: '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"auxModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
-    key: 'rag:answer:fe2677c09c15ced7082b3b19c1285bb4',
+    fingerprint: '{"promptVersion":4,"resultContractVersion":2,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.5,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":8,"agenticRetrieveLimit":10,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"auxModel":"gemini-2.0-flash-grade","orgName":"Test Corp","audience":"test customers","agentPersona":{"name":"Destr","tone":"friendly"},"customInstructions":"Always answer in Spanish.","outOfScopeTopics":[]}',
+    key: 'rag:answer:9f7b62f7f5ae6af1d0c6b0125015e9bd',
   },
 ];
 
@@ -218,4 +218,27 @@ describe('chat turn cache-key golden parity (R3)', () => {
       expect(key).toBe(fixture.key);
     },
   );
+
+  it('isolates typed-score cache entries from the legacy result contract', () => {
+    const currentFingerprint = cacheFingerprint(baseCfg as AppConfig, 'normal');
+    const legacyFingerprint = currentFingerprint.replace(
+      `"resultContractVersion":${SEARCH_RESULT_CONTRACT_VERSION},`,
+      '',
+    );
+    const opts = {
+      embeddingModel: 'text-embedding-3-small',
+      chatModel: 'gpt-4o-mini',
+      userId: 'user_1',
+    };
+    const currentKey = answerCacheKey('How do I reset my password?', {
+      ...opts,
+      fingerprint: currentFingerprint,
+    });
+    const legacyKey = answerCacheKey('How do I reset my password?', {
+      ...opts,
+      fingerprint: legacyFingerprint,
+    });
+    expect(currentFingerprint).toContain('"resultContractVersion":2');
+    expect(currentKey).not.toBe(legacyKey);
+  });
 });

@@ -14,8 +14,12 @@ import {
   buildSystemPrompt,
   SYSTEM_PROMPT_PREFIX_VERSION,
 } from '../../prompt/build-system-prompt';
-import type { RetrievedChunk } from '../../rag/search';
-import { cacheFingerprint } from '../cache-key';
+import { SearchFailure } from '../../rag/search';
+import {
+  cacheFingerprint,
+  legacySearchResultCacheFingerprint,
+  SEARCH_RESULT_CONTRACT_VERSION,
+} from '../cache-key';
 import { buildEventMeta } from '../build-event-meta';
 import { shouldCache } from '../should-cache';
 import { buildAssistantMessageLike } from '../history';
@@ -44,7 +48,7 @@ import {
 } from '../turn-fingerprint';
 import { parseCachedAnswer, parseTurnResult, createCachedAnswerStream, TURN_RESULT_CACHE_TTL_SEC } from './cached-answer';
 import { persistHistory, readBoundedJson } from './turn-io';
-import { buildChatTools } from './chat-tools';
+import { buildChatTools, type PrefetchedSearchOutcome } from './chat-tools';
 import { runHallucinationCheck, DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
 import type { ChatTurnDeps, ChatTurnRequest, ChatTurnResult, ChatModelUsageTelemetry, TurnMetrics } from './turn-types';
 import { parseGenerationUsage } from './turn-types';
@@ -96,6 +100,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       semanticContext: cacheFingerprint(cfg, cfg.retrievalMode),
       messages: inputMessages,
     }),
+    preResultContract: turnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      retry: parsed.data.retry,
+      semanticContext: legacySearchResultCacheFingerprint(cfg, cfg.retrievalMode),
+      messages: inputMessages,
+    }),
     legacy: legacyTurnRequestFingerprint({
       conversationId: parsed.data.conversationId,
       messages: inputMessages,
@@ -121,7 +131,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     firstTokenMs: null,
     hallucinationMs: null,
     hitCount: null,
-    maxSimilarity: null,
+    maxRetrievalScores: {},
+    searchResultStates: [],
     ticketCreated: false,
     ticketId: null,
     rewritten: false,
@@ -138,8 +149,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       })
     : null;
   const turnResultCache = deps.turnResultCache;
-  const turnResultKey = turnResultCache && turnId
+  const turnResultCoordinationKey = turnResultCache && turnId
     ? `rag:turn-result:${encodeURIComponent(userId)}:${turnId}`
+    : null;
+  const turnResultKey = turnResultCoordinationKey
+    ? `rag:turn-result:v${SEARCH_RESULT_CONTRACT_VERSION}:${encodeURIComponent(userId)}:${turnId}`
     : null;
   let cacheLease: CacheLease | null = null;
   let turnLease: CacheLease | null = null;
@@ -167,33 +181,38 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   };
 
   try {
-    if (turnResultCache && turnResultKey) {
-      let turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
-      let turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+    if (turnResultCache && turnResultKey && turnResultCoordinationKey) {
+      const readTurnState = async () => {
+        const current = await turnResultCache.get(turnResultKey).catch(() => null);
+        const currentState = current ? parseTurnResult(current, turnRequestHash) : null;
+        if (currentState) return currentState;
+        const compatible = await turnResultCache.get(turnResultCoordinationKey).catch(() => null);
+        return compatible ? parseTurnResult(compatible, turnRequestHash) : null;
+      };
+      let turnState = await readTurnState();
       if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
       if (!turnState) {
         const lease = createCacheLease(
           turnResultCache,
-          turnResultKey,
+          turnResultCoordinationKey,
           Math.ceil(MAX_DURATION_MS / 1000),
           cacheLeaseOptions,
         );
         const leaseResult = await lease.acquireResult();
         if (leaseResult.kind === 'acquired') {
           turnLease = lease;
-          turnResult = await turnResultCache.get(turnResultKey).catch(() => null);
-          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          turnState = await readTurnState();
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
         } else if (leaseResult.kind === 'held') {
           const remainingWaitMs = Math.max(
             0,
             MAX_DURATION_MS - (Date.now() - requestStartedAt) - 5_000,
           );
-          turnResult = await waitForCachedAnswer(turnResultCache, turnResultKey, {
+          await waitForCachedAnswer(turnResultCache, turnResultCoordinationKey, {
             timeoutMs: remainingWaitMs,
             signal: request.signal,
           });
-          turnState = turnResult ? parseTurnResult(turnResult, turnRequestHash) : null;
+          turnState = await readTurnState();
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
           if (!turnState) return { kind: 'cache-wait-timeout' };
         } else {
@@ -210,9 +229,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           cacheHit: true,
           totalMs: Math.round(performance.now() - turnStart),
           ...(cachedAnswer.citations.length > 0
+            ? { citationCount: cachedAnswer.citations.length }
+            : {}),
+          ...(cachedAnswer.citations.length > 0 || cachedAnswer.search
             ? {
-                citationCount: cachedAnswer.citations.length,
-                meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+                meta: buildEventMeta({
+                  documentIds: citationDocumentIds(cachedAnswer.citations),
+                  searchResultStates: cachedAnswer.search?.resultStates,
+                  retrievalScoreMaxima: cachedAnswer.search?.scoreMaxima,
+                }),
               }
             : {}),
         });
@@ -284,9 +309,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         cacheHit: true,
         totalMs: Math.round(performance.now() - turnStart),
         ...(cachedAnswer.citations.length > 0
+          ? { citationCount: cachedAnswer.citations.length }
+          : {}),
+        ...(cachedAnswer.citations.length > 0 || cachedAnswer.search
           ? {
-              citationCount: cachedAnswer.citations.length,
-              meta: buildEventMeta({ documentIds: citationDocumentIds(cachedAnswer.citations) }),
+              meta: buildEventMeta({
+                documentIds: citationDocumentIds(cachedAnswer.citations),
+                searchResultStates: cachedAnswer.search?.resultStates,
+                retrievalScoreMaxima: cachedAnswer.search?.scoreMaxima,
+              }),
             }
           : {}),
       });
@@ -333,7 +364,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
     }
 
-  let prefetch: RetrievedChunk[] | null = null;
+  const outOfDomainRef = { value: false };
+  const isEmptyRef = { value: false };
+  const resultStateRef = { value: null as AgenticResultState | null };
+
+  let prefetch: PrefetchedSearchOutcome | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchStartedAt = performance.now();
     const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
@@ -342,9 +377,51 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     metrics.prefetchStatus = 'performed';
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
-      prefetch = null;
+      prefetch = { kind: 'error', query: lastUserText, failure: prefetchResult.error };
+      metrics.searchResultStates.push('error');
+      resultStateRef.value = 'error';
     } else {
-      prefetch = addGroundingEvidence(groundingEvidence, prefetchResult.value);
+      const { chunks, degradedBy } = prefetchResult.value;
+      for (const chunk of prefetchResult.value.chunks) {
+        for (const signal of ['dense', 'lexical', 'fusion', 'reranker'] as const) {
+          const score = chunk.scores[signal];
+          const previous = metrics.maxRetrievalScores[signal];
+          if (score !== undefined && (previous === undefined || score > previous)) {
+            metrics.maxRetrievalScores[signal] = score;
+          }
+        }
+      }
+      if (chunks.length === 0 && degradedBy.length > 0) {
+        const code = degradedBy.every((item) => item === 'reranker_unavailable')
+          ? 'reranker_unavailable'
+          : 'retrieval_unavailable';
+        prefetch = {
+          kind: 'error',
+          query: lastUserText,
+          failure: new SearchFailure(
+            code,
+            true,
+            'The documentation search is temporarily unavailable. Please try again.',
+          ),
+        };
+        metrics.searchResultStates.push('error');
+        resultStateRef.value = 'error';
+        metrics.hitCount = 0;
+      } else if (chunks.length === 0) {
+        prefetch = { kind: 'no_match', query: lastUserText };
+        metrics.searchResultStates.push('no_match');
+        resultStateRef.value = 'no_match';
+        outOfDomainRef.value = true;
+        isEmptyRef.value = true;
+        metrics.hitCount = 0;
+      } else {
+        const matches = addGroundingEvidence(groundingEvidence, chunks);
+        prefetch = { kind: 'results', query: lastUserText, matches, degradedBy };
+        const state: AgenticResultState = degradedBy.length > 0 ? 'degraded' : 'results';
+        metrics.searchResultStates.push(state);
+        resultStateRef.value = state;
+        metrics.hitCount = matches.length;
+      }
     }
   }
 
@@ -352,10 +429,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     stablePromptPrefix: buildStableSystemPrompt(cfg),
     prefixVersion: SYSTEM_PROMPT_PREFIX_VERSION,
   });
-
-  const outOfDomainRef = { value: false };
-  const isEmptyRef = { value: false };
-  const resultStateRef = { value: null as AgenticResultState | null };
 
   const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
   const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
@@ -377,7 +450,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch),
+    system: buildSystemPrompt(cfg, prefetch?.kind === 'results' ? prefetch.matches : null),
     messages: await deps.ai.convertToModelMessages(compactModelHistory(messages), {
       ignoreIncompleteToolCalls: true,
     }),
@@ -393,7 +466,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       isEmptyRef,
       resultStateRef,
       metrics,
-      ...(prefetch ? { prefetched: { query: lastUserText, matches: prefetch } } : {}),
+      ...(prefetch ? { prefetched: prefetch } : {}),
     }),
     ...(modelRequestOptions?.providerOptions !== undefined
       ? { providerOptions: modelRequestOptions.providerOptions }
@@ -489,7 +562,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
                 }
                 await cacheLease?.publish(
-                  JSON.stringify({ v: 1, text: finalAnswer, citations: finalCitations }),
+                  JSON.stringify({
+                    v: SEARCH_RESULT_CONTRACT_VERSION,
+                    text: finalAnswer,
+                    citations: finalCitations,
+                    search: {
+                      resultStates: metrics.searchResultStates,
+                      scoreMaxima: metrics.maxRetrievalScores,
+                    },
+                  }),
                   cfg.answerCacheTtlSec,
                 );
               }
@@ -497,7 +578,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               logger.warn('Answer cache write skipped', { error: String(err) });
             }
           }
-          if (turnResultCache && turnResultKey && turnLease?.isOwned() === true && !timedOut) {
+          if (
+            turnResultCache &&
+            turnResultKey &&
+            turnResultCoordinationKey &&
+            turnLease?.isOwned() === true &&
+            !timedOut
+          ) {
             try {
               const finalAnswer = await result.text;
               if (finalAnswer && finalAnswer.trim() !== '') {
@@ -508,18 +595,39 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                       isEmpty,
                     }
                   : undefined;
-                await turnLease?.publish(
-                  JSON.stringify({
-                    v: 1,
-                    kind: 'turn-result',
-                    requestFingerprint: turnRequestHash.current,
-                    fingerprintVersion: TURN_FINGERPRINT_VERSION,
-                    text: finalAnswer,
-                    citations: finalCitations,
-                    ...(guardrail ? { guardrail } : {}),
-                  }),
+                const versionedPayload = JSON.stringify({
+                  v: SEARCH_RESULT_CONTRACT_VERSION,
+                  kind: 'turn-result',
+                  requestFingerprint: turnRequestHash.current,
+                  fingerprintVersion: TURN_FINGERPRINT_VERSION,
+                  text: finalAnswer,
+                  citations: finalCitations,
+                  search: {
+                    resultStates: metrics.searchResultStates,
+                    scoreMaxima: metrics.maxRetrievalScores,
+                  },
+                  ...(guardrail ? { guardrail } : {}),
+                });
+                const compatibilityPayload = JSON.stringify({
+                  v: 1,
+                  kind: 'turn-result',
+                  requestFingerprint: turnRequestHash.preResultContract,
+                  fingerprintVersion: TURN_FINGERPRINT_VERSION,
+                  text: finalAnswer,
+                  citations: [],
+                  ...(guardrail ? { guardrail } : {}),
+                });
+                const publishResult = await turnLease.publish(
+                  compatibilityPayload,
                   TURN_RESULT_CACHE_TTL_SEC,
                 );
+                if (publishResult.kind === 'published') {
+                  await turnResultCache.set(
+                    turnResultKey,
+                    versionedPayload,
+                    TURN_RESULT_CACHE_TTL_SEC,
+                  );
+                }
               }
             } catch (err) {
               logger.warn('Turn result cache write skipped', { error: String(err) });
@@ -553,7 +661,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
             totalMs,
             hitCount: metrics.hitCount,
-            maxSimilarity: metrics.maxSimilarity,
+            maxSimilarity: metrics.maxRetrievalScores.dense ?? null,
             outOfDomain: finalOutOfDomain,
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
@@ -566,6 +674,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
               resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              searchResultStates: metrics.searchResultStates,
+              retrievalScoreMaxima: metrics.maxRetrievalScores,
               modelTelemetry: modelRequestOptions?.telemetry,
               promptCache: promptCacheUsage
                 ? {

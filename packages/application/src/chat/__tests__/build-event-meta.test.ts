@@ -35,9 +35,9 @@ describe('buildEventMeta quality and agentic metadata', () => {
       buildEventMeta({
         fallbackReason: 'turn_deadline',
         isEmpty: false,
-        resultState: 'ok',
+        resultState: 'results',
       }),
-    ).toEqual({ fallbackReason: 'turn_deadline', isEmpty: false, resultState: 'ok' });
+    ).toEqual({ fallbackReason: 'turn_deadline', isEmpty: false, resultState: 'results' });
     expect(
       buildEventMeta({
         fallbackReason: undefined,
@@ -49,6 +49,18 @@ describe('buildEventMeta quality and agentic metadata', () => {
 
   it('never emits a degraded key', () => {
     expect(Object.keys(buildEventMeta({}))).not.toContain('degraded');
+  });
+
+  it('records typed search result states and separate score maxima', () => {
+    expect(buildEventMeta({
+      searchResultStates: ['results', 'degraded', 'error'],
+      retrievalScoreMaxima: { dense: 0.91, lexical: 0.14, fusion: 0.03, reranker: 0.88 },
+    })).toEqual({
+      search: {
+        resultStates: ['results', 'degraded', 'error'],
+        scoreMaxima: { dense: 0.91, lexical: 0.14, fusion: 0.03, reranker: 0.88 },
+      },
+    });
   });
 
   it('stores judgeScores as a nested object carrying judgedAt', () => {
@@ -70,14 +82,14 @@ describe('buildEventMeta quality and agentic metadata', () => {
         documentIds: [1, 2],
         fallbackReason: 'turn_deadline',
         isEmpty: false,
-        resultState: 'empty',
+        resultState: 'no_match',
       }),
     ).toEqual({
       rewritten: true,
       documentIds: [1, 2],
       fallbackReason: 'turn_deadline',
       isEmpty: false,
-      resultState: 'empty',
+      resultState: 'no_match',
     });
   });
 });

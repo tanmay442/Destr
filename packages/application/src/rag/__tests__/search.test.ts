@@ -16,9 +16,11 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
           page: null,
           sectionTitle: null,
           source: null,
+          title: null,
           content: 'test',
           similarity: 0.9,
           parentChunkId: null,
+          chunkIndex: 0,
         },
       ]),
       searchByLexical: vi.fn().mockResolvedValue([]),
@@ -58,7 +60,7 @@ describe('searchChunks', () => {
     const result = await searchChunks('test', { hybridEnabled: false }, deps);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.message).toMatch(/Vector search failed/);
+      expect(result.error.code).toBe('retrieval_unavailable');
     }
   });
 
@@ -94,7 +96,13 @@ describe('searchChunks', () => {
     const result = await searchChunks('test', {}, deps);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.map((r) => r.id)).toEqual([2]);
+      expect(result.value.chunks.map((r) => r.id)).toEqual([2]);
+      expect(result.value.degradedBy).toEqual(['vector_unavailable']);
+      expect(result.value.chunks[0]?.scores).toMatchObject({
+        lexical: 0.7,
+        finalRank: 1,
+        finalSignal: 'lexical',
+      });
     }
   });
 
@@ -117,7 +125,7 @@ describe('searchChunks', () => {
     const result = await searchChunks('test', {}, deps);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.message).toMatch(/Vector search failed/);
+      expect(result.error.code).toBe('retrieval_unavailable');
     }
   });
 
@@ -129,9 +137,35 @@ describe('searchChunks', () => {
     const result = await searchChunks('   ', {}, deps);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual([]);
+      expect(result.value.chunks).toEqual([]);
     }
     expect(embed).not.toHaveBeenCalled();
+  });
+
+  it('maps embedding failures without exposing the provider error', async () => {
+    const deps = makeDeps({
+      embeddings: {
+        embed: vi.fn().mockRejectedValue(new Error('secret provider payload')),
+        embedBatch: vi.fn(),
+      },
+    });
+    const result = await searchChunks('test', {}, deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('embedding_unavailable');
+      expect(result.error.userSafeMessage).not.toContain('secret provider payload');
+    }
+  });
+
+  it('maps an expired deadline signal to timeout', async () => {
+    const signal = AbortSignal.abort(new DOMException('deadline detail', 'TimeoutError'));
+    const result = await searchChunks('test', { signal }, makeDeps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('timeout');
+      expect(result.error.retryable).toBe(true);
+      expect(result.error.userSafeMessage).not.toContain('deadline detail');
+    }
   });
 
   it('returns results on success', async () => {
@@ -139,7 +173,7 @@ describe('searchChunks', () => {
     const result = await searchChunks('test', {}, deps);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual([
+      expect(result.value.chunks).toEqual([
         {
           id: 1,
           documentId: 1,
@@ -147,8 +181,10 @@ describe('searchChunks', () => {
           page: null,
           sectionTitle: null,
           source: null,
+          title: null,
           content: 'test',
-          similarity: 0.9,
+          chunkIndex: 0,
+          scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
         },
       ]);
     }
@@ -211,7 +247,7 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', {}, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual([
+    expect(result.value.chunks).toEqual([
       {
         id: 5,
         documentId: 1,
@@ -219,9 +255,10 @@ describe('searchChunks parent-child resolution', () => {
         page: 1,
         sectionTitle: 'Child Sec',
         source: 'Page 1 — Child Sec',
-        title: null,
-        content: 'PARENT BLOCK CONTENT',
-        similarity: 0.9,
+          title: null,
+          content: 'PARENT BLOCK CONTENT',
+          chunkIndex: 0,
+          scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
       },
     ]);
   });
@@ -248,7 +285,7 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', {}, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual([
+    expect(result.value.chunks).toEqual([
       {
         id: 7,
         documentId: 1,
@@ -258,7 +295,8 @@ describe('searchChunks parent-child resolution', () => {
         source: null,
         title: null,
         content: 'flat chunk',
-        similarity: 0.8,
+        chunkIndex: 9,
+        scores: { dense: 0.8, finalRank: 1, finalSignal: 'dense' },
       },
     ]);
   });
@@ -312,9 +350,9 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', {}, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([7, 5]);
-    expect(result.value[0]!.similarity).toBe(0.95);
-    expect(result.value[1]!.similarity).toBe(0.4);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([7, 5]);
+    expect(result.value.chunks[0]!.scores.dense).toBe(0.95);
+    expect(result.value.chunks[1]!.scores.dense).toBe(0.4);
   });
 
   it('pads the hit with neighbouring chunks in window mode', async () => {
@@ -351,8 +389,8 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', { mode: 'window' }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value[0]!.content).toBe('before\n\nmiddle\n\nafter');
-    expect(result.value[0]!.id).toBe(3);
+    expect(result.value.chunks[0]!.content).toBe('before\n\nmiddle\n\nafter');
+    expect(result.value.chunks[0]!.id).toBe(3);
   });
 
   it('dedupes overlapping windows but always emits the hit itself (M1)', async () => {
@@ -385,13 +423,13 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', { mode: 'window' }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ids = result.value.map((r) => r.id);
+    const ids = result.value.chunks.map((r) => r.id);
     expect(ids).toEqual(expect.arrayContaining([3, 8, 20]));
-    const contents = result.value.map((r) => r.content).join('\n');
+    const contents = result.value.chunks.map((r) => r.content).join('\n');
     expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
     expect(contents.indexOf('four', contents.indexOf('four') + 1)).toBe(-1);
     expect(contents).toContain('six');
-    const lonely = result.value.find((r) => r.id === 20);
+    const lonely = result.value.chunks.find((r) => r.id === 20);
     expect(lonely).toBeDefined();
     expect(lonely!.content).toBe('lonely');
   });
@@ -427,9 +465,9 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', { mode: 'window' }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ids = result.value.map((r) => r.id);
+    const ids = result.value.chunks.map((r) => r.id);
     expect(ids).toEqual([3]);
-    const contents = result.value.map((r) => r.content).join('\n');
+    const contents = result.value.chunks.map((r) => r.content).join('\n');
     expect(contents.indexOf('four')).toBeGreaterThanOrEqual(0);
     expect(contents.indexOf('five')).toBeGreaterThanOrEqual(0);
   });
@@ -456,7 +494,7 @@ describe('searchChunks parent-child resolution', () => {
     const result = await searchChunks('q', {}, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual([
+    expect(result.value.chunks).toEqual([
       {
         id: 10,
         documentId: 1,
@@ -466,7 +504,8 @@ describe('searchChunks parent-child resolution', () => {
         source: 'Page 1 — Child Sec',
         title: null,
         content: 'child text',
-        similarity: 0.9,
+        chunkIndex: 3,
+        scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
       },
     ]);
   });
@@ -524,7 +563,12 @@ describe('searchChunks reranking', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(rank).toHaveBeenCalledWith('q', ['first by cosine', 'second by cosine', 'third by cosine']);
-    expect(result.value.map((r) => r.id)).toEqual([3, 2, 1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([3, 2, 1]);
+    expect(result.value.chunks.map((r) => r.scores)).toEqual([
+      { dense: 0.7, reranker: 2, finalRank: 1, finalSignal: 'reranker' },
+      { dense: 0.8, reranker: 1, finalRank: 2, finalSignal: 'reranker' },
+      { dense: 0.9, reranker: 0, finalRank: 3, finalSignal: 'reranker' },
+    ]);
   });
 
   it('slices reranked results to the requested topN', async () => {
@@ -543,7 +587,7 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 2 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([1, 2]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([1, 2]);
   });
 
   it('retrieves a broad candidate pool with no cosine cutoff when reranking', async () => {
@@ -586,7 +630,22 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([2, 3]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([2, 3]);
+    expect(result.value.degradedBy).toEqual(['reranker_unavailable']);
+    expect(result.value.chunks.every((chunk) => chunk.scores.finalSignal === 'dense')).toBe(true);
+  });
+
+  it('degrades safely when the reranker returns invalid scores', async () => {
+    const rows = [flatRow(1, 'a', 0.9), flatRow(2, 'b', 0.8)];
+    const deps = rerankDeps(rows, {
+      rank: vi.fn().mockResolvedValue([{ index: 0, relevanceScore: Number.NaN }]),
+    });
+    const result = await searchChunks('q', { limit: 2 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.degradedBy).toEqual(['reranker_unavailable']);
+    expect(result.value.chunks.map((chunk) => chunk.scores.finalRank)).toEqual([1, 2]);
+    expect(JSON.stringify(result.value)).not.toMatch(/NaN|Infinity/);
   });
 
   it('drops below-threshold candidates post-rerank even when ranked first', async () => {
@@ -602,7 +661,7 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 2 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([2]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([2]);
   });
 
   it('uses the original cosine path when no reranker is configured (default cosine mode)', async () => {
@@ -615,7 +674,7 @@ describe('searchChunks reranking', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([2, 3, 1]);
   });
 });
 
@@ -663,7 +722,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('ERR-4291 rate limit', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ids = result.value.map((r) => r.id);
+    const ids = result.value.chunks.map((r) => r.id);
     expect(ids).toContain(2);
   });
 
@@ -675,7 +734,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('query', { limit: 5 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ids = result.value.map((r) => r.id);
+    const ids = result.value.chunks.map((r) => r.id);
     expect(ids).toEqual(expect.arrayContaining([1, 2, 3]));
   });
 
@@ -685,7 +744,9 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([1]);
+    expect(result.value.degradedBy).toEqual(['lexical_unavailable']);
+    expect(result.value.chunks[0]?.scores).toMatchObject({ dense: 0.9, finalSignal: 'dense' });
   });
 
   it('returns empty when both branches find nothing', async () => {
@@ -693,7 +754,20 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('nothing', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual([]);
+    expect(result.value.chunks).toEqual([]);
+  });
+
+  it('does not compare a lexical-only score with the dense threshold', async () => {
+    const deps = hybridDeps([], [flatRow(2, 'exact lexical evidence', 0.01)]);
+    const result = await searchChunks('exact lexical evidence', { limit: 3, threshold: 0.99 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks).toHaveLength(1);
+    expect(result.value.chunks[0]?.scores).toMatchObject({
+      lexical: 0.01,
+      finalSignal: 'lexical',
+      finalRank: 1,
+    });
   });
 
   it('surfaces fileName/page/sectionTitle/source on fused chunks', async () => {
@@ -701,7 +775,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    for (const r of result.value) {
+    for (const r of result.value.chunks) {
       expect(r.fileName).toBe('d.pdf');
       expect(r.page).toBe(r.id);
       expect(r.sectionTitle).toBe(`Sec ${r.id}`);
@@ -728,7 +802,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await pending;
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(result.value.chunks.map((r) => r.id).sort()).toEqual([1, 2]);
   });
 
   it('honours opts.hybridEnabled = false (vector-only, no lexical call)', async () => {
@@ -737,7 +811,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     expect(deps.chunks.searchByLexical).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([1]);
   });
 
   it('orders fused results by RRF score, not raw similarity (H1)', async () => {
@@ -748,7 +822,13 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([2, 3, 1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([2, 3, 1]);
+    expect(result.value.chunks[0]?.scores).toMatchObject({
+      dense: 0.9,
+      lexical: 0.03,
+      finalSignal: 'fusion',
+      finalRank: 1,
+    });
   });
 
   it('keeps similarity ordering when the lexical branch is empty', async () => {
@@ -759,7 +839,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('q', { limit: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([2, 1]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([2, 1]);
   });
 
   it('stops waiting for vector retrieval when the request is aborted', async () => {
@@ -773,7 +853,9 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const pending = searchChunks('q', { hybridEnabled: false, signal: controller.signal }, deps);
     await vi.waitFor(() => expect(vectorStarted).toBe(true));
     controller.abort(new Error('client disconnected'));
-    await expect(pending).rejects.toThrow('client disconnected');
+    const cancelled = await pending;
+    expect(cancelled.ok).toBe(false);
+    if (!cancelled.ok) expect(cancelled.error.code).toBe('cancelled');
     expect(deps.chunks.searchByVector).toHaveBeenCalledWith(
       [0.1, 0.2, 0.3],
       expect.objectContaining({ signal: controller.signal }),
@@ -791,7 +873,7 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     const result = await searchChunks('q', { limit: 5 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([5, 7]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([5, 7]);
   });
 });
 
@@ -885,10 +967,10 @@ describe('searchChunks segment resolution', () => {
     const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toHaveLength(1);
-    expect(result.value[0]!.content).toBe('five\n\nsix\n\nseven');
-    expect(result.value[0]!.id).toBe(105);
-    expect(result.value[0]!.similarity).toBe(0.9);
+    expect(result.value.chunks).toHaveLength(1);
+    expect(result.value.chunks[0]!.content).toBe('five\n\nsix\n\nseven');
+    expect(result.value.chunks[0]!.id).toBe(105);
+    expect(result.value.chunks[0]!.scores.dense).toBe(0.9);
   });
 
   it('returns isolated hits as single-chunk segments (top-k fallback)', async () => {
@@ -902,9 +984,9 @@ describe('searchChunks segment resolution', () => {
     const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 2 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([105, 150]);
-    expect(result.value[0]!.content).toBe('five');
-    expect(result.value[1]!.content).toBe('fifty');
+    expect(result.value.chunks.map((r) => r.id)).toEqual([105, 150]);
+    expect(result.value.chunks[0]!.content).toBe('five');
+    expect(result.value.chunks[1]!.content).toBe('fifty');
   });
 
   it('dedupes a parent block contained in its child segment', async () => {
@@ -919,9 +1001,9 @@ describe('searchChunks segment resolution', () => {
     const result = await searchChunks('q', { mode: 'segment', rseMaxSegmentChunks: 3 }, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toHaveLength(1);
-    expect(result.value[0]!.content).toBe('four\n\nparent block child six body parent block');
-    expect(result.value[0]!.id).toBe(104);
+    expect(result.value.chunks).toHaveLength(1);
+    expect(result.value.chunks[0]!.content).toBe('four\n\nparent block child six body parent block');
+    expect(result.value.chunks[0]!.id).toBe(104);
   });
 
   it('preserves reranker ordering and keeps raw similarity in segment mode', async () => {
@@ -948,8 +1030,8 @@ describe('searchChunks segment resolution', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.map((r) => r.id)).toEqual([120, 101]);
-    expect(result.value.map((r) => r.similarity)).toEqual([0.5, 0.9]);
+    expect(result.value.chunks.map((r) => r.id)).toEqual([120, 101]);
+    expect(result.value.chunks.map((r) => r.scores.dense)).toEqual([0.5, 0.9]);
   });
 
   it('uses fused score for ordering without exposing it as similarity', async () => {
@@ -971,7 +1053,12 @@ describe('searchChunks segment resolution', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value[0]!.id).toBe(120);
-    expect(result.value[0]!.similarity).toBe(0.04);
+    expect(result.value.chunks[0]!.id).toBe(120);
+    expect(result.value.chunks[0]!.scores).toMatchObject({
+      dense: 0.72,
+      lexical: 0.04,
+      finalSignal: 'fusion',
+      finalRank: 1,
+    });
   });
 });

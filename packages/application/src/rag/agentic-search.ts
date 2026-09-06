@@ -1,6 +1,7 @@
-import { ok, err, type Result, ExternalServiceError, logger } from '@app/domain';
+import { ok, err, isRequestCancellationError, type Result, logger } from '@app/domain';
 import type { QueryRewriter, FallbackReason, AgenticResultState } from '@app/domain';
 import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
+import { SearchFailure, type SearchDegradation } from './search/search-contract';
 import { AGENTIC_RETRIEVE_LIMIT, AGENTIC_MAX_RETRIES, AGENT_STEP_BUDGET } from '@app/domain';
 
 export interface AgenticDeps {
@@ -18,6 +19,9 @@ export interface AgenticDeps {
 export interface AgenticResult {
   chunks: RetrievedChunk[];
   rewrittenQuery: string;
+  attemptedQueries: string[];
+  resultQuery: string | null;
+  degradedBy: readonly SearchDegradation[];
   outOfDomain: boolean;
   isEmpty: boolean;
   fallbackReason: FallbackReason | null;
@@ -25,8 +29,8 @@ export interface AgenticResult {
 }
 
 type PassOutcome =
-  | { kind: 'empty' }
-  | { kind: 'kept'; chunks: RetrievedChunk[] };
+  | { kind: 'empty'; degradedBy: readonly SearchDegradation[] }
+  | { kind: 'kept'; chunks: RetrievedChunk[]; query: string; degradedBy: readonly SearchDegradation[] };
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
@@ -59,26 +63,33 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): P
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,
-): Promise<Result<AgenticResult>> {
-  throwIfAborted(deps.signal);
+): Promise<Result<AgenticResult, SearchFailure>> {
+  if (deps.signal?.aborted) {
+    return err(unexpectedFailure(deps.signal.reason, deps.signal));
+  }
   if (originalQuery.trim() === '') {
     return ok({
       chunks: [],
       rewrittenQuery: originalQuery,
+      attemptedQueries: [originalQuery],
+      resultQuery: null,
+      degradedBy: [],
       outOfDomain: true,
       isEmpty: true,
       fallbackReason: null,
-      resultState: 'empty',
+      resultState: 'no_match',
     });
   }
 
+  const attemptedQueries: string[] = [];
   try {
     const rewriteOn = deps.rewriteEnabled !== false;
 
     const tryRewrite = async (query: string): Promise<string> => {
       if (!rewriteOn) return query;
       try {
-        return await abortable(deps.queryRewriter.rewrite(query), deps.signal);
+        const candidate = (await abortable(deps.queryRewriter.rewrite(query), deps.signal)).trim();
+        return (candidate || query.trim()).slice(0, 2_000);
       } catch (cause) {
         logger.debug('agentic rewrite failed', { error: String(cause), query });
         return query;
@@ -89,6 +100,7 @@ export async function agenticSearch(
     const maxRetries = Math.max(0, Math.min(deps.maxRetries ?? AGENTIC_MAX_RETRIES, stepBudget - 1));
 
     const runPass = async (query: string): Promise<PassOutcome> => {
+      attemptedQueries.push(query);
       const found = await searchChunks(
         query,
         {
@@ -100,11 +112,11 @@ export async function agenticSearch(
         deps.search,
       );
       if (!found.ok) {
-        throw new ExternalServiceError('Agentic retrieval failed', found.error);
+        throw found.error;
       }
-      const rows = found.value;
-      if (rows.length === 0) return { kind: 'empty' };
-      return { kind: 'kept', chunks: rows };
+      const rows = found.value.chunks;
+      if (rows.length === 0) return { kind: 'empty', degradedBy: found.value.degradedBy };
+      return { kind: 'kept', chunks: rows, query, degradedBy: found.value.degradedBy };
     };
 
     let rewritten = await tryRewrite(originalQuery);
@@ -119,23 +131,61 @@ export async function agenticSearch(
       return ok({
         chunks: [],
         rewrittenQuery: rewritten,
+        attemptedQueries,
+        resultQuery: null,
+        degradedBy: outcome.degradedBy,
         outOfDomain: true,
         isEmpty: true,
         fallbackReason: null,
-        resultState: 'empty',
+        resultState: 'no_match',
       });
     }
 
     return ok({
       chunks: outcome.chunks,
       rewrittenQuery: rewritten,
+      attemptedQueries,
+      resultQuery: outcome.query,
+      degradedBy: outcome.degradedBy,
       outOfDomain: false,
       isEmpty: false,
       fallbackReason: null,
-      resultState: 'ok',
+      resultState: outcome.degradedBy.length > 0 ? 'degraded' : 'results',
     });
   } catch (e) {
-    throwIfAborted(deps.signal);
-    return err(new ExternalServiceError('Agentic search failed', e));
+    if (e instanceof SearchFailure) {
+      return err(new SearchFailure(
+        e.code,
+        e.retryable,
+        e.userSafeMessage,
+        e,
+        attemptedQueries.length > 0 ? attemptedQueries : e.attemptedQueries,
+      ));
+    }
+    return err(unexpectedFailure(e, deps.signal, attemptedQueries));
   }
+}
+
+function unexpectedFailure(
+  cause: unknown,
+  signal: AbortSignal | undefined,
+  attemptedQueries?: readonly string[],
+): SearchFailure {
+  const candidate = cause instanceof Error ? cause : undefined;
+  const interruption = signal?.aborted ? signal.reason : cause;
+  const interruptionError = interruption instanceof Error ? interruption : candidate;
+  const timedOut = interruptionError?.name === 'TimeoutError';
+  const cancelled = signal?.aborted || isRequestCancellationError(cause);
+  const code = timedOut ? 'timeout' : cancelled ? 'cancelled' : 'retrieval_unavailable';
+  return new SearchFailure(
+    code,
+    code !== 'cancelled',
+    code === 'timeout'
+      ? 'The documentation search timed out. Please try again.'
+      : code === 'cancelled'
+        ? 'The documentation search was cancelled.'
+        : 'The documentation search is temporarily unavailable. Please try again.',
+    cause,
+    attemptedQueries,
+  );
 }

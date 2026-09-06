@@ -829,7 +829,7 @@ export interface QueryRewriter {
 export type FallbackReason = 'turn_deadline';
 
 /** Final state of an agentic retrieval turn. */
-export type AgenticResultState = 'ok' | 'empty';
+export type AgenticResultState = 'results' | 'degraded' | 'no_match' | 'error';
 
 /** Live quality-judge scores for one answered turn (0-1 each). */
 export interface JudgeScores {

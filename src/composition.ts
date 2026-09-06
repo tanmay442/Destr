@@ -20,6 +20,7 @@ import {
   type IngestDeps, type SearchDeps, type RateLimitDeps,
   type CacheLeasePolicy, type CacheLeaseTelemetry,
   type AgenticDeps,
+  SearchFailure,
 } from '@app/application';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
@@ -83,10 +84,10 @@ const asyncIngest = Boolean(process.env.QSTASH_TOKEN);
 
 const { documentRepo, chunkRepo, settingsRepo, chatEventBatcher, chatFeedbackRepo, qualityReviewsRepo, chatHistoryRepo, embeddingService, blobStorage, cursorCodec, clock, hasher, runner } = core;
 
-const bind = <Args extends unknown[], T>(
-  fn: (...args: Args) => Promise<Result<T>>,
+const bind = <Args extends unknown[], T, E>(
+  fn: (...args: Args) => Promise<Result<T, E>>,
   ...bound: Args
-): Promise<Result<T>> => fn(...bound);
+): Promise<Result<T, E>> => fn(...bound);
 
 const ingestQueue = core.ingestQueue;
 const rateLimiter = Auth.createFallbackRateLimiter({
@@ -285,7 +286,7 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
   return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
 }
 
-function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
+function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal, retrieveLimit?: number): AgenticDeps {
   const aux = Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
@@ -293,7 +294,7 @@ function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal): AgenticDeps {
   return {
     search: getSearchDeps(cfg),
     queryRewriter: aux.queryRewriter!,
-    retrieveLimit: cfg.agenticRetrieveLimit,
+    retrieveLimit: retrieveLimit ?? cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
@@ -333,7 +334,11 @@ function createComposition() {
         },
         getSearchDeps(cfg),
       ),
-    agenticSearch: async (cfg: AppConfig, query: string, opts: { signal?: AbortSignal | undefined } = {}) => {
+    agenticSearch: async (
+      cfg: AppConfig,
+      query: string,
+      opts: { limit?: number | undefined; signal?: AbortSignal | undefined } = {},
+    ) => {
       if (process.env.AGENTIC_ENABLED === 'false') {
         const fallback = await bind(
           searchChunks,
@@ -347,26 +352,41 @@ function createComposition() {
             lexicalWeight: LEXICAL_WEIGHT,
             rerankTopN: RERANK_TOP_N,
             candidateLimit: CANDIDATE_POOL,
+            limit: opts.limit,
             signal: opts.signal,
           },
           getSearchDeps(cfg),
         );
         if (!fallback.ok) return fallback;
-        const chunks = fallback.value;
+        const chunks = fallback.value.chunks;
         const isEmpty = chunks.length === 0;
         return ok({
           chunks,
           rewrittenQuery: query,
+          attemptedQueries: [query],
+          resultQuery: isEmpty ? null : query,
+          degradedBy: fallback.value.degradedBy,
           outOfDomain: isEmpty,
           isEmpty,
           fallbackReason: null,
-          resultState: (isEmpty ? 'empty' : 'ok') as AgenticResultState,
+          resultState: (
+            isEmpty
+              ? 'no_match'
+              : fallback.value.degradedBy.length > 0
+                ? 'degraded'
+                : 'results'
+          ) as AgenticResultState,
         });
       }
       try {
-        return await agenticSearch(query, getAgenticDeps(cfg, opts.signal));
+        return await agenticSearch(query, getAgenticDeps(cfg, opts.signal, opts.limit));
       } catch (e) {
-        return err(new ExternalServiceError('Agentic retrieval unavailable', e));
+        return err(new SearchFailure(
+          'retrieval_unavailable',
+          true,
+          'The documentation search is temporarily unavailable. Please try again.',
+          e,
+        ));
       }
     },
     getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env).hallucinationGrader?.grade ?? null,

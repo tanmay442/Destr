@@ -11,7 +11,8 @@ const CHUNK: RetrievedChunk = {
   source: 'https://example.com/benefits.pdf',
   title: 'Benefits',
   content: 'The dental plan covers two cleanings per year.',
-  similarity: 0.91,
+  chunkIndex: 0,
+  scores: { dense: 0.91, finalRank: 1, finalSignal: 'dense' },
 };
 
 describe('grounding evidence', () => {

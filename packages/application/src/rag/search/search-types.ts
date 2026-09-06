@@ -1,4 +1,10 @@
 import type { ChunkRepository, EmbeddingService, Reranker, RetrievedChunkRow } from '@app/domain';
+import type {
+  RetrievalScores,
+  RetrievalSignal,
+  SearchDegradation,
+  SearchFailure,
+} from './search-contract';
 
 const MAX_SEARCH_LIMIT = 50;
 const MAX_CANDIDATE_LIMIT = 500;
@@ -27,10 +33,13 @@ export interface RetrievedChunk {
   source: string | null;
   title: string | null;
   content: string;
-  similarity: number;
+  chunkIndex: number;
+  scores: RetrievalScores;
 }
 
 interface ScoredRow extends RetrievedChunkRow {
+  denseScore?: number;
+  lexicalScore?: number;
   fusedScore?: number;
   rerankerScore?: number;
 }
@@ -38,7 +47,37 @@ interface ScoredRow extends RetrievedChunkRow {
 export type { ScoredRow };
 
 export function scoreOf(row: ScoredRow): number {
-  return row.rerankerScore ?? row.fusedScore ?? row.similarity;
+  return row.rerankerScore ?? row.fusedScore ?? row.denseScore ?? row.lexicalScore ?? 0;
+}
+
+function finiteNonnegative(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+export function denseScoredRows(rows: RetrievedChunkRow[]): ScoredRow[] {
+  return rows.map((row) => ({ ...row, denseScore: finiteNonnegative(Number(row.similarity)) }));
+}
+
+export function lexicalScoredRows(rows: RetrievedChunkRow[]): ScoredRow[] {
+  return rows.map((row) => ({ ...row, lexicalScore: finiteNonnegative(Number(row.similarity)) }));
+}
+
+function finalSignal(row: ScoredRow): RetrievalSignal {
+  if (row.rerankerScore !== undefined) return 'reranker';
+  if (row.fusedScore !== undefined) return 'fusion';
+  if (row.denseScore !== undefined) return 'dense';
+  return 'lexical';
+}
+
+function scoresOf(row: ScoredRow, finalRank: number): RetrievalScores {
+  return {
+    ...(row.denseScore !== undefined ? { dense: finiteNonnegative(row.denseScore) } : {}),
+    ...(row.lexicalScore !== undefined ? { lexical: finiteNonnegative(row.lexicalScore) } : {}),
+    ...(row.fusedScore !== undefined ? { fusion: finiteNonnegative(row.fusedScore) } : {}),
+    ...(row.rerankerScore !== undefined ? { reranker: finiteNonnegative(row.rerankerScore) } : {}),
+    finalRank: Math.max(1, Math.floor(finalRank)),
+    finalSignal: finalSignal(row),
+  };
 }
 
 export interface SearchDeps {
@@ -77,7 +116,14 @@ export interface SearchOpts {
   rerankTopN?: number | undefined;
 }
 
-function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
+export interface SearchExecutionResult {
+  readonly chunks: RetrievedChunk[];
+  readonly degradedBy: readonly SearchDegradation[];
+}
+
+export type SearchChunksResult = import('@app/domain').Result<SearchExecutionResult, SearchFailure>;
+
+function toRetrievedChunk(r: ScoredRow, finalRank = 1): RetrievedChunk {
   return {
     id: r.id,
     documentId: r.documentId,
@@ -89,7 +135,8 @@ function toRetrievedChunk(r: RetrievedChunkRow): RetrievedChunk {
     source: r.source,
     title: r.title,
     content: r.content,
-    similarity: Number(r.similarity),
+    chunkIndex: r.chunkIndex,
+    scores: scoresOf(r, finalRank),
   };
 }
 

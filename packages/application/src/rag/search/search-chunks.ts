@@ -1,5 +1,4 @@
-import { err, ok, type Result, ExternalServiceError, logger } from '@app/domain';
-import type { RetrievedChunkRow } from '@app/domain';
+import { err, ok, isRequestCancellationError, logger } from '@app/domain';
 import {
   SIMILARITY_THRESHOLD,
   PARENT_CHILD_MODE,
@@ -15,17 +14,22 @@ import {
   RSE_MIN_SEGMENT_VALUE,
 } from '@app/domain';
 import { sanitizePagination } from '../../service-result';
-import { throwIfAborted, abortable } from './abort';
+import { abortable } from './abort';
 import {
   MAX_SEARCH_LIMIT,
   MAX_CANDIDATE_LIMIT,
   boundedPositiveInteger,
   boundedNonnegativeNumber,
+  denseScoredRows,
+  lexicalScoredRows,
   type RetrievedChunk,
   type ScoredRow,
+  type SearchChunksResult,
+  type SearchExecutionResult,
   type SearchDeps,
   type SearchOpts,
 } from './search-types';
+import { SearchFailure, type SearchDegradation, type SearchFailureCode } from './search-contract';
 import { resolveParents } from './resolve-parents';
 import { resolveWindow } from './resolve-window';
 import { resolveSegments } from './resolve-segments';
@@ -37,10 +41,12 @@ export async function searchChunks(
   query: string,
   opts: SearchOpts,
   deps: SearchDeps,
-): Promise<Result<RetrievedChunk[]>> {
-  throwIfAborted(opts.signal);
+): Promise<SearchChunksResult> {
+  if (opts.signal?.aborted) {
+    return err(toSearchFailure('retrieval_unavailable', opts.signal.reason, opts.signal));
+  }
   if (query.trim() === '') {
-    return ok([]);
+    return ok({ chunks: [], degradedBy: [] });
   }
   const { limit: topN } = sanitizePagination(opts.limit, undefined, MAX_SEARCH_LIMIT, opts.rerankTopN ?? RERANK_TOP_N);
   const rerankerEnabled = deps.reranker != null;
@@ -57,8 +63,7 @@ export async function searchChunks(
       opts.signal,
     );
   } catch (cause) {
-    throwIfAborted(opts.signal);
-    return err(new ExternalServiceError('Embedding API failed', cause));
+    return err(toSearchFailure('embedding_unavailable', cause, opts.signal));
   }
 
   const hybridEnabled = opts.hybridEnabled ?? HYBRID_ENABLED;
@@ -84,48 +89,86 @@ export async function searchChunks(
       )
     : Promise.resolve(null);
 
-  let vectorRows: RetrievedChunkRow[] = [];
+  let vectorRows: ScoredRow[] = [];
   let vectorError: unknown;
   try {
-    vectorRows = await vectorPromise;
+    vectorRows = denseScoredRows(await vectorPromise);
   } catch (cause) {
-    throwIfAborted(opts.signal);
+    if (opts.signal?.aborted || isRequestCancellationError(cause)) {
+      return err(toSearchFailure('retrieval_unavailable', cause, opts.signal));
+    }
     vectorError = cause;
   }
-  const vectorIds = new Set(vectorRows.map((r) => r.id));
 
   const lexicalResult = await lexicalPromise;
-  throwIfAborted(opts.signal);
+  if (opts.signal?.aborted) {
+    return err(toSearchFailure('retrieval_unavailable', opts.signal.reason, opts.signal));
+  }
   if (vectorError !== undefined) {
     if (!runHybrid || lexicalResult === null || !lexicalResult.ok) {
-      return err(new ExternalServiceError('Vector search failed', vectorError));
+      return err(toSearchFailure('retrieval_unavailable', vectorError, opts.signal));
     }
     logger.warn('Vector search failed; falling back to lexical-only', { error: String(vectorError) });
-    return capAndResolve(lexicalResult.rows, query, topN, opts, deps, vectorIds);
+    return capAndResolve(
+      lexicalScoredRows(lexicalResult.rows),
+      query,
+      topN,
+      opts,
+      deps,
+      ['vector_unavailable'],
+    );
   }
   if (lexicalResult === null) {
-    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
+    return capAndResolve(vectorRows, query, topN, opts, deps, []);
   }
   if (!lexicalResult.ok) {
+    if (isRequestCancellationError(lexicalResult.cause)) {
+      return err(toSearchFailure('retrieval_unavailable', lexicalResult.cause, opts.signal));
+    }
     logger.warn('Lexical search failed; falling back to vector-only', { error: String(lexicalResult.cause) });
-    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
+    return capAndResolve(vectorRows, query, topN, opts, deps, ['lexical_unavailable']);
   }
-  const lexicalRows = lexicalResult.rows;
+  const lexicalRows = lexicalScoredRows(lexicalResult.rows);
 
   if (vectorRows.length === 0 && lexicalRows.length === 0) {
-    return ok([]);
+    return ok({ chunks: [], degradedBy: [] });
   }
   if (vectorRows.length === 0) {
-    return capAndResolve(lexicalRows, query, topN, opts, deps, vectorIds);
+    return capAndResolve(lexicalRows, query, topN, opts, deps, []);
   }
   if (lexicalRows.length === 0) {
-    return capAndResolve(vectorRows, query, topN, opts, deps, vectorIds);
+    return capAndResolve(vectorRows, query, topN, opts, deps, []);
   }
 
   const rrfK = boundedPositiveInteger(opts.rrfK, RRF_K, Number.MAX_SAFE_INTEGER);
   const lexicalWeight = boundedNonnegativeNumber(opts.lexicalWeight, LEXICAL_WEIGHT);
   const fused = reciprocalRankFusion(vectorRows, lexicalRows, candidateLimit, rrfK, lexicalWeight);
-  return capAndResolve(fused, query, topN, { ...opts, threshold }, deps, vectorIds);
+  return capAndResolve(fused, query, topN, { ...opts, threshold }, deps, []);
+}
+
+function errorName(value: unknown): string | undefined {
+  return typeof value === 'object' && value !== null && 'name' in value && typeof value.name === 'string'
+    ? value.name
+    : undefined;
+}
+
+function toSearchFailure(
+  fallbackCode: SearchFailureCode,
+  cause: unknown,
+  signal: AbortSignal | undefined,
+): SearchFailure {
+  const interruption = signal?.aborted ? signal.reason : cause;
+  const code = errorName(interruption) === 'TimeoutError'
+    ? 'timeout'
+    : signal?.aborted || isRequestCancellationError(cause)
+      ? 'cancelled'
+      : fallbackCode;
+  const userSafeMessage = code === 'cancelled'
+    ? 'The documentation search was cancelled.'
+    : code === 'timeout'
+      ? 'The documentation search timed out. Please try again.'
+      : 'The documentation search is temporarily unavailable. Please try again.';
+  return new SearchFailure(code, code !== 'cancelled', userSafeMessage, cause);
 }
 
 async function capAndResolve(
@@ -134,48 +177,72 @@ async function capAndResolve(
   topN: number,
   opts: SearchOpts,
   deps: SearchDeps,
-  vectorIds: Set<number>,
-): Promise<Result<RetrievedChunk[]>> {
-  throwIfAborted(opts.signal);
+  degradedBy: readonly SearchDegradation[],
+): Promise<SearchChunksResult> {
+  if (opts.signal?.aborted) {
+    return err(toSearchFailure('retrieval_unavailable', opts.signal.reason, opts.signal));
+  }
   const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
-  const capped = deps.reranker
-    ? await rerankRows(query, rows, topN, deps.reranker, threshold, vectorIds, opts.signal)
-    : sortByRelevance(rows).slice(0, topN);
+  let capped: ScoredRow[];
+  let combinedDegradations = [...degradedBy];
+  try {
+    if (deps.reranker) {
+      const reranked = await rerankRows(query, rows, topN, deps.reranker, threshold, opts.signal);
+      capped = reranked.rows;
+      combinedDegradations = [...combinedDegradations, ...reranked.degradedBy];
+    } else {
+      capped = sortByRelevance(rows).slice(0, topN);
+    }
+  } catch (cause) {
+    return err(toSearchFailure('reranker_unavailable', cause, opts.signal));
+  }
 
   const mode = opts.mode ?? PARENT_CHILD_MODE;
-  const resolved =
-    mode === 'window'
-      ? await resolveWindow(
-          capped,
-          deps,
-          boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT),
-          opts.signal,
-        )
-      : mode === 'segment'
-        ? (
-            await resolveSegments(
-              capped,
-              deps,
-              {
-                penalty: boundedNonnegativeNumber(opts.rsePenalty, RSE_IRRELEVANT_PENALTY),
-                maxSegmentChunks: boundedPositiveInteger(
-                  opts.rseMaxSegmentChunks,
-                  RSE_MAX_SEGMENT_CHUNKS,
-                  MAX_SEARCH_LIMIT,
-                ),
-                overallMaxChunks: boundedPositiveInteger(
-                  opts.rseOverallMaxChunks,
-                  RSE_OVERALL_MAX_CHUNKS,
-                  MAX_SEARCH_LIMIT,
-                ),
-                minSegmentValue:
-                  typeof opts.rseMinSegmentValue === 'number' && Number.isFinite(opts.rseMinSegmentValue)
-                    ? opts.rseMinSegmentValue
-                    : RSE_MIN_SEGMENT_VALUE,
-              },
-              opts.signal,
-            )
-          ).slice(0, topN)
-        : await resolveParents(capped, deps, topN, opts.signal);
-  return ok(resolved);
+  try {
+    const resolved =
+      mode === 'window'
+        ? await resolveWindow(
+            capped,
+            deps,
+            boundedPositiveInteger(opts.parentChildWindow, PARENT_CHILD_WINDOW, MAX_SEARCH_LIMIT),
+            opts.signal,
+          )
+        : mode === 'segment'
+          ? (
+              await resolveSegments(
+                capped,
+                deps,
+                {
+                  penalty: boundedNonnegativeNumber(opts.rsePenalty, RSE_IRRELEVANT_PENALTY),
+                  maxSegmentChunks: boundedPositiveInteger(
+                    opts.rseMaxSegmentChunks,
+                    RSE_MAX_SEGMENT_CHUNKS,
+                    MAX_SEARCH_LIMIT,
+                  ),
+                  overallMaxChunks: boundedPositiveInteger(
+                    opts.rseOverallMaxChunks,
+                    RSE_OVERALL_MAX_CHUNKS,
+                    MAX_SEARCH_LIMIT,
+                  ),
+                  minSegmentValue:
+                    typeof opts.rseMinSegmentValue === 'number' && Number.isFinite(opts.rseMinSegmentValue)
+                      ? opts.rseMinSegmentValue
+                      : RSE_MIN_SEGMENT_VALUE,
+                },
+                opts.signal,
+              )
+            ).slice(0, topN)
+          : await resolveParents(capped, deps, topN, opts.signal);
+    const chunks: RetrievedChunk[] = resolved.map((chunk, index) => ({
+      ...chunk,
+      scores: { ...chunk.scores, finalRank: index + 1 },
+    }));
+    const value: SearchExecutionResult = {
+      chunks,
+      degradedBy: [...new Set(combinedDegradations)],
+    };
+    return ok(value);
+  } catch (cause) {
+    return err(toSearchFailure('retrieval_unavailable', cause, opts.signal));
+  }
 }

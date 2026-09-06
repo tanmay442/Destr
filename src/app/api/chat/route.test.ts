@@ -4,8 +4,30 @@ import type { Composition } from '@/composition';
 
 const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = vi.hoisted(() => ({
   searchValue: [
-    { content: 'The dental plan covers two cleanings per year.', similarity: 0.91 },
-    { content: 'Submit claims via the HR portal.', similarity: 0.62 },
+    {
+      id: 1,
+      documentId: 1,
+      fileName: 'benefits.md',
+      page: 1,
+      sectionTitle: 'Dental',
+      source: null,
+      title: 'Benefits',
+      content: 'The dental plan covers two cleanings per year.',
+      chunkIndex: 0,
+      scores: { dense: 0.91, finalRank: 1, finalSignal: 'dense' as const },
+    },
+    {
+      id: 2,
+      documentId: 1,
+      fileName: 'claims.md',
+      page: 2,
+      sectionTitle: 'Claims',
+      source: null,
+      title: 'Claims',
+      content: 'Submit claims via the HR portal.',
+      chunkIndex: 1,
+      scores: { dense: 0.62, finalRank: 2, finalSignal: 'dense' as const },
+    },
   ],
   ticketInsertedValues: [] as Array<Record<string, unknown>>,
   streamTextImpl: vi.fn(),
@@ -153,7 +175,7 @@ const { compositionMock, gatewayHolder } = vi.hoisted<{
     gatewayHolder,
     compositionMock: {
     rateLimit: () => rateLimitResult,
-    searchChunks: vi.fn(async () => ok(searchValue) as never),
+    searchChunks: vi.fn(async () => ok({ chunks: searchValue, degradedBy: [] }) as never),
     createTicket: createTicketMock,
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
@@ -223,11 +245,29 @@ function agenticResult(overrides: Record<string, unknown> = {}): Record<string, 
   return {
     chunks: [],
     rewrittenQuery: 'rewritten',
+    attemptedQueries: ['rewritten'],
+    resultQuery: 'rewritten',
+    degradedBy: [],
     outOfDomain: false,
     isEmpty: false,
     fallbackReason: null,
-    resultState: 'ok',
+    resultState: 'results',
     ...overrides,
+  };
+}
+
+function testChunk(content: string, dense: number, id = 1) {
+  return {
+    id,
+    documentId: 1,
+    fileName: null,
+    page: null,
+    sectionTitle: null,
+    source: null,
+    title: null,
+    content,
+    chunkIndex: id - 1,
+    scores: { dense, finalRank: id, finalSignal: 'dense' as const },
   };
 }
 
@@ -524,22 +564,26 @@ describe('/api/chat searchDocumentation tool', () => {
     const searchChunksSpy = vi
       .spyOn(compositionMock, 'searchChunks')
       .mockResolvedValueOnce(
-        ok([{ content: longContent, similarity: 0.8, source: 'https://docs.example.com/a.md' }]) as never,
+        ok({
+          chunks: [{ ...testChunk(longContent, 0.8), source: 'https://docs.example.com/a.md' }],
+          degradedBy: [],
+        }) as never,
       );
     const { tools } = await captureTools();
-    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as Array<{
-      content: string;
-    }>;
-    expect(result?.[0]?.content.startsWith('<reference source="https://docs.example.com/a.md">\n')).toBe(true);
-    expect(result?.[0]?.content.endsWith('\n</reference>')).toBe(true);
-    expect(result?.[0]?.content).toContain('x'.repeat(800) + '\u2026');
+    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as {
+      sets: Array<{ kind: string; results: Array<{ content: string }> }>;
+    };
+    const content = result.sets[0]!.results[0]!.content;
+    expect(content.startsWith('<reference source="https://docs.example.com/a.md">\n')).toBe(true);
+    expect(content.endsWith('\n</reference>')).toBe(true);
+    expect(content).toContain('x'.repeat(800) + '\u2026');
     searchChunksSpy.mockRestore();
   });
 
   it('passes a user-supplied limit through to searchChunks', async () => {
     const searchChunksSpy = vi
       .spyOn(compositionMock, 'searchChunks')
-      .mockResolvedValueOnce(ok([]) as never);
+      .mockResolvedValueOnce(ok({ chunks: [], degradedBy: [] }) as never);
     const { tools } = await captureTools();
     await tools?.searchDocumentation?.execute({ query: 'q', limit: 5 });
     expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', {
@@ -550,12 +594,20 @@ describe('/api/chat searchDocumentation tool', () => {
   });
 
   it('omits duplicate chunks from repeated retrieval results', async () => {
-    const searchSpy = vi.spyOn(compositionMock, 'searchChunks').mockResolvedValue(ok(searchValue) as never);
+    const searchSpy = vi
+      .spyOn(compositionMock, 'searchChunks')
+      .mockResolvedValue(ok({ chunks: searchValue, degradedBy: [] }) as never);
     const { tools } = await captureTools();
     const firstResult = await tools?.searchDocumentation?.execute({ query: 'q' });
     const secondResult = await tools?.searchDocumentation?.execute({ query: 'q again' });
-    expect(firstResult).toHaveLength(2);
-    expect(secondResult).toEqual([]);
+    expect(firstResult).toMatchObject({
+      sets: [{ kind: 'results', results: expect.arrayContaining([expect.any(Object), expect.any(Object)]) }],
+      uniqueEvidenceAdded: 2,
+    });
+    expect(secondResult).toMatchObject({
+      sets: [{ kind: 'no_match', reason: 'filtered_duplicates', ticketEligible: false }],
+      uniqueEvidenceAdded: 0,
+    });
     searchSpy.mockRestore();
   });
 
@@ -762,29 +814,34 @@ describe('/api/chat agentic loop (Session 8)', () => {
 
   it('uses agenticSearch when effectiveMode is agentic, dropping graded-irrelevant chunks before the model sees them', async () => {
     const allChunks = [
-      { content: 'keep this', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
-      { content: 'drop this', similarity: 0.2, id: 2, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null },
+      testChunk('keep this', 0.9, 1),
+      testChunk('drop this', 0.2, 2),
     ];
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [allChunks[0]] })) as never,
     );
     const { tools } = await captureToolsForAgentic();
-    const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as Array<{ content: string }>;
+    const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as {
+      sets: Array<{ kind: string; results: Array<{ content: string }> }>;
+    };
     expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague', {
+      limit: 3,
       signal: expect.any(AbortSignal),
     });
-    expect(result).toHaveLength(1);
-    expect(result[0]!.content).toBe('<reference source="null">\nkeep this\n</reference>');
+    expect(result.sets[0]!.results).toHaveLength(1);
+    expect(result.sets[0]!.results[0]!.content).toBe('<reference source="null">\nkeep this\n</reference>');
   });
 
   it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {
     retrievalConfig.retrievalMode = 'normal';
-    const searchSpy = vi.spyOn(compositionMock, 'searchChunks').mockResolvedValue(ok([]) as never);
+    const searchSpy = vi
+      .spyOn(compositionMock, 'searchChunks')
+      .mockResolvedValue(ok({ chunks: [], degradedBy: [] }) as never);
     const agenticSpy = compositionMock.agenticSearch as ReturnType<typeof vi.fn>;
     const { tools } = await captureToolsForAgentic();
     await tools?.searchDocumentation?.execute({ query: 'plain' });
     expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', {
-      limit: undefined,
+      limit: 3,
       signal: expect.any(AbortSignal),
     });
     expect(agenticSpy).not.toHaveBeenCalled();
@@ -793,7 +850,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
 
   it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
@@ -803,11 +860,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
 
   it('surfaces a guardrail when the hallucination grader flags the answer ungrounded', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({
-        chunks: [{ content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null }],
-        rewrittenQuery: 'rewritten',
-        outOfDomain: false,
-      }) as never,
+      ok(agenticResult({ chunks: [testChunk('doc', 0.9)] })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
@@ -817,11 +870,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
 
   it('does not surface a guardrail when the answer is grounded', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok({
-        chunks: [{ content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null }],
-        rewrittenQuery: 'rewritten',
-        outOfDomain: false,
-      }) as never,
+      ok(agenticResult({ chunks: [testChunk('doc', 0.9)] })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
@@ -1093,7 +1142,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
     const payload = JSON.parse(value as string) as { v: number; text: string; citations: Array<{ snippet: string }> };
-    expect(payload.v).toBe(1);
+    expect(payload.v).toBe(2);
     expect(payload.text).toBe('freshly generated answer');
     expect(payload.citations.map((c) => c.snippet)).toEqual([
       'The dental plan covers two cleanings per year.',
@@ -1141,6 +1190,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     ];
     expect(opts.userId).toBe('user_fp');
     expect(opts.fingerprint).toContain('"mode":"agentic"');
+    expect(opts.fingerprint).toContain('"resultContractVersion":2');
     expect(opts.fingerprint).toContain('"retrievalMode":"agentic"');
     expect(opts.fingerprint).toContain('"similarityThreshold":0.5');
   });
@@ -1150,7 +1200,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = vi.fn(async () => 'no' as const);
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
     );
     const body = await runAgenticStreamAndRead('where is my refund?');
     expect(body).toMatch(/data-guardrail/);
@@ -1161,7 +1211,7 @@ describe('/api/chat answer cache (Session 10)', () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = vi.fn(async () => 'no' as const);
-    const chunk = { content: 'doc', similarity: 0.9, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
+    const chunk = testChunk('doc', 0.9);
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [chunk] })) as never,
     );
@@ -1224,7 +1274,7 @@ describe('/api/chat answer cache (Session 10)', () => {
 });
 
 describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
-  const CHUNK_A = { content: 'fallback chunk A', similarity: 0.7, id: 1, documentId: 1, fileName: null, page: null, sectionTitle: null, source: null };
+  const CHUNK_A = testChunk('fallback chunk A', 0.7);
 
   async function runPendingAfterCallbacks(): Promise<void> {
     const pending = afterCallbacks.splice(0);
@@ -1305,7 +1355,7 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
 
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
@@ -1414,7 +1464,7 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
 
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
     compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultState: 'empty' })) as never,
+      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
     );
     await runAgenticStreamAndRead('where is my refund?');
     await runPendingAfterCallbacks();

@@ -6,7 +6,7 @@ export interface EmittedCitation {
   documentId: number;
   documentUid?: string;
   chunkUid?: string;
-  similarity: number;
+  scores: RetrievedChunk['scores'];
   snippet: string;
   fileName: string | null;
   page: number | null;
@@ -31,7 +31,7 @@ export function emitCitations(
     documentId: m.documentId,
     ...(m.documentUid ? { documentUid: m.documentUid } : {}),
     ...(m.chunkUid ? { chunkUid: m.chunkUid } : {}),
-    similarity: m.similarity,
+    scores: m.scores,
     snippet: truncateSnippet(m.content, snippetMax),
     fileName: m.fileName,
     page: m.page,

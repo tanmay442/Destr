@@ -4,6 +4,8 @@ import type { EmittedCitation } from '../emit-citations';
 import type { ChatUIMessage } from '../message-types';
 import { TURN_FINGERPRINT_VERSION } from '../turn-fingerprint';
 import type { AiSdk } from './turn-types';
+import type { AgenticResultState } from '@app/domain';
+import type { RetrievalScores } from '../../rag/search';
 
 type UIMessage = ChatUIMessage;
 
@@ -24,6 +26,10 @@ interface CachedAnswerPayload {
     isEmpty?: boolean;
     resultState?: string;
   };
+  search?: {
+    resultStates: AgenticResultState[];
+    scoreMaxima: Partial<Pick<RetrievalScores, 'dense' | 'lexical' | 'fusion' | 'reranker'>>;
+  };
 }
 
 export type { CachedAnswerPayload };
@@ -42,9 +48,10 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         requestFingerprint?: unknown;
         fingerprintVersion?: unknown;
         guardrail?: unknown;
+        search?: unknown;
       };
       if (
-        candidate.v === 1 &&
+        (candidate.v === 1 || candidate.v === 2) &&
         (expectedKind === undefined || candidate.kind === expectedKind) &&
         typeof candidate.text === 'string' &&
         Array.isArray(candidate.citations) &&
@@ -68,6 +75,9 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         if (typeof candidate.guardrail === 'object' && candidate.guardrail !== null) {
           result.guardrail = candidate.guardrail as NonNullable<CachedAnswerPayload['guardrail']>;
         }
+        if (typeof candidate.search === 'object' && candidate.search !== null) {
+          result.search = candidate.search as NonNullable<CachedAnswerPayload['search']>;
+        }
         return result;
       }
     }
@@ -80,14 +90,14 @@ export { parseCachedAnswer };
 
 function parseTurnResult(
   value: string,
-  requestFingerprint: { current: string; legacy: string },
+  requestFingerprint: { current: string; preResultContract: string; legacy: string },
 ): { answer: CachedAnswerPayload } | { conflict: true } | null {
   const answer = parseCachedAnswer(value, 'turn-result');
   if (!answer) return null;
   const expected = answer.fingerprintVersion === TURN_FINGERPRINT_VERSION
-    ? requestFingerprint.current
-    : requestFingerprint.legacy;
-  if (answer.requestFingerprint !== expected) return { conflict: true };
+    ? [requestFingerprint.current, requestFingerprint.preResultContract]
+    : [requestFingerprint.legacy];
+  if (!expected.includes(answer.requestFingerprint ?? '')) return { conflict: true };
   return { answer };
 }
 

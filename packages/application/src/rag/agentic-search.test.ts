@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ok, err, unwrap, ExternalServiceError } from '@app/domain';
+import { ok, err, unwrap } from '@app/domain';
 import { agenticSearch, type AgenticDeps } from './agentic-search';
+import { SearchFailure, type SearchDegradation } from './search/search-contract';
 
 const { searchChunksMock, rewriterMock } = vi.hoisted(() => ({
   searchChunksMock: vi.fn(),
@@ -18,7 +19,7 @@ function makeDeps(): AgenticDeps {
   };
 }
 
-function chunk(content: string, similarity: number) {
+function chunk(content: string, dense: number) {
   return {
     id: 1,
     documentId: 1,
@@ -28,8 +29,13 @@ function chunk(content: string, similarity: number) {
     source: null,
     title: null,
     content,
-    similarity,
+    chunkIndex: 0,
+    scores: { dense, finalRank: 1, finalSignal: 'dense' as const },
   };
+}
+
+function searchResult(chunks: ReturnType<typeof chunk>[], degradedBy: SearchDegradation[] = []) {
+  return { chunks, degradedBy };
 }
 
 beforeEach(() => {
@@ -41,7 +47,7 @@ beforeEach(() => {
 describe('agenticSearch', () => {
   it('keeps every row returned by the pass unfiltered and flags a clean ok result', async () => {
     const rows = [chunk('relevant doc', 0.9), chunk('low-similarity doc kept anyway', 0.1)];
-    searchChunksMock.mockResolvedValue(ok(rows));
+    searchChunksMock.mockResolvedValue(ok(searchResult(rows)));
     const res = await agenticSearch('vague question', makeDeps());
     expect(res.ok).toBe(true);
     const r = unwrap(res);
@@ -51,7 +57,9 @@ describe('agenticSearch', () => {
     expect(r.outOfDomain).toBe(false);
     expect(r.isEmpty).toBe(false);
     expect(r.fallbackReason).toBeNull();
-    expect(r.resultState).toBe('ok');
+    expect(r.resultState).toBe('results');
+    expect(r.attemptedQueries).toEqual(['rewritten query']);
+    expect(r.resultQuery).toBe('rewritten query');
   });
 
   it('returns empty wall flags for an empty query without searching or rewriting', async () => {
@@ -62,14 +70,14 @@ describe('agenticSearch', () => {
     expect(r.outOfDomain).toBe(true);
     expect(r.isEmpty).toBe(true);
     expect(r.fallbackReason).toBeNull();
-    expect(r.resultState).toBe('empty');
+    expect(r.resultState).toBe('no_match');
     expect(searchChunksMock).not.toHaveBeenCalled();
     expect(rewriterMock).not.toHaveBeenCalled();
   });
 
   it('echoes the original query when the rewriter throws and searches with it verbatim', async () => {
     rewriterMock.mockRejectedValue(new Error('boom'));
-    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.9)]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([chunk('doc', 0.9)])));
     const res = await agenticSearch('original wording', makeDeps());
     expect(res.ok).toBe(true);
     const r = unwrap(res);
@@ -82,21 +90,21 @@ describe('agenticSearch', () => {
   });
 
   it('rewrite off skips tryRewrite and uses the original query verbatim', async () => {
-    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.9)]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([chunk('doc', 0.9)])));
     const res = await agenticSearch('original wording', { ...makeDeps(), rewriteEnabled: false });
     expect(res.ok).toBe(true);
     const r = unwrap(res);
     expect(rewriterMock).not.toHaveBeenCalled();
     expect(searchChunksMock).toHaveBeenCalledWith('original wording', expect.anything(), expect.anything());
     expect(r.rewrittenQuery).toBe('original wording');
-    expect(r.resultState).toBe('ok');
+    expect(r.resultState).toBe('results');
   });
 
   it('retries an empty pass with a fresh rewrite and keeps the recovered rows', async () => {
     rewriterMock.mockImplementation(async (q: string) => `${q} refined`);
     searchChunksMock
-      .mockResolvedValueOnce(ok([]))
-      .mockResolvedValueOnce(ok([chunk('strong match', 0.85)]));
+      .mockResolvedValueOnce(ok(searchResult([])))
+      .mockResolvedValueOnce(ok(searchResult([chunk('strong match', 0.85)])));
     const res = await agenticSearch('the question', makeDeps());
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
@@ -111,20 +119,21 @@ describe('agenticSearch', () => {
     const r = unwrap(res);
     expect(r.chunks[0]!.content).toBe('strong match');
     expect(r.rewrittenQuery).toBe('the question refined');
-    expect(r.resultState).toBe('ok');
+    expect(r.resultState).toBe('results');
+    expect(r.attemptedQueries).toEqual(['the question refined', 'the question refined']);
   });
 
   it('stops retrying once a pass returns rows even with retries still available', async () => {
-    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.9)]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([chunk('doc', 0.9)])));
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 3 });
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(1);
     expect(rewriterMock).toHaveBeenCalledTimes(1);
-    expect(unwrap(res).resultState).toBe('ok');
+    expect(unwrap(res).resultState).toBe('results');
   });
 
   it('gives up after maxRetries empty passes and returns the empty wall flags', async () => {
-    searchChunksMock.mockResolvedValue(ok([]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([])));
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 2 });
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(3);
@@ -134,41 +143,48 @@ describe('agenticSearch', () => {
     expect(r.outOfDomain).toBe(true);
     expect(r.isEmpty).toBe(true);
     expect(r.fallbackReason).toBeNull();
-    expect(r.resultState).toBe('empty');
+    expect(r.resultState).toBe('no_match');
   });
 
   it('retries once by default when no explicit maxRetries is given', async () => {
-    searchChunksMock.mockResolvedValue(ok([]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([])));
     const res = await agenticSearch('q', makeDeps());
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(2);
-    expect(unwrap(res).resultState).toBe('empty');
+    expect(unwrap(res).resultState).toBe('no_match');
   });
 
   it('caps retries by the step budget', async () => {
-    searchChunksMock.mockResolvedValue(ok([]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([])));
     const res = await agenticSearch('q', { ...makeDeps(), maxRetries: 5, stepBudget: 3 });
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledTimes(3);
-    expect(unwrap(res).resultState).toBe('empty');
+    expect(unwrap(res).resultState).toBe('no_match');
   });
 
-  it('wraps a failing inner search result into an ExternalServiceError', async () => {
-    searchChunksMock.mockResolvedValue(err(new Error('db down')));
+  it('preserves a typed failing inner search result', async () => {
+    searchChunksMock.mockResolvedValue(err(new SearchFailure(
+      'retrieval_unavailable',
+      true,
+      'The documentation search is temporarily unavailable. Please try again.',
+    )));
     const res = await agenticSearch('q', makeDeps());
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toBeInstanceOf(ExternalServiceError);
+    if (!res.ok) {
+      expect(res.error.code).toBe('retrieval_unavailable');
+      expect(res.error.attemptedQueries).toEqual(['rewritten query']);
+    }
   });
 
-  it('wraps a thrown search failure into an ExternalServiceError', async () => {
+  it('maps a thrown search failure to a typed retrieval error', async () => {
     searchChunksMock.mockRejectedValue(new Error('model down'));
     const res = await agenticSearch('q', makeDeps());
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toBeInstanceOf(ExternalServiceError);
+    if (!res.ok) expect(res.error.code).toBe('retrieval_unavailable');
   });
 
   it('forwards similarityThreshold and hybridEnabled into the inner searchChunks opts', async () => {
-    searchChunksMock.mockResolvedValue(ok([chunk('doc', 0.9)]));
+    searchChunksMock.mockResolvedValue(ok(searchResult([chunk('doc', 0.9)])));
     const res = await agenticSearch('q', {
       ...makeDeps(),
       retrieveLimit: 25,
@@ -178,7 +194,7 @@ describe('agenticSearch', () => {
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledWith(
       'rewritten query',
-      { limit: 25, threshold: 0.7, hybridEnabled: false },
+      expect.objectContaining({ limit: 25, threshold: 0.7, hybridEnabled: false }),
       expect.anything(),
     );
   });

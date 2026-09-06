@@ -129,7 +129,7 @@ export function FeedbackSection({
                   <TableRow>
                     <TableHead>Document</TableHead>
                     <TableHead className="text-right">Retrievals</TableHead>
-                    <TableHead className="text-right">p95 similarity</TableHead>
+                    <TableHead className="text-right">p95 retrieval score (legacy)</TableHead>
                     <TableHead className="text-right">Ticket conv.</TableHead>
                   </TableRow>
                 </TableHeader>

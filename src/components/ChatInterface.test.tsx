@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
+import type { CitationData } from '@/chat/types';
 
 const useChatMock = vi.fn();
 vi.mock('@ai-sdk/react', () => ({
@@ -26,16 +27,7 @@ type Msg = {
     | { type: 'text'; text: string }
     | {
         type: 'data-citation';
-        data: {
-          id?: number;
-          documentId?: number;
-          similarity: number;
-          snippet: string;
-          fileName?: string | null;
-          page?: number | null;
-          sectionTitle?: string | null;
-          source?: string | null;
-        };
+        data: CitationData;
       }
     | { type: 'data-guardrail'; data: {
         outOfDomain: boolean;
@@ -192,7 +184,10 @@ describe('ChatInterface', () => {
           { type: 'text', text: 'According to the policy…' },
           {
             type: 'data-citation',
-            data: { similarity: 0.92, snippet: 'The dental plan covers two cleanings per year.' },
+            data: {
+              scores: { dense: 0.92, finalRank: 1, finalSignal: 'dense' },
+              snippet: 'The dental plan covers two cleanings per year.',
+            },
           },
         ],
       },
@@ -200,10 +195,36 @@ describe('ChatInterface', () => {
     render(<ChatInterface conversationId="conv-test" />);
     const citation = screen.getByTestId('chat-citation');
     expect(citation).toBeInTheDocument();
-    expect(within(citation).getByText(/92% match/i)).toBeInTheDocument();
+    expect(within(citation).getByText(/semantic · rank 1/i)).toBeInTheDocument();
+    expect(citation).not.toHaveTextContent(/% match/i);
     expect(
       within(citation).getByText(/dental plan covers two cleanings/i),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['dense', 'Semantic'],
+    ['lexical', 'Keyword'],
+    ['fusion', 'Hybrid'],
+    ['reranker', 'Reranked'],
+  ] as const)('renders %s score provenance as rank rather than a percentage', (finalSignal, label) => {
+    setupChat([
+      {
+        id: `citation-${finalSignal}`,
+        role: 'assistant',
+        parts: [{
+          type: 'data-citation',
+          data: {
+            scores: { [finalSignal]: 0.73, finalRank: 2, finalSignal },
+            snippet: `${label} evidence`,
+          },
+        }],
+      },
+    ]);
+    render(<ChatInterface conversationId="conv-test" />);
+    const citation = screen.getByTestId('chat-citation');
+    expect(within(citation).getByText(`${label} · rank 2`)).toBeInTheDocument();
+    expect(citation).not.toHaveTextContent(/% match/i);
   });
 
   it('renders provenance metadata on citation cards when present', () => {
@@ -311,6 +332,7 @@ describe('ChatInterface', () => {
     expect(
       within(citation).getByText(/legacy citation snippet/i),
     ).toBeInTheDocument();
+    expect(citation).not.toHaveTextContent(/% match/i);
   });
 
   it('renders text parts in the conversation', () => {

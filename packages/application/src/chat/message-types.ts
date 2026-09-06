@@ -1,12 +1,15 @@
 import type { UIMessage } from 'ai';
 import type { ValidatedChatFile } from './chat-file';
+import type { RetrievalScores } from '../rag/search';
 
 export interface ChatCitationData {
   id?: number;
   documentId?: number;
   documentUid?: string;
   chunkUid?: string;
-  similarity: number;
+  scores?: RetrievalScores;
+  /** Legacy cache/history field. Never render as a cross-modality percentage. */
+  similarity?: number;
   snippet: string;
   fileName?: string | null;
   page?: number | null;

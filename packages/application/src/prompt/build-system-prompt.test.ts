@@ -32,7 +32,8 @@ function prefetchChunk(): RetrievedChunk {
     source: 'docs/guide.md',
     title: 'Guide',
     content: 'How to install.',
-    similarity: 0.9,
+    chunkIndex: 0,
+    scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
   };
 }
 

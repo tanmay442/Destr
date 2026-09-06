@@ -12,7 +12,8 @@ function chunk(over: Partial<RetrievedChunk>): RetrievedChunk {
     source: 'https://example.com/doc.pdf',
     title: 'Doc',
     content: 'hello world',
-    similarity: 0.9,
+    chunkIndex: 3,
+    scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
     ...over,
   };
 }
@@ -23,7 +24,7 @@ describe('emitCitations', () => {
     expect(c).toMatchObject({
       id: 42,
       documentId: 7,
-      similarity: 0.9,
+      scores: { dense: 0.9, finalRank: 1, finalSignal: 'dense' },
       fileName: 'doc.pdf',
       page: 2,
       sectionTitle: 'Intro',

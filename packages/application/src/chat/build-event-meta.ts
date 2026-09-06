@@ -1,4 +1,5 @@
-import type { JudgeScores } from '@app/domain';
+import type { AgenticResultState, JudgeScores } from '@app/domain';
+import type { RetrievalScores } from '../rag/search';
 
 export interface EventMetaInput {
   rewritten?: boolean | undefined;
@@ -7,6 +8,8 @@ export interface EventMetaInput {
   fallbackReason?: string | undefined;
   isEmpty?: boolean | undefined;
   resultState?: string | undefined;
+  searchResultStates?: AgenticResultState[] | undefined;
+  retrievalScoreMaxima?: Partial<Pick<RetrievalScores, 'dense' | 'lexical' | 'fusion' | 'reranker'>> | undefined;
 
   /** Provider/model and cache facts supplied by the infrastructure adapter. */
   modelTelemetry?: Record<string, unknown> | undefined;
@@ -35,6 +38,12 @@ export function buildEventMeta(input: EventMetaInput): Record<string, unknown> {
   if (input.fallbackReason !== undefined) meta.fallbackReason = input.fallbackReason;
   if (input.isEmpty !== undefined) meta.isEmpty = input.isEmpty;
   if (input.resultState !== undefined) meta.resultState = input.resultState;
+  if (input.searchResultStates !== undefined || input.retrievalScoreMaxima !== undefined) {
+    meta.search = {
+      ...(input.searchResultStates !== undefined ? { resultStates: [...input.searchResultStates] } : {}),
+      ...(input.retrievalScoreMaxima !== undefined ? { scoreMaxima: { ...input.retrievalScoreMaxima } } : {}),
+    };
+  }
   if (input.modelTelemetry !== undefined) meta.model = { ...input.modelTelemetry };
   if (input.promptCache !== undefined) meta.promptCache = { ...input.promptCache };
   if (input.prefetchStatus !== undefined || input.prefetchMs !== undefined) {

@@ -194,7 +194,7 @@ async function buildLiveRealDeps(model: Awaited<ReturnType<typeof buildRealModel
     searchChunks: async (query: string) => {
       const r = await searchChunks(query, {}, searchDeps);
       return r.ok
-        ? r.value.map((c) => ({
+        ? r.value.chunks.map((c) => ({
             content: c.content,
             documentId: c.documentId,
             ...(c.documentUid ? { documentUid: c.documentUid } : {}),
@@ -207,7 +207,7 @@ async function buildLiveRealDeps(model: Awaited<ReturnType<typeof buildRealModel
         console.warn('[eval] agenticSearch degraded to plain searchChunks: aux models unavailable (AGENTIC_ENABLED=false)');
         const r = await searchChunks(query, {}, searchDeps);
         return r.ok
-          ? r.value.map((c) => ({
+          ? r.value.chunks.map((c) => ({
               content: c.content,
               documentId: c.documentId,
               ...(c.documentUid ? { documentUid: c.documentUid } : {}),

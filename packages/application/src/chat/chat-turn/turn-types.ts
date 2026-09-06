@@ -10,13 +10,18 @@ import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider'
 import { z } from 'zod';
 import type {
   AnswerCache,
+  AgenticResultState,
   ChatEventInput,
   RateLimiter,
   Result,
 } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import type { AgenticResult } from '../../rag/agentic-search';
-import type { RetrievedChunk } from '../../rag/search';
+import type {
+  RetrievalSignal,
+  SearchChunksResult,
+  SearchFailure,
+} from '../../rag/search';
 import type { ChatUIMessage } from '../message-types';
 import type {
   CacheLeasePolicy,
@@ -74,12 +79,12 @@ export interface ChatTurnDeps {
     cfg: AppConfig,
     query: string,
     opts: { limit?: number | undefined; signal?: AbortSignal | undefined },
-  ): Promise<Result<RetrievedChunk[]>>;
+  ): Promise<SearchChunksResult>;
   agenticSearch(
     cfg: AppConfig,
     query: string,
-    opts?: { signal?: AbortSignal | undefined },
-  ): Promise<Result<AgenticResult>>;
+    opts?: { limit?: number | undefined; signal?: AbortSignal | undefined },
+  ): Promise<Result<AgenticResult, SearchFailure>>;
   hallucinationGrader(
     cfg: AppConfig,
   ): ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
@@ -159,7 +164,8 @@ interface TurnMetrics {
   firstTokenMs: number | null;
   hallucinationMs: number | null;
   hitCount: number | null;
-  maxSimilarity: number | null;
+  maxRetrievalScores: Partial<Record<RetrievalSignal, number>>;
+  searchResultStates: AgenticResultState[];
   ticketCreated: boolean;
   ticketId: string | null;
   rewritten: boolean;

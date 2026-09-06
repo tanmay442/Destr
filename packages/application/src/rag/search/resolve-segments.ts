@@ -149,7 +149,6 @@ export async function resolveSegments(
           chunk: {
             ...toRetrievedChunk(anchor),
             content,
-            similarity: anchor.similarity,
           },
           score: Number.isFinite(anchorScore) ? anchorScore : 0,
         });

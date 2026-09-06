@@ -72,14 +72,14 @@ export const MessageItem = memo(function MessageItem({
         >
           {citations.map((c, i) => {
             const citationKey = c.data.chunkUid ?? (c.data.id != null ? String(c.data.id) : `${message.id}-citation-${i}`);
-            const sim = c.data.similarity;
-            const simPct = Math.round(sim * 100);
-            const simTone =
-              sim >= 0.8
-                ? 'var(--success)'
-                : sim >= 0.6
-                  ? 'var(--primary)'
-                  : 'var(--warning)';
+            const scoreLabel = c.data.scores
+              ? {
+                  dense: 'Semantic',
+                  lexical: 'Keyword',
+                  fusion: 'Hybrid',
+                  reranker: 'Reranked',
+                }[c.data.scores.finalSignal]
+              : null;
             return (
               <div
                 key={citationKey}
@@ -90,16 +90,14 @@ export const MessageItem = memo(function MessageItem({
                   <span className="text-[11px] font-semibold tracking-[0.1em] text-muted-foreground uppercase">
                     Source {i + 1}
                   </span>
-                  <span
-                    className="rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums"
-                    style={{
-                      color: simTone,
-                      background: `color-mix(in oklch, ${simTone} 14%, transparent)`,
-                    }}
-                    title="Cosine similarity to your question"
-                  >
-                    {simPct}% match
-                  </span>
+                  {scoreLabel && c.data.scores ? (
+                    <span
+                      className="rounded-full bg-surface-elevated px-2 py-0.5 text-[11px] font-semibold text-muted-foreground tabular-nums"
+                      title={`${scoreLabel} retrieval order; scores from different retrieval methods are not comparable`}
+                    >
+                      {scoreLabel} · rank {c.data.scores.finalRank}
+                    </span>
+                  ) : null}
                 </div>
                 {c.data.fileName ? (
                   <div className="flex flex-col gap-0.5">

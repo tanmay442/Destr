@@ -20,12 +20,10 @@ async function resolveParents(
   );
   const parentById = new Map(parents.map((p) => [p.id, p]));
 
-  const bestSimilarity = new Map<number, number>();
   const bestScore = new Map<number, number>();
   const bestChild = new Map<number, ScoredRow>();
   for (const h of childHits) {
     const pid = h.parentChunkId as number;
-    bestSimilarity.set(pid, Math.max(bestSimilarity.get(pid) ?? -Infinity, h.similarity));
     const score = scoreOf(h);
     bestScore.set(pid, Math.max(bestScore.get(pid) ?? -Infinity, score));
     const prev = bestChild.get(pid);
@@ -38,8 +36,10 @@ async function resolveParents(
   for (const p of parents) {
     if (!parentById.has(p.id)) continue;
     const child = bestChild.get(p.id);
+    const rankedSource = child ? toRetrievedChunk(child) : toRetrievedChunk({ ...p, denseScore: 0 });
     entries.push({
       chunk: {
+        ...rankedSource,
         id: p.id,
         documentId: p.documentId,
         ...(p.documentUid ? { documentUid: p.documentUid } : {}),
@@ -50,7 +50,7 @@ async function resolveParents(
         source: child?.source ?? p.source,
         title: p.title ?? child?.title ?? null,
         content: p.content,
-        similarity: bestSimilarity.get(p.id) ?? child?.similarity ?? 0,
+        chunkIndex: p.chunkIndex,
       },
       score: bestScore.get(p.id) ?? 0,
     });

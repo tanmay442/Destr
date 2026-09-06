@@ -1,11 +1,14 @@
 import type { UIMessage } from 'ai';
+import type { RetrievalScores } from '@app/application/rag/search';
 
 export interface CitationData {
   id?: number;
   documentId?: number;
   documentUid?: string;
   chunkUid?: string;
-  similarity: number;
+  scores?: RetrievalScores;
+  /** Legacy cache/history field. Never render as a cross-modality percentage. */
+  similarity?: number;
   snippet: string;
   fileName?: string | null;
   page?: number | null;
