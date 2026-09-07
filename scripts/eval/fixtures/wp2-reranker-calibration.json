@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "wp2-reranker-calibration-corpus.v1",
+  "cases": [
+    {
+      "id": "password-reset-positive",
+      "label": "positive",
+      "query": "How do I reset my password?",
+      "document": "To reset your password, open Account Settings and select Reset Password."
+    },
+    {
+      "id": "password-reset-negative-billing",
+      "label": "negative",
+      "query": "How do I reset my password?",
+      "document": "Invoices are generated on the first business day of each month."
+    },
+    {
+      "id": "password-reset-negative-travel",
+      "label": "negative",
+      "query": "How do I reset my password?",
+      "document": "The office travel policy requires manager approval for international flights."
+    },
+    {
+      "id": "refund-window-positive",
+      "label": "positive",
+      "query": "What is the refund window?",
+      "document": "The refund window is 30 days from the date of purchase."
+    },
+    {
+      "id": "refund-window-negative-security",
+      "label": "negative",
+      "query": "What is the refund window?",
+      "document": "Security keys must be registered before accessing the production network."
+    },
+    {
+      "id": "refund-window-negative-benefits",
+      "label": "negative",
+      "query": "What is the refund window?",
+      "document": "Dental benefits cover two preventive cleanings per calendar year."
+    },
+    {
+      "id": "two-factor-positive",
+      "label": "positive",
+      "query": "How can I enable two-factor authentication?",
+      "document": "Enable two-factor authentication from Security Settings, then scan the QR code."
+    },
+    {
+      "id": "two-factor-negative-vacation",
+      "label": "negative",
+      "query": "How can I enable two-factor authentication?",
+      "document": "Vacation requests should be submitted at least two weeks in advance."
+    },
+    {
+      "id": "two-factor-negative-shipping",
+      "label": "negative",
+      "query": "How can I enable two-factor authentication?",
+      "document": "Standard shipping usually arrives within five business days."
+    }
+  ]
+}

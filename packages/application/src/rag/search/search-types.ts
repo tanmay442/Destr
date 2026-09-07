@@ -35,6 +35,8 @@ export interface RetrievedChunk {
   content: string;
   chunkIndex: number;
   scores: RetrievalScores;
+  /** Exact chunks whose content is model-visible after window/segment resolution. */
+  constituentChunks?: readonly RetrievedChunk[];
 }
 
 interface ScoredRow extends RetrievedChunkRow {
@@ -91,7 +93,13 @@ export interface SearchDeps {
 export interface SearchOpts {
   signal?: AbortSignal | undefined;
   threshold?: number | undefined;
+  /** Independent relevance floor for successful reranker output. */
+  rerankerThreshold?: number | undefined;
   limit?: number | undefined;
+  /** Optional tenant-authorized document scope, forwarded to both modalities. */
+  filter?: { documentId?: number } | undefined;
+  /** Stable identities already emitted in this turn; used for bounded backfill. */
+  excludeChunkIdentities?: ReadonlySet<string> | undefined;
   /** Override `PARENT_CHILD_MODE` for this call (`parent`|`window`|`segment`). */
   mode?: 'parent' | 'window' | 'segment' | undefined;
   /** Override `PARENT_CHILD_WINDOW` for this call. */
@@ -104,7 +112,7 @@ export interface SearchOpts {
   rseOverallMaxChunks?: number | undefined;
   /** Minimum segment value required for emission. */
   rseMinSegmentValue?: number | undefined;
-  /** Broad candidate-pool size before reranking. Ignored when no reranker. */
+  /** Broad candidate-pool size before reranking or stable-identity backfill. */
   candidateLimit?: number | undefined;
   /** Override `HYBRID_ENABLED`. Defaults to the frozen constant. */
   hybridEnabled?: boolean | undefined;
@@ -112,6 +120,8 @@ export interface SearchOpts {
   rrfK?: number | undefined;
   /** Override LEXICAL_WEIGHT (lexical modality boost). */
   lexicalWeight?: number | undefined;
+  /** Additive weighted-vector rollout switch; content_plain is the rollback path. */
+  lexicalSearchMode?: 'content_plain' | 'weighted_websearch' | undefined;
   /** Override RERANK_TOP_N (default search limit). */
   rerankTopN?: number | undefined;
 }
@@ -119,6 +129,42 @@ export interface SearchOpts {
 export interface SearchExecutionResult {
   readonly chunks: RetrievedChunk[];
   readonly degradedBy: readonly SearchDegradation[];
+  readonly diagnostics: RetrievalDiagnostics;
+}
+
+export interface RetrievalDiagnostics {
+  readonly requestedLimit: number;
+  readonly candidateLimit: number;
+  readonly documentFilterApplied: boolean;
+  readonly dense: {
+    readonly status: 'not_run' | 'ok' | 'error';
+    readonly candidateCount: number;
+  };
+  readonly lexical: {
+    readonly status: 'not_run' | 'ok' | 'error';
+    readonly candidateCount: number;
+    readonly mode: 'content_plain' | 'weighted_websearch';
+  };
+  readonly fusion: {
+    readonly applied: boolean;
+    readonly inputCount: number;
+    readonly outputCount: number;
+  };
+  readonly reranker: {
+    readonly status: 'not_configured' | 'applied' | 'degraded';
+    readonly inputCount: number;
+    readonly validCount: number;
+    readonly acceptedCount: number;
+    readonly threshold: number | null;
+    readonly thresholdFilteredCount: number;
+  };
+  readonly resolutionMode: 'parent' | 'window' | 'segment';
+  readonly resolvedCount: number;
+  readonly stableDuplicatesSkipped: number;
+  readonly backfillCount: number;
+  readonly hasMore: boolean;
+  readonly finalCount: number;
+  readonly finalRanks: readonly number[];
 }
 
 export type SearchChunksResult = import('@app/domain').Result<SearchExecutionResult, SearchFailure>;

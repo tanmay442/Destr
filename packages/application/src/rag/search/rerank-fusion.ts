@@ -2,6 +2,7 @@ import type { Reranker } from '@app/domain';
 import { abortable } from './abort';
 import { scoreOf, type ScoredRow } from './search-types';
 import type { SearchDegradation } from './search-contract';
+import { stableChunkIdentity } from './stable-chunk-identity';
 
 function filterByThreshold(
   rows: ScoredRow[],
@@ -18,6 +19,53 @@ function filterByThreshold(
 interface RerankOutcome {
   readonly rows: ScoredRow[];
   readonly degradedBy: readonly SearchDegradation[];
+  readonly diagnostics: {
+    readonly status: 'applied' | 'degraded';
+    readonly inputCount: number;
+    readonly validCount: number;
+    readonly acceptedCount: number;
+    readonly thresholdFilteredCount: number;
+  };
+}
+
+function isCompleteRanking(
+  ranked: readonly { index: number; relevanceScore: number }[],
+  rowCount: number,
+): boolean {
+  if (ranked.length !== rowCount) return false;
+  const indices = new Set<number>();
+  for (const item of ranked) {
+    if (
+      !Number.isInteger(item.index) ||
+      item.index < 0 ||
+      item.index >= rowCount ||
+      !Number.isFinite(item.relevanceScore) ||
+      item.relevanceScore < 0 ||
+      item.relevanceScore > 1
+    ) return false;
+    indices.add(item.index);
+  }
+  return indices.size === rowCount;
+}
+
+function degradedRerank(
+  rows: ScoredRow[],
+  topN: number,
+  denseThreshold: number,
+  validCount: number,
+): RerankOutcome {
+  const fallback = filterByThreshold(sortByRelevance(rows), denseThreshold).slice(0, topN);
+  return {
+    rows: fallback,
+    degradedBy: ['reranker_unavailable'],
+    diagnostics: {
+      status: 'degraded',
+      inputCount: rows.length,
+      validCount,
+      acceptedCount: fallback.length,
+      thresholdFilteredCount: 0,
+    },
+  };
 }
 
 async function rerankRows(
@@ -25,34 +73,44 @@ async function rerankRows(
   rows: ScoredRow[],
   topN: number,
   reranker: Reranker,
-  threshold: number,
+  denseThreshold: number,
+  rerankerThreshold: number,
   signal?: AbortSignal,
 ): Promise<RerankOutcome> {
   try {
-    const ranked = await abortable(reranker.rank(query, rows.map((r) => r.content)), signal);
+    const documents = rows.map((row) => row.content);
+    const ranked = await abortable(
+      signal ? reranker.rank(query, documents, { signal }) : reranker.rank(query, documents),
+      signal,
+    );
+    if (!isCompleteRanking(ranked, rows.length)) {
+      return degradedRerank(rows, topN, denseThreshold, 0);
+    }
     const ordered: ScoredRow[] = [...ranked]
-      .filter((rankedRow) => Number.isFinite(rankedRow.relevanceScore) && rankedRow.relevanceScore >= 0)
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .flatMap((rankedRow) => {
         const row = rows[rankedRow.index];
         return row ? [{ ...row, rerankerScore: rankedRow.relevanceScore }] : [];
       });
-    if (ordered.length === 0 && rows.length > 0) {
-      return {
-        rows: filterByThreshold(sortByRelevance(rows), threshold).slice(0, topN),
-        degradedBy: ['reranker_unavailable'],
-      };
-    }
+    const accepted = ordered
+      .filter((row) => row.rerankerScore !== undefined && row.rerankerScore >= rerankerThreshold)
+      .slice(0, topN);
     return {
-      rows: filterByThreshold(ordered, threshold).slice(0, topN),
+      rows: accepted,
       degradedBy: [],
+      diagnostics: {
+        status: 'applied',
+        inputCount: rows.length,
+        validCount: ordered.length,
+        acceptedCount: accepted.length,
+        thresholdFilteredCount: ordered.filter(
+          (row) => row.rerankerScore !== undefined && row.rerankerScore < rerankerThreshold,
+        ).length,
+      },
     };
   } catch (cause) {
     if (signal?.aborted) throw cause;
-    return {
-      rows: filterByThreshold(sortByRelevance(rows), threshold).slice(0, topN),
-      degradedBy: ['reranker_unavailable'],
-    };
+    return degradedRerank(rows, topN, denseThreshold, 0);
   }
 }
 
@@ -71,7 +129,7 @@ function reciprocalRankFusion(
   const fused = new Map<string, { row: ScoredRow; score: number }>();
   const add = (rows: ScoredRow[], boost: number) => {
     rows.forEach((row, rank) => {
-      const key = row.chunkUid ?? `id:${row.id}`;
+      const key = stableChunkIdentity(row);
       const previous = fused.get(key);
       const score = (previous?.score ?? 0) + boost / (rrfK + rank + 1);
       fused.set(key, {
@@ -87,7 +145,7 @@ function reciprocalRankFusion(
   add(vectorRows, 1);
   add(lexicalRows, lexicalWeight);
   return [...fused.values()]
-    .sort((a, b) => b.score - a.score || String(a.row.id).localeCompare(String(b.row.id)))
+    .sort((a, b) => b.score - a.score || stableChunkIdentity(a.row).localeCompare(stableChunkIdentity(b.row)))
     .slice(0, limit)
     .map((entry) => ({ ...entry.row, fusedScore: entry.score }));
 }

@@ -15,8 +15,10 @@ import {
   RERANKER_PROVIDER as DEFAULT_RERANKER_PROVIDER,
   CANDIDATE_POOL as DEFAULT_CANDIDATE_POOL,
   RERANK_TOP_N as DEFAULT_RERANK_TOP_N,
+  RERANKER_THRESHOLD as DEFAULT_RERANKER_THRESHOLD,
   RRF_K as DEFAULT_RRF_K,
   LEXICAL_WEIGHT as DEFAULT_LEXICAL_WEIGHT,
+  LEXICAL_SEARCH_MODE as DEFAULT_LEXICAL_SEARCH_MODE,
   RSE_IRRELEVANT_PENALTY as DEFAULT_RSE_PENALTY,
   RSE_MAX_SEGMENT_CHUNKS as DEFAULT_RSE_MAX_SEGMENT,
   RSE_OVERALL_MAX_CHUNKS as DEFAULT_RSE_OVERALL_MAX,
@@ -129,6 +131,7 @@ function resolveRuntimeConfig(env: EnvSource) {
   const RERANKER_PROVIDER = enumOrDefault(env.get('RERANKER_PROVIDER'), ['cosine', 'local', 'cohere'] as const, DEFAULT_RERANKER_PROVIDER, 'RERANKER_PROVIDER');
   const CANDIDATE_POOL = positiveIntegerOrDefault(env.get('CANDIDATE_POOL'), DEFAULT_CANDIDATE_POOL, 'CANDIDATE_POOL');
   const RERANK_TOP_N = positiveIntegerOrDefault(env.get('RERANK_TOP_N'), DEFAULT_RERANK_TOP_N, 'RERANK_TOP_N');
+  const RERANKER_THRESHOLD = probabilityOrDefault(env.get('RERANKER_THRESHOLD'), DEFAULT_RERANKER_THRESHOLD, 'RERANKER_THRESHOLD');
   const HYBRID_ENABLED = env.get('HYBRID_ENABLED') !== 'false';
   const RRF_K = positiveOrDefault(env.get('RRF_K'), DEFAULT_RRF_K, 'RRF_K');
   const RSE_PENALTY = probabilityOrDefault(env.get('RSE_PENALTY'), DEFAULT_RSE_PENALTY, 'RSE_PENALTY');
@@ -136,6 +139,12 @@ function resolveRuntimeConfig(env: EnvSource) {
   const RSE_OVERALL_MAX_CHUNKS = positiveIntegerOrDefault(env.get('RSE_OVERALL_MAX_CHUNKS'), DEFAULT_RSE_OVERALL_MAX, 'RSE_OVERALL_MAX_CHUNKS');
   const RSE_MIN_SEGMENT_VALUE = nonnegativeOrDefault(env.get('RSE_MIN_SEGMENT_VALUE'), DEFAULT_RSE_MIN_VALUE, 'RSE_MIN_SEGMENT_VALUE');
   const LEXICAL_WEIGHT = nonnegativeOrDefault(env.get('LEXICAL_WEIGHT'), DEFAULT_LEXICAL_WEIGHT, 'LEXICAL_WEIGHT');
+  const LEXICAL_SEARCH_MODE = enumOrDefault(
+    env.get('LEXICAL_SEARCH_MODE'),
+    ['content_plain', 'weighted_websearch'] as const,
+    DEFAULT_LEXICAL_SEARCH_MODE,
+    'LEXICAL_SEARCH_MODE',
+  );
   const AGENTIC_ENABLED = env.get('AGENTIC_ENABLED') !== 'false';
   const AUX_MODEL = env.get('AUX_MODEL') ?? DEFAULT_AUX_MODEL;
   const OUT_OF_DOMAIN_THRESHOLD = probabilityOrDefault(env.get('OUT_OF_DOMAIN_THRESHOLD'), DEFAULT_OUT_OF_DOMAIN_THRESHOLD, 'OUT_OF_DOMAIN_THRESHOLD');
@@ -168,9 +177,11 @@ function resolveRuntimeConfig(env: EnvSource) {
     RERANKER_PROVIDER,
     CANDIDATE_POOL,
     RERANK_TOP_N,
+    RERANKER_THRESHOLD,
     HYBRID_ENABLED,
     RRF_K,
     LEXICAL_WEIGHT,
+    LEXICAL_SEARCH_MODE,
     RSE_PENALTY,
     RSE_MAX_SEGMENT_CHUNKS,
     RSE_OVERALL_MAX_CHUNKS,
@@ -233,9 +244,12 @@ export const PARENT_CHILD_WINDOW: number = defaultConfig.PARENT_CHILD_WINDOW as 
 export const RERANKER_PROVIDER: 'cosine' | 'local' | 'cohere' = defaultConfig.RERANKER_PROVIDER as 'cosine' | 'local' | 'cohere';
 export const CANDIDATE_POOL: number = defaultConfig.CANDIDATE_POOL as number;
 export const RERANK_TOP_N: number = defaultConfig.RERANK_TOP_N as number;
+export const RERANKER_THRESHOLD: number = defaultConfig.RERANKER_THRESHOLD as number;
 export const HYBRID_ENABLED: boolean = defaultConfig.HYBRID_ENABLED as boolean;
 export const RRF_K: number = defaultConfig.RRF_K as number;
 export const LEXICAL_WEIGHT: number = defaultConfig.LEXICAL_WEIGHT as number;
+export const LEXICAL_SEARCH_MODE: 'content_plain' | 'weighted_websearch' =
+  defaultConfig.LEXICAL_SEARCH_MODE as 'content_plain' | 'weighted_websearch';
 export const RSE_PENALTY: number = defaultConfig.RSE_PENALTY as number;
 export const RSE_MAX_SEGMENT_CHUNKS: number = defaultConfig.RSE_MAX_SEGMENT_CHUNKS as number;
 export const RSE_OVERALL_MAX_CHUNKS: number = defaultConfig.RSE_OVERALL_MAX_CHUNKS as number;

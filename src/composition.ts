@@ -286,7 +286,15 @@ function getSearchDeps(cfg: AppConfig): SearchDeps {
   return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
 }
 
-function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal, retrieveLimit?: number): AgenticDeps {
+function getAgenticDeps(
+  cfg: AppConfig,
+  opts: {
+    signal?: AbortSignal;
+    retrieveLimit?: number;
+    filter?: { documentId?: number };
+    excludeChunkIdentities?: ReadonlySet<string>;
+  } = {},
+): AgenticDeps {
   const aux = Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env);
   if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
     throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
@@ -294,13 +302,17 @@ function getAgenticDeps(cfg: AppConfig, signal?: AbortSignal, retrieveLimit?: nu
   return {
     search: getSearchDeps(cfg),
     queryRewriter: aux.queryRewriter!,
-    retrieveLimit: retrieveLimit ?? cfg.agenticRetrieveLimit,
+    retrieveLimit: opts.retrieveLimit ?? cfg.agenticRetrieveLimit,
     maxRetries: cfg.agenticMaxRetries,
     stepBudget: cfg.agentStepBudget,
     rewriteEnabled: cfg.agenticQueryRewriteEnabled,
     similarityThreshold: cfg.similarityThreshold,
+    rerankerThreshold: cfg.rerankerThreshold,
     hybridEnabled: cfg.hybridEnabled,
-    signal,
+    lexicalSearchMode: cfg.lexicalSearchMode,
+    ...(opts.filter ? { filter: opts.filter } : {}),
+    ...(opts.excludeChunkIdentities ? { excludeChunkIdentities: opts.excludeChunkIdentities } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   };
 }
 
@@ -320,7 +332,9 @@ function createComposition() {
         {
           ...o,
           threshold: cfg.similarityThreshold,
+          rerankerThreshold: cfg.rerankerThreshold,
           hybridEnabled: cfg.hybridEnabled,
+          lexicalSearchMode: cfg.lexicalSearchMode,
           mode: cfg.parentChildMode,
           parentChildWindow: cfg.parentChildWindow,
           rsePenalty: o.rsePenalty ?? cfg.rsePenalty,
@@ -337,7 +351,12 @@ function createComposition() {
     agenticSearch: async (
       cfg: AppConfig,
       query: string,
-      opts: { limit?: number | undefined; signal?: AbortSignal | undefined } = {},
+      opts: {
+        limit?: number | undefined;
+        signal?: AbortSignal | undefined;
+        filter?: { documentId?: number } | undefined;
+        excludeChunkIdentities?: ReadonlySet<string> | undefined;
+      } = {},
     ) => {
       if (process.env.AGENTIC_ENABLED === 'false') {
         const fallback = await bind(
@@ -345,7 +364,9 @@ function createComposition() {
           query,
           {
             threshold: cfg.similarityThreshold,
+            rerankerThreshold: cfg.rerankerThreshold,
             hybridEnabled: cfg.hybridEnabled,
+            lexicalSearchMode: cfg.lexicalSearchMode,
             mode: cfg.parentChildMode,
             parentChildWindow: cfg.parentChildWindow,
             rrfK: RRF_K,
@@ -353,6 +374,8 @@ function createComposition() {
             rerankTopN: RERANK_TOP_N,
             candidateLimit: CANDIDATE_POOL,
             limit: opts.limit,
+            filter: opts.filter,
+            excludeChunkIdentities: opts.excludeChunkIdentities,
             signal: opts.signal,
           },
           getSearchDeps(cfg),
@@ -376,10 +399,16 @@ function createComposition() {
                 ? 'degraded'
                 : 'results'
           ) as AgenticResultState,
+          retrievalDiagnostics: [fallback.value.diagnostics],
         });
       }
       try {
-        return await agenticSearch(query, getAgenticDeps(cfg, opts.signal, opts.limit));
+        return await agenticSearch(query, getAgenticDeps(cfg, {
+          ...(opts.signal ? { signal: opts.signal } : {}),
+          ...(opts.limit !== undefined ? { retrieveLimit: opts.limit } : {}),
+          ...(opts.filter ? { filter: opts.filter } : {}),
+          ...(opts.excludeChunkIdentities ? { excludeChunkIdentities: opts.excludeChunkIdentities } : {}),
+        }));
       } catch (e) {
         return err(new SearchFailure(
           'retrieval_unavailable',

@@ -38,9 +38,29 @@ describe('grounding evidence', () => {
     expect(evidence.citations.map((citation) => citation.chunkUid)).toEqual(['chunk-a', 'chunk-b']);
   });
 
+  it('records every model-visible constituent identity and citation', () => {
+    const evidence = createGroundingEvidence();
+    const first = { ...CHUNK, id: 11, chunkUid: 'window-a', content: 'A' };
+    const second = { ...CHUNK, id: 12, chunkUid: 'window-b', chunkIndex: 1, content: 'B' };
+    const resolved = {
+      ...first,
+      content: 'A\n\nB',
+      constituentChunks: [first, second],
+    };
+
+    expect(addGroundingEvidence(evidence, [resolved])).toEqual([resolved]);
+    expect(evidence.seenChunkKeys).toEqual(new Set(['chunk_uid:window-a', 'chunk_uid:window-b']));
+    expect(evidence.citations.map((citation) => citation.chunkUid)).toEqual(['window-a', 'window-b']);
+    expect(addGroundingEvidence(evidence, [second])).toEqual([]);
+  });
+
   it('bounds the number of unique chunks retained for one turn', () => {
     const evidence = createGroundingEvidence();
-    const chunks = Array.from({ length: 35 }, (_, index) => ({ ...CHUNK, id: index + 1 }));
+    const chunks = Array.from({ length: 35 }, (_, index) => ({
+      ...CHUNK,
+      id: index + 1,
+      chunkIndex: index,
+    }));
 
     const added = addGroundingEvidence(evidence, chunks);
 

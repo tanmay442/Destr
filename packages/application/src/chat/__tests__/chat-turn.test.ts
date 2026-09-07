@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { err, ok, ExternalServiceError } from '@app/domain';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { AppConfig } from '@app/domain/app-config';
-import { SearchFailure, type RetrievedChunk } from '../../rag/search';
+import { SearchFailure, type RetrievalDiagnostics, type RetrievedChunk } from '../../rag/search';
 import type { AgenticResult } from '../../rag/agentic-search';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
 import { searchDocumentationInputSchema } from '../chat-turn/chat-tools';
@@ -21,6 +21,7 @@ function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
     isEmpty: false,
     fallbackReason: null,
     resultState: 'results',
+    retrievalDiagnostics: [],
     ...overrides,
   };
 }
@@ -56,6 +57,28 @@ const CHUNK2: RetrievedChunk = {
   scores: { dense: 0.62, finalRank: 2, finalSignal: 'dense' },
 };
 
+function testDiagnostics(finalCount: number): RetrievalDiagnostics {
+  return {
+    requestedLimit: finalCount,
+    candidateLimit: finalCount,
+    documentFilterApplied: false,
+    dense: { status: 'ok', candidateCount: finalCount },
+    lexical: { status: 'not_run', candidateCount: 0, mode: 'weighted_websearch' },
+    fusion: { applied: false, inputCount: finalCount, outputCount: finalCount },
+    reranker: {
+      status: 'not_configured', inputCount: 0, validCount: 0, acceptedCount: 0,
+      threshold: null, thresholdFilteredCount: 0,
+    },
+    resolutionMode: 'parent',
+    resolvedCount: finalCount,
+    stableDuplicatesSkipped: 0,
+    backfillCount: 0,
+    hasMore: false,
+    finalCount,
+    finalRanks: Array.from({ length: finalCount }, (_, index) => index + 1),
+  };
+}
+
 function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     orgName: 'Test Corp',
@@ -88,7 +111,7 @@ type DepsOverrides = Partial<Omit<ChatTurnDeps, 'getRuntimeConfig'>> & {
 function makeDeps(overrides: DepsOverrides = {}) {
   const cfg = overrides.cfg ?? makeCfg();
   const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(
-    async () => ok({ chunks: [CHUNK, CHUNK2], degradedBy: [] }),
+    async () => ok({ chunks: [CHUNK, CHUNK2], degradedBy: [], diagnostics: testDiagnostics(2) }),
   );
   const agenticSearch = vi.fn(async () => ok(agenticOk()));
   const answerCache = {
@@ -702,6 +725,32 @@ describe('chatTurn', () => {
     expect(citations).toHaveLength(1);
   });
 
+  it('passes prior stable identities so a later overlapping call can backfill unseen evidence', async () => {
+    const exclusionSnapshots: string[][] = [];
+    const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(async (_cfg, _query, opts) => {
+      exclusionSnapshots.push([...opts.excludeChunkIdentities ?? []]);
+      const next = exclusionSnapshots.length === 1 ? CHUNK : CHUNK2;
+      return ok({ chunks: [next], degradedBy: [], diagnostics: testDiagnostics(1) });
+    });
+    const { deps } = makeDeps({ searchChunks });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    if (result.kind !== 'stream') throw new Error('expected stream');
+
+    const first = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
+    const second = await captured.current?.searchDocumentation?.execute({ query: 'policy details' });
+    closeLlm();
+    const parts = await readParts(result.stream);
+
+    expect(first).toMatchObject({ sets: [{ kind: 'results', results: [{ id: 1 }] }] });
+    expect(second).toMatchObject({
+      sets: [{ kind: 'results', results: [{ id: 2 }] }],
+      uniqueEvidenceAdded: 1,
+    });
+    expect(exclusionSnapshots).toEqual([[], ['document_chunk:10:0']]);
+    expect(parts.filter((part) => (part as { type: string }).type === 'data-citation')).toHaveLength(2);
+  });
+
   it('caps tool content at 800 chars with an ellipsis, wrapped in untrusted reference framing', async () => {
     const { deps, fakes } = makeDeps();
     fakes.searchChunks.mockResolvedValueOnce(ok({
@@ -730,6 +779,7 @@ describe('chatTurn', () => {
     closeLlm();
     await readParts(result.stream);
     expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', {
+      excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
     });
@@ -747,6 +797,7 @@ describe('chatTurn', () => {
     if (result.kind !== 'stream') return;
     await captured.current?.searchDocumentation?.execute({ query: 'plain' });
     expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', {
+      excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
     });
@@ -775,11 +826,13 @@ describe('chatTurn', () => {
     });
     if (mode === 'agentic') {
       expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'policy', {
+        excludeChunkIdentities: expect.any(Set),
         limit: 1,
         signal: expect.any(AbortSignal),
       });
     } else {
       expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'policy', {
+        excludeChunkIdentities: expect.any(Set),
         limit: 1,
         signal: expect.any(AbortSignal),
       });
@@ -843,6 +896,7 @@ describe('chatTurn', () => {
       searchChunks: vi.fn(async () => ok({
         chunks: [CHUNK],
         degradedBy: ['lexical_unavailable'] as const,
+        diagnostics: testDiagnostics(1),
       })),
     });
     const { captured, closeLlm } = captureTools();
@@ -1072,7 +1126,7 @@ describe('chatTurn', () => {
 
   it('returns a typed no-match when an exact-match prefetch found no evidence', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
-    fakes.searchChunks.mockResolvedValueOnce(ok({ chunks: [], degradedBy: [] }));
+    fakes.searchChunks.mockResolvedValueOnce(ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) }));
     const { captured, closeLlm } = captureTools();
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
@@ -1095,6 +1149,7 @@ describe('chatTurn', () => {
     fakes.searchChunks.mockResolvedValueOnce(ok({
       chunks: [CHUNK],
       degradedBy: ['lexical_unavailable'],
+      diagnostics: testDiagnostics(1),
     }));
     const { captured, closeLlm } = captureTools();
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);

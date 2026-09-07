@@ -95,11 +95,18 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
   return result as unknown as AppConfig;
 }
 
-function enforceAgenticKillSwitch(cfg: AppConfig): AppConfig {
+function enforceEnvironmentKillSwitches(cfg: AppConfig): AppConfig {
+  let enforced = cfg;
   if (process.env.AGENTIC_ENABLED === 'false' && cfg.retrievalMode === 'agentic') {
-    return { ...cfg, retrievalMode: 'normal' };
+    enforced = { ...enforced, retrievalMode: 'normal' };
   }
-  return cfg;
+  // An explicit rollback value is authoritative even when a stale DB override
+  // still selects weighted lexical search. Enabling the candidate remains
+  // runtime-editable; this one-way kill switch makes incident rollback atomic.
+  if (process.env.LEXICAL_SEARCH_MODE === 'content_plain' && enforced.lexicalSearchMode !== 'content_plain') {
+    enforced = { ...enforced, lexicalSearchMode: 'content_plain' };
+  }
+  return enforced;
 }
 
 let cache: CacheEntry | null = null;
@@ -120,7 +127,7 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
   const now = Date.now();
 
   if (cache && now < cache.softExpiry) {
-    return enforceAgenticKillSwitch(applyEnvLock(cache.value));
+    return enforceEnvironmentKillSwitches(applyEnvLock(cache.value));
   }
   if (cache && now < cache.hardExpiry) {
     if (!refreshInFlight) {
@@ -128,9 +135,9 @@ export async function getRuntimeConfig(): Promise<AppConfig> {
         refreshInFlight = null;
       });
     }
-    return enforceAgenticKillSwitch(applyEnvLock(cache.value));
+    return enforceEnvironmentKillSwitches(applyEnvLock(cache.value));
   }
-  return enforceAgenticKillSwitch(applyEnvLock(await refreshCache()));
+  return enforceEnvironmentKillSwitches(applyEnvLock(await refreshCache()));
 }
 
 async function enterDegradedMode(err?: unknown): Promise<AppConfig> {
@@ -142,7 +149,7 @@ async function enterDegradedMode(err?: unknown): Promise<AppConfig> {
   degraded = true;
   const now = Date.now();
   const fallback = cache ? cache.value : appConfig;
-  const enforced = enforceAgenticKillSwitch(fallback);
+  const enforced = enforceEnvironmentKillSwitches(fallback);
   cache = {
     value: enforced,
     softExpiry: now + SOFT_TTL_MS,
@@ -171,9 +178,12 @@ async function refreshCache(): Promise<AppConfig> {
     const { overrides, version } = await readOverridesWithRetry();
     const merged = deepMerge(appConfig, overrides);
     let validated = appConfigSchema.parse(merged);
-    validated = enforceAgenticKillSwitch(validated);
+    validated = enforceEnvironmentKillSwitches(validated);
     if (process.env.AGENTIC_ENABLED === 'false' && (merged as Record<string, unknown>).retrievalMode === 'agentic') {
       logger.warn('[runtime-config] AGENTIC_ENABLED=false forces retrievalMode=normal despite DB override — agentic retrieval disabled');
+    }
+    if (process.env.LEXICAL_SEARCH_MODE === 'content_plain' && merged.lexicalSearchMode !== 'content_plain') {
+      logger.warn('[runtime-config] LEXICAL_SEARCH_MODE=content_plain overrides the DB setting — weighted lexical retrieval disabled');
     }
     const now = Date.now();
     cache = {

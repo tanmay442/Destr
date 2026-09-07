@@ -5,6 +5,7 @@ import {
   searchToolResultSchema,
   SearchFailure,
   type RetrievalSignal,
+  type RetrievalDiagnostics,
   type RetrievedChunk,
   type SearchDegradation,
   type SearchSubquestionResult,
@@ -169,6 +170,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         let degradation: readonly SearchDegradation[] = [];
         let attempts = [query];
         let resultQuery = query;
+        let retrievalDiagnostics: RetrievalDiagnostics | undefined;
 
         if (canReusePrefetch) {
           prefetchedConsumed = true;
@@ -235,10 +237,14 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         }
 
         if (effectiveMode === 'agentic') {
-          const result = await deps.agenticSearch(cfg, query, { limit: requestedLimit, signal: request.signal });
+          const result = await deps.agenticSearch(cfg, query, {
+            limit: requestedLimit,
+            signal: request.signal,
+            excludeChunkIdentities: groundingEvidence.seenChunkKeys,
+          });
           metrics.retrieveMs += Math.round(performance.now() - t0);
           if (!result.ok) {
-            logger.error('Agentic retrieval failed', { error: result.error });
+            logger.error('Agentic retrieval failed', { code: result.error.code });
             searchInfrastructureFailed = true;
             resultStateRef.value = 'error';
             metrics.searchResultStates.push('error');
@@ -256,13 +262,14 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           attempts = result.value.attemptedQueries;
           resultQuery = result.value.resultQuery ?? attempts.at(-1) ?? query;
           degradation = result.value.degradedBy;
+          retrievalDiagnostics = result.value.retrievalDiagnostics?.at(-1);
           if (deps.traceEnabled) {
             logger.info('rag.retrieve', {
               mode: 'agentic',
-              query,
               ms: performance.now() - t0,
               hits: result.value.chunks.length,
               resultState: result.value.resultState,
+              diagnostics: retrievalDiagnostics,
             });
           }
           if (result.value.rewrittenQuery && result.value.rewrittenQuery !== query) {
@@ -271,10 +278,14 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           }
           matches = result.value.chunks.slice(0, requestedLimit);
         } else {
-          const result = await deps.searchChunks(cfg, query, { limit: requestedLimit, signal: request.signal });
+          const result = await deps.searchChunks(cfg, query, {
+            limit: requestedLimit,
+            signal: request.signal,
+            excludeChunkIdentities: groundingEvidence.seenChunkKeys,
+          });
           metrics.retrieveMs += Math.round(performance.now() - t0);
           if (!result.ok) {
-            logger.error('RAG retrieval failed', { error: result.error });
+            logger.error('RAG retrieval failed', { code: result.error.code });
             searchInfrastructureFailed = true;
             resultStateRef.value = 'error';
             metrics.searchResultStates.push('error');
@@ -289,14 +300,15 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           if (deps.traceEnabled) {
             logger.info('rag.retrieve', {
               mode: 'vector',
-              query,
               ms: performance.now() - t0,
               hits: result.value.chunks.length,
               degradedBy: result.value.degradedBy,
+              diagnostics: result.value.diagnostics,
             });
           }
           matches = result.value.chunks.slice(0, requestedLimit);
           degradation = result.value.degradedBy;
+          retrievalDiagnostics = result.value.diagnostics;
         }
 
         recordScores(metrics, matches);
@@ -364,7 +376,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           executedQueries: queries,
           results: toToolItems(uniqueMatches, subquestionId, queries[resultQueryIndex]!.queryId),
           coverage: degradation.length > 0 ? 'partial' : 'sufficient',
-          hasMore: false,
+          hasMore: retrievalDiagnostics?.hasMore ?? false,
           degradedBy: [...degradation],
         };
         return validatedToolResult({
@@ -372,7 +384,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           sets: [set],
           uniqueEvidenceAdded: uniqueMatches.length,
           evidenceTokensAdded: estimatedTokens(uniqueMatches),
-          truncatedBy: [],
+          truncatedBy: retrievalDiagnostics?.hasMore ? ['call_result_limit'] : [],
         });
       },
     }),

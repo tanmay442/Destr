@@ -221,7 +221,12 @@ export interface VectorSearch {
 export interface LexicalSearch {
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
+    opts: {
+      limit: number;
+      filter?: { documentId?: number };
+      mode?: 'content_plain' | 'weighted_websearch';
+      signal?: AbortSignal;
+    },
   ): Promise<RetrievedChunkRow[]>;
 }
 
@@ -259,7 +264,12 @@ export interface ChunkRepository extends VectorSearch, LexicalSearch, ChunkStore
   ): Promise<RetrievedChunkRow[]>;
   searchByLexical(
     query: string,
-    opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
+    opts: {
+      limit: number;
+      filter?: { documentId?: number };
+      mode?: 'content_plain' | 'weighted_websearch';
+      signal?: AbortSignal;
+    },
   ): Promise<RetrievedChunkRow[]>;
   getByIds(ids: number[], opts?: { signal?: AbortSignal }): Promise<RetrievedChunkRow[]>;
   getByDocAndRange(
@@ -817,7 +827,11 @@ export interface RankedDocument {
 
 /** Second-stage reranker: reorders retrieval candidates by query-document relevance. */
 export interface Reranker {
-  rank(query: string, documents: string[]): Promise<RankedDocument[]>;
+  rank(
+    query: string,
+    documents: string[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<RankedDocument[]>;
 }
 
 /** Rewrites a vague user query into a tighter, more retrievable phrase. */

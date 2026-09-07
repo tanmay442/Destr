@@ -41,9 +41,12 @@ export const RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const RERANKER_PROVIDER = 'cosine' as 'cosine' | 'local' | 'cohere';
 export const CANDIDATE_POOL = 30;
 export const RERANK_TOP_N = DEFAULT_SEARCH_LIMIT;
+/** Synthetic local-reranker calibration; production adapters must recalibrate before rollout. */
+export const RERANKER_THRESHOLD = 0.5;
 export const HYBRID_ENABLED = true;
 export const RRF_K = 60;
 export const LEXICAL_WEIGHT = 1;
+export const LEXICAL_SEARCH_MODE = 'weighted_websearch' as 'content_plain' | 'weighted_websearch';
 export const SIMILARITY_THRESHOLD = 0.5;
 export const TOOL_CONTENT_CAP = 800;
 export const AGENTIC_ENABLED = true;

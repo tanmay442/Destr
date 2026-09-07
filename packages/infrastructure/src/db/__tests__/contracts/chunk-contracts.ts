@@ -50,6 +50,8 @@ async function seedDoc(
     chunkIndex?: number;
     kind?: 'parent' | 'child' | 'summary';
     parentChunkId?: number | null;
+    title?: string | null;
+    sectionTitle?: string | null;
   }>,
 ): Promise<number> {
   const fileName = `contract-${randomUUID()}.pdf`;
@@ -62,6 +64,8 @@ async function seedDoc(
       chunkIndex: r.chunkIndex ?? i,
       kind: r.kind ?? 'child',
       parentChunkId: r.parentChunkId ?? null,
+      title: r.title ?? null,
+      sectionTitle: r.sectionTitle ?? null,
     })),
   );
   return doc.id;
@@ -117,6 +121,26 @@ function vectorSuite(target: (client: Client) => Target): void {
           filter: { documentId: docA },
         });
         expect(filtered.map((r) => r.content)).toEqual(['childA']);
+      });
+    });
+
+    it('applies document scope before the bounded vector candidate limit', async () => {
+      await rolledBack(async (tx) => {
+        const t = target(tx);
+        await seedDoc(t.store, tx, Array.from({ length: 55 }, (_, index) => ({
+          content: `out-of-scope-${index}`,
+          embedding: makeEmb(1, 1),
+        })));
+        const scopedDocumentId = await seedDoc(t.store, tx, [{
+          content: 'scoped-candidate',
+          embedding: makeEmb(1, 1),
+        }]);
+        const scoped = await t.vector.searchByVector(makeEmb(1, 1), {
+          threshold: -1,
+          limit: 1,
+          filter: { documentId: scopedDocumentId },
+        });
+        expect(scoped.map((row) => row.content)).toEqual(['scoped-candidate']);
       });
     });
 
@@ -206,6 +230,67 @@ function lexicalSuite(target: (client: Client) => Target): void {
         const afterDelete = await t.lexical.searchByLexical('needle', { limit: 10 });
         expect(afterDelete.map((r) => r.content)).toEqual(['needle']);
         expect(afterDelete[0]!.documentId).not.toBe(docA);
+      });
+    });
+
+    it('weights title and section metadata while retaining a content-only rollback mode', async () => {
+      await rolledBack(async (tx) => {
+        const t = target(tx);
+        await seedDoc(t.store, tx, [
+          {
+            title: 'ERR-4291 Rate Limit',
+            sectionTitle: 'API errors',
+            content: 'Wait briefly and retry the request.',
+            embedding: makeEmb(1, 1),
+          },
+          {
+            title: 'Account access',
+            sectionTitle: 'Password Reset',
+            content: 'Use the recovery workflow.',
+            embedding: makeEmb(1, 1),
+          },
+        ]);
+
+        expect(await t.lexical.searchByLexical('ERR-4291', {
+          limit: 10,
+          mode: 'content_plain',
+        })).toEqual([]);
+        const titleHit = await t.lexical.searchByLexical('ERR-4291', {
+          limit: 10,
+          mode: 'weighted_websearch',
+        });
+        expect(titleHit.map((row) => row.title)).toEqual(['ERR-4291 Rate Limit']);
+        const sectionHit = await t.lexical.searchByLexical('password reset', {
+          limit: 10,
+          mode: 'weighted_websearch',
+        });
+        expect(sectionHit.map((row) => row.sectionTitle)).toEqual(['Password Reset']);
+      });
+    });
+
+    it('uses web-search phrase and OR semantics in weighted mode', async () => {
+      await rolledBack(async (tx) => {
+        const t = target(tx);
+        await seedDoc(t.store, tx, [
+          { content: 'reset password now', embedding: makeEmb(1, 1) },
+          { content: 'reset the account, then choose a new password', embedding: makeEmb(1, 1) },
+          { content: 'refund processing guidance', embedding: makeEmb(1, 1) },
+          { content: 'chargeback dispute guidance', embedding: makeEmb(1, 1) },
+        ]);
+
+        const phrase = await t.lexical.searchByLexical('"reset password"', {
+          limit: 10,
+          mode: 'weighted_websearch',
+        });
+        expect(phrase.map((row) => row.content)).toEqual(['reset password now']);
+        const alternatives = await t.lexical.searchByLexical('refund OR chargeback', {
+          limit: 10,
+          mode: 'weighted_websearch',
+        });
+        expect(alternatives.map((row) => row.content).sort()).toEqual([
+          'chargeback dispute guidance',
+          'refund processing guidance',
+        ]);
       });
     });
   });

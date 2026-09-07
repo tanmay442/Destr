@@ -78,12 +78,20 @@ export interface ChatTurnDeps {
   searchChunks(
     cfg: AppConfig,
     query: string,
-    opts: { limit?: number | undefined; signal?: AbortSignal | undefined },
+    opts: {
+      limit?: number | undefined;
+      signal?: AbortSignal | undefined;
+      excludeChunkIdentities?: ReadonlySet<string> | undefined;
+    },
   ): Promise<SearchChunksResult>;
   agenticSearch(
     cfg: AppConfig,
     query: string,
-    opts?: { limit?: number | undefined; signal?: AbortSignal | undefined },
+    opts?: {
+      limit?: number | undefined;
+      signal?: AbortSignal | undefined;
+      excludeChunkIdentities?: ReadonlySet<string> | undefined;
+    },
   ): Promise<Result<AgenticResult, SearchFailure>>;
   hallucinationGrader(
     cfg: AppConfig,

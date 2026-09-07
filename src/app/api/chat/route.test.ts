@@ -106,7 +106,9 @@ const { retrievalConfig } = vi.hoisted(() => ({
     agenticRetrieveLimit: 10,
     agenticMaxRetries: 1,
     similarityThreshold: 0.5,
+    rerankerThreshold: 0.5,
     hybridEnabled: true,
+    lexicalSearchMode: 'weighted_websearch' as const,
     agenticQueryRewriteEnabled: true,
     hallucinationCheckEnabled: true,
     judgeSampleRate: 0.02,
@@ -252,6 +254,7 @@ function agenticResult(overrides: Record<string, unknown> = {}): Record<string, 
     isEmpty: false,
     fallbackReason: null,
     resultState: 'results',
+    retrievalDiagnostics: [],
     ...overrides,
   };
 }
@@ -587,6 +590,7 @@ describe('/api/chat searchDocumentation tool', () => {
     const { tools } = await captureTools();
     await tools?.searchDocumentation?.execute({ query: 'q', limit: 5 });
     expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', {
+      excludeChunkIdentities: expect.any(Set),
       limit: 5,
       signal: expect.any(AbortSignal),
     });
@@ -825,6 +829,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
       sets: Array<{ kind: string; results: Array<{ content: string }> }>;
     };
     expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague', {
+      excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
     });
@@ -841,6 +846,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
     const { tools } = await captureToolsForAgentic();
     await tools?.searchDocumentation?.execute({ query: 'plain' });
     expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', {
+      excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
     });

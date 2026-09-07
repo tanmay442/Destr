@@ -1,6 +1,11 @@
 import { ok, err, isRequestCancellationError, type Result, logger } from '@app/domain';
 import type { QueryRewriter, FallbackReason, AgenticResultState } from '@app/domain';
-import { searchChunks, type SearchDeps, type RetrievedChunk } from './search';
+import {
+  searchChunks,
+  type RetrievalDiagnostics,
+  type SearchDeps,
+  type RetrievedChunk,
+} from './search';
 import { SearchFailure, type SearchDegradation } from './search/search-contract';
 import { AGENTIC_RETRIEVE_LIMIT, AGENTIC_MAX_RETRIES, AGENT_STEP_BUDGET } from '@app/domain';
 
@@ -13,7 +18,11 @@ export interface AgenticDeps {
   stepBudget?: number;
   rewriteEnabled?: boolean;
   similarityThreshold?: number;
+  rerankerThreshold?: number;
   hybridEnabled?: boolean;
+  lexicalSearchMode?: 'content_plain' | 'weighted_websearch';
+  filter?: { documentId?: number };
+  excludeChunkIdentities?: ReadonlySet<string>;
 }
 
 export interface AgenticResult {
@@ -26,6 +35,7 @@ export interface AgenticResult {
   isEmpty: boolean;
   fallbackReason: FallbackReason | null;
   resultState: AgenticResultState;
+  retrievalDiagnostics: readonly RetrievalDiagnostics[];
 }
 
 type PassOutcome =
@@ -78,10 +88,12 @@ export async function agenticSearch(
       isEmpty: true,
       fallbackReason: null,
       resultState: 'no_match',
+      retrievalDiagnostics: [],
     });
   }
 
   const attemptedQueries: string[] = [];
+  const retrievalDiagnostics: RetrievalDiagnostics[] = [];
   try {
     const rewriteOn = deps.rewriteEnabled !== false;
 
@@ -90,8 +102,8 @@ export async function agenticSearch(
       try {
         const candidate = (await abortable(deps.queryRewriter.rewrite(query), deps.signal)).trim();
         return (candidate || query.trim()).slice(0, 2_000);
-      } catch (cause) {
-        logger.debug('agentic rewrite failed', { error: String(cause), query });
+      } catch {
+        logger.debug('agentic rewrite failed');
         return query;
       }
     };
@@ -106,7 +118,11 @@ export async function agenticSearch(
         {
           limit: deps.retrieveLimit ?? AGENTIC_RETRIEVE_LIMIT,
           threshold: deps.similarityThreshold,
+          rerankerThreshold: deps.rerankerThreshold,
           hybridEnabled: deps.hybridEnabled,
+          lexicalSearchMode: deps.lexicalSearchMode,
+          filter: deps.filter,
+          excludeChunkIdentities: deps.excludeChunkIdentities,
           signal: deps.signal,
         },
         deps.search,
@@ -114,6 +130,7 @@ export async function agenticSearch(
       if (!found.ok) {
         throw found.error;
       }
+      retrievalDiagnostics.push(found.value.diagnostics);
       const rows = found.value.chunks;
       if (rows.length === 0) return { kind: 'empty', degradedBy: found.value.degradedBy };
       return { kind: 'kept', chunks: rows, query, degradedBy: found.value.degradedBy };
@@ -138,6 +155,7 @@ export async function agenticSearch(
         isEmpty: true,
         fallbackReason: null,
         resultState: 'no_match',
+        retrievalDiagnostics,
       });
     }
 
@@ -151,6 +169,7 @@ export async function agenticSearch(
       isEmpty: false,
       fallbackReason: null,
       resultState: outcome.degradedBy.length > 0 ? 'degraded' : 'results',
+      retrievalDiagnostics,
     });
   } catch (e) {
     if (e instanceof SearchFailure) {

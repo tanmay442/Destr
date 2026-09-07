@@ -7,6 +7,7 @@ import {
   type ScoredRow,
   type SearchDeps,
 } from './search-types';
+import { stableChunkIdentity } from './stable-chunk-identity';
 
 export function getBestSegments(
   values: number[],
@@ -78,7 +79,7 @@ export async function resolveSegments(
     signal,
   );
 
-  const keyOf = (row: RetrievedChunkRow): string => row.chunkUid ?? `id:${row.id}`;
+  const keyOf = (row: RetrievedChunkRow): string => stableChunkIdentity(row);
   const hitByKey = new Map<string, ScoredRow>();
   for (const hit of hits) {
     const previous = hitByKey.get(keyOf(hit));
@@ -149,6 +150,7 @@ export async function resolveSegments(
           chunk: {
             ...toRetrievedChunk(anchor),
             content,
+            constituentChunks: inSpan.map(toRetrievedChunk),
           },
           score: Number.isFinite(anchorScore) ? anchorScore : 0,
         });

@@ -41,6 +41,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   delete process.env.APP_SETTINGS_LOCK;
+  delete process.env.LEXICAL_SEARCH_MODE;
   Date.now = realNow;
 });
 
@@ -201,6 +202,16 @@ describe('graceful degradation', () => {
 });
 
 describe('settings read hardening', () => {
+  it('honors the lexical environment rollback despite a conflicting DB override', async () => {
+    process.env.LEXICAL_SEARCH_MODE = 'content_plain';
+    const repo = makeRepo({ lexicalSearchMode: 'weighted_websearch' });
+    const { getRuntimeConfig } = await loadRuntime(repo);
+
+    const cfg = await getRuntimeConfig();
+
+    expect(cfg.lexicalSearchMode).toBe('content_plain');
+  });
+
   it('recovers without entering degraded mode when a transient cold-read failure succeeds on retry', async () => {
     const repo = makeRepo({ retrievalMode: 'normal' });
     repo.getOverrides.mockRejectedValueOnce(new Error('connection terminated'));

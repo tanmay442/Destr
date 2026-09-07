@@ -49,6 +49,7 @@ export async function searchChunksByVector(
       JOIN documents doc ON doc.id = ch.document_id
       WHERE doc.deleted_at IS NULL
         AND ch.kind <> 'parent'
+        ${opts.filter?.documentId != null ? sql`AND ch.document_id = ${opts.filter.documentId}` : sql``}
       ORDER BY ch.embedding <=> ${vectorLiteral}::vector
       LIMIT ${candidatePool}
     )

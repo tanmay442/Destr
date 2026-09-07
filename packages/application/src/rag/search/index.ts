@@ -4,6 +4,7 @@ export type {
   SearchDeps,
   SearchExecutionResult,
   SearchOpts,
+  RetrievalDiagnostics,
 } from './search-types';
 export {
   executedQuerySchema,
@@ -26,3 +27,4 @@ export type {
 } from './search-contract';
 export { getBestSegments } from './resolve-segments';
 export { searchChunks } from './search-chunks';
+export { stableChunkIdentity, stableChunkIdentities } from './stable-chunk-identity';

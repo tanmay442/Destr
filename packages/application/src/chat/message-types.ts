@@ -5,6 +5,7 @@ import type { RetrievalScores } from '../rag/search';
 export interface ChatCitationData {
   id?: number;
   documentId?: number;
+  chunkIndex?: number;
   documentUid?: string;
   chunkUid?: string;
   scores?: RetrievalScores;

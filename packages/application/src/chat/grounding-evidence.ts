@@ -1,5 +1,5 @@
 import { TOOL_CONTENT_CAP } from '@app/domain';
-import type { RetrievedChunk } from '../rag/search';
+import { stableChunkIdentities, type RetrievedChunk } from '../rag/search';
 import { emitCitations, type EmittedCitation } from './emit-citations';
 
 const MAX_UNIQUE_GROUNDING_CHUNKS = 30;
@@ -16,12 +16,6 @@ export function createGroundingEvidence(): GroundingEvidence {
     documents: [],
     seenChunkKeys: new Set<string>(),
   };
-}
-
-function chunkKey(chunk: RetrievedChunk): string {
-  if (chunk.chunkUid) return `uid:${chunk.chunkUid}`;
-  if (Number.isInteger(chunk.id)) return `id:${chunk.id}`;
-  return `fallback:${chunk.documentId ?? ''}:${chunk.source ?? ''}:${chunk.page ?? ''}:${chunk.content}`;
 }
 
 function capContent(content: string): string {
@@ -42,14 +36,14 @@ export function addGroundingEvidence(
 ): RetrievedChunk[] {
   const uniqueChunks: RetrievedChunk[] = [];
   for (const chunk of chunks) {
-    const key = chunkKey(chunk);
-    if (evidence.seenChunkKeys.has(key)) continue;
-    if (evidence.citations.length >= MAX_UNIQUE_GROUNDING_CHUNKS) break;
-    evidence.seenChunkKeys.add(key);
+    const keys = stableChunkIdentities(chunk);
+    if (keys.some((key) => evidence.seenChunkKeys.has(key))) continue;
+    const citationSources = chunk.constituentChunks?.length ? chunk.constituentChunks : [chunk];
+    if (evidence.citations.length + citationSources.length > MAX_UNIQUE_GROUNDING_CHUNKS) break;
+    for (const key of keys) evidence.seenChunkKeys.add(key);
     uniqueChunks.push(chunk);
     evidence.documents.push(formatGroundingReference(chunk));
-    const citation = emitCitations([chunk])[0];
-    if (citation) evidence.citations.push(citation);
+    evidence.citations.push(...emitCitations([...citationSources]));
   }
   return uniqueChunks;
 }

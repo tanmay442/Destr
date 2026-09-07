@@ -4,6 +4,7 @@ import { CITATION_SNIPPET_MAX } from '@app/domain';
 export interface EmittedCitation {
   id: number;
   documentId: number;
+  chunkIndex: number;
   documentUid?: string;
   chunkUid?: string;
   scores: RetrievedChunk['scores'];
@@ -29,6 +30,7 @@ export function emitCitations(
   return chunks.map((m) => ({
     id: m.id,
     documentId: m.documentId,
+    chunkIndex: m.chunkIndex,
     ...(m.documentUid ? { documentUid: m.documentUid } : {}),
     ...(m.chunkUid ? { chunkUid: m.chunkUid } : {}),
     scores: m.scores,

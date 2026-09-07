@@ -7,7 +7,12 @@ type Client = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export async function searchChunksByLexical(
   query: string,
-  opts: { limit: number; filter?: { documentId?: number }; signal?: AbortSignal },
+  opts: {
+    limit: number;
+    filter?: { documentId?: number };
+    mode?: 'content_plain' | 'weighted_websearch';
+    signal?: AbortSignal;
+  },
   client: Client = db,
 ): Promise<
   Array<{
@@ -27,7 +32,14 @@ export async function searchChunksByLexical(
   }>
 > {
   if (!query.trim()) return [];
-  const lexQuery = sql`plainto_tsquery('english', ${query})`;
+  const weighted = opts.mode === 'weighted_websearch';
+  const lexQuery = weighted
+    ? sql`websearch_to_tsquery('english', ${query})`
+    : sql`plainto_tsquery('english', ${query})`;
+  const searchVector = weighted ? sql`c.search_tsv` : sql`c.tsv`;
+  const relevance = weighted
+    ? sql`ts_rank_cd(${searchVector}, ${lexQuery})`
+    : sql`ts_rank(${searchVector}, ${lexQuery})`;
   const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
@@ -42,12 +54,12 @@ export async function searchChunksByLexical(
       c.content AS content,
       c.parent_chunk_id AS "parentChunkId",
       c.chunk_index AS "chunkIndex",
-      ts_rank(c.tsv, ${lexQuery}) AS similarity
+      ${relevance} AS similarity
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.deleted_at IS NULL
       AND c.kind <> 'parent'
-      AND c.tsv @@ ${lexQuery}
+      AND ${searchVector} @@ ${lexQuery}
       ${opts.filter?.documentId != null ? sql`AND c.document_id = ${opts.filter.documentId}` : sql``}
     ORDER BY similarity DESC
     LIMIT ${opts.limit}

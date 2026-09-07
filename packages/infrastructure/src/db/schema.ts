@@ -54,6 +54,11 @@ export const chunks = pgTable('chunks', {
   embeddingModel: text('embedding_model'),
   contentHash: text('content_hash').notNull(),
   tsv: tsvector('tsv').generatedAlwaysAs(() => sql`to_tsvector('english', content)`),
+  searchTsv: tsvector('search_tsv').generatedAlwaysAs(() => sql`
+    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(section_title, '')), 'B') ||
+    setweight(to_tsvector('english', content), 'D')
+  `),
 }, (table) => [
   uniqueIndex('chunks_chunk_uid_unique').on(table.chunkUid),
   index('embedding_idx')
@@ -62,6 +67,7 @@ export const chunks = pgTable('chunks', {
   index('chunks_document_id_idx').on(table.documentId),
   index('chunks_document_id_chunk_index_idx').on(table.documentId, table.chunkIndex),
   index('chunks_tsv_idx').using('gin', sql`${table.tsv}`),
+  index('chunks_search_tsv_idx').using('gin', sql`${table.searchTsv}`),
   check('chunks_kind_check', sql`${table.kind} IN ('parent','child','summary')`),
   foreignKey({
     columns: [table.parentChunkId],

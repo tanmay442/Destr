@@ -1,5 +1,6 @@
 import { abortable } from './abort';
 import { toRetrievedChunk, type RetrievedChunk, type ScoredRow, type SearchDeps } from './search-types';
+import { stableChunkIdentity } from './stable-chunk-identity';
 
 async function resolveWindow(
   hits: ScoredRow[],
@@ -13,25 +14,26 @@ async function resolveWindow(
     signal ? deps.chunks.getByDocAndRanges(ranges, { signal }) : deps.chunks.getByDocAndRanges(ranges),
     signal,
   );
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const resolved: RetrievedChunk[] = [];
   for (const h of hits) {
     const key = `${h.documentId}:${h.chunkIndex - boundedRadius}:${h.chunkIndex + boundedRadius}`;
     const neighbours = ranged.get(key) ?? [];
     const ordered = [...new Map(neighbours.map((neighbour) => [neighbour.id, neighbour])).values()]
       .sort((a, b) => a.chunkIndex - b.chunkIndex);
-    const windowed = ordered.filter((n) => !seen.has(n.id));
-    for (const n of ordered) seen.add(n.id);
+    const windowed = ordered.filter((n) => !seen.has(stableChunkIdentity(n)));
+    for (const n of ordered) seen.add(stableChunkIdentity(n));
     const content =
       windowed.length > 0
         ? windowed.map((n) => n.content).join('\n\n')
-        : seen.has(h.id)
+        : seen.has(stableChunkIdentity(h))
           ? ''
           : h.content;
     if (content === '') continue;
     resolved.push({
       ...toRetrievedChunk(h),
       content,
+      constituentChunks: windowed.map(toRetrievedChunk),
     });
   }
   return resolved;

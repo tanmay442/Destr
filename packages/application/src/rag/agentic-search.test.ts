@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ok, err, unwrap } from '@app/domain';
 import { agenticSearch, type AgenticDeps } from './agentic-search';
 import { SearchFailure, type SearchDegradation } from './search/search-contract';
+import type { RetrievalDiagnostics } from './search';
 
 const { searchChunksMock, rewriterMock } = vi.hoisted(() => ({
   searchChunksMock: vi.fn(),
@@ -35,7 +36,33 @@ function chunk(content: string, dense: number) {
 }
 
 function searchResult(chunks: ReturnType<typeof chunk>[], degradedBy: SearchDegradation[] = []) {
-  return { chunks, degradedBy };
+  return { chunks, degradedBy, diagnostics: testDiagnostics(chunks.length) };
+}
+
+function testDiagnostics(finalCount: number): RetrievalDiagnostics {
+  return {
+    requestedLimit: finalCount,
+    candidateLimit: finalCount,
+    documentFilterApplied: false,
+    dense: { status: 'ok', candidateCount: finalCount },
+    lexical: { status: 'not_run', candidateCount: 0, mode: 'weighted_websearch' },
+    fusion: { applied: false, inputCount: finalCount, outputCount: finalCount },
+    reranker: {
+      status: 'not_configured',
+      inputCount: 0,
+      validCount: 0,
+      acceptedCount: 0,
+      threshold: null,
+      thresholdFilteredCount: 0,
+    },
+    resolutionMode: 'parent',
+    resolvedCount: finalCount,
+    stableDuplicatesSkipped: 0,
+    backfillCount: 0,
+    hasMore: false,
+    finalCount,
+    finalRanks: Array.from({ length: finalCount }, (_, index) => index + 1),
+  };
 }
 
 beforeEach(() => {
@@ -183,18 +210,31 @@ describe('agenticSearch', () => {
     if (!res.ok) expect(res.error.code).toBe('retrieval_unavailable');
   });
 
-  it('forwards similarityThreshold and hybridEnabled into the inner searchChunks opts', async () => {
+  it('forwards all WP-2 retrieval controls into the inner searchChunks opts', async () => {
     searchChunksMock.mockResolvedValue(ok(searchResult([chunk('doc', 0.9)])));
+    const excluded = new Set(['chunk_uid:seen']);
     const res = await agenticSearch('q', {
       ...makeDeps(),
       retrieveLimit: 25,
       similarityThreshold: 0.7,
+      rerankerThreshold: 0.6,
       hybridEnabled: false,
+      lexicalSearchMode: 'content_plain',
+      filter: { documentId: 42 },
+      excludeChunkIdentities: excluded,
     });
     expect(res.ok).toBe(true);
     expect(searchChunksMock).toHaveBeenCalledWith(
       'rewritten query',
-      expect.objectContaining({ limit: 25, threshold: 0.7, hybridEnabled: false }),
+      expect.objectContaining({
+        limit: 25,
+        threshold: 0.7,
+        rerankerThreshold: 0.6,
+        hybridEnabled: false,
+        lexicalSearchMode: 'content_plain',
+        filter: { documentId: 42 },
+        excludeChunkIdentities: excluded,
+      }),
       expect.anything(),
     );
   });

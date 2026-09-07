@@ -98,4 +98,22 @@ describe('cohereReranker', () => {
     expect(err.message).not.toContain('\u0000');
     expect(err.message).not.toContain('\u001f');
   });
+
+  it('propagates parent cancellation through the total retry budget', async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(requestSignal?.reason), { once: true });
+      });
+    });
+    const reason = new Error('client disconnected');
+    const pending = cohereReranker.rank('q', ['doc'], { signal: controller.signal });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(requestSignal?.aborted).toBe(true);
+  });
 });

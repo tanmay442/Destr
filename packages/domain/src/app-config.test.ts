@@ -128,6 +128,23 @@ describe('agentic pipeline toggles', () => {
   });
 });
 
+describe('WP-2 retrieval controls', () => {
+  it('defaults to the synthetic reranker calibration and weighted lexical path', () => {
+    const result = appConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.rerankerThreshold).toBe(0.5);
+    expect(result.data.lexicalSearchMode).toBe('weighted_websearch');
+  });
+
+  it('accepts the rollback path and rejects invalid thresholds or modes', () => {
+    expect(appConfigSchema.safeParse({ lexicalSearchMode: 'content_plain' }).success).toBe(true);
+    expect(appConfigSchema.safeParse({ rerankerThreshold: -0.01 }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ rerankerThreshold: 1.01 }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ lexicalSearchMode: 'unknown' }).success).toBe(false);
+  });
+});
+
 describe('judgeSampleRate and auxModel', () => {
   it('defaults judgeSampleRate to 0.02 and auxModel to undefined', () => {
     const result = appConfigSchema.safeParse({});

@@ -47,4 +47,16 @@ describe('localReranker', () => {
     expect(ordered[0]!.index).toBe(1);
     expect(ordered[1]!.index).toBe(0);
   });
+
+  it('returns promptly when the parent signal aborts during non-preemptible inference', async () => {
+    const controller = new AbortController();
+    tokenizerImpl.mockImplementation(() => new Promise(() => undefined));
+    const reason = new Error('client disconnected');
+    const pending = localReranker.rank('query', ['doc'], { signal: controller.signal });
+    await vi.waitFor(() => expect(tokenizerImpl).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(modelImpl).not.toHaveBeenCalled();
+  });
 });

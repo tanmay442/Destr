@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { searchChunks, getBestSegments } from '../search';
+import { searchChunks, getBestSegments, stableChunkIdentities } from '../search';
 import type { SearchDeps } from '../search';
 import type { RankedDocument, RetrievedChunkRow } from '@app/domain';
 
@@ -509,6 +509,47 @@ describe('searchChunks parent-child resolution', () => {
       },
     ]);
   });
+
+  it('overfetches before parent resolution so colliding children do not consume the result limit', async () => {
+    const child = (id: number, similarity: number): RetrievedChunkRow => ({
+      id,
+      documentId: 1,
+      fileName: 'd.pdf',
+      page: 1,
+      sectionTitle: null,
+      source: null,
+      title: null,
+      content: `child-${id}`,
+      similarity,
+      parentChunkId: 5,
+      chunkIndex: id,
+    });
+    const flat: RetrievedChunkRow = {
+      ...child(12, 0.7),
+      content: 'independent evidence',
+      parentChunkId: null,
+    };
+    const parent: RetrievedChunkRow = {
+      ...child(5, 0),
+      content: 'shared parent evidence',
+      parentChunkId: null,
+      chunkIndex: 0,
+    };
+    const deps = parentChildDeps([child(10, 0.9), child(11, 0.8), flat], [parent]);
+
+    const result = await searchChunks('q', {
+      limit: 2,
+      candidateLimit: 3,
+      excludeChunkIdentities: new Set(['irrelevant']),
+    }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((row) => row.content)).toEqual([
+      'shared parent evidence',
+      'independent evidence',
+    ]);
+  });
 });
 
 describe('searchChunks reranking', () => {
@@ -555,7 +596,7 @@ describe('searchChunks reranking', () => {
       flatRow(3, 'third by cosine', 0.7),
     ];
     const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
-      docs.map((_d, index) => ({ index, relevanceScore: index })),
+      docs.map((_d, index) => ({ index, relevanceScore: 0.6 + index * 0.2 })),
     );
     const deps = rerankDeps(rows, { rank });
 
@@ -565,9 +606,9 @@ describe('searchChunks reranking', () => {
     expect(rank).toHaveBeenCalledWith('q', ['first by cosine', 'second by cosine', 'third by cosine']);
     expect(result.value.chunks.map((r) => r.id)).toEqual([3, 2, 1]);
     expect(result.value.chunks.map((r) => r.scores)).toEqual([
-      { dense: 0.7, reranker: 2, finalRank: 1, finalSignal: 'reranker' },
-      { dense: 0.8, reranker: 1, finalRank: 2, finalSignal: 'reranker' },
-      { dense: 0.9, reranker: 0, finalRank: 3, finalSignal: 'reranker' },
+      { dense: 0.7, reranker: 1, finalRank: 1, finalSignal: 'reranker' },
+      { dense: 0.8, reranker: 0.8, finalRank: 2, finalSignal: 'reranker' },
+      { dense: 0.9, reranker: 0.6, finalRank: 3, finalSignal: 'reranker' },
     ]);
   });
 
@@ -580,7 +621,7 @@ describe('searchChunks reranking', () => {
       flatRow(5, 'e', 0.5),
     ];
     const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
-      docs.map((_d, index) => ({ index, relevanceScore: docs.length - index })),
+      docs.map((_d, index) => ({ index, relevanceScore: 1 - index * 0.1 })),
     );
     const deps = rerankDeps(rows, { rank });
 
@@ -648,14 +689,15 @@ describe('searchChunks reranking', () => {
     expect(JSON.stringify(result.value)).not.toMatch(/NaN|Infinity/);
   });
 
-  it('drops below-threshold candidates post-rerank even when ranked first', async () => {
+  it('drops candidates below the independent reranker threshold', async () => {
     const rows = [
       flatRow(1, 'noise', 0.2),
       flatRow(2, 'relevant', 0.8),
     ];
-    const rank = vi.fn(async (_q: string, docs: string[]): Promise<RankedDocument[]> =>
-      docs.map((_d, index) => ({ index, relevanceScore: docs.length - index })),
-    );
+    const rank = vi.fn(async (): Promise<RankedDocument[]> => [
+      { index: 1, relevanceScore: 0.9 },
+      { index: 0, relevanceScore: 0.4 },
+    ]);
     const deps = rerankDeps(rows, { rank });
 
     const result = await searchChunks('q', { limit: 2 }, deps);
@@ -675,6 +717,51 @@ describe('searchChunks reranking', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.chunks.map((r) => r.id)).toEqual([2, 3, 1]);
+  });
+
+  it('applies rerankerThreshold to lexical-only candidates independently of cosine threshold', async () => {
+    const rows = [flatRow(1, 'weak lexical', 0.01), flatRow(2, 'strong lexical', 0.02)];
+    const deps = rerankDeps([], {
+      rank: vi.fn().mockResolvedValue([
+        { index: 1, relevanceScore: 0.51 },
+        { index: 0, relevanceScore: 0.49 },
+      ]),
+    });
+    deps.chunks.searchByLexical = vi.fn().mockResolvedValue(rows);
+
+    const result = await searchChunks('q', {
+      limit: 2,
+      threshold: 0.99,
+      rerankerThreshold: 0.5,
+    }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((row) => row.id)).toEqual([2]);
+    expect(result.value.diagnostics.reranker).toMatchObject({
+      status: 'applied',
+      threshold: 0.5,
+      thresholdFilteredCount: 1,
+    });
+  });
+
+  it('forwards request cancellation into the reranker and stops waiting', async () => {
+    const controller = new AbortController();
+    const rank = vi.fn((_query: string, _documents: string[], opts?: { signal?: AbortSignal }) =>
+      new Promise<RankedDocument[]>((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(opts.signal?.reason), { once: true });
+      }),
+    );
+    const pending = searchChunks('q', { limit: 1, signal: controller.signal }, rerankDeps([
+      flatRow(1, 'candidate', 0.9),
+    ], { rank }));
+    await vi.waitFor(() => expect(rank).toHaveBeenCalledTimes(1));
+    controller.abort(new Error('client disconnected'));
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('cancelled');
+    expect(rank).toHaveBeenCalledWith('q', ['candidate'], { signal: controller.signal });
   });
 });
 
@@ -875,6 +962,164 @@ describe('searchChunks hybrid retrieval (vector + lexical RRF)', () => {
     if (!result.ok) return;
     expect(result.value.chunks.map((r) => r.id)).toEqual([5, 7]);
   });
+
+  it('breaks exact fusion ties by stable numeric row id', async () => {
+    const deps = hybridDeps(
+      [flatRow(2, 'vector only', 0.9)],
+      [flatRow(1, 'lexical only', 0.1)],
+    );
+    const result = await searchChunks('q', { limit: 2, lexicalWeight: 1 }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((row) => row.id)).toEqual([1, 2]);
+  });
+
+  it('forwards the same document scope into vector and lexical candidate queries', async () => {
+    const deps = hybridDeps([flatRow(1, 'vector', 0.9)], [flatRow(2, 'lexical', 0.1)]);
+    const result = await searchChunks('q', {
+      limit: 2,
+      filter: { documentId: 42 },
+      lexicalSearchMode: 'content_plain',
+    }, deps);
+    expect(result.ok).toBe(true);
+    expect(deps.chunks.searchByVector).toHaveBeenCalledWith(
+      [0.1, 0.2, 0.3],
+      expect.objectContaining({ filter: { documentId: 42 } }),
+    );
+    expect(deps.chunks.searchByLexical).toHaveBeenCalledWith(
+      'q',
+      expect.objectContaining({ filter: { documentId: 42 }, mode: 'content_plain' }),
+    );
+    if (result.ok) expect(result.value.diagnostics.documentFilterApplied).toBe(true);
+  });
+
+  it('backfills unseen stable identities from a bounded candidate pool', async () => {
+    const rows = [
+      { ...flatRow(1, 'seen', 0.99), chunkUid: 'seen' },
+      { ...flatRow(2, 'new two', 0.9), chunkUid: 'two' },
+      { ...flatRow(3, 'new three', 0.8), chunkUid: 'three' },
+      { ...flatRow(4, 'more', 0.7), chunkUid: 'four' },
+    ];
+    const deps = hybridDeps(rows, []);
+    const result = await searchChunks('q', {
+      limit: 2,
+      candidateLimit: 4,
+      excludeChunkIdentities: new Set(['chunk_uid:seen']),
+    }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((row) => row.id)).toEqual([2, 3]);
+    expect(result.value.diagnostics).toMatchObject({
+      candidateLimit: 4,
+      stableDuplicatesSkipped: 1,
+      backfillCount: 1,
+      hasMore: true,
+      finalRanks: [1, 2],
+    });
+  });
+
+  it('backfills a new parent when a later child resolves to an already emitted parent', async () => {
+    const childOne = { ...flatRow(11, 'child one', 0.95), parentChunkId: 101 };
+    const childTwo = { ...flatRow(12, 'child two', 0.8), parentChunkId: 102 };
+    const deps = hybridDeps([childOne], []);
+    (deps.chunks.getByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...flatRow(101, 'parent one', 0), chunkUid: 'parent-one' },
+      { ...flatRow(102, 'parent two', 0), chunkUid: 'parent-two' },
+    ]);
+    (deps.chunks.searchByVector as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([childOne])
+      .mockResolvedValueOnce([childOne, childTwo]);
+
+    const first = await searchChunks('first', { hybridEnabled: false, limit: 1 }, deps);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const second = await searchChunks('second', {
+      hybridEnabled: false,
+      limit: 1,
+      candidateLimit: 2,
+      excludeChunkIdentities: new Set(stableChunkIdentities(first.value.chunks[0]!)),
+    }, deps);
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.chunks.map((chunk) => chunk.id)).toEqual([102]);
+    expect(second.value.diagnostics.stableDuplicatesSkipped).toBe(1);
+  });
+
+  it('backfills after a later window anchor was already embedded in earlier context', async () => {
+    const anchorFive = { ...flatRow(5, 'five', 0.95), chunkUid: 'five' };
+    const anchorSix = { ...flatRow(6, 'six', 0.99), chunkUid: 'six', chunkIndex: 6 };
+    const anchorFifty = { ...flatRow(50, 'fifty', 0.8), chunkUid: 'fifty', chunkIndex: 50 };
+    const window = [
+      { ...flatRow(4, 'four', 0), chunkUid: 'four', chunkIndex: 4 },
+      anchorFive,
+      anchorSix,
+    ];
+    const deps = hybridDeps([anchorFive], []);
+    (deps.chunks.searchByVector as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([anchorFive])
+      .mockResolvedValueOnce([anchorSix, anchorFifty]);
+    (deps.chunks.getByDocAndRanges as ReturnType<typeof vi.fn>).mockImplementation(
+      async (ranges: Array<{ documentId: number; start: number; end: number }>) => new Map(
+        ranges.map((range) => {
+          const key = `${range.documentId}:${range.start}:${range.end}`;
+          return [key, range.start < 10 ? window : [anchorFifty]];
+        }),
+      ),
+    );
+
+    const first = await searchChunks('first', {
+      hybridEnabled: false,
+      mode: 'window',
+      parentChildWindow: 2,
+      limit: 1,
+    }, deps);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(stableChunkIdentities(first.value.chunks[0]!)).toEqual([
+      'chunk_uid:four', 'chunk_uid:five', 'chunk_uid:six',
+    ]);
+
+    const second = await searchChunks('second', {
+      hybridEnabled: false,
+      mode: 'window',
+      parentChildWindow: 2,
+      limit: 1,
+      candidateLimit: 2,
+      excludeChunkIdentities: new Set(stableChunkIdentities(first.value.chunks[0]!)),
+    }, deps);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.chunks.map((chunk) => chunk.id)).toEqual([50]);
+    expect(second.value.diagnostics.stableDuplicatesSkipped).toBe(1);
+  });
+
+  it('keeps equal-content chunks with distinct stable chunk UIDs', async () => {
+    const deps = hybridDeps([
+      { ...flatRow(1, 'same content', 0.9), chunkUid: 'uid-one' },
+      { ...flatRow(2, 'same content', 0.8), chunkUid: 'uid-two' },
+    ], []);
+    const result = await searchChunks('q', { limit: 2 }, deps);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.chunks.map((row) => row.id)).toEqual([1, 2]);
+  });
+
+  it('deduplicates the document-and-index fallback identity and backfills', async () => {
+    const deps = hybridDeps([
+      flatRow(1, 'first representation', 0.9),
+      { ...flatRow(2, 'same logical chunk', 0.8), chunkIndex: 1 },
+      flatRow(3, 'another chunk', 0.7),
+    ], []);
+    const result = await searchChunks('q', {
+      limit: 2,
+      candidateLimit: 3,
+      excludeChunkIdentities: new Set(['irrelevant']),
+    }, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((row) => row.id)).toEqual([1, 3]);
+    expect(result.value.diagnostics.stableDuplicatesSkipped).toBe(1);
+  });
 });
 
 describe('getBestSegments', () => {
@@ -1024,7 +1269,7 @@ describe('searchChunks segment resolution', () => {
 
     const result = await searchChunks(
       'q',
-      { mode: 'segment', limit: 2, rseMaxSegmentChunks: 10 },
+      { mode: 'segment', limit: 2, rseMaxSegmentChunks: 10, rerankerThreshold: 0 },
       deps,
     );
 
@@ -1060,5 +1305,50 @@ describe('searchChunks segment resolution', () => {
       finalSignal: 'fusion',
       finalRank: 1,
     });
+  });
+
+  it('backfills after a later segment anchor was embedded in earlier context', async () => {
+    const five = { ...flatRow(105, 5, 'five', 0.95), chunkUid: 'five' };
+    const six = { ...flatRow(106, 6, 'six', 0), chunkUid: 'six' };
+    const seven = { ...flatRow(107, 7, 'seven', 0.9), chunkUid: 'seven' };
+    const fifty = { ...flatRow(150, 50, 'fifty', 0.8), chunkUid: 'fifty' };
+    const deps = segmentDeps([five, seven], new Map([
+      ['1:2:8', [five, six, seven]],
+      ['1:4:10', [five, six, seven]],
+    ]));
+    (deps.chunks.searchByVector as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([five, seven])
+      .mockResolvedValueOnce([{ ...six, similarity: 0.99 }, fifty]);
+
+    const first = await searchChunks('first', {
+      hybridEnabled: false,
+      mode: 'segment',
+      limit: 1,
+      candidateLimit: 2,
+      excludeChunkIdentities: new Set(['not-present']),
+      rseMaxSegmentChunks: 3,
+    }, deps);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(stableChunkIdentities(first.value.chunks[0]!)).toEqual([
+      'chunk_uid:five', 'chunk_uid:six', 'chunk_uid:seven',
+    ]);
+
+    (deps.chunks.getByDocAndRanges as ReturnType<typeof vi.fn>).mockResolvedValue(new Map([
+      ['1:3:9', [five, six, seven]],
+      ['1:47:53', [fifty]],
+    ]));
+    const second = await searchChunks('second', {
+      hybridEnabled: false,
+      mode: 'segment',
+      limit: 1,
+      candidateLimit: 2,
+      excludeChunkIdentities: new Set(stableChunkIdentities(first.value.chunks[0]!)),
+      rseMaxSegmentChunks: 3,
+    }, deps);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.chunks.map((chunk) => chunk.id)).toEqual([150]);
+    expect(second.value.diagnostics.stableDuplicatesSkipped).toBe(1);
   });
 });

@@ -271,7 +271,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }
 
     if (cacheKey) {
-    if (deps.traceEnabled) logger.info('rag.cache.get', { query: lastUserText, key: cacheKey });
+    if (deps.traceEnabled) logger.info('rag.cache.get', { key: cacheKey });
     let cached = await deps.answerCache.get(cacheKey).catch(() => null);
     if (!cached) {
       const lease = createCacheLease(
@@ -376,7 +376,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     metrics.retrieveMs += metrics.prefetchMs;
     metrics.prefetchStatus = 'performed';
     if (!prefetchResult.ok) {
-      logger.error('First-turn pre-fetch failed', { error: prefetchResult.error });
+      logger.error('First-turn pre-fetch failed', { code: prefetchResult.error.code });
       prefetch = { kind: 'error', query: lastUserText, failure: prefetchResult.error };
       metrics.searchResultStates.push('error');
       resultStateRef.value = 'error';

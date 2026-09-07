@@ -76,3 +76,5 @@ eval/wp0-command-evidence.json
 eval/agent-baseline-measurements.json
 eval/agent-modernization-baseline.json
 eval/model-interactions.jsonl
+eval/wp2-retrieval-report.json
+eval/wp2-reranker-calibration-report.json
