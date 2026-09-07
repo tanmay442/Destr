@@ -355,6 +355,86 @@ describe('searchChunks parent-child resolution', () => {
     expect(result.value.chunks[1]!.scores.dense).toBe(0.4);
   });
 
+  it('breaks equal parent-score ties by stable chunk identity', async () => {
+    const childA: RetrievedChunkRow = {
+      id: 201,
+      documentId: 1,
+      fileName: 'd.pdf',
+      page: 1,
+      sectionTitle: null,
+      source: null,
+      title: null,
+      content: 'child a',
+      similarity: 0.8,
+      parentChunkId: 200,
+      chunkIndex: 1,
+    };
+    const childB: RetrievedChunkRow = {
+      ...childA,
+      id: 101,
+      content: 'child b',
+      parentChunkId: 100,
+      chunkIndex: 2,
+    };
+    const parentA: RetrievedChunkRow = {
+      ...childA,
+      id: 200,
+      chunkUid: 'parent-a',
+      content: 'parent a',
+      similarity: 0,
+      parentChunkId: null,
+      chunkIndex: 0,
+    };
+    const parentB: RetrievedChunkRow = {
+      ...childB,
+      id: 100,
+      chunkUid: 'parent-b',
+      content: 'parent b',
+      similarity: 0,
+      parentChunkId: null,
+      chunkIndex: 0,
+    };
+    const deps = parentChildDeps([childA, childB], [parentB, parentA]);
+    const result = await searchChunks('q', { hybridEnabled: false, limit: 2 }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((chunk) => chunk.id)).toEqual([200, 100]);
+    expect(result.value.chunks.map((chunk) => chunk.chunkUid)).toEqual(['parent-a', 'parent-b']);
+  });
+
+  it('breaks equal flat-score ties by stable chunk identity without loading parents', async () => {
+    const flatB: RetrievedChunkRow = {
+      id: 100,
+      documentId: 1,
+      fileName: 'd.pdf',
+      page: 1,
+      sectionTitle: null,
+      source: null,
+      title: null,
+      content: 'flat b',
+      similarity: 0.8,
+      chunkUid: 'flat-b',
+      parentChunkId: null,
+      chunkIndex: 1,
+    };
+    const flatA: RetrievedChunkRow = {
+      ...flatB,
+      id: 200,
+      content: 'flat a',
+      chunkUid: 'flat-a',
+      chunkIndex: 2,
+    };
+    const deps = parentChildDeps([flatB, flatA], []);
+    const result = await searchChunks('q', { hybridEnabled: false, limit: 2 }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((chunk) => chunk.id)).toEqual([200, 100]);
+    expect(result.value.chunks.map((chunk) => chunk.chunkUid)).toEqual(['flat-a', 'flat-b']);
+    expect(deps.chunks.getByIds).not.toHaveBeenCalled();
+  });
+
   it('pads the hit with neighbouring chunks in window mode', async () => {
     const deps = parentChildDeps(
       [
@@ -1218,6 +1298,26 @@ describe('searchChunks segment resolution', () => {
     expect(result.value.chunks[0]!.scores.dense).toBe(0.9);
   });
 
+  it('breaks equal segment-score ties by stable chunk identity', async () => {
+    const first = { ...flatRow(200, 5, 'stable a', 0.9), chunkUid: 'segment-a' };
+    const second = { ...flatRow(100, 50, 'stable b', 0.9), chunkUid: 'segment-b' };
+    const deps = segmentDeps([first, second], new Map([
+      ['1:2:8', [first]],
+      ['1:47:53', [second]],
+    ]));
+    const result = await searchChunks('q', {
+      hybridEnabled: false,
+      mode: 'segment',
+      limit: 2,
+      rseMaxSegmentChunks: 3,
+    }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((chunk) => chunk.id)).toEqual([200, 100]);
+    expect(result.value.chunks.map((chunk) => chunk.chunkUid)).toEqual(['segment-a', 'segment-b']);
+  });
+
   it('returns isolated hits as single-chunk segments (top-k fallback)', async () => {
     const hits = [flatRow(105, 5, 'five', 0.9), flatRow(150, 50, 'fifty', 0.8)];
     const row = (idx: number, name: string): RetrievedChunkRow => flatRow(100 + idx, idx, name, 0);
@@ -1350,5 +1450,34 @@ describe('searchChunks segment resolution', () => {
     if (!second.ok) return;
     expect(second.value.chunks.map((chunk) => chunk.id)).toEqual([150]);
     expect(second.value.diagnostics.stableDuplicatesSkipped).toBe(1);
+  });
+
+  it('deduplicates fallback identities before segment resolution so a later unique chunk backfills', async () => {
+    const duplicateA = flatRow(200, 0, 'duplicate a', 0.9);
+    const duplicateB = flatRow(100, 0, 'duplicate b', 0.8);
+    const later = flatRow(300, 2, 'later unique', 0);
+    const deps = segmentDeps([duplicateA, duplicateB], new Map([
+      ['1:-2:2', [duplicateA, duplicateB, later]],
+    ]));
+    const result = await searchChunks('q', {
+      hybridEnabled: false,
+      mode: 'segment',
+      limit: 1,
+      candidateLimit: 2,
+      excludeChunkIdentities: new Set(['document_chunk:1:0']),
+      rseMaxSegmentChunks: 2,
+      rsePenalty: 0,
+      rseMinSegmentValue: 0,
+    }, deps);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.chunks.map((chunk) => chunk.id)).toEqual([300]);
+    expect(result.value.chunks[0]!.content).toBe('later unique');
+    expect(result.value.diagnostics).toMatchObject({
+      resolvedCount: 2,
+      stableDuplicatesSkipped: 1,
+      backfillCount: 1,
+    });
   });
 });

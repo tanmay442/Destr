@@ -202,10 +202,10 @@ describe('graceful degradation', () => {
 });
 
 describe('settings read hardening', () => {
-  it('honors the lexical environment rollback despite a conflicting DB override', async () => {
+  it('honors the lexical environment rollback despite a conflicting DB override and settings lock', async () => {
     process.env.LEXICAL_SEARCH_MODE = 'content_plain';
     const repo = makeRepo({ lexicalSearchMode: 'weighted_websearch' });
-    const { getRuntimeConfig } = await loadRuntime(repo);
+    const { getRuntimeConfig } = await loadRuntime(repo, 'lexicalSearchMode');
 
     const cfg = await getRuntimeConfig();
 

@@ -1,5 +1,6 @@
 import { abortable } from './abort';
 import { scoreOf, toRetrievedChunk, type RetrievedChunk, type ScoredRow, type SearchDeps } from './search-types';
+import { stableChunkIdentity } from './stable-chunk-identity';
 
 async function resolveParents(
   hits: ScoredRow[],
@@ -10,7 +11,9 @@ async function resolveParents(
   const childHits = hits.filter((h) => h.parentChunkId != null);
   const flatHits = hits.filter((h) => h.parentChunkId == null);
   if (childHits.length === 0) {
-    return hits.map(toRetrievedChunk);
+    return [...hits]
+      .sort((a, b) => scoreOf(b) - scoreOf(a) || stableChunkIdentity(a).localeCompare(stableChunkIdentity(b)))
+      .map(toRetrievedChunk);
   }
 
   const parentIds = [...new Set(childHits.map((h) => h.parentChunkId as number))];
@@ -67,7 +70,7 @@ async function resolveParents(
   }
 
   return entries
-    .sort((a, b) => b.score - a.score || String(a.chunk.id).localeCompare(String(b.chunk.id)))
+    .sort((a, b) => b.score - a.score || stableChunkIdentity(a.chunk).localeCompare(stableChunkIdentity(b.chunk)))
     .slice(0, topN)
     .map((entry) => entry.chunk);
 }

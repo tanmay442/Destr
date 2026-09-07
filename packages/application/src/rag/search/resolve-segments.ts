@@ -86,14 +86,15 @@ export async function resolveSegments(
     if (!previous || scoreOf(hit) > scoreOf(previous)) hitByKey.set(keyOf(hit), hit);
   }
 
-  const docChunks = new Map<number, RetrievedChunkRow[]>();
+  const docChunks = new Map<number, Map<string, RetrievedChunkRow>>();
   const addCandidate = (documentId: number, row: RetrievedChunkRow): void => {
-    const candidates = docChunks.get(documentId);
-    if (candidates) {
-      if (!candidates.some((candidate) => candidate.id === row.id)) candidates.push(row);
-    } else {
-      docChunks.set(documentId, [row]);
+    const key = keyOf(row);
+    let candidates = docChunks.get(documentId);
+    if (!candidates) {
+      candidates = new Map<string, RetrievedChunkRow>();
+      docChunks.set(documentId, candidates);
     }
+    if (!candidates.has(key)) candidates.set(key, row);
   };
   for (const hit of hits) {
     const key = `${hit.documentId}:${hit.chunkIndex - radius}:${hit.chunkIndex + radius}`;
@@ -101,10 +102,10 @@ export async function resolveSegments(
   }
   for (const hit of hits) addCandidate(hit.documentId, hit);
 
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const segments: Array<{ chunk: RetrievedChunk; score: number }> = [];
   for (const candidates of docChunks.values()) {
-    const ordered = [...candidates].sort((a, b) => a.chunkIndex - b.chunkIndex);
+    const ordered = [...candidates.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
     const runs: RetrievedChunkRow[][] = [];
     for (const candidate of ordered) {
       const run = runs[runs.length - 1];
@@ -131,8 +132,8 @@ export async function resolveSegments(
       });
       for (const span of spans) {
         const inSpan = run.slice(span.start, span.end);
-        const fresh = inSpan.filter((candidate) => !seen.has(candidate.id));
-        for (const candidate of inSpan) seen.add(candidate.id);
+        const fresh = inSpan.filter((candidate) => !seen.has(keyOf(candidate)));
+        for (const candidate of inSpan) seen.add(keyOf(candidate));
         if (fresh.length === 0) continue;
         const content = concatDeduped(inSpan.map((candidate) => candidate.content));
         if (content === '') continue;
@@ -158,6 +159,6 @@ export async function resolveSegments(
     }
   }
   return segments
-    .sort((a, b) => b.score - a.score || String(a.chunk.id).localeCompare(String(b.chunk.id)))
+    .sort((a, b) => b.score - a.score || stableChunkIdentity(a.chunk).localeCompare(stableChunkIdentity(b.chunk)))
     .map((entry) => entry.chunk);
 }
