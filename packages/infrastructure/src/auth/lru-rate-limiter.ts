@@ -10,7 +10,8 @@ export function createLruRateLimiter(): RateLimiter {
   const buckets = new Map<string, Bucket>();
 
   return {
-    async check(key, opts) {
+    async check(key, opts, signal) {
+      if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
       const now = Date.now();
       const cutoff = now - opts.windowMs;
       const existing = buckets.get(key);
@@ -50,9 +51,14 @@ export function createLruRateLimiter(): RateLimiter {
       const bucket = buckets.get(key)!;
       if (bucket.timestamps.length >= opts.limit) {
         const oldest = bucket.timestamps[0] ?? now;
+        if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
         return { ok: false, retryAfterMs: Math.max(0, oldest + opts.windowMs - now) };
       }
       bucket.timestamps.push(now);
+      if (signal?.aborted) {
+        bucket.timestamps.pop();
+        throw new DOMException('Rate limit check was cancelled.', 'AbortError');
+      }
       return {
         ok: true,
         remaining: opts.limit - bucket.timestamps.length,

@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AppConfig } from '@app/domain/app-config';
 import type { AgenticResultState } from '@app/domain';
-import { SearchFailure } from '../../rag/search/search-contract';
 import type { RetrievedChunk } from '../../rag/search/search-types';
 import { addGroundingEvidence, type GroundingEvidence } from '../../chat/grounding-evidence';
 import type { TurnMetrics } from '../../chat/chat-turn/turn-types';
@@ -10,6 +9,7 @@ import type {
   AgentToolContext,
   AgentTraceWriter,
   GroundingEvidenceCollector,
+  ToolExecuteCall,
 } from '../tool-contract';
 import { createDefaultBudget } from '../tool-contract';
 import {
@@ -29,34 +29,35 @@ import {
   createKnowledgeTicketTool,
   TICKET_TOOL_NAME,
   ticketToolOutputSchema,
+  type TicketRateLimiter,
+  type TicketUserResolver,
+  type TicketWriter,
 } from '../tools/create-knowledge-ticket';
-import { TurnToolLedger } from '../run-state';
-import { serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
+import { TurnToolLedger, type ToolCallOutcomeKind } from '../run-state';
+import { sanitizeUntrustedMetadata, serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
 import { ToolPolicyError } from '../tool-policy-pipeline';
 
 export interface CatalogCompatDeps {
   readonly searchChunks: SearchChunksFn;
   readonly agenticSearch: AgenticSearchFn;
-  readonly createTicket: (input: {
-    userId: string;
-    name: string;
-    email: string;
-    issue: string;
-  }) => Promise<{ ok: true; value: { ticketId: string; status: 'created' } } | { ok: false; error: unknown }>;
-  readonly userResolver: (userId: string) => Promise<{ name?: string; email?: string }>;
-  readonly rateLimit: {
-    check(
-      key: string,
-      opts: { limit: number; windowMs: number },
-    ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
-  };
+  readonly createTicket: TicketWriter;
+  readonly userResolver: TicketUserResolver;
+  readonly rateLimit: TicketRateLimiter;
   readonly toolFactory: (opts: {
     description: string;
     inputSchema: unknown;
     outputSchema: unknown;
+    inputExamples?: readonly { readonly input: unknown }[];
+    strict?: boolean;
     execute: (args: never, options: unknown) => Promise<unknown>;
   }) => unknown;
   readonly capabilities?: ModelToolCapabilities | undefined;
+}
+
+export interface CatalogCompatInternalToolContext {
+  readonly userId: string;
+  readonly turnId: string;
+  readonly approvalToken?: string | undefined;
 }
 
 export interface CatalogCompatTurn {
@@ -71,6 +72,10 @@ export interface CatalogCompatTurn {
   readonly ledger: TurnToolLedger;
   readonly prefetched?: PrefetchedSearchOutcome | undefined;
   readonly enabledTools?: ReadonlySet<string> | undefined;
+  /** Remaining turn budget in ms used to align the catalog budget deadline. */
+  readonly budgetDeadlineInMs?: number | undefined;
+  /** A request-owned context; never take approval credentials from model-visible arguments. */
+  readonly internalToolContext?: CatalogCompatInternalToolContext | undefined;
 }
 
 export interface CatalogCompatResult {
@@ -81,17 +86,78 @@ export interface CatalogCompatResult {
   readonly guidanceBlock: string;
 }
 
-function toolCallId(options: unknown): string {
-  if (
-    typeof options === 'object' &&
-    options !== null &&
-    'toolCallId' in options &&
-    typeof (options as { toolCallId: unknown }).toolCallId === 'string' &&
-    ((options as { toolCallId: string }).toolCallId.trim() !== '')
-  ) {
-    return (options as { toolCallId: string }).toolCallId.trim().slice(0, 100);
-  }
-  return `search-${randomUUID().slice(0, 8)}`;
+interface ParsedToolExecutionOptions {
+  readonly callId: string;
+  readonly signal: AbortSignal;
+  readonly approvalToken?: string | undefined;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return typeof AbortSignal !== 'undefined' && value instanceof AbortSignal;
+}
+
+function combineSignals(primary: AbortSignal, secondary: AbortSignal | undefined): AbortSignal {
+  if (secondary === undefined || primary === secondary) return primary;
+  if (primary.aborted) return primary;
+  if (secondary.aborted) return secondary;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([primary, secondary]);
+  const controller = new AbortController();
+  const forward = (source: AbortSignal): void => {
+    if (!controller.signal.aborted) controller.abort(source.reason);
+  };
+  primary.addEventListener('abort', () => forward(primary), { once: true });
+  secondary.addEventListener('abort', () => forward(secondary), { once: true });
+  return controller.signal;
+}
+
+function validatedApprovalToken(
+  options: Readonly<Record<string, unknown>> | undefined,
+  turn: CatalogCompatTurn,
+): string | undefined {
+  const internal = turn.internalToolContext;
+  if (internal === undefined) return undefined;
+  if (internal.userId !== turn.userId || internal.turnId !== turn.turnId) return undefined;
+  if (options?.experimental_context !== undefined && options.experimental_context !== internal) return undefined;
+  const token = internal.approvalToken;
+  return typeof token === 'string' && token.trim() !== '' ? token.trim() : undefined;
+}
+
+function parseToolExecutionOptions(
+  options: unknown,
+  turn: CatalogCompatTurn,
+  fallbackPrefix: string,
+): ParsedToolExecutionOptions {
+  const record = isRecord(options) ? options : undefined;
+  const rawCallId = record?.toolCallId;
+  const callId = typeof rawCallId === 'string' && rawCallId.trim() !== ''
+    ? rawCallId.trim().slice(0, 100)
+    : `${fallbackPrefix}-${randomUUID().slice(0, 8)}`;
+  const signal = combineSignals(turn.signal, isAbortSignal(record?.abortSignal) ? record.abortSignal : undefined);
+  const approvalToken = validatedApprovalToken(record, turn);
+  return { callId, signal, ...(approvalToken !== undefined ? { approvalToken } : {}) };
+}
+
+function toToolExecuteCall(options: ParsedToolExecutionOptions): ToolExecuteCall {
+  return {
+    callId: options.callId,
+    signal: options.signal,
+    ...(options.approvalToken !== undefined ? { approvalToken: options.approvalToken } : {}),
+  };
+}
+
+function thrownSearchKind(error: unknown, signal: AbortSignal): Extract<ToolCallOutcomeKind, 'error' | 'timeout' | 'cancelled'> {
+  const candidate = error instanceof ToolPolicyError
+    ? error.kind
+    : isRecord(error) && typeof error.kind === 'string'
+      ? error.kind
+      : undefined;
+  if (candidate === 'timeout') return 'timeout';
+  if (candidate === 'cancelled' || signal.aborted) return 'cancelled';
+  return 'error';
 }
 
 function recordScores(metrics: TurnMetrics, chunks: readonly RetrievedChunk[]): void {
@@ -141,6 +207,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     budget: createDefaultBudget({
       maxTotalToolCalls: 10,
       maxCallsByTool: { [SEARCH_TOOL_NAME]: 4, [TICKET_TOOL_NAME]: 1 },
+      ...(turn.budgetDeadlineInMs !== undefined ? { deadlineInMs: Math.max(0, turn.budgetDeadlineInMs) } : {}),
     }),
     evidence: toEvidenceCollector(turn.groundingEvidence),
     trace,
@@ -153,7 +220,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     effectiveMode: turn.effectiveMode,
   });
   const ticketDefinition = createKnowledgeTicketTool({
-    createTicket: deps.createTicket as never,
+    createTicket: deps.createTicket,
     userResolver: deps.userResolver,
     rateLimit: deps.rateLimit,
   });
@@ -166,6 +233,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   });
   const ledger = turn.ledger;
   let ticketOpened = false;
+  let ticketOutcomeUnknown = false;
   let searchInfrastructureFailed =
     turn.prefetched?.kind === 'error' ||
     (turn.prefetched?.kind === 'results' && turn.prefetched.degradedBy.length > 0);
@@ -176,7 +244,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   const searchBuilt = built.tools.get(SEARCH_TOOL_NAME);
   const ticketBuilt = built.tools.get(TICKET_TOOL_NAME);
 
-  function recordSearchOutcome(output: unknown, durationMs: number, requestedQuery?: string): void {
+  function recordSearchOutcome(output: unknown, durationMs: number, callId: string, requestedQuery?: string): void {
     const parsed = output as {
       sets?: Array<{ kind: string; requestedQuery?: string; attemptedQueries?: readonly string[]; executedQueries?: readonly { queryId: string; query: string }[] }>;
       uniqueEvidenceAdded?: number;
@@ -217,7 +285,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     }
     ledger.record({
       toolName: SEARCH_TOOL_NAME,
-      callId: 'search',
+      callId,
       kind,
       resultState,
       ticketCreated: false,
@@ -227,14 +295,33 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     });
   }
 
+  function recordSearchThrownOutcome(error: unknown, durationMs: number, callId: string, signal: AbortSignal): void {
+    const kind = thrownSearchKind(error, signal);
+    searchInfrastructureFailed = true;
+    metrics.searchResultStates.push('error');
+    ledger.record({
+      toolName: SEARCH_TOOL_NAME,
+      callId,
+      kind,
+      resultState: 'error',
+      ticketCreated: false,
+      searchInfrastructureFailed: true,
+      uniqueEvidenceAdded: 0,
+      durationMs,
+    });
+  }
+
   const tools: Record<string, unknown> = {};
   if (searchBuilt) {
     tools[SEARCH_TOOL_NAME] = deps.toolFactory({
       description: searchBuilt.description,
-      inputSchema: searchDefinition.inputSchema,
-      outputSchema: searchDefinition.outputSchema,
+      inputSchema: searchBuilt.inputSchema,
+      outputSchema: searchBuilt.outputSchema,
+      ...(searchBuilt.inputExamples !== undefined ? { inputExamples: searchBuilt.inputExamples } : {}),
+      ...(searchBuilt.strict !== undefined ? { strict: searchBuilt.strict } : {}),
       execute: (async (args: never, options: unknown) => {
-        const callId = toolCallId(options);
+        const execution = parseToolExecutionOptions(options, turn, SEARCH_TOOL_NAME);
+        const { callId } = execution;
         const t0 = Date.now();
         const parsed = args as { query?: unknown; limit?: unknown };
         const query = typeof parsed.query === 'string' ? parsed.query : '';
@@ -316,8 +403,6 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             uniqueEvidenceAdded: 0,
             durationMs: Math.max(0, Date.now() - t0),
           });
-          const { executedQueries: _ignoredPrefetch } = { executedQueries: [] as Array<{ queryId: string; query: string }> };
-          void _ignoredPrefetch;
           return {
             callId,
             sets: [{
@@ -333,9 +418,9 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
                 subquestionId: 'sq-1',
                 executedQueryIds: ['q-1'],
                 content: serializeUntrustedChunk({ content: chunk.content, source: chunk.source }),
-                source: chunk.source,
-                ...(chunk.title ? { documentTitle: chunk.title } : {}),
-                ...(chunk.sectionTitle ? { section: chunk.sectionTitle } : {}),
+                source: chunk.source === null ? null : sanitizeUntrustedMetadata(chunk.source),
+                ...(chunk.title ? { documentTitle: sanitizeUntrustedMetadata(chunk.title) } : {}),
+                ...(chunk.sectionTitle ? { section: sanitizeUntrustedMetadata(chunk.sectionTitle) } : {}),
                 scores: chunk.scores,
               })),
               coverage: prefetch.degradedBy.length > 0 ? 'partial' : 'sufficient',
@@ -353,15 +438,12 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           metrics.reformulationCount += 1;
         }
         const started = Date.now();
-        metrics.retrieveMs += 0;
         try {
-          const output = await searchBuilt.execute({ query, ...(limit !== undefined ? { limit } : {}) }, { callId, signal: turn.signal });
-          const typed = output as { sets: Array<{ kind: string; results?: readonly RetrievedChunk[] }>; uniqueEvidenceAdded: number; evidenceTokensAdded: number };
-          if (typed.sets[0]?.kind === 'results') {
-            const results = (typed.sets[0] as { results: readonly { content: string }[] }).results;
-            void results;
-          }
-          recordSearchOutcome(output, Math.max(0, Date.now() - started), query);
+          const output = await searchBuilt.execute(
+            { query, ...(limit !== undefined ? { limit } : {}) },
+            toToolExecuteCall(execution),
+          );
+          recordSearchOutcome(output, Math.max(0, Date.now() - started), callId, query);
           const withScores = output as { sets: Array<{ kind: string; results?: Array<{ scores?: RetrievedChunk['scores'] }> }> };
           if (withScores.sets[0]?.kind === 'results') {
             const items = withScores.sets[0]?.results ?? [];
@@ -380,8 +462,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           metrics.hitCount = (metrics.hitCount ?? 0) + uniqueAdded;
           return output;
         } catch (error) {
-          if (error instanceof ToolPolicyError) throw error;
-          if (error instanceof SearchFailure) throw error;
+          recordSearchThrownOutcome(error, Math.max(0, Date.now() - started), callId, execution.signal);
           throw error;
         } finally {
           metrics.retrieveMs += Math.max(0, Date.now() - started);
@@ -392,13 +473,17 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   if (ticketBuilt) {
     tools[TICKET_TOOL_NAME] = deps.toolFactory({
       description: ticketBuilt.description,
-      inputSchema: ticketDefinition.inputSchema,
-      outputSchema: ticketDefinition.outputSchema,
-      execute: (async (args: never) => {
+      inputSchema: ticketBuilt.inputSchema,
+      outputSchema: ticketBuilt.outputSchema,
+      ...(ticketBuilt.inputExamples !== undefined ? { inputExamples: ticketBuilt.inputExamples } : {}),
+      ...(ticketBuilt.strict !== undefined ? { strict: ticketBuilt.strict } : {}),
+      execute: (async (args: never, options: unknown) => {
+        const execution = parseToolExecutionOptions(options, turn, TICKET_TOOL_NAME);
+        const { callId } = execution;
         if (searchInfrastructureFailed) {
           ledger.record({
             toolName: TICKET_TOOL_NAME,
-            callId: 'ticket',
+            callId,
             kind: 'denied',
             resultState: null,
             ticketCreated: false,
@@ -412,10 +497,27 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             message: 'A knowledge ticket cannot be created from a failed documentation search.',
           });
         }
+        if (ticketOutcomeUnknown) {
+          ledger.record({
+            toolName: TICKET_TOOL_NAME,
+            callId,
+            kind: 'denied',
+            resultState: null,
+            ticketCreated: false,
+            searchInfrastructureFailed,
+            uniqueEvidenceAdded: 0,
+            durationMs: 0,
+          });
+          return ticketToolOutputSchema.parse({
+            ticketId: null,
+            status: 'denied',
+            message: 'A previous ticket request has an unknown outcome; do not retry it.',
+          });
+        }
         if (ticketOpened) {
           ledger.record({
             toolName: TICKET_TOOL_NAME,
-            callId: 'ticket',
+            callId,
             kind: 'denied',
             resultState: null,
             ticketCreated: false,
@@ -430,15 +532,33 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           });
         }
         try {
-          const output = await ticketBuilt.execute(args as unknown, { callId: `ticket-${turn.turnId}`, signal: turn.signal });
-          const typed = output as { ticketId: string | null; status: string };
+          const output = await ticketBuilt.execute(args as unknown, toToolExecuteCall(execution));
+          const typed = output as { ticketId?: string | null; status?: string; kind?: string; message?: string };
+          if (typed.kind === 'outcome_unknown') {
+            ticketOutcomeUnknown = true;
+            ledger.record({
+              toolName: TICKET_TOOL_NAME,
+              callId,
+              kind: 'outcome_unknown',
+              resultState: null,
+              ticketCreated: false,
+              searchInfrastructureFailed,
+              uniqueEvidenceAdded: 0,
+              durationMs: 0,
+            });
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'error',
+              message: 'Ticket outcome is unknown; do not retry this request.',
+            });
+          }
           if (typed.status === 'created' && typed.ticketId) {
             ticketOpened = true;
             metrics.ticketCreated = true;
             metrics.ticketId = typed.ticketId;
             ledger.record({
               toolName: TICKET_TOOL_NAME,
-              callId: 'ticket',
+              callId,
               kind: 'success',
               resultState: null,
               ticketCreated: true,
@@ -449,7 +569,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           } else {
             ledger.record({
               toolName: TICKET_TOOL_NAME,
-              callId: 'ticket',
+              callId,
               kind: typed.status === 'denied' ? 'denied' : 'error',
               resultState: null,
               ticketCreated: false,
@@ -468,7 +588,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           if (kind === 'denied' || kind === 'budget_exceeded') {
             ledger.record({
               toolName: TICKET_TOOL_NAME,
-              callId: 'ticket',
+              callId,
               kind: 'denied',
               resultState: null,
               ticketCreated: false,

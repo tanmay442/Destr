@@ -90,22 +90,35 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
       cacheLeasePolicy: comp.cacheLeasePolicy,
       onCacheLeaseTelemetry: comp.onCacheLeaseTelemetry,
       rateLimit: {
-        check: async (key, opts) => normalizeRateLimitDecision(await comp.rateLimit(key, opts)),
+        check: async (key, opts, signal) => {
+          if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
+          // Upstash Lua is atomic and may still apply server-side after the
+          // caller stops waiting; cancellation prevents downstream work.
+          const decision = normalizeRateLimitDecision(await comp.rateLimit(key, opts, signal));
+          if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
+          return decision;
+        },
       },
-      createTicket: (input) => comp.createTicket(input),
-      userResolver: async () => {
+      createTicket: (input, opts) => comp.createTicket(input, opts),
+      userResolver: async (_request, opts) => {
+        if (opts?.signal?.aborted) throw new DOMException('Ticket identity lookup was cancelled.', 'AbortError');
+        // Clerk currentUser() accepts no AbortSignal; cancellation cannot
+        // abort the in-flight fetch. Pre/post fencing ensures a cancelled
+        // lookup never yields an identity and is never mapped to a generic
+        // identity failure.
         const clerkUser = await currentUser();
+        if (opts?.signal?.aborted) throw new DOMException('Ticket identity lookup was cancelled.', 'AbortError');
         if (!clerkUser) {
           logger.warn('createKnowledgeTicket: currentUser() returned null after auth() succeeded');
-          return { userId, name: 'Unknown', email: `${userId}@clerk.user` };
+          return { userId };
         }
-        const name = clerkUser.fullName ?? clerkUser.firstName ?? clerkUser.username ?? 'User';
+        const name = clerkUser.fullName ?? clerkUser.firstName ?? clerkUser.username;
         const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress;
-        const email =
-          primaryEmail && primaryEmail.includes('@')
-            ? primaryEmail
-            : `${clerkUser.id}@clerk.user`;
-        return { userId, name, email };
+        return {
+          userId,
+          ...(name ? { name } : {}),
+          ...(primaryEmail?.includes('@') ? { email: primaryEmail } : {}),
+        };
       },
       eventSink: {
         record: (event) => comp.chatEventBatcher.record(event),

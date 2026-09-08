@@ -554,6 +554,60 @@ describe('createTicket', () => {
       }),
     );
   });
+
+  it('throws when aborted before insert and performs no insert or audit', async () => {
+    const deps = makeMockRepos();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      createTicket(
+        { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+        deps,
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(deps.tickets.insert).not.toHaveBeenCalled();
+    expect(deps.audit.logTicketEvent).not.toHaveBeenCalled();
+    expect(deps.audit.recordDeadLetter).not.toHaveBeenCalled();
+  });
+
+  it('reports a delayed insert as created with audit even when aborted mid-flight', async () => {
+    const insert = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { ticketId: 'TKT-123456789abcdef0', status: 'created' } as unknown as TicketRow;
+    });
+    const deps = makeMockRepos({ tickets: { insert: insert as never } });
+    const controller = new AbortController();
+    const pending = createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+      { signal: controller.signal },
+    );
+    controller.abort();
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.status).toBe('created');
+    expect(insert).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(deps.audit.logTicketEvent).toHaveBeenCalledOnce());
+  });
+
+  it('runs audit for a commit that resolves after abort without reporting cancellation', async () => {
+    const deps = makeMockRepos();
+    const controller = new AbortController();
+    const pending = createTicket(
+      { userId: 'user_1', name: 'Test', email: 't@x.com', issue: 'help' },
+      deps,
+      { signal: controller.signal },
+    );
+    controller.abort();
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.ticketId).toMatch(/^TKT-/);
+      expect(result.value.status).toBe('created');
+    }
+    await vi.waitFor(() => expect(deps.audit.logTicketEvent).toHaveBeenCalledOnce());
+  });
 });
 
 describe('isTicketStatus', () => {

@@ -143,4 +143,5 @@ process, so this is not a distributed concurrency limit.
 - [Technical Reference Manual](docs/REFERENCE.md) — Comprehensive guide on Tech Stack, Architecture Deep Dive, Auth/RBAC, Admin Console, Database Schema, Rate Limiting, and Telemetry.
 - [Test Suite & Metrics](docs/test.md) — Test catalog, metrics, port contract matrix, and CI pipeline setup.
 - [Getting Your API Keys](docs/GETTING_YOUR_API_KEYS.md) — Step-by-step provider credential setup guide.
+- [Agent Tool Extension Guide](docs/agent-tool-extension-guide.md) — Add read and write tools through the catalog with schema, approval, and untrusted-data safeguards.
 - [Contributing Guide](CONTRIBUTING.md) — Issue-first workflow, architecture boundary rules, and PR checklist.

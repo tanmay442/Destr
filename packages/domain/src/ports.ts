@@ -737,6 +737,7 @@ export interface RateLimiter {
   check(
     key: string,
     opts: { limit: number; windowMs: number },
+    signal?: AbortSignal,
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 }
 

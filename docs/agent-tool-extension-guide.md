@@ -8,8 +8,8 @@ How to add a local tool to the Destr chat agent through one cohesive module and 
 
 | Layer | Owns |
 |---|---|
-| `packages/application/src/agent/tool-contract.ts` | `AgentToolDefinition`, `AgentToolContext`, `ToolCatalog`, budget, trace, approval interfaces |
-| `packages/application/src/agent/tool-catalog.ts` | Unique-name validation, enabled-tool filtering, capability adaptation, validation, timeout, cancellation, approval interception, call-count enforcement, tracing, sanitized errors, guidance generation |
+| `packages/application/src/agent/tool-contract.ts` | `AgentToolDefinition`, `AgentToolContext`, budget, trace, and approval interfaces |
+| `packages/application/src/agent/tool-catalog.ts` | `ToolCatalog`, unique-name validation, enabled-tool filtering, capability adaptation, validation, timeout, cancellation, approval interception, call-count enforcement, tracing, sanitized errors, guidance generation |
 | `packages/application/src/agent/tool-policy-pipeline.ts` | Shared policy decorators consumed only by the catalog |
 | `packages/application/src/agent/tools/*` | Deep tool modules; each closes only its own dependencies |
 | `packages/application/src/agent/compat/chat-tools-compat.ts` | Compatibility assembly binding the catalog to the current `streamText` chat path |
@@ -52,9 +52,10 @@ import type { AgentToolDefinition } from '../tool-contract';
 const lookupInput = z.object({
   key: z.string().trim().min(1).max(200),
 });
+const lookupOutput = z.object({ value: z.string().nullable() });
 
 type LookupInput = z.infer<typeof lookupInput>;
-type LookupOutput = { value: string | null };
+type LookupOutput = z.infer<typeof lookupOutput>;
 
 export function createLookupTool(
   deps: { lookup: (key: string, signal: AbortSignal) => Promise<string | null> },
@@ -63,7 +64,7 @@ export function createLookupTool(
     name: 'lookupGlossary',
     description: 'Look up a product glossary term. Returns the canonical definition or null.',
     inputSchema: lookupInput,
-    outputSchema: z.object({ value: z.string().nullable() }),
+    outputSchema: lookupOutput,
     inputExamples: [{ key: 'SSO' }],
     guidance: {
       useWhen: ['the user asks what a product term means'],
@@ -84,7 +85,7 @@ export function createLookupTool(
 }
 ```
 
-Register it in composition alongside the built-in tools:
+Register it in a catalog factory or test composition seam (the production-wide third-tool registry is a later work package):
 
 ```ts
 import { asUntypedTool, createToolCatalog } from './tool-catalog';
@@ -96,9 +97,9 @@ const catalog = createToolCatalog([
 ]);
 ```
 
-No edit to `chat-turn/turn.ts`, the system prompt, or unrelated tool modules is required. The catalog validates the unique name, filters by `enabledTools`, adapts examples per provider capabilities, and composes the compact guidance block automatically.
+For this catalog-level extension proof, no edit to `chat-turn/turn.ts`, the system prompt, or unrelated tool modules is required. The catalog validates the unique name, filters by `enabledTools`, adapts examples per provider capabilities, and composes the compact guidance block automatically.
 
-Note: production `chatTurn` currently builds its catalog from the two built-in definitions inside `agent/compat/chat-tools-compat.ts`. The snippet above shows the registration shape a future composition seam will call; wiring a production-wide third-tool registry (beyond per-test `createToolCatalog` composition) is tracked for WP-5/WP-9. The catalog-level proof — a test-only tool composing, executing, and appearing in `guidanceBlock` with no prompt-file edit — is covered by `tool-catalog.test.ts` and the `compat.test.ts` guidance test.
+Note: production `chatTurn` currently builds its catalog from the two built-in definitions inside `agent/compat/chat-tools-compat.ts`. The snippet above is intentionally a test/future composition shape; wiring a production-wide third-tool registry (beyond per-test `createToolCatalog` composition) is tracked for WP-5/WP-9. The catalog-level proof — a test-only tool composing, executing, and appearing in `guidanceBlock` with no prompt-file edit — is covered by `tool-catalog.test.ts` and the `compat.test.ts` guidance test.
 
 ---
 
@@ -114,9 +115,10 @@ const flagInput = z.object({
   documentId: z.number().int().positive(),
   reason: z.string().trim().min(1).max(500),
 });
+const flagOutput = z.object({ flagged: z.boolean() });
 
 type FlagInput = z.infer<typeof flagInput>;
-type FlagOutput = { flagged: boolean };
+type FlagOutput = z.infer<typeof flagOutput>;
 
 export function createFlagDocumentTool(
   deps: { flag: (input: { documentId: number; reason: string; userId: string }) => Promise<void> },
@@ -125,7 +127,7 @@ export function createFlagDocumentTool(
     name: 'flagDocument',
     description: 'Flag a document for reviewer attention. Requires explicit user intent or approval.',
     inputSchema: flagInput,
-    outputSchema: z.object({ flagged: z.boolean() }),
+    outputSchema: flagOutput,
     inputExamples: [{ documentId: 42, reason: 'outdated pricing table' }],
     guidance: {
       useWhen: ['the user explicitly asks to flag or report a document'],
@@ -151,6 +153,8 @@ export function createFlagDocumentTool(
 ```
 
 Approval scope covers tool name, normalized arguments, authenticated user, turn ID, and expiration. Approval of one call never authorizes changed arguments, a different user or turn, or an expired token. Retrieved content and tool descriptions can never grant approval; only explicit user intent (for example “flag this document”) or a properly scoped approval issued through `ToolApprovalPolicy` authorizes execution.
+
+Write tools receive `call.signal` and must pass it to every cancellable dependency. A non-cancellable writer must not be retried after timeout or cancellation: the catalog reconciles an already-started write for a bounded interval, reports a resolved commit as created, and reports an unresolved result as `outcome_unknown` with a do-not-retry message. Keep any idempotency or operation identity in the writer boundary when the storage contract provides one; do not create a second write from an ambiguous result.
 
 ---
 

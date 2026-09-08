@@ -142,4 +142,30 @@ describe('createUpstashRateLimiter', () => {
     const next = await limiter.check('user:1', { limit: 30, windowMs: 1_000 });
     expect(next.ok).toBe(true);
   });
+
+  it('throws immediately when already aborted without calling Redis', async () => {
+    redisMock.eval.mockResolvedValue([1, 29]);
+    const limiter = createUpstashRateLimiter();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(limiter.check('user:1', { limit: 30, windowMs: 60_000 }, controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(redisMock.eval).not.toHaveBeenCalled();
+  });
+
+  it('stops waiting when aborted mid-flight while the remote call may still settle', async () => {
+    let release!: (value: [number, number]) => void;
+    const gate = new Promise<[number, number]>((resolve) => {
+      release = resolve;
+    });
+    redisMock.eval.mockReturnValue(gate);
+    const limiter = createUpstashRateLimiter();
+    const controller = new AbortController();
+    const pending = limiter.check('user:1', { limit: 30, windowMs: 60_000 }, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    release([1, 29]);
+    await gate;
+  });
 });

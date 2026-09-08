@@ -141,14 +141,23 @@ describe('ToolCatalog depth (WP-3)', () => {
       capabilities: DEFAULT_TOOL_CAPABILITIES,
       enabledTools: new Set([TEST_TOOL_NAME]),
     });
-    expect(built.tools.get(TEST_TOOL_NAME)?.description).toBe(TEST_TOOL_DESCRIPTION);
+    const tool = built.tools.get(TEST_TOOL_NAME);
+    expect(tool?.description).toBe(TEST_TOOL_DESCRIPTION);
+    expect(tool?.inputSchema).toBe(testInputSchema);
+    expect(tool?.outputSchema).toBe(testOutputSchema);
+    expect(tool?.inputExamples).toEqual([
+      { input: { echo: 'alpha' } },
+      { input: { echo: 'beta' } },
+      { input: { echo: 'gamma' } },
+    ]);
+    expect(tool?.strict).toBe(true);
   });
 
   it('appends at most 2 input examples under emulated capabilities', () => {
     const catalog = createToolCatalog([asUntypedTool(makeTestOnlyTool())]);
     const built = catalog.buildForRun({
       context: makeContext(),
-      capabilities: EMULATED_EXAMPLE_CAPABILITIES,
+      capabilities: { ...EMULATED_EXAMPLE_CAPABILITIES, strictSchemas: 'emulated' },
       enabledTools: new Set([TEST_TOOL_NAME]),
     });
     const description = built.tools.get(TEST_TOOL_NAME)?.description ?? '';
@@ -156,16 +165,21 @@ describe('ToolCatalog depth (WP-3)', () => {
     expect(description).toContain('alpha');
     expect(description).toContain('beta');
     expect(description).not.toContain('gamma');
+    expect(built.tools.get(TEST_TOOL_NAME)?.inputExamples).toBeUndefined();
+    expect(built.tools.get(TEST_TOOL_NAME)?.strict).toBe(false);
   });
 
   it('leaves descriptions unchanged under unsupported input-example capabilities', () => {
     const catalog = createToolCatalog([asUntypedTool(makeTestOnlyTool())]);
     const built = catalog.buildForRun({
       context: makeContext(),
-      capabilities: { ...DEFAULT_TOOL_CAPABILITIES, inputExamples: 'unsupported' },
+      capabilities: { ...DEFAULT_TOOL_CAPABILITIES, inputExamples: 'unsupported', strictSchemas: 'unsupported' },
       enabledTools: new Set([TEST_TOOL_NAME]),
     });
-    expect(built.tools.get(TEST_TOOL_NAME)?.description).toBe(TEST_TOOL_DESCRIPTION);
+    const tool = built.tools.get(TEST_TOOL_NAME);
+    expect(tool?.description).toBe(TEST_TOOL_DESCRIPTION);
+    expect(tool?.inputExamples).toBeUndefined();
+    expect(tool?.strict).toBeUndefined();
   });
 
   it('registers a test-only read tool alongside real definitions and executes it', async () => {

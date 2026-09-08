@@ -55,6 +55,12 @@ export const TOOL_CATALOG_VERSION = 'tool-catalog-v1';
 export interface BuiltToolInstance {
   readonly name: string;
   readonly description: string;
+  readonly inputSchema: z.ZodType<unknown>;
+  readonly outputSchema: z.ZodType<unknown>;
+  /** Native AI SDK examples are wrapped in the SDK's `{ input }` envelope. */
+  readonly inputExamples: readonly { readonly input: unknown }[] | undefined;
+  /** `undefined` means the provider does not support a strict-schema fact. */
+  readonly strict: boolean | undefined;
   readonly execute: (rawInput: unknown, call: ToolExecuteCall) => Promise<unknown>;
   readonly policyEffect: 'read' | 'write';
 }
@@ -115,6 +121,12 @@ export class DefaultToolCatalog implements ToolCatalog {
         examples: definition.inputExamples,
         capabilities: input.capabilities,
       });
+      const inputExamples = input.capabilities.inputExamples === 'native'
+        ? definition.inputExamples.map((example) => ({ input: example }))
+        : undefined;
+      const strict = input.capabilities.strictSchemas === 'unsupported'
+        ? undefined
+        : input.capabilities.strictSchemas === 'native';
       const execute = async (rawInput: unknown, call: ToolExecuteCall): Promise<unknown> => {
         try {
           return await wrapped(rawInput, call);
@@ -125,6 +137,10 @@ export class DefaultToolCatalog implements ToolCatalog {
       tools.set(definition.name, {
         name: definition.name,
         description,
+        inputSchema: definition.inputSchema,
+        outputSchema: definition.outputSchema,
+        inputExamples,
+        strict,
         execute,
         policyEffect: definition.policy.effect,
       });

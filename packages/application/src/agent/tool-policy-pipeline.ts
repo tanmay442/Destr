@@ -6,7 +6,7 @@ import type {
 } from './tool-contract';
 import { normalizeToolArgs } from './tool-approval';
 
-export type ToolErrorKind = 'input_validation' | 'output_validation' | 'timeout' | 'cancelled' | 'denied' | 'budget_exceeded' | 'failed';
+export type ToolErrorKind = 'input_validation' | 'output_validation' | 'timeout' | 'cancelled' | 'denied' | 'budget_exceeded' | 'failed' | 'outcome_unknown';
 
 export class ToolPolicyError extends Error {
   readonly kind: ToolErrorKind;
@@ -21,6 +21,17 @@ function sanitizeMessage(message: string): string {
   return message.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ').trim() || 'Tool execution failed.';
 }
 
+const GENERIC_TOOL_ERROR_MESSAGE = 'Tool execution failed.';
+
+const WRITE_RECONCILIATION_MAX_MS = 5_000;
+
+function unknownWriteOutcomeError(toolName: string): ToolPolicyError {
+  return new ToolPolicyError(
+    'outcome_unknown',
+    `${toolName} outcome is unknown; do not retry this request.`,
+  );
+}
+
 function isAbortError(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') return true;
   if (error instanceof Error) {
@@ -33,6 +44,15 @@ function timeoutError(toolName: string, timeoutMs: number): ToolPolicyError {
   return new ToolPolicyError('timeout', `${toolName} timed out after ${timeoutMs}ms.`);
 }
 
+function cancelledError(toolName: string, reason: unknown): ToolPolicyError {
+  if (reason instanceof ToolPolicyError) return reason;
+  return new ToolPolicyError(
+    'cancelled',
+    `${toolName} was cancelled.`,
+    reason instanceof Error ? { cause: reason } : undefined,
+  );
+}
+
 function throwIfAborted(signal: AbortSignal | undefined, toolName: string): void {
   if (!signal?.aborted) return;
   const reason = signal.reason;
@@ -40,27 +60,99 @@ function throwIfAborted(signal: AbortSignal | undefined, toolName: string): void
   throw new ToolPolicyError('cancelled', `${toolName} was cancelled.`, reason instanceof Error ? { cause: reason } : undefined);
 }
 
-async function withTimeout<T>(operation: Promise<T>, ms: number, toolName: string, signal: AbortSignal): Promise<T> {
-  throwIfAborted(signal, toolName);
+interface LinkedAbortController {
+  readonly signal: AbortSignal;
+  abort(reason: unknown): void;
+  cleanup(): void;
+}
+
+function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortController {
+  const controller = new AbortController();
+  const uniqueSignals = [...new Set(signals)];
+  const listeners = new Map<AbortSignal, () => void>();
+  const onAbort = (signal: AbortSignal): void => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+  };
+  for (const signal of uniqueSignals) {
+    const listener = (): void => onAbort(signal);
+    listeners.set(signal, listener);
+    signal.addEventListener('abort', listener, { once: true });
+    if (signal.aborted) onAbort(signal);
+  }
+  return {
+    signal: controller.signal,
+    abort(reason: unknown): void {
+      if (!controller.signal.aborted) controller.abort(reason);
+    },
+    cleanup(): void {
+      for (const [signal, listener] of listeners) signal.removeEventListener('abort', listener);
+      listeners.clear();
+    },
+  };
+}
+
+export async function withTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  toolName: string,
+  sourceSignals: readonly AbortSignal[],
+  settleAfterAbort: boolean,
+  reconcileBudgetMs?: number,
+): Promise<T> {
+  for (const signal of sourceSignals) throwIfAborted(signal, toolName);
+  const linked = linkAbortSignals(sourceSignals);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancellationListener: (() => void) | undefined;
   try {
+    const cancellation = new Promise<never>((_, reject) => {
+      cancellationListener = (): void => reject(cancelledError(toolName, linked.signal.reason));
+      linked.signal.addEventListener('abort', cancellationListener, { once: true });
+      if (linked.signal.aborted) cancellationListener();
+    });
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(timeoutError(toolName, ms)), ms);
+      timer = setTimeout(() => {
+        const error = timeoutError(toolName, ms);
+        linked.abort(error);
+        reject(error);
+      }, ms);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    const abort = new Promise<never>((_, reject) => {
-      if (signal.aborted) {
-        reject(new ToolPolicyError('cancelled', `${toolName} was cancelled.`));
-        return;
+    const operationPromise = linked.signal.aborted
+      ? Promise.reject<T>(cancelledError(toolName, linked.signal.reason))
+      : operation(linked.signal);
+    try {
+      return await Promise.race([operationPromise, timeout, cancellation]);
+    } catch (error) {
+      if (!settleAfterAbort || !linked.signal.aborted) throw error;
+      const cap = Math.min(
+        WRITE_RECONCILIATION_MAX_MS,
+        reconcileBudgetMs !== undefined ? Math.max(0, reconcileBudgetMs) : WRITE_RECONCILIATION_MAX_MS,
+      );
+      if (cap <= 0) {
+        operationPromise.then(() => undefined, () => undefined);
+        throw unknownWriteOutcomeError(toolName);
       }
-      const onAbort = (): void => {
-        reject(new ToolPolicyError('cancelled', `${toolName} was cancelled.`, signal.reason instanceof Error ? { cause: signal.reason } : undefined));
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-    return await Promise.race([operation, timeout, abort]);
+      let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const reconcileTimeout = new Promise<never>((_, reject) => {
+          reconcileTimer = setTimeout(() => reject(unknownWriteOutcomeError(toolName)), cap);
+          if (typeof reconcileTimer.unref === 'function') reconcileTimer.unref();
+        });
+        return await Promise.race([operationPromise, reconcileTimeout]);
+      } catch (reconcileError) {
+        operationPromise.then(() => undefined, () => undefined);
+        if (reconcileError instanceof ToolPolicyError && reconcileError.kind === 'outcome_unknown') {
+          throw reconcileError;
+        }
+        throw error;
+      } finally {
+        if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
+      }
+    }
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    if (cancellationListener !== undefined) linked.signal.removeEventListener('abort', cancellationListener);
+    linked.cleanup();
   }
 }
 
@@ -84,6 +176,7 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
   const now = input.now ?? Date.now;
   return async (rawInput: unknown, call: ToolExecuteCall): Promise<TOutput> => {
     const startedAt = now();
+    let terminalPhase: 'success' | 'error' | 'denied' | 'timeout' | 'cancelled' | null = null;
     context.trace.write({
       toolName: definition.name,
       callId: call.callId,
@@ -92,6 +185,8 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       sanitized: true,
     });
     const finish = (phase: 'success' | 'error' | 'denied' | 'timeout' | 'cancelled'): void => {
+      if (terminalPhase !== null) return;
+      terminalPhase = phase;
       context.trace.write({
         toolName: definition.name,
         callId: call.callId,
@@ -126,15 +221,17 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       }
       if (definition.policy.effect === 'write' && definition.policy.requiresApproval) {
         const normalized = normalizeToolArgs(parsedInput.data);
+        const approvalInput = {
+          toolName: definition.name,
+          normalizedArgs: normalized,
+          userId: context.actor.userId,
+          turnId: context.turnId,
+          nowMs: now(),
+          ...(call.approvalToken !== undefined ? { approvalToken: call.approvalToken } : {}),
+        };
         const approved =
-          context.approvals.isExplicitlyRequested() ||
-          context.approvals.isApproved({
-            toolName: definition.name,
-            normalizedArgs: normalized,
-            userId: context.actor.userId,
-            turnId: context.turnId,
-            nowMs: now(),
-          });
+          context.approvals.isExplicitlyRequested(approvalInput) ||
+          (call.approvalToken !== undefined && context.approvals.isApproved(approvalInput));
         if (!approved) {
           finish('denied');
           throw new ToolPolicyError('denied', `${definition.name} requires explicit user intent or approval.`);
@@ -142,12 +239,20 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       }
       counts.byTool.set(definition.name, currentForTool + 1);
       counts.total += 1;
-      const combinedSignal = anySignal([context.signal, call.signal]);
+      const reconcileBudgetMs = definition.policy.effect === 'write'
+        ? Math.max(0, context.budget.deadlineAt - now())
+        : undefined;
       const result = await withTimeout(
-        inner(parsedInput.data, { callId: call.callId, signal: combinedSignal }),
+        (signal) => inner(parsedInput.data, {
+          callId: call.callId,
+          signal,
+          ...(call.approvalToken !== undefined ? { approvalToken: call.approvalToken } : {}),
+        }),
         definition.policy.timeoutMs,
         definition.name,
-        combinedSignal,
+        [context.signal, call.signal],
+        definition.policy.effect === 'write',
+        reconcileBudgetMs,
       );
       const parsedOutput = (definition.outputSchema as z.ZodType<TOutput>).safeParse(result);
       if (!parsedOutput.success) {
@@ -160,6 +265,8 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       if (error instanceof ToolPolicyError) {
         if (error.kind === 'timeout') finish('timeout');
         else if (error.kind === 'cancelled') finish('cancelled');
+        else if (error.kind === 'denied' || error.kind === 'budget_exceeded') finish('denied');
+        else finish('error');
         throw error;
       }
       if (isAbortError(error) || context.signal.aborted || call.signal.aborted) {
@@ -167,25 +274,17 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
         throw new ToolPolicyError('cancelled', sanitizeMessage(`${definition.name} was cancelled.`), { cause: error });
       }
       finish('error');
-      throw new ToolPolicyError('failed', sanitizeMessage(error instanceof Error ? error.message : 'Tool execution failed.'), { cause: error });
+      throw new ToolPolicyError('failed', GENERIC_TOOL_ERROR_MESSAGE, { cause: error });
     }
   };
 }
 
-function anySignal(signals: readonly AbortSignal[]): AbortSignal {
-  const active = signals.filter((signal) => !signal.aborted);
-  if (active.length === 0) return signals[0] as AbortSignal;
-  if (active.length === 1) return active[0] as AbortSignal;
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any(active);
-  const controller = new AbortController();
-  for (const signal of active) {
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
-  }
-  return controller.signal;
-}
-
 export function sanitizeToolError(error: unknown): { kind: ToolErrorKind; message: string } {
-  if (error instanceof ToolPolicyError) return { kind: error.kind, message: sanitizeMessage(error.message) };
-  if (error instanceof Error) return { kind: 'failed', message: sanitizeMessage(error.message) };
-  return { kind: 'failed', message: 'Tool execution failed.' };
+  if (error instanceof ToolPolicyError) {
+    return {
+      kind: error.kind,
+      message: error.kind === 'failed' ? GENERIC_TOOL_ERROR_MESSAGE : sanitizeMessage(error.message),
+    };
+  }
+  return { kind: 'failed', message: GENERIC_TOOL_ERROR_MESSAGE };
 }

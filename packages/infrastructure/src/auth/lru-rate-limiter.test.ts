@@ -97,4 +97,16 @@ describe('createLruRateLimiter', () => {
     const refreshed = await limiter.check('1', { limit: 5, windowMs: 60_000 });
     expect(refreshed.ok).toBe(true);
   });
+
+  it('throws when the signal is already aborted and consumes no quota', async () => {
+    const limiter = createLruRateLimiter();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(limiter.check('user:1', { limit: 1, windowMs: 60_000 }, controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    const fresh = new AbortController();
+    const result = await limiter.check('user:1', { limit: 1, windowMs: 60_000 }, fresh.signal);
+    expect(result.ok).toBe(true);
+  });
 });

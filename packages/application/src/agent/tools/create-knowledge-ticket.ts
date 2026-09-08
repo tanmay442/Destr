@@ -46,6 +46,7 @@ export const TICKET_TOOL_GUIDANCE = {
     'created: ticket persisted once per turn; ticketId identifies the record',
     'denied: explicit intent or approval missing, already created, rate limited, or blocked by search failure; no side effect occurred',
     'error: ticket writer or identity lookup failed safely; no ticket persisted',
+    'outcome_unknown: ticket writer did not settle within the reconciliation window; do not retry',
     'identity always comes from the authenticated actor; input never supplies name or email',
   ],
 } as const;
@@ -69,14 +70,18 @@ export type TicketWriter = (input: {
   name: string;
   email: string;
   issue: string;
-}) => Promise<Result<{ ticketId: string; status: 'created' }>>;
+}, opts?: { readonly signal?: AbortSignal | undefined }) => Promise<Result<{ ticketId: string; status: 'created' }>>;
 
-export type TicketUserResolver = (userId: string) => Promise<{ name?: string; email?: string }>;
+export type TicketUserResolver = (
+  userId: string,
+  opts?: { readonly signal?: AbortSignal | undefined },
+) => Promise<{ name?: string; email?: string }>;
 
 export type TicketRateLimiter = {
   check(
     key: string,
     opts: { limit: number; windowMs: number },
+    signal?: AbortSignal,
   ): Promise<{ ok: true; remaining: number; resetMs: number } | { ok: false; retryAfterMs: number }>;
 };
 
@@ -102,6 +107,10 @@ function failed(message: string): TicketToolOutput {
   return ticketToolOutputSchema.parse({ ticketId: null, status: 'error', message: message.slice(0, 500) });
 }
 
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+}
+
 export function createKnowledgeTicketTool(
   deps: CreateKnowledgeTicketDeps,
 ): AgentToolDefinition<CreateKnowledgeTicketInput, TicketToolOutput> {
@@ -125,11 +134,25 @@ export function createKnowledgeTicketTool(
     },
     create(context: AgentToolContext) {
       return async (input: CreateKnowledgeTicketInput, call: ToolExecuteCall): Promise<TicketToolOutput> => {
-        void call;
+        throwIfCancelled(call.signal);
+        let profile: { name?: string; email?: string };
+        try {
+          profile = await deps.userResolver(context.actor.userId, { signal: call.signal });
+        } catch {
+          throwIfCancelled(call.signal);
+          return failed('Ticket identity lookup failed. Please try again.');
+        }
+        throwIfCancelled(call.signal);
+        const realName = profile.name?.trim();
+        const realEmail = profile.email?.trim();
+        if (!realName || !realEmail || !realEmail.includes('@')) {
+          return failed('Ticket identity lookup failed. Please try again.');
+        }
         const limit = await deps.rateLimit.check(`ticket:${context.actor.userId}`, {
           limit: TICKET_RATE_LIMIT.limit,
           windowMs: TICKET_RATE_LIMIT.windowMs,
-        });
+        }, call.signal);
+        throwIfCancelled(call.signal);
         if (!limit.ok) {
           const retryAfterSec = Number.isFinite(limit.retryAfterMs)
             ? Math.ceil(limit.retryAfterMs / 1000)
@@ -140,23 +163,17 @@ export function createKnowledgeTicketTool(
               : 'Ticket creation is rate limited for this user.',
           );
         }
-        let profile: { name?: string; email?: string };
-        try {
-          profile = await deps.userResolver(context.actor.userId);
-        } catch {
-          return failed('Ticket identity lookup failed. Please try again.');
-        }
-        const realName = profile.name?.trim() !== '' && profile.name !== undefined ? profile.name : 'User';
-        const realEmail = profile.email?.includes('@') === true && profile.email !== undefined
-          ? profile.email
-          : `${context.actor.userId}@clerk.user`;
+        throwIfCancelled(call.signal);
         const result = await deps.createTicket({
           userId: context.actor.userId,
           name: realName,
           email: realEmail,
           issue: composeTicketIssue(input),
-        });
-        if (!result.ok) return failed('Ticket creation failed. Please try again.');
+        }, { signal: call.signal });
+        if (!result.ok) {
+          throwIfCancelled(call.signal);
+          return failed('Ticket creation failed. Please try again.');
+        }
         return ticketToolOutputSchema.parse({ ticketId: result.value.ticketId, status: 'created' });
       };
     },

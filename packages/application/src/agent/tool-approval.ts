@@ -37,10 +37,23 @@ const EXPLICIT_TICKET_PATTERNS: readonly RegExp[] = [
   /\bhuman\s+review\b/i,
 ];
 
+const TICKET_ACTION = /(?:open\s+(?:a\s+)?(?:knowledge\s+)?ticket|file\s+(?:a\s+)?(?:knowledge\s+)?ticket|create\s+(?:a\s+)?(?:knowledge\s+)?ticket|raise\s+(?:a\s+)?(?:knowledge\s+)?ticket|submit\s+(?:a\s+)?(?:complaint|ticket)|escalate|talk\s+to\s+(?:a\s+)?human|speak\s+to\s+(?:a\s+)?human|human\s+support|human\s+review)\b/i;
+const DIRECT_REQUEST = /(?:^|[.!?]\s+|,\s*)(?:(?:please|kindly)[,\s]+)?(?:open|file|create|raise|submit|escalate|talk\s+to|speak\s+to)\b/i;
+const POLITE_REQUEST = /\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:open|file|create|raise|submit|escalate|talk\s+to|speak\s+to)\b|\b(?:i\s+want|i\s+need|i(?:'|’)d\s+like)\s+(?:you\s+to\s+)?(?:open|file|create|raise|submit|escalate|talk\s+to|speak\s+to)\b/i;
+const NEGATION_BEFORE_ACTION = /\b(?:do\s+not|don't|dont|never|no\s+need\s+to|not|without|avoid|stop|cancel|refuse|wouldn't|shouldn't|can't|cannot)\b[\s\S]{0,80}\b(?:open|file|create|raise|submit|escalate|talk\s+to|speak\s+to)\b/i;
+
+function removeQuotedText(text: string): string {
+  return text.replace(/(["`])(?:\\.|(?!\1)[^\\])*\1/g, ' ');
+}
+
 export function isExplicitTicketRequestText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed === '') return false;
-  return EXPLICIT_TICKET_PATTERNS.some((pattern) => pattern.test(trimmed));
+  const withoutQuotedText = removeQuotedText(trimmed);
+  if (withoutQuotedText === trimmed && /["`]/.test(trimmed)) return false;
+  if (!EXPLICIT_TICKET_PATTERNS.some((pattern) => pattern.test(withoutQuotedText))) return false;
+  if (NEGATION_BEFORE_ACTION.test(withoutQuotedText)) return false;
+  return (DIRECT_REQUEST.test(withoutQuotedText) || POLITE_REQUEST.test(withoutQuotedText)) && TICKET_ACTION.test(withoutQuotedText);
 }
 
 export function isExplicitTicketRequestFromMessages(messages: readonly { role: string; text: string }[]): boolean {
@@ -64,37 +77,32 @@ function approvalKey(input: { toolName: string; normalizedArgs: string; userId: 
 
 export class InMemoryToolApprovalPolicy implements ToolApprovalPolicy {
   private readonly tokens = new Map<string, StoredApproval>();
+  private explicitNormalizedArgs: string | undefined;
   constructor(
     private readonly opts: {
       readonly explicitTicketRequest: boolean;
       readonly userId: string;
       readonly turnId: string;
+      readonly explicitToolName?: string;
+      readonly explicitNormalizedArgs?: string;
     },
-  ) {}
+  ) {
+    this.explicitNormalizedArgs = opts.explicitNormalizedArgs;
+  }
 
-  isExplicitlyRequested(): boolean {
-    return this.opts.explicitTicketRequest;
+  isExplicitlyRequested(input: ApprovalCheckInput): boolean {
+    if (!this.opts.explicitTicketRequest) return false;
+    if (input.toolName !== (this.opts.explicitToolName ?? 'createKnowledgeTicket')) return false;
+    if (input.userId !== this.opts.userId || input.turnId !== this.opts.turnId) return false;
+    if (this.explicitNormalizedArgs === undefined) this.explicitNormalizedArgs = input.normalizedArgs;
+    return this.explicitNormalizedArgs === input.normalizedArgs;
   }
 
   issueApproval(input: ApprovalIssueInput): { readonly token: string; readonly expiresAt: number } {
-    const expectedKey = approvalKey({
-      toolName: input.toolName,
-      normalizedArgs: input.normalizedArgs,
-      userId: input.userId,
-      turnId: input.turnId,
-    });
-    void expectedKey;
     const token = randomUUID();
-    const expiresAt = input.nowMs + Math.max(1, input.ttlMs);
-    const key = approvalKey({
-      toolName: input.toolName,
-      normalizedArgs: input.normalizedArgs,
-      userId: this.opts.userId,
-      turnId: this.opts.turnId,
-    });
-    void key;
-    const storeKey = `${input.toolName}\0${input.normalizedArgs}\0${input.userId}\0${input.turnId}\0${token}`;
-    this.tokens.set(storeKey, { key: approvalKey({
+    const ttlMs = Number.isFinite(input.ttlMs) ? Math.max(1, input.ttlMs) : 1;
+    const expiresAt = input.nowMs + ttlMs;
+    this.tokens.set(token, { key: approvalKey({
       toolName: input.toolName,
       normalizedArgs: input.normalizedArgs,
       userId: input.userId,
@@ -104,6 +112,8 @@ export class InMemoryToolApprovalPolicy implements ToolApprovalPolicy {
   }
 
   isApproved(input: ApprovalCheckInput): boolean {
+    const token = input.approvalToken;
+    if (token === undefined || token.trim() === '') return false;
     const wanted = approvalKey({
       toolName: input.toolName,
       normalizedArgs: input.normalizedArgs,
@@ -112,38 +122,17 @@ export class InMemoryToolApprovalPolicy implements ToolApprovalPolicy {
     });
     if (input.userId !== this.opts.userId) return false;
     if (input.turnId !== this.opts.turnId) return false;
-    for (const [storeKey, stored] of this.tokens) {
-      if (stored.key !== wanted) continue;
-      if (input.nowMs > stored.expiresAt) {
-        this.tokens.delete(storeKey);
-        continue;
-      }
-      const parts = storeKey.split('\0');
-      const tokenUser = parts[2];
-      const tokenTurn = parts[3];
-      if (tokenUser !== input.userId) continue;
-      if (tokenTurn !== input.turnId) continue;
-      return true;
+    const stored = this.tokens.get(token);
+    if (stored === undefined) return false;
+    if (input.nowMs >= stored.expiresAt) {
+      this.tokens.delete(token);
+      return false;
     }
-    return false;
+    return stored.key === wanted;
   }
 
   isApprovedWithToken(input: ApprovalCheckInput & { readonly token: string }): boolean {
-    const storeKey = `${input.toolName}\0${input.normalizedArgs}\0${input.userId}\0${input.turnId}\0${input.token}`;
-    const stored = this.tokens.get(storeKey);
-    if (!stored) return false;
-    if (input.userId !== this.opts.userId) return false;
-    if (input.turnId !== this.opts.turnId) return false;
-    if (input.nowMs > stored.expiresAt) {
-      this.tokens.delete(storeKey);
-      return false;
-    }
-    return stored.key === approvalKey({
-      toolName: input.toolName,
-      normalizedArgs: input.normalizedArgs,
-      userId: input.userId,
-      turnId: input.turnId,
-    });
+    return this.isApproved({ ...input, approvalToken: input.token });
   }
 }
 
@@ -156,5 +145,6 @@ export function createApprovalPolicyForTurn(input: {
     explicitTicketRequest: isExplicitTicketRequestText(input.lastUserText),
     userId: input.userId,
     turnId: input.turnId,
+    explicitToolName: 'createKnowledgeTicket',
   });
 }

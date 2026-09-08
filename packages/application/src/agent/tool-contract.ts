@@ -82,6 +82,11 @@ export interface ApprovalCheckInput {
   readonly userId: string;
   readonly turnId: string;
   readonly nowMs: number;
+  /**
+   * Issued approvals are bearer credentials.  A matching scope without the
+   * credential must never authorize a write.
+   */
+  readonly approvalToken?: string;
 }
 
 export interface ApprovalIssueInput {
@@ -94,7 +99,7 @@ export interface ApprovalIssueInput {
 }
 
 export interface ToolApprovalPolicy {
-  isExplicitlyRequested(): boolean;
+  isExplicitlyRequested(input: ApprovalCheckInput): boolean;
   isApproved(input: ApprovalCheckInput): boolean;
   issueApproval(input: ApprovalIssueInput): { readonly token: string; readonly expiresAt: number };
 }
@@ -112,6 +117,8 @@ export interface AgentToolContext {
 export interface ToolExecuteCall {
   readonly callId: string;
   readonly signal: AbortSignal;
+  /** Optional approval credential presented for this exact tool invocation. */
+  readonly approvalToken?: string;
 }
 
 export interface AgentToolDefinition<TInput, TOutput> {

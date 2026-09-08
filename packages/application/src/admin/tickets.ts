@@ -213,9 +213,11 @@ export interface CreateTicketInput {
 export async function createTicket(
   input: CreateTicketInput,
   deps: { tickets: TicketRepository; audit: AuditLog },
+  opts?: { readonly signal?: AbortSignal | undefined },
 ): Promise<Result<{ ticketId: string; status: 'created' }>> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_TICKET_CREATE_ATTEMPTS; attempt++) {
+    if (opts?.signal?.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
     const ticketId = `${TICKET_ID_PREFIX}${randomUUID().replaceAll('-', '').slice(0, TICKET_ID_HEX_LENGTH)}`;
     try {
       const row = await deps.tickets.insert({
@@ -225,6 +227,10 @@ export async function createTicket(
         email: capCodePoints(input.email, MAX_TICKET_EMAIL_LENGTH),
         issue: capCodePoints(input.issue, MAX_TICKET_ISSUE_LENGTH),
       });
+      // The insert adapter cannot be cancelled mid-flight. A commit is
+      // truthful as created even when cancellation arrived during the write.
+      // Audit/dead-letter scheduling runs for every commit so cancellation
+      // never skips it and never converts a commit into a cancellation.
       const event = { action: 'create' as const, ticketId: row.ticketId, actorId: input.userId };
       void safeAudit(
         () => deps.audit.logTicketEvent(event),

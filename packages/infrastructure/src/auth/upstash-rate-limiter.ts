@@ -30,23 +30,54 @@ export function createUpstashRateLimiter(): RateLimiter {
   const redis = new Redis({ url, token });
 
   return {
-    async check(key, opts) {
+    async check(key, opts, signal) {
+      if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
       const redisKey = `ratelimit:${key}`;
       const now = Date.now();
       const windowMs = opts.windowMs;
-      const [rawOk, rawSecond] = (await redis.eval(
+      // Upstash Redis v1.38 eval has no per-call AbortSignal slot; the
+      // client-level signal is static at construction. The Lua script is
+      // atomic and may still apply server-side after the caller stops
+      // waiting. Cancellation only stops local waiting and must prevent all
+      // downstream identity and ticket work.
+      const evalPromise = redis.eval(
         RATE_LIMITER_LUA,
         [redisKey],
         [now, windowMs, opts.limit],
-      )) as [unknown, unknown];
-      // Upstash may surface integer zset values as strings; coerce before comparing.
-      const ok = Number(rawOk);
-      const second = Number(rawSecond);
-      if (ok === 1) {
-        return { ok: true, remaining: Math.max(0, second), resetMs: windowMs };
+      ) as Promise<[unknown, unknown]>;
+      let abortListener: (() => void) | undefined;
+      const abortPromise = signal
+        ? new Promise<never>((_, reject) => {
+            if (signal.aborted) {
+              reject(new DOMException('Rate limit check was cancelled.', 'AbortError'));
+              return;
+            }
+            abortListener = (): void => {
+              reject(new DOMException('Rate limit check was cancelled.', 'AbortError'));
+            };
+            signal.addEventListener('abort', abortListener, { once: true });
+          })
+        : null;
+      try {
+        const [rawOk, rawSecond] = abortPromise
+          ? await Promise.race([evalPromise, abortPromise])
+          : await evalPromise;
+        if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
+        // Upstash may surface integer zset values as strings; coerce before comparing.
+        const ok = Number(rawOk);
+        const second = Number(rawSecond);
+        if (ok === 1) {
+          return { ok: true, remaining: Math.max(0, second), resetMs: windowMs };
+        }
+        const oldest = second || now;
+        return { ok: false, retryAfterMs: Math.max(0, oldest + windowMs - now) };
+      } catch (error) {
+        evalPromise.then(() => undefined, () => undefined);
+        if (signal?.aborted) throw new DOMException('Rate limit check was cancelled.', 'AbortError');
+        throw error;
+      } finally {
+        if (signal && abortListener) signal.removeEventListener('abort', abortListener);
       }
-      const oldest = second || now;
-      return { ok: false, retryAfterMs: Math.max(0, oldest + windowMs - now) };
     },
   };
 }

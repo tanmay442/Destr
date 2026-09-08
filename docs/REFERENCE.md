@@ -166,7 +166,11 @@ Migration `0028_high_growth_identifier_width` widens the sequence-backed primary
 - **In-Memory LRU (`LruRateLimiter`)**: single-instance sliding-window limiter keyed per user/operation (`chat:${userId}`, `feedback:${userId}`). Default budget: 30 req / 60s with 5,000 active-key capacity.
 - **Distributed (`UpstashRateLimiter`)**: production drop-in when `UPSTASH_REDIS_REST_URL` is set; Lua-scripted sorted sets (`ZADD`/`ZREMRANGEBYSCORE`) with keys `ratelimit:<key>` + per-key `:seq` counter.
 
-### Chat Grounding Evidence
+### Agent turn cancellation and write outcomes
+- The request signal is shared by rate-limit checks, authenticated identity lookup, both search assemblies, ticket creation, first-turn prefetch, and model execution. Boundaries fence cancellation before and after adapters that do not accept `AbortSignal`; a cancelled request cannot proceed into identity lookup or ticket writing.
+- The catalog applies the per-tool timeout and turn deadline to ticket writes. The ticket writer receives the linked signal. A writer that resolves after cancellation is reported as `created`, and its audit event is still scheduled through the dead-letter path.
+- Neon HTTP/WebSocket writes cannot be physically cancelled after they start. The catalog waits up to 5 seconds, clamped by the remaining turn budget, for an already-started write to settle. A late commit is returned as `created`; a write that does not settle in that window returns `outcome_unknown` with an explicit do-not-retry message. The caller must not treat that state as permission to issue another ticket request. No idempotency key or schema change was added in WP-3.
+
 - Retrieval evidence is accumulated for the full turn across first-turn prefetch and repeated `searchDocumentation` calls. A later empty search does not erase evidence already found.
 - Chunks are deduplicated by stable chunk UID, then by numeric chunk id, with a content-and-source-metadata fallback when no id is available. At most 30 unique chunks are retained per turn.
 - The model, citations, and hallucination checker use the same bounded chunk content. UI citation snippets remain shorter for display.
@@ -186,7 +190,7 @@ Migration `0028_high_growth_identifier_width` widens the sequence-backed primary
 | Google | Explicit cached-content reuse | `GOOGLE_CACHED_CONTENT` resource name, when configured | Cached-content/read/write details when reported |
 | Ollama | No native prompt-cache contract claimed | None | Unsupported fields remain `null`, never a synthetic zero |
 
-Stable instructions and deployment configuration precede dynamic prefetch evidence. Identical configuration produces a byte-for-byte stable prefix identified by `system-v1`; retrieval evidence is appended afterward. Event metadata records provider/model identity, prefix version, capability facts, input/cache token metrics with `reported` versus `unsupported` status, prefetch latency/status, reformulation count, and retrieval provider/mode. Raw user queries continue to follow `captureQueryText`; timing logs do not add query text.
+Stable instructions and deployment configuration precede dynamic prefetch evidence. Identical configuration produces a byte-for-byte stable prefix identified by `system-v2`; retrieval evidence is appended afterward. Event metadata records provider/model identity, prefix version, capability facts, input/cache token metrics with `reported` versus `unsupported` status, prefetch latency/status, reformulation count, and retrieval provider/mode. Raw user queries continue to follow `captureQueryText`; timing logs do not add query text.
 
 Chat file URLs accepted by the production composition must match an origin in `CHAT_FILE_ALLOWED_ORIGINS`. An empty list rejects all file parts. Only list origins whose DNS and storage are operationally controlled; this avoids relying on request-time hostname checks against DNS rebinding.
 

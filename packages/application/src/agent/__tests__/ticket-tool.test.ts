@@ -56,8 +56,12 @@ function makeContext(input: {
   };
 }
 
-function makeCall(callId: string): ToolExecuteCall {
-  return { callId, signal: new AbortController().signal };
+function makeCall(callId: string, approvalToken?: string): ToolExecuteCall {
+  return {
+    callId,
+    signal: new AbortController().signal,
+    ...(approvalToken !== undefined ? { approvalToken } : {}),
+  };
 }
 
 function allowRateLimit(): TicketRateLimiter {
@@ -242,7 +246,7 @@ describe('ticket tool contract (F-10, F-20)', () => {
     const approvals = silentApprovals();
     const input = baseInput();
     const nowMs = Date.now();
-    approvals.issueApproval({
+    const approval = approvals.issueApproval({
       toolName: TICKET_TOOL_NAME,
       normalizedArgs: normalizeToolArgs(input),
       userId: USER_ID,
@@ -256,9 +260,34 @@ describe('ticket tool contract (F-10, F-20)', () => {
       capabilities: DEFAULT_TOOL_CAPABILITIES,
       enabledTools: new Set([TICKET_TOOL_NAME]),
     });
-    const raw = await built.tools.get(TICKET_TOOL_NAME)?.execute(input, makeCall('call-approved'));
+    const raw = await built.tools.get(TICKET_TOOL_NAME)?.execute(input, makeCall('call-approved', approval.token));
     expect(ticketToolOutputSchema.parse(raw)).toMatchObject({ status: 'created' });
     expect(createTicket.mock).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the presented approval token even when all other scope fields match', async () => {
+    const createTicket = makeWriter();
+    const userResolver = makeResolver();
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit: allowRateLimit() });
+    const approvals = silentApprovals();
+    const input = baseInput();
+    approvals.issueApproval({
+      toolName: TICKET_TOOL_NAME,
+      normalizedArgs: normalizeToolArgs(input),
+      userId: USER_ID,
+      turnId: TURN_ID,
+      ttlMs: 60_000,
+      nowMs: Date.now(),
+    });
+    const context = makeContext({ approvals });
+    const guarded = wrapToolWithPolicy({
+      definition: tool,
+      context,
+      inner: tool.create(context),
+      counts: createPolicyCounts(),
+    });
+    await expect(guarded(input, makeCall('call-token-missing'))).rejects.toMatchObject({ kind: 'denied' });
+    expect(createTicket.mock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -387,6 +416,140 @@ describe('ticket tool contract (F-10, F-20)', () => {
     await expect(instance?.execute(smuggled, makeCall('call-smuggled')) ?? Promise.resolve()).rejects.toMatchObject({
       kind: 'denied',
     });
+    expect(createTicket.mock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ticket identity and rate-limit cancellation (P1-1, P1-2)', () => {
+  function abortError(): DOMException {
+    return new DOMException('Ticket creation was cancelled.', 'AbortError');
+  }
+
+  it('forwards the call signal to identity lookup and rate limiting', async () => {
+    const createTicket = makeWriter();
+    let resolverSignal: AbortSignal | undefined;
+    let limiterSignal: AbortSignal | undefined;
+    const userResolver: TicketUserResolver = async (_userId, opts) => {
+      resolverSignal = opts?.signal;
+      return { name: 'Real Person', email: 'real@example.com' };
+    };
+    const rateLimit: TicketRateLimiter = {
+      check: async (_key, _opts, signal) => {
+        limiterSignal = signal;
+        return { ok: true, remaining: 0, resetMs: 60_000 };
+      },
+    };
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const callSignal = new AbortController().signal;
+    const output = await tool.create(context)(baseInput(), { callId: 'call-signal-fwd', signal: callSignal });
+    expect(output.status).toBe('created');
+    expect(resolverSignal).toBe(callSignal);
+    expect(limiterSignal).toBe(callSignal);
+  });
+
+  it('aborts before identity lookup without calling resolver, limiter, or writer', async () => {
+    const createTicket = makeWriter();
+    const resolver = makeResolver();
+    const limiter = allowRateLimit();
+    const limiterSpy = vi.spyOn(limiter, 'check');
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver: resolver, rateLimit: limiter });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      tool.create(context)(baseInput(), { callId: 'call-before-lookup', signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(resolver.mock).not.toHaveBeenCalled();
+    expect(limiterSpy).not.toHaveBeenCalled();
+    expect(createTicket.mock).not.toHaveBeenCalled();
+  });
+
+  it('aborts during identity lookup without calling limiter or writer and never maps to identity failure', async () => {
+    const createTicket = makeWriter();
+    const userResolver: TicketUserResolver = async (_userId, opts) => {
+      await new Promise<never>((_, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+      });
+      return { name: 'Real Person', email: 'real@example.com' };
+    };
+    const limiter = allowRateLimit();
+    const limiterSpy = vi.spyOn(limiter, 'check');
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit: limiter });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const controller = new AbortController();
+    const pending = tool.create(context)(baseInput(), { callId: 'call-during-lookup', signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(limiterSpy).not.toHaveBeenCalled();
+    expect(createTicket.mock).not.toHaveBeenCalled();
+  });
+
+  it('aborts after identity lookup but before rate limiting without calling writer', async () => {
+    const createTicket = makeWriter();
+    let releaseResolver!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
+    });
+    const userResolver: TicketUserResolver = async () => {
+      await gate;
+      return { name: 'Real Person', email: 'real@example.com' };
+    };
+    const limiter = allowRateLimit();
+    const limiterSpy = vi.spyOn(limiter, 'check');
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit: limiter });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const controller = new AbortController();
+    const pending = tool.create(context)(baseInput(), { callId: 'call-after-lookup', signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    releaseResolver();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(limiterSpy).not.toHaveBeenCalled();
+    expect(createTicket.mock).not.toHaveBeenCalled();
+  });
+
+  it('aborts before the ticket writer without persisting', async () => {
+    const createTicket = makeWriter();
+    const userResolver = makeResolver();
+    let releaseLimiter!: () => void;
+    const limiterGate = new Promise<void>((resolve) => {
+      releaseLimiter = resolve;
+    });
+    const rateLimit: TicketRateLimiter = {
+      check: async () => {
+        await limiterGate;
+        return { ok: true, remaining: 0, resetMs: 60_000 };
+      },
+    };
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const controller = new AbortController();
+    const pending = tool.create(context)(baseInput(), { callId: 'call-before-writer', signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    releaseLimiter();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(createTicket.mock).not.toHaveBeenCalled();
+  });
+
+  it('does not call the writer when rate-limit cancellation wins', async () => {
+    const createTicket = makeWriter();
+    const userResolver = makeResolver();
+    const rateLimit: TicketRateLimiter = {
+      check: async (_key, _opts, signal) => {
+        await new Promise<never>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
+        return { ok: true, remaining: 0, resetMs: 60_000 };
+      },
+    };
+    const tool = createKnowledgeTicketTool({ createTicket, userResolver, rateLimit });
+    const context = makeContext({ approvals: explicitApprovals() });
+    const controller = new AbortController();
+    const pending = tool.create(context)(baseInput(), { callId: 'call-limiter-cancel', signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(createTicket.mock).not.toHaveBeenCalled();
   });
 });

@@ -63,7 +63,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const requestStartedAt = Date.now();
   const { request, userId } = input;
   const cfg = await deps.getRuntimeConfig();
-  const limit = await deps.rateLimit.check(`chat:${userId}`, CHAT_RATE_LIMIT);
+  const limit = await deps.rateLimit.check(`chat:${userId}`, CHAT_RATE_LIMIT, request.signal);
+  if (request.signal.aborted) throw new DOMException('Chat rate limit check was cancelled.', 'AbortError');
   if (!limit.ok) {
     return {
       kind: 'rate-limited',
@@ -367,16 +368,47 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
     }
 
-  const outOfDomainRef = { value: false };
-  const isEmptyRef = { value: false };
-  const resultStateRef = { value: null as AgenticResultState | null };
+  const prefetchedToolState = {
+    outOfDomain: false,
+    isEmpty: false,
+    resultState: null as AgenticResultState | null,
+  };
   const toolLedger = new TurnToolLedger();
   const catalogEnabled = isCatalogEnabled({ get: (key: string) => process.env[key] });
+
+  // One turn wall-clock deadline shared by prefetch, tools, and the model
+  // loop. Created before prefetch so prefetch cannot escape the turn
+  // envelope. Full deadline-ledger accounting remains WP-8 scope.
+  const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
+  const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
+  let softDeadlineMs = rawSoftDeadlineMs;
+  if (softDeadlineMs > maxSoftDeadlineMs) {
+    logger.warn('CHAT_SOFT_DEADLINE_MS clamped', { requested: rawSoftDeadlineMs, clamped: maxSoftDeadlineMs });
+    softDeadlineMs = maxSoftDeadlineMs;
+  }
+  const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
+  const elapsedBeforePrefetch = Date.now() - requestStartedAt;
+  // An already-expired budget must abort immediately; a one-second floor here
+  // would let the model run past the application's hard wall-time boundary.
+  const softDeadlineMsForPrefetch = Math.max(0, softDeadlineMs - elapsedBeforePrefetch);
+  const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsForPrefetch);
+  let softDeadlineFired = false;
+  softDeadlineSignal.addEventListener('abort', () => {
+    softDeadlineFired = true;
+  });
+  const turnSignal = AbortSignal.any([request.signal, softDeadlineSignal]);
+  const turnDeadlineAt = requestStartedAt + softDeadlineMs;
 
   let prefetch: PrefetchedSearchOutcome | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchStartedAt = performance.now();
-    const prefetchResult = await deps.searchChunks(cfg, lastUserText, { signal: request.signal });
+    if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
+    const prefetchResult = turnSignal.aborted
+      ? {
+          ok: false as const,
+          error: new SearchFailure('timeout', true, 'Documentation prefetch exceeded the turn deadline.'),
+        }
+      : await deps.searchChunks(cfg, lastUserText, { signal: turnSignal });
     metrics.prefetchMs = Math.round(performance.now() - prefetchStartedAt);
     metrics.retrieveMs += metrics.prefetchMs;
     metrics.prefetchStatus = 'performed';
@@ -384,7 +416,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       logger.error('First-turn pre-fetch failed', { code: prefetchResult.error.code });
       prefetch = { kind: 'error', query: lastUserText, failure: prefetchResult.error };
       metrics.searchResultStates.push('error');
-      resultStateRef.value = 'error';
+      prefetchedToolState.resultState = 'error';
     } else {
       const { chunks, degradedBy } = prefetchResult.value;
       for (const chunk of prefetchResult.value.chunks) {
@@ -410,21 +442,21 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           ),
         };
         metrics.searchResultStates.push('error');
-        resultStateRef.value = 'error';
+        prefetchedToolState.resultState = 'error';
         metrics.hitCount = 0;
       } else if (chunks.length === 0) {
         prefetch = { kind: 'no_match', query: lastUserText };
         metrics.searchResultStates.push('no_match');
-        resultStateRef.value = 'no_match';
-        outOfDomainRef.value = true;
-        isEmptyRef.value = true;
+        prefetchedToolState.resultState = 'no_match';
+        prefetchedToolState.outOfDomain = true;
+        prefetchedToolState.isEmpty = true;
         metrics.hitCount = 0;
       } else {
         const matches = addGroundingEvidence(groundingEvidence, chunks);
         prefetch = { kind: 'results', query: lastUserText, matches, degradedBy };
         const state: AgenticResultState = degradedBy.length > 0 ? 'degraded' : 'results';
         metrics.searchResultStates.push(state);
-        resultStateRef.value = state;
+        prefetchedToolState.resultState = state;
         metrics.hitCount = matches.length;
       }
     }
@@ -435,33 +467,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     prefixVersion: SYSTEM_PROMPT_PREFIX_VERSION,
   });
 
-  const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
-  const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
-  let softDeadlineMs = rawSoftDeadlineMs;
-  if (softDeadlineMs > maxSoftDeadlineMs) {
-    logger.warn('CHAT_SOFT_DEADLINE_MS clamped', { requested: rawSoftDeadlineMs, clamped: maxSoftDeadlineMs });
-    softDeadlineMs = maxSoftDeadlineMs;
-  }
-  const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
-  const elapsedBeforeStream = Date.now() - requestStartedAt;
-  // An already-expired budget must abort immediately; a one-second floor here
-  // would let the model run past the application's hard wall-time boundary.
-  const softDeadlineMsRemaining = Math.max(0, softDeadlineMs - elapsedBeforeStream);
-  const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsRemaining);
-  let softDeadlineFired = false;
-  softDeadlineSignal.addEventListener('abort', () => {
-    softDeadlineFired = true;
-  });
-  const turnSignal = AbortSignal.any([request.signal, softDeadlineSignal]);
+  const softDeadlineMsRemaining = Math.max(0, turnDeadlineAt - Date.now());
 
-  const catalogTools = catalogEnabled
-    ? buildCatalogToolsForTurn(
+  // Build module-owned guidance for both execution paths so the rollback path
+  // cannot drift back to a hand-maintained prompt contract.
+  const catalogTools = buildCatalogToolsForTurn(
         {
           searchChunks: (cfgValue, query, opts) => deps.searchChunks(cfgValue, query, opts),
           agenticSearch: (cfgValue, query, opts) => deps.agenticSearch(cfgValue, query, opts),
-          createTicket: (ticketInput) => deps.createTicket(ticketInput) as never,
-          userResolver: async (actorId: string) => {
-            const profile = await deps.userResolver(request);
+          createTicket: (ticketInput, opts) => deps.createTicket(ticketInput, opts),
+          userResolver: async (actorId: string, opts) => {
+            if (opts?.signal?.aborted) throw new DOMException('Ticket identity lookup was cancelled.', 'AbortError');
+            const profile = await deps.userResolver(request, { signal: opts?.signal });
+            if (opts?.signal?.aborted) throw new DOMException('Ticket identity lookup was cancelled.', 'AbortError');
             void actorId;
             return {
               ...(profile.name !== undefined ? { name: profile.name } : {}),
@@ -482,10 +500,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           groundingEvidence,
           metrics,
           ledger: toolLedger,
+          budgetDeadlineInMs: softDeadlineMsRemaining,
           ...(prefetch ? { prefetched: prefetch } : {}),
         },
-      )
-    : null;
+      );
 
   const legacyTools = catalogEnabled
     ? null
@@ -496,28 +514,59 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           userId,
           request,
           groundingEvidence,
-          outOfDomainRef,
-          isEmptyRef,
-          resultStateRef,
+          ledger: toolLedger,
           metrics,
+          signal: turnSignal,
+          deadlineAt: turnDeadlineAt,
           ...(prefetch ? { prefetched: prefetch } : {}),
         });
-        const ticket = (built as Record<string, { execute: (args: unknown) => Promise<unknown> }>).createKnowledgeTicket;
+        const ticket = (built as Record<string, {
+          execute: (args: unknown, options?: {
+            readonly abortSignal?: AbortSignal | undefined;
+            readonly toolCallId?: string | undefined;
+          }) => Promise<unknown>;
+        }>).createKnowledgeTicket;
         if (ticket && typeof ticket.execute === 'function') {
           const inner = ticket.execute.bind(ticket);
           const explicit = isExplicitTicketRequestText(lastUserText);
-          ticket.execute = async (args: unknown) => {
+          ticket.execute = async (args: unknown, options?: {
+            readonly abortSignal?: AbortSignal | undefined;
+            readonly toolCallId?: string | undefined;
+          }) => {
             if (!explicit) {
+              toolLedger.record({
+                toolName: 'createKnowledgeTicket',
+                callId: typeof options?.toolCallId === 'string' && options.toolCallId.trim() !== ''
+                  ? options.toolCallId.trim().slice(0, 100)
+                  : `legacy-ticket-${crypto.randomUUID()}`,
+                kind: 'denied',
+                resultState: null,
+                ticketCreated: false,
+                searchInfrastructureFailed: false,
+                uniqueEvidenceAdded: 0,
+                durationMs: 0,
+              });
               return { ticketId: null, status: 'denied', message: 'Ticket creation requires explicit user intent or approval.' };
             }
-            return inner(args);
+            return inner(args, options);
           };
         }
         return built;
       })();
 
+  const deriveToolState = () => {
+    if (toolLedger.calls.length > 0) return toolLedger.derive();
+    {
+      return {
+        ...prefetchedToolState,
+        ticketCreated: false,
+        ticketId: null,
+      };
+    }
+  };
+
   const baseSystemPrompt = buildSystemPrompt(cfg, prefetch?.kind === 'results' ? prefetch.matches : null);
-  const systemPrompt = catalogEnabled && catalogTools ? `${baseSystemPrompt}\n\n${catalogTools.guidanceBlock}` : baseSystemPrompt;
+  const systemPrompt = `${baseSystemPrompt}\n\n${catalogTools.guidanceBlock}`;
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
@@ -527,7 +576,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
     abortSignal: turnSignal,
-    tools: (catalogEnabled && catalogTools ? catalogTools.tools : legacyTools) as unknown as NonNullable<Parameters<typeof deps.ai.streamText>[0]['tools']>,
+    tools: (catalogEnabled ? catalogTools.tools : legacyTools) as unknown as NonNullable<Parameters<typeof deps.ai.streamText>[0]['tools']>,
     ...(modelRequestOptions?.providerOptions !== undefined
       ? { providerOptions: modelRequestOptions.providerOptions }
       : {}),
@@ -576,18 +625,13 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               data: src,
             });
           }
-          if (catalogEnabled && toolLedger.calls.length > 0) {
-            const derived = toolLedger.derive();
-            outOfDomainRef.value = derived.outOfDomain;
-            isEmptyRef.value = derived.isEmpty;
-            resultStateRef.value = derived.resultState;
-            if (derived.ticketCreated && derived.ticketId) {
+          const derivedToolState = deriveToolState();
+          if (catalogEnabled && derivedToolState.ticketCreated && derivedToolState.ticketId) {
               metrics.ticketCreated = true;
-              metrics.ticketId = derived.ticketId;
-            }
+              metrics.ticketId = derivedToolState.ticketId;
           }
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
-          const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;
+          const finalOutOfDomain = !hasGroundingEvidence && derivedToolState.outOfDomain;
           const hallucinationStart = performance.now();
           const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
@@ -611,7 +655,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             hallucinationTimedOut = hallucinationResult.timedOut;
           }
           metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
-          const isEmpty = !hasGroundingEvidence && (isEmptyRef.value || finalOutOfDomain);
+          const isEmpty = !hasGroundingEvidence && (derivedToolState.isEmpty || finalOutOfDomain);
           if (
             cacheKey &&
             cacheLease?.isOwned() === true &&
@@ -743,7 +787,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
-              resultState: timedOut ? undefined : resultStateRef.value ?? undefined,
+              resultState: timedOut ? undefined : derivedToolState.resultState ?? undefined,
               searchResultStates: metrics.searchResultStates,
               retrievalScoreMaxima: metrics.maxRetrievalScores,
               modelTelemetry: modelRequestOptions?.telemetry,
@@ -795,7 +839,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               citations: finalCitations,
               guardrail: hallucinationBlocked
                 ? {
-                    outOfDomain: outOfDomainRef.value,
+                    outOfDomain: derivedToolState.outOfDomain,
                     offerTicket: true,
                   }
                 : timedOut
@@ -853,8 +897,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 citationCount: dedupeCitations(capturedCitations).length,
                 meta: buildEventMeta({
                   ticketId: metrics.ticketId,
-                  resultState: resultStateRef.value ?? undefined,
-                  isEmpty: isEmptyRef.value || outOfDomainRef.value || undefined,
+                  resultState: deriveToolState().resultState ?? undefined,
+                  isEmpty: deriveToolState().isEmpty || deriveToolState().outOfDomain || undefined,
                 }),
               });
               if (cfg.captureQueryText && deps.historySink && parsed.data.conversationId) {

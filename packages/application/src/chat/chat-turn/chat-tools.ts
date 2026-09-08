@@ -1,10 +1,19 @@
-import { z } from 'zod';
 import { logger, type AgenticResultState } from '@app/domain';
 import {
   composeTicketIssue,
   createKnowledgeTicketInputSchema,
+  TICKET_TOOL_DESCRIPTION,
+  TICKET_TOOL_TIMEOUT_MS,
   ticketToolOutputSchema,
 } from '../../agent/tools/create-knowledge-ticket';
+import {
+  SEARCH_TOOL_DESCRIPTION,
+  searchDocumentationInputSchema,
+} from '../../agent/tools/search-documentation';
+import {
+  sanitizeUntrustedMetadata,
+  serializeUntrustedChunk,
+} from '../../agent/prompt/serialize-untrusted-result';
 import type { AppConfig } from '@app/domain/app-config';
 import {
   searchToolResultSchema,
@@ -19,26 +28,10 @@ import {
 } from '../../rag/search';
 import { addGroundingEvidence, formatGroundingReference, type GroundingEvidence } from '../grounding-evidence';
 import type { ChatTurnDeps, TurnMetrics } from './turn-types';
+import { TurnToolLedger } from '../../agent/run-state';
+import { ToolPolicyError, withTimeout } from '../../agent/tool-policy-pipeline';
 
 const DEFAULT_TOOL_RESULT_LIMIT = 3;
-
-const searchDocumentationInputSchema = z.object({
-  query: z
-    .string()
-    .trim()
-    .min(1)
-    .max(2000)
-    .describe(
-      'A focused, specific search query. Reformulate vague user wording into a tight phrase (e.g. "school cell phone policy" instead of "phones").',
-    ),
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(10)
-    .optional()
-    .describe('Maximum number of evidence chunks to return. Defaults to 3.'),
-});
 
 type PrefetchedSearchOutcome =
   | {
@@ -61,6 +54,12 @@ function toolCallId(options: unknown): string {
     return options.toolCallId.trim().slice(0, 100);
   }
   return `search-${crypto.randomUUID()}`;
+}
+
+function toolCallSignal(options: { readonly abortSignal?: AbortSignal | undefined } | undefined, requestSignal: AbortSignal): AbortSignal {
+  const callSignal = options?.abortSignal;
+  if (callSignal === undefined || callSignal === requestSignal) return requestSignal;
+  return AbortSignal.any([requestSignal, callSignal]);
 }
 
 function recordScores(metrics: TurnMetrics, chunks: readonly RetrievedChunk[]): void {
@@ -95,10 +94,10 @@ function toToolItems(
     chunkIndex: chunk.chunkIndex,
     subquestionId,
     executedQueryIds: [executedQueryId],
-    content: formatGroundingReference(chunk),
-    source: chunk.source,
-    ...(chunk.title ? { documentTitle: chunk.title } : {}),
-    ...(chunk.sectionTitle ? { section: chunk.sectionTitle } : {}),
+    content: serializeUntrustedChunk({ content: chunk.content, source: chunk.source }),
+    source: chunk.source === null ? null : sanitizeUntrustedMetadata(chunk.source),
+    ...(chunk.title ? { documentTitle: sanitizeUntrustedMetadata(chunk.title) } : {}),
+    ...(chunk.sectionTitle ? { section: sanitizeUntrustedMetadata(chunk.sectionTitle) } : {}),
     scores: chunk.scores,
   }));
 }
@@ -124,17 +123,33 @@ function errorSet(
   };
 }
 
+function thrownSearchKind(error: unknown, signal: AbortSignal): 'error' | 'timeout' | 'cancelled' {
+  const kind = typeof error === 'object' && error !== null && 'kind' in error
+    ? (error as { kind?: unknown }).kind
+    : undefined;
+  if (kind === 'timeout') return 'timeout';
+  if (kind === 'cancelled') return 'cancelled';
+  if (error instanceof SearchFailure && error.code === 'timeout') return 'timeout';
+  if (error instanceof SearchFailure && error.code === 'cancelled') return 'cancelled';
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'timeout';
+  if (error instanceof Error && error.name === 'TimeoutError') return 'timeout';
+  if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled';
+  if (error instanceof Error && (error.name === 'AbortError' || /abort/i.test(error.message))) return 'cancelled';
+  if (signal.aborted) return 'cancelled';
+  return 'error';
+}
+
 function buildChatTools(deps: ChatTurnDeps, opts: {
   cfg: AppConfig;
   effectiveMode: 'agentic' | 'normal';
   userId: string;
   request: Request;
   groundingEvidence: GroundingEvidence;
-  outOfDomainRef: { value: boolean };
-  isEmptyRef: { value: boolean };
-  resultStateRef: { value: AgenticResultState | null };
+  ledger: TurnToolLedger;
   metrics: TurnMetrics;
   prefetched?: PrefetchedSearchOutcome | undefined;
+  signal?: AbortSignal | undefined;
+  deadlineAt?: number | undefined;
 }) {
   const {
     cfg,
@@ -142,13 +157,13 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     userId,
     request,
     groundingEvidence,
-    outOfDomainRef,
-    isEmptyRef,
-    resultStateRef,
+    ledger,
     metrics,
     prefetched,
   } = opts;
+  const turnSignal = opts.signal ?? request.signal;
   let ticketOpenedInTurn = false;
+  let ticketOutcomeUnknown = false;
   let searchInfrastructureFailed =
     prefetched?.kind === 'error' ||
     (prefetched?.kind === 'results' && prefetched.degradedBy.length > 0);
@@ -157,15 +172,18 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
 
   return {
     searchDocumentation: deps.ai.tool({
-      description:
-        "Search the org documentation for evidence relevant to the user's question. Returns a structured result with independently typed results, no-match, or infrastructure-error states. Results are ordered by final rank and include score provenance; scores from different retrieval methods are not interchangeable percentages. Call this tool whenever an answer needs official documentation. You may call it again with a distinct reformulation after a genuine no-match. Do not treat an error as no documentation and do not open a ticket because search infrastructure failed.",
+      description: SEARCH_TOOL_DESCRIPTION,
       inputSchema: searchDocumentationInputSchema,
       outputSchema: searchToolResultSchema,
       execute: async ({ query, limit }, options) => {
         const callId = toolCallId(options);
+        const callSignal = toolCallSignal(options, turnSignal);
         const subquestionId = 'sq-1';
         const requestedLimit = limit ?? DEFAULT_TOOL_RESULT_LIMIT;
         const t0 = performance.now();
+        let thrownKind: 'error' | 'timeout' | 'cancelled' | null = null;
+        let resultState: AgenticResultState | null = null;
+        try {
         const canReusePrefetch =
           !prefetchedConsumed &&
           prefetched !== undefined &&
@@ -181,7 +199,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           prefetchedConsumed = true;
           metrics.prefetchStatus = 'exact_match_reused';
           if (prefetched.kind === 'error') {
-            resultStateRef.value = 'error';
+            resultState = 'error';
             return validatedToolResult({
               callId,
               sets: [errorSet(subquestionId, query, [query], prefetched.failure)],
@@ -191,11 +209,8 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             });
           }
           if (prefetched.kind === 'no_match') {
-            if (groundingEvidence.documents.length === 0) {
-              outOfDomainRef.value = true;
-              isEmptyRef.value = true;
-            }
-            resultStateRef.value = 'no_match';
+
+            resultState = 'no_match';
             return validatedToolResult({
               callId,
               sets: [{
@@ -214,7 +229,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           const truncated = prefetched.matches.length > requestedLimit;
           matches = prefetched.matches.slice(0, requestedLimit);
           degradation = prefetched.degradedBy;
-          resultStateRef.value = degradation.length > 0 ? 'degraded' : 'results';
+          resultState = degradation.length > 0 ? 'degraded' : 'results';
           const queries = executedQueries(attempts);
           const set: SearchSubquestionResult = {
             kind: 'results',
@@ -242,16 +257,23 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         }
 
         if (effectiveMode === 'agentic') {
-          const result = await deps.agenticSearch(cfg, query, {
-            limit: requestedLimit,
-            signal: request.signal,
-            excludeChunkIdentities: groundingEvidence.seenChunkKeys,
-          });
+          let result: Awaited<ReturnType<ChatTurnDeps['agenticSearch']>>;
+          try {
+            result = await deps.agenticSearch(cfg, query, {
+              limit: requestedLimit,
+              signal: callSignal,
+              excludeChunkIdentities: groundingEvidence.seenChunkKeys,
+            });
+          } catch (error) {
+            searchInfrastructureFailed = true;
+            resultState = 'error';
+            throw error;
+          }
           metrics.retrieveMs += Math.round(performance.now() - t0);
           if (!result.ok) {
             logger.error('Agentic retrieval failed', { code: result.error.code });
             searchInfrastructureFailed = true;
-            resultStateRef.value = 'error';
+            resultState = 'error';
             metrics.searchResultStates.push('error');
             attempts = result.error.attemptedQueries?.length
               ? [...result.error.attemptedQueries]
@@ -283,16 +305,23 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           }
           matches = result.value.chunks.slice(0, requestedLimit);
         } else {
-          const result = await deps.searchChunks(cfg, query, {
-            limit: requestedLimit,
-            signal: request.signal,
-            excludeChunkIdentities: groundingEvidence.seenChunkKeys,
-          });
+          let result: Awaited<ReturnType<ChatTurnDeps['searchChunks']>>;
+          try {
+            result = await deps.searchChunks(cfg, query, {
+              limit: requestedLimit,
+              signal: callSignal,
+              excludeChunkIdentities: groundingEvidence.seenChunkKeys,
+            });
+          } catch (error) {
+            searchInfrastructureFailed = true;
+            resultState = 'error';
+            throw error;
+          }
           metrics.retrieveMs += Math.round(performance.now() - t0);
           if (!result.ok) {
             logger.error('RAG retrieval failed', { code: result.error.code });
             searchInfrastructureFailed = true;
-            resultStateRef.value = 'error';
+            resultState = 'error';
             metrics.searchResultStates.push('error');
             return validatedToolResult({
               callId,
@@ -330,7 +359,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
             true,
             'The documentation search is temporarily unavailable. Please try again.',
           );
-          resultStateRef.value = 'error';
+          resultState = 'error';
           metrics.searchResultStates.push('error');
           return validatedToolResult({
             callId,
@@ -344,12 +373,9 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
         if (matches.length === 0 || uniqueMatches.length === 0) {
           const filteredDuplicates = matches.length > 0;
           const state: AgenticResultState = filteredDuplicates ? 'degraded' : 'no_match';
-          resultStateRef.value = state;
+          resultState = state;
           metrics.searchResultStates.push(state);
-          if (!filteredDuplicates && groundingEvidence.documents.length === 0) {
-            outOfDomainRef.value = true;
-            isEmptyRef.value = true;
-          }
+
           const set: SearchSubquestionResult = {
             kind: 'no_match',
             subquestionId,
@@ -367,10 +393,8 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           });
         }
 
-        outOfDomainRef.value = false;
-        isEmptyRef.value = false;
         const state: AgenticResultState = degradation.length > 0 ? 'degraded' : 'results';
-        resultStateRef.value = state;
+        resultState = state;
         metrics.searchResultStates.push(state);
         const queries = executedQueries(attempts);
         const resultQueryIndex = Math.max(0, attempts.lastIndexOf(resultQuery));
@@ -391,67 +415,157 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
           evidenceTokensAdded: estimatedTokens(uniqueMatches),
           truncatedBy: retrievalDiagnostics?.hasMore ? ['call_result_limit'] : [],
         });
+        } catch (error) {
+          searchInfrastructureFailed = true;
+          resultState = 'error';
+          thrownKind = thrownSearchKind(error, callSignal);
+          metrics.searchResultStates.push('error');
+          throw error;
+        } finally {
+          const state = resultState ?? 'error';
+          const kind = thrownKind ?? (state === 'results'
+            ? 'success'
+            : state === 'no_match' ? 'no_match' : state);
+          ledger.record({
+            toolName: 'searchDocumentation',
+            callId,
+            kind,
+            resultState: state,
+            ticketCreated: false,
+            searchInfrastructureFailed,
+            uniqueEvidenceAdded: 0,
+            durationMs: Math.max(0, performance.now() - t0),
+          });
+        }
       },
     }),
     createKnowledgeTicket: deps.ai.tool({
-      description:
-        'Open a knowledge ticket for a genuine documentation gap or an explicit user escalation request. Requires explicit user intent or a scoped approval; otherwise the call is denied without side effects. Never use after a search infrastructure error. Identity comes from the authenticated user, never from model input.',
+      description: TICKET_TOOL_DESCRIPTION,
       inputSchema: createKnowledgeTicketInputSchema,
       outputSchema: ticketToolOutputSchema,
-      execute: async (rawInput) => {
-        const parsed = createKnowledgeTicketInputSchema.safeParse(rawInput);
-        if (!parsed.success) throw parsed.error;
-        const ticketInput = parsed.data;
-        if (searchInfrastructureFailed) {
-          return ticketToolOutputSchema.parse({
-            ticketId: null,
-            status: 'denied',
-            message: 'A knowledge ticket cannot be created from a failed documentation search.',
-          });
-        }
-        if (ticketOpenedInTurn) {
-          return ticketToolOutputSchema.parse({
-            ticketId: null,
-            status: 'denied',
-            message: 'A knowledge ticket was already created in this turn.',
-          });
-        }
-        const ticketLimit = await deps.rateLimit.check(`ticket:${userId}`, { limit: 1, windowMs: 5 * 60_000 });
-        if (!ticketLimit.ok) {
-          const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
-            ? Math.ceil(ticketLimit.retryAfterMs / 1000)
-            : undefined;
-          return ticketToolOutputSchema.parse({
-            ticketId: null,
-            status: 'denied',
-            message:
-              retryAfterSec !== undefined
-                ? `Ticket creation is rate limited for this user; retry in about ${retryAfterSec} second${retryAfterSec === 1 ? '' : 's'}.`
-                : 'Ticket creation is rate limited for this user.',
-          });
-        }
-        let userProfile: { name?: string; email?: string };
+      execute: async (rawInput, options) => {
+        const callId = toolCallId(options);
+        const startedAt = performance.now();
+        const callSignal = toolCallSignal(options, turnSignal);
+        let outcomeKind: 'success' | 'error' | 'denied' | 'cancelled' | 'timeout' | 'outcome_unknown' = 'error';
+        let createdTicketId: string | null = null;
         try {
-          userProfile = await deps.userResolver(request);
-        } catch {
-          return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
+          if (callSignal.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+          const parsed = createKnowledgeTicketInputSchema.safeParse(rawInput);
+          if (!parsed.success) throw parsed.error;
+          const ticketInput = parsed.data;
+          if (searchInfrastructureFailed) {
+            outcomeKind = 'denied';
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'denied',
+              message: 'A knowledge ticket cannot be created from a failed documentation search.',
+            });
+          }
+          if (ticketOutcomeUnknown) {
+            outcomeKind = 'denied';
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'denied',
+              message: 'A previous ticket request has an unknown outcome; do not retry it.',
+            });
+          }
+          if (ticketOpenedInTurn) {
+            outcomeKind = 'denied';
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'denied',
+              message: 'A knowledge ticket was already created in this turn.',
+            });
+          }
+          let userProfile: { name?: string; email?: string };
+          try {
+            userProfile = await deps.userResolver(request, { signal: callSignal });
+          } catch {
+            if (callSignal.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+            return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
+          }
+          if (callSignal.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+          const realName = userProfile.name?.trim();
+          const realEmail = userProfile.email?.trim();
+          if (!realName || !realEmail || !realEmail.includes('@')) {
+            return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
+          }
+          const ticketLimit = await deps.rateLimit.check(`ticket:${userId}`, { limit: 1, windowMs: 5 * 60_000 }, callSignal);
+          if (callSignal.aborted) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+          if (!ticketLimit.ok) {
+            outcomeKind = 'denied';
+            const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
+              ? Math.ceil(ticketLimit.retryAfterMs / 1000)
+              : undefined;
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'denied',
+              message:
+                retryAfterSec !== undefined
+                  ? `Ticket creation is rate limited for this user; retry in about ${retryAfterSec} second${retryAfterSec === 1 ? '' : 's'}.`
+                  : 'Ticket creation is rate limited for this user.',
+            });
+          }
+          let result: Awaited<ReturnType<ChatTurnDeps['createTicket']>>;
+          try {
+            result = await withTimeout(
+              (signal) => deps.createTicket({
+                userId,
+                name: realName,
+                email: realEmail,
+                issue: composeTicketIssue(ticketInput),
+              }, { signal }),
+              TICKET_TOOL_TIMEOUT_MS,
+              'createKnowledgeTicket',
+              [callSignal],
+              true,
+              opts.deadlineAt !== undefined ? Math.max(0, opts.deadlineAt - Date.now()) : undefined,
+            );
+          } catch (error) {
+            if (error instanceof ToolPolicyError && error.kind === 'outcome_unknown') {
+              ticketOutcomeUnknown = true;
+              outcomeKind = 'outcome_unknown';
+              return ticketToolOutputSchema.parse({
+                ticketId: null,
+                status: 'error',
+                message: 'Ticket outcome is unknown; do not retry this request.',
+              });
+            }
+            throw error;
+          }
+          if (callSignal.aborted && !result.ok) throw new DOMException('Ticket creation was cancelled.', 'AbortError');
+          if (!result.ok) {
+            logger.error('createKnowledgeTicket: createTicket failed', { error: result.error });
+            return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
+          }
+          outcomeKind = 'success';
+          ticketOpenedInTurn = true;
+          createdTicketId = result.value.ticketId;
+          metrics.ticketCreated = true;
+          metrics.ticketId = createdTicketId;
+          return ticketToolOutputSchema.parse(result.value);
+        } catch (error) {
+          if (error instanceof ToolPolicyError) {
+            if (error.kind === 'cancelled') outcomeKind = 'cancelled';
+            else if (error.kind === 'timeout') outcomeKind = 'timeout';
+            else if (error.kind === 'outcome_unknown') outcomeKind = 'outcome_unknown';
+          } else if (callSignal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            outcomeKind = 'cancelled';
+          }
+          throw error;
+        } finally {
+          ledger.record({
+            toolName: 'createKnowledgeTicket',
+            callId,
+            kind: outcomeKind,
+            resultState: null,
+            ticketCreated: createdTicketId !== null,
+            searchInfrastructureFailed,
+            uniqueEvidenceAdded: 0,
+            durationMs: Math.max(0, performance.now() - startedAt),
+          }, createdTicketId);
         }
-        const realName = userProfile.name ?? 'User';
-        const realEmail = userProfile.email ?? `${userId}@clerk.user`;
-        const result = await deps.createTicket({
-          userId,
-          name: realName,
-          email: realEmail,
-          issue: composeTicketIssue(ticketInput),
-        });
-        if (!result.ok) {
-          logger.error('createKnowledgeTicket: createTicket failed', { error: result.error });
-          return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
-        }
-        ticketOpenedInTurn = true;
-        metrics.ticketCreated = true;
-        metrics.ticketId = result.value.ticketId;
-        return ticketToolOutputSchema.parse(result.value);
       },
     }),
   };

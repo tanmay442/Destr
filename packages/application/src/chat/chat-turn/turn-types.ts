@@ -121,8 +121,11 @@ export interface ChatTurnDeps {
     name: string;
     email: string;
     issue: string;
-  }): Promise<Result<{ ticketId: string; status: 'created' }>>;
-  userResolver(req: Request): Promise<{ userId: string; name?: string; email?: string }>;
+  }, opts?: { readonly signal?: AbortSignal | undefined }): Promise<Result<{ ticketId: string; status: 'created' }>>;
+  userResolver(
+    req: Request,
+    opts?: { readonly signal?: AbortSignal | undefined },
+  ): Promise<{ userId: string; name?: string; email?: string }>;
   eventSink: {
     record(event: ChatEventInput): void;
     flush(): Promise<void>;

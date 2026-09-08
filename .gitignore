@@ -66,15 +66,13 @@ scripts/chunk-output/
 
 docs/modularityport/
 
+# Local planning copies (shared in the workspace, never committed)
+docs/agentic-tooling-search-modernization-plan.md
+docs/agent-observability-admin-visibility-spec.md
+
 # Local agent handoff/audit logs (shared in the workspace, never committed)
 docs/agentic-modernization-agent-logs/
-# Generated eval artifact (§C7) — uploaded as a CI artifact, not committed
-eval/golden-report.json
-eval/golden-report.mock.json
-eval/golden-report.real-synthetic.json
-eval/wp0-command-evidence.json
-eval/agent-baseline-measurements.json
-eval/agent-modernization-baseline.json
-eval/model-interactions.jsonl
-eval/wp2-retrieval-report.json
-eval/wp2-reranker-calibration-report.json
+
+# Generated evaluation output (uploaded as CI artifacts, not committed).
+# Evaluation source and fixtures live under scripts/eval/ and remain tracked.
+/eval/

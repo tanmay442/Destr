@@ -21,7 +21,10 @@ import type {
   AgentToolDefinition,
   ToolExecuteCall,
 } from '../tool-contract';
-import { serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
+import {
+  sanitizeUntrustedMetadata,
+  serializeUntrustedChunk,
+} from '../prompt/serialize-untrusted-result';
 
 export const SEARCH_TOOL_NAME = 'searchDocumentation' as const;
 export const DEFAULT_SEARCH_TOOL_LIMIT = 3;
@@ -120,9 +123,9 @@ function toToolItems(
     subquestionId,
     executedQueryIds: [executedQueryId],
     content: serializeUntrustedChunk({ content: chunk.content, source: chunk.source }),
-    source: chunk.source,
-    ...(chunk.title ? { documentTitle: chunk.title } : {}),
-    ...(chunk.sectionTitle ? { section: chunk.sectionTitle } : {}),
+    source: chunk.source === null ? null : sanitizeUntrustedMetadata(chunk.source),
+    ...(chunk.title ? { documentTitle: sanitizeUntrustedMetadata(chunk.title) } : {}),
+    ...(chunk.sectionTitle ? { section: sanitizeUntrustedMetadata(chunk.sectionTitle) } : {}),
     scores: chunk.scores,
   }));
 }

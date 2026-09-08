@@ -38,7 +38,7 @@ function prefetchChunk(): RetrievedChunk {
 }
 
 describe('buildSystemPrompt', () => {
-  it('assembles the tool contract, persona, guardrail and out-of-scope blocks in order', () => {
+  it('assembles global interaction, persona, guardrail and out-of-scope blocks in order', () => {
     const prompt = buildSystemPrompt(makeCfg(), null);
     expect(prompt).toContain('# Interaction Guidelines');
     expect(prompt).toContain('# Persona');
@@ -50,9 +50,17 @@ describe('buildSystemPrompt', () => {
     expect(outOfScopeAt).toBeGreaterThan(guardrailAt);
   });
 
+  it('does not duplicate tool-specific names, fields, or policy in the stable prefix', () => {
+    const prompt = buildStableSystemPrompt(makeCfg());
+    expect(prompt).not.toContain('searchDocumentation');
+    expect(prompt).not.toContain('createKnowledgeTicket');
+    expect(prompt).not.toContain('documentationSearched');
+    expect(prompt).toContain('Follow the generated guidance for each enabled tool.');
+  });
+
   it('uses the grader-free guardrail wording', () => {
     const prompt = buildSystemPrompt(makeCfg(), null);
-    expect(prompt).toContain('- Use only highly relevant information and ignore off-topic chunks.');
+    expect(prompt).toContain('- Use only highly relevant registered-tool evidence and ignore off-topic content.');
     expect(prompt).not.toContain('Grade chunks:');
   });
 
@@ -71,7 +79,7 @@ describe('buildSystemPrompt', () => {
   it('appends the pre-fetch block last when pre-fetched chunks exist', () => {
     const prompt = buildSystemPrompt(makeCfg(), [prefetchChunk()]);
     expect(prompt).toContain('# Pre-fetched Reference Data');
-    expect(prompt).toContain('<reference source="docs/guide.md">');
+    expect(prompt).toContain('BEGIN UNTRUSTED EVIDENCE');
     const prefetchAt = prompt.indexOf('# Pre-fetched Reference Data');
     const outOfScopeAt = prompt.indexOf('# Out-of-Scope Topics');
     expect(prefetchAt).toBeGreaterThan(outOfScopeAt);

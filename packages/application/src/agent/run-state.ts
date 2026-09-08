@@ -1,6 +1,6 @@
 import type { AgenticResultState } from '@app/domain';
 
-export type ToolCallOutcomeKind = 'success' | 'no_match' | 'error' | 'degraded' | 'denied' | 'timeout' | 'cancelled';
+export type ToolCallOutcomeKind = 'success' | 'no_match' | 'error' | 'degraded' | 'denied' | 'timeout' | 'cancelled' | 'outcome_unknown';
 
 export interface ToolCallRecord {
   readonly toolName: string;

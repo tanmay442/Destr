@@ -503,15 +503,18 @@ describe('/api/chat createKnowledgeTicket tool', () => {
     expect(out).toHaveProperty('status', 'created');
     expect(out).toHaveProperty('ticketId');
     expect((out as { ticketId: string }).ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
-    expect(createTicketMock).toHaveBeenCalledWith({
-      userId: 'user_test',
-      name: 'Real Person',
-      email: 'real@example.com',
-      issue: expect.stringContaining('Question: Cannot reset my password.'),
-    });
+    expect(createTicketMock).toHaveBeenCalledWith(
+      {
+        userId: 'user_test',
+        name: 'Real Person',
+        email: 'real@example.com',
+        issue: expect.stringContaining('Question: Cannot reset my password.'),
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
-  it('falls back to a synthetic email when the Clerk user has no email', async () => {
+  it('rejects ticket creation when the Clerk user has no verified email', async () => {
     currentUserMock.mockResolvedValueOnce({
       id: 'user_nomail',
       emailAddresses: [],
@@ -521,10 +524,8 @@ describe('/api/chat createKnowledgeTicket tool', () => {
     });
     createTicketMock.mockResolvedValueOnce(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
     const out = await invokeToolFromStreamText(ticketInput({ question: 'no email on account' }));
-    expect(out).toHaveProperty('status', 'created');
-    expect(createTicketMock).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'user_nomail@clerk.user' }),
-    );
+    expect(out).toMatchObject({ ticketId: null, status: 'error' });
+    expect(createTicketMock).not.toHaveBeenCalled();
   });
 
   it('generates unique ticket ids (UUID-based, no collision retry needed)', async () => {

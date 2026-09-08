@@ -7,7 +7,11 @@ import type {
   ToolExecuteCall,
 } from '../tool-contract';
 import { createDefaultBudget, createInMemoryTraceWriter } from '../tool-contract';
-import { InMemoryToolApprovalPolicy } from '../tool-approval';
+import {
+  createApprovalPolicyForTurn,
+  InMemoryToolApprovalPolicy,
+  isExplicitTicketRequestText,
+} from '../tool-approval';
 import {
   createPolicyCounts,
   sanitizeToolError,
@@ -29,9 +33,12 @@ type TestOutput = z.infer<typeof outputSchema>;
 function makeDefinition(overrides?: {
   readonly timeoutMs?: number;
   readonly maxCallsPerTurn?: number;
+  readonly name?: string;
+  readonly effect?: 'read' | 'write';
+  readonly requiresApproval?: boolean;
 }): AgentToolDefinition<TestInput, TestOutput> {
   return {
-    name: 'probeTool',
+    name: overrides?.name ?? 'probeTool',
     description: 'Minimal probe tool for policy wrapper tests.',
     inputSchema,
     outputSchema,
@@ -42,9 +49,9 @@ function makeDefinition(overrides?: {
       resultSemantics: ['returns an answer string'],
     },
     policy: {
-      effect: 'read',
-      idempotent: true,
-      requiresApproval: false,
+      effect: overrides?.effect ?? 'read',
+      idempotent: overrides?.effect !== 'write',
+      requiresApproval: overrides?.requiresApproval ?? false,
       maxCallsPerTurn: overrides?.maxCallsPerTurn ?? 10,
       timeoutMs: overrides?.timeoutMs ?? 1000,
     },
@@ -58,6 +65,7 @@ function makeContext(overrides?: {
   readonly signal?: AbortSignal;
   readonly maxTotalToolCalls?: number;
   readonly deadlineInMs?: number;
+  readonly approvals?: AgentToolContext['approvals'];
 }): { readonly context: AgentToolContext; readonly abort: () => void } {
   const controller = new AbortController();
   const context: AgentToolContext = {
@@ -77,7 +85,7 @@ function makeContext(overrides?: {
       },
     },
     trace: createInMemoryTraceWriter(),
-    approvals: new InMemoryToolApprovalPolicy({
+    approvals: overrides?.approvals ?? new InMemoryToolApprovalPolicy({
       explicitTicketRequest: false,
       userId: 'user-1',
       turnId: 'turn-1',
@@ -175,6 +183,142 @@ describe('tool policy wrappers', () => {
     expect(kindOf(caught)).toBe('timeout');
   });
 
+  it('aborts the underlying operation when the policy timeout wins', async () => {
+    const { context } = makeContext();
+    let observedSignal: AbortSignal | undefined;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 20 }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (_parsed: TestInput, call: ToolExecuteCall): Promise<TestOutput> => {
+        observedSignal = call.signal;
+        return await new Promise<TestOutput>((_resolve, reject) => {
+          call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true });
+        });
+      },
+    });
+    const { signal } = freshCallSignal();
+
+    await expect(wrapped({ query: 'timeout-abort' }, makeCall(signal, 'call-timeout-abort'))).rejects.toMatchObject({
+      kind: 'timeout',
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(context.trace.events.filter((event) => event.phase !== 'start')).toHaveLength(1);
+  });
+
+  it('reconciles an already-started write result after timeout instead of reporting a retryable false failure', async () => {
+    const { context } = makeContext();
+    let observedAborted = false;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 10, effect: 'write', requiresApproval: false }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (_parsed, call): Promise<TestOutput> => {
+        await sleep(25);
+        observedAborted = call.signal.aborted;
+        return { answer: 'committed' };
+      },
+    });
+
+    await expect(wrapped(
+      { query: 'write' },
+      makeCall(new AbortController().signal, 'call-write-reconcile'),
+    )).resolves.toEqual({ answer: 'committed' });
+    expect(observedAborted).toBe(true);
+    expect(context.trace.events.filter((event) => event.phase !== 'start')).toHaveLength(1);
+    expect(context.trace.events.at(-1)?.phase).toBe('success');
+  });
+
+  it('returns a write that completes before timeout as success', async () => {
+    const { context } = makeContext();
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 1000, effect: 'write', requiresApproval: false }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => ({ answer: 'fast-commit' }),
+    });
+    await expect(
+      wrapped({ query: 'fast' }, makeCall(new AbortController().signal, 'call-write-fast')),
+    ).resolves.toEqual({ answer: 'fast-commit' });
+    expect(context.trace.events.filter((e) => e.phase !== 'start')).toHaveLength(1);
+    expect(context.trace.events.at(-1)?.phase).toBe('success');
+  });
+
+  it('does not invoke a write when aborted before it begins', async () => {
+    const caller = new AbortController();
+    caller.abort();
+    const { context } = makeContext({ signal: caller.signal });
+    let innerCalls = 0;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 1000, effect: 'write', requiresApproval: false }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => {
+        innerCalls += 1;
+        return { answer: 'never' };
+      },
+    });
+    const caught = await wrapped({ query: 'x' }, makeCall(new AbortController().signal, 'call-write-preabort')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(kindOf(caught)).toBe('cancelled');
+    expect(innerCalls).toBe(0);
+    expect(context.trace.events.filter((e) => e.phase !== 'start')).toHaveLength(1);
+  });
+
+  it('reports timeout when a write honors abort instead of masking the deadline', async () => {
+    const { context } = makeContext();
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 10, effect: 'write', requiresApproval: false }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (_parsed, call): Promise<TestOutput> => {
+        await new Promise<never>((_, reject) => {
+          call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true });
+        });
+        return { answer: 'unreached' };
+      },
+    });
+    const caught = await wrapped({ query: 'honor' }, makeCall(new AbortController().signal, 'call-write-honor')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(kindOf(caught)).toBe('timeout');
+    expect(context.trace.events.filter((e) => e.phase !== 'start')).toHaveLength(1);
+    expect(context.trace.events.at(-1)?.phase).toBe('timeout');
+  });
+
+  it('bounds reconciliation when a write never settles and invokes it exactly once', async () => {
+    const { context } = makeContext({ deadlineInMs: 200 });
+    let innerCalls = 0;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 10, effect: 'write', requiresApproval: false, maxCallsPerTurn: 1 }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => {
+        innerCalls += 1;
+        await new Promise<never>(() => undefined);
+        return { answer: 'unreached' };
+      },
+    });
+    const started = Date.now();
+    const caught = await wrapped({ query: 'hang' }, makeCall(new AbortController().signal, 'call-write-hang')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const elapsed = Date.now() - started;
+    expect(kindOf(caught)).toBe('outcome_unknown');
+    expect(innerCalls).toBe(1);
+    expect(elapsed).toBeLessThan(10_000);
+    const terminals = context.trace.events.filter((e) => e.phase !== 'start');
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]?.phase).toBe('error');
+    await expect(
+      wrapped({ query: 'retry' }, makeCall(new AbortController().signal, 'call-write-retry')),
+    ).rejects.toMatchObject({ kind: 'budget_exceeded' });
+  });
+
   it('yields cancelled when the caller aborts before the call', async () => {
     const caller = new AbortController();
     caller.abort();
@@ -229,6 +373,124 @@ describe('tool policy wrappers', () => {
     expect(kindOf(caught)).toBe('cancelled');
     const seen: unknown = observedSignal;
     expect(seen instanceof AbortSignal && seen.aborted).toBe(true);
+    expect(context.trace.events.filter((event) => event.phase !== 'start')).toHaveLength(1);
+  });
+
+  it('propagates per-call cancellation to the underlying operation', async () => {
+    const caller = new AbortController();
+    const call = new AbortController();
+    const { context } = makeContext({ signal: caller.signal });
+    let observedSignal: AbortSignal | undefined;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 5000 }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (_parsed: TestInput, innerCall: ToolExecuteCall): Promise<TestOutput> => {
+        observedSignal = innerCall.signal;
+        return await new Promise<TestOutput>((_resolve, reject) => {
+          innerCall.signal.addEventListener('abort', () => reject(innerCall.signal.reason), { once: true });
+        });
+      },
+    });
+
+    const pending = wrapped({ query: 'call-abort' }, makeCall(call.signal, 'call-abort'));
+    await sleep(10);
+    call.abort();
+    await expect(pending).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(context.trace.events.filter((event) => event.phase !== 'start')).toHaveLength(1);
+  });
+
+  it('does not let negative or informational ticket text authorize a write', async () => {
+    const negative = [
+      'I do not want to open a ticket.',
+      'Please do not open a ticket.',
+      'What does "open a ticket" mean?',
+      'The docs say to open a ticket.',
+    ];
+    for (const text of negative) expect(isExplicitTicketRequestText(text)).toBe(false);
+
+    const { context } = makeContext({
+      approvals: createApprovalPolicyForTurn({
+        lastUserText: 'I do not want to open a ticket.',
+        userId: 'user-1',
+        turnId: 'turn-1',
+      }),
+    });
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ name: 'createKnowledgeTicket', effect: 'write', requiresApproval: true }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => ({ answer: 'must not run' }),
+    });
+
+    await expect(wrapped({ query: 'ticket body' }, makeCall(new AbortController().signal, 'call-negative'))).rejects.toMatchObject({
+      kind: 'denied',
+    });
+  });
+
+  it('recognizes direct unambiguous ticket requests including contractions', () => {
+    for (const text of [
+      'Please open a ticket.',
+      "I'd like you to create a knowledge ticket.",
+      'How do I reset my password? Please open a ticket.',
+    ]) {
+      expect(isExplicitTicketRequestText(text)).toBe(true);
+    }
+  });
+
+  it('scopes explicit intent to tool, actor, turn, and the first exact argument set', async () => {
+    const approvals = new InMemoryToolApprovalPolicy({
+      explicitTicketRequest: true,
+      userId: 'user-1',
+      turnId: 'turn-1',
+    });
+    const { context } = makeContext({ approvals });
+    const definition = makeDefinition({ name: 'createKnowledgeTicket', effect: 'write', requiresApproval: true });
+    const counts = createPolicyCounts();
+    const wrapped = wrapToolWithPolicy({
+      definition,
+      context,
+      counts,
+      inner: async (parsed): Promise<TestOutput> => ({ answer: parsed.query }),
+    });
+
+    await expect(wrapped({ query: 'first' }, makeCall(new AbortController().signal, 'call-explicit-1'))).resolves.toEqual({
+      answer: 'first',
+    });
+    await expect(wrapped({ query: 'changed' }, makeCall(new AbortController().signal, 'call-explicit-2'))).rejects.toMatchObject({
+      kind: 'denied',
+    });
+
+    const wrongToolContext = makeContext({ approvals: new InMemoryToolApprovalPolicy({
+      explicitTicketRequest: true,
+      userId: 'user-1',
+      turnId: 'turn-1',
+    }) }).context;
+    const wrongTool = wrapToolWithPolicy({
+      definition: makeDefinition({ name: 'otherWrite', effect: 'write', requiresApproval: true }),
+      context: wrongToolContext,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => ({ answer: 'must not run' }),
+    });
+    await expect(wrongTool({ query: 'first' }, makeCall(new AbortController().signal, 'call-explicit-other'))).rejects.toMatchObject({
+      kind: 'denied',
+    });
+
+    const mismatchedActor = makeContext({ approvals: new InMemoryToolApprovalPolicy({
+      explicitTicketRequest: true,
+      userId: 'user-2',
+      turnId: 'turn-1',
+    }) });
+    const actorBound = wrapToolWithPolicy({
+      definition,
+      context: mismatchedActor.context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => ({ answer: 'must not run' }),
+    });
+    await expect(actorBound({ query: 'first' }, makeCall(new AbortController().signal, 'call-explicit-actor'))).rejects.toMatchObject({
+      kind: 'denied',
+    });
   });
 
   it('enforces per-tool maxCallsPerTurn with budget_exceeded on the 2nd call', async () => {
@@ -304,12 +566,24 @@ describe('tool policy wrappers', () => {
     expect(JSON.stringify(events)).not.toContain(secret);
   });
 
-  it('sanitizeToolError strips control characters', () => {
+  it('sanitizeToolError preserves the bounded unknown-write outcome without exposing causes', () => {
+    const result = sanitizeToolError(new ToolPolicyError(
+      'outcome_unknown',
+      'Ticket outcome is unknown; do not retry this request.',
+      { cause: new Error('secret database detail') },
+    ));
+    expect(result).toEqual({
+      kind: 'outcome_unknown',
+      message: 'Ticket outcome is unknown; do not retry this request.',
+    });
+    expect(result.message).not.toContain('secret database detail');
+  });
+
+  it('sanitizeToolError returns a generic message for unexpected errors', () => {
     const result = sanitizeToolError(new Error('alpha\nbeta\tgamma\0delta'));
     expect(result.kind).toBe('failed');
     expect(/[\u0000-\u001f\u007f]/.test(result.message)).toBe(false);
-    expect(result.message).toContain('alpha');
-    expect(result.message).toContain('delta');
+    expect(result.message).toBe('Tool execution failed.');
   });
 
   it('sanitizeToolError caps message length', () => {
@@ -324,7 +598,7 @@ describe('tool policy wrappers', () => {
     });
     const fromPolicy = sanitizeToolError(withCause);
     expect(fromPolicy.kind).toBe('failed');
-    expect(fromPolicy.message).toBe('safe outer message');
+    expect(fromPolicy.message).toBe('Tool execution failed.');
     expect(fromPolicy.message).not.toContain('super-secret-cause-payload-5813');
 
     const outerWithCause = new Error('safe outer only', {
@@ -332,7 +606,26 @@ describe('tool policy wrappers', () => {
     });
     const fromError = sanitizeToolError(outerWithCause);
     expect(fromError.kind).toBe('failed');
-    expect(fromError.message).toContain('safe outer only');
+    expect(fromError.message).toBe('Tool execution failed.');
     expect(fromError.message).not.toContain('hidden-inner-secret-4429');
+  });
+
+  it('does not expose unexpected provider error text through the policy wrapper', async () => {
+    const { context } = makeContext();
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition(),
+      context,
+      counts: createPolicyCounts(),
+      inner: async (): Promise<TestOutput> => {
+        throw new Error('database password=super-secret-123');
+      },
+    });
+
+    const caught = await wrapped({ query: 'error' }, makeCall(new AbortController().signal, 'call-safe-error')).catch(
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(ToolPolicyError);
+    expect((caught as ToolPolicyError).message).toBe('Tool execution failed.');
+    expect(JSON.stringify(caught)).not.toContain('super-secret-123');
   });
 });

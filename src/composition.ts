@@ -452,8 +452,10 @@ function createComposition() {
     listTickets: (input: Parameters<typeof listTickets>[0]) => bind(listTickets, input, { tickets: core.ticketRepo, ...userDeps, cursorCodec }),
     updateTicket: (input: Parameters<typeof updateTicket>[0]) =>
       bind(updateTicket, input, { tickets: core.ticketRepo, ...auditDeps, ...userDeps, runner: txRunner }),
-    createTicket: (input: Parameters<typeof createTicket>[0]) =>
-      bind(createTicket, input, { tickets: core.ticketRepo, ...auditDeps }),
+    createTicket: (
+      input: Parameters<typeof createTicket>[0],
+      opts?: Parameters<typeof createTicket>[2],
+    ) => createTicket(input, { tickets: core.ticketRepo, ...auditDeps }, opts),
     getDocumentById: (id: number, opts?: { includeDeleted?: boolean | undefined }) => getDocumentById(id, { documents: documentRepo }, opts),
     hardDeleteDocument: (input: { documentId: number; actorId: string }) =>
       bind(hardDeleteDocument, input, { documents: documentRepo, ...auditDeps, runner: txRunner, blobStorage, ...userDeps }),
@@ -594,8 +596,8 @@ function createComposition() {
     qualityReviewsRepo,
     chatHistoryRepo,
     session: Auth.clerkSessionStore,
-    rateLimit: (key: string, opts: { limit: number; windowMs: number }) =>
-      rateLimiter.check(key, opts),
+    rateLimit: (key: string, opts: { limit: number; windowMs: number }, signal?: AbortSignal) =>
+      rateLimiter.check(key, opts, signal),
   };
 }
 
