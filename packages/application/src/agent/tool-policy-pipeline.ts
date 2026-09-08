@@ -97,12 +97,13 @@ export async function withTimeout<T>(
   toolName: string,
   sourceSignals: readonly AbortSignal[],
   settleAfterAbort: boolean,
-  reconcileBudgetMs?: number,
+  reconcileBudgetMs?: number | (() => number | undefined),
 ): Promise<T> {
   for (const signal of sourceSignals) throwIfAborted(signal, toolName);
   const linked = linkAbortSignals(sourceSignals);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancellationListener: (() => void) | undefined;
+  let operationPromise: Promise<T> | undefined;
   try {
     const cancellation = new Promise<never>((_, reject) => {
       cancellationListener = (): void => reject(cancelledError(toolName, linked.signal.reason));
@@ -117,16 +118,17 @@ export async function withTimeout<T>(
       }, ms);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    const operationPromise = linked.signal.aborted
+    operationPromise = linked.signal.aborted
       ? Promise.reject<T>(cancelledError(toolName, linked.signal.reason))
       : operation(linked.signal);
     try {
       return await Promise.race([operationPromise, timeout, cancellation]);
     } catch (error) {
       if (!settleAfterAbort || !linked.signal.aborted) throw error;
+      const remaining = typeof reconcileBudgetMs === 'function' ? reconcileBudgetMs() : reconcileBudgetMs;
       const cap = Math.min(
         WRITE_RECONCILIATION_MAX_MS,
-        reconcileBudgetMs !== undefined ? Math.max(0, reconcileBudgetMs) : WRITE_RECONCILIATION_MAX_MS,
+        remaining !== undefined ? Math.max(0, remaining) : WRITE_RECONCILIATION_MAX_MS,
       );
       if (cap <= 0) {
         operationPromise.then(() => undefined, () => undefined);
@@ -150,6 +152,7 @@ export async function withTimeout<T>(
       }
     }
   } finally {
+    operationPromise?.then(() => undefined, () => undefined);
     if (timer !== undefined) clearTimeout(timer);
     if (cancellationListener !== undefined) linked.signal.removeEventListener('abort', cancellationListener);
     linked.cleanup();
@@ -240,7 +243,7 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       counts.byTool.set(definition.name, currentForTool + 1);
       counts.total += 1;
       const reconcileBudgetMs = definition.policy.effect === 'write'
-        ? Math.max(0, context.budget.deadlineAt - now())
+        ? () => Math.max(0, context.budget.deadlineAt - now())
         : undefined;
       const result = await withTimeout(
         (signal) => inner(parsedInput.data, {

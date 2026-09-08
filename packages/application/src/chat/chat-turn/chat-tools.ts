@@ -520,7 +520,7 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
               'createKnowledgeTicket',
               [callSignal],
               true,
-              opts.deadlineAt !== undefined ? Math.max(0, opts.deadlineAt - Date.now()) : undefined,
+              () => (opts.deadlineAt !== undefined ? Math.max(0, opts.deadlineAt - Date.now()) : undefined),
             );
           } catch (error) {
             if (error instanceof ToolPolicyError && error.kind === 'outcome_unknown') {

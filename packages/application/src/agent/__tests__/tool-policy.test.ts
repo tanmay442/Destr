@@ -628,4 +628,24 @@ describe('tool policy wrappers', () => {
     expect((caught as ToolPolicyError).message).toBe('Tool execution failed.');
     expect(JSON.stringify(caught)).not.toContain('super-secret-123');
   });
+
+  it('safely handles late promise rejection after timeout without unhandled rejection', async () => {
+    const { context } = makeContext();
+    let lateReject: ((error: unknown) => void) | undefined;
+    const wrapped = wrapToolWithPolicy({
+      definition: makeDefinition({ timeoutMs: 10 }),
+      context,
+      counts: createPolicyCounts(),
+      inner: async () => {
+        return await new Promise<TestOutput>((_resolve, reject) => {
+          lateReject = reject;
+        });
+      },
+    });
+    await expect(
+      wrapped({ query: 'late' }, makeCall(new AbortController().signal, 'call-late')),
+    ).rejects.toMatchObject({ kind: 'timeout' });
+    expect(lateReject).toBeDefined();
+    expect(() => lateReject?.(new Error('late failure after race'))).not.toThrow();
+  });
 });

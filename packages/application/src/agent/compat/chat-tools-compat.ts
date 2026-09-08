@@ -533,25 +533,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
         }
         try {
           const output = await ticketBuilt.execute(args as unknown, toToolExecuteCall(execution));
-          const typed = output as { ticketId?: string | null; status?: string; kind?: string; message?: string };
-          if (typed.kind === 'outcome_unknown') {
-            ticketOutcomeUnknown = true;
-            ledger.record({
-              toolName: TICKET_TOOL_NAME,
-              callId,
-              kind: 'outcome_unknown',
-              resultState: null,
-              ticketCreated: false,
-              searchInfrastructureFailed,
-              uniqueEvidenceAdded: 0,
-              durationMs: 0,
-            });
-            return ticketToolOutputSchema.parse({
-              ticketId: null,
-              status: 'error',
-              message: 'Ticket outcome is unknown; do not retry this request.',
-            });
-          }
+          const typed = output as { ticketId?: string | null; status?: string; message?: string };
           if (typed.status === 'created' && typed.ticketId) {
             ticketOpened = true;
             metrics.ticketCreated = true;
@@ -585,6 +567,24 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             : typeof error === 'object' && error !== null && 'kind' in error
               ? (error as { kind?: unknown }).kind
               : undefined;
+          if (kind === 'outcome_unknown') {
+            ticketOutcomeUnknown = true;
+            ledger.record({
+              toolName: TICKET_TOOL_NAME,
+              callId,
+              kind: 'outcome_unknown',
+              resultState: null,
+              ticketCreated: false,
+              searchInfrastructureFailed,
+              uniqueEvidenceAdded: 0,
+              durationMs: 0,
+            });
+            return ticketToolOutputSchema.parse({
+              ticketId: null,
+              status: 'error',
+              message: 'Ticket outcome is unknown; do not retry this request.',
+            });
+          }
           if (kind === 'denied' || kind === 'budget_exceeded') {
             ledger.record({
               toolName: TICKET_TOOL_NAME,
@@ -607,6 +607,16 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
               message: rawMessage.slice(0, 500),
             });
           }
+          ledger.record({
+            toolName: TICKET_TOOL_NAME,
+            callId,
+            kind: kind === 'timeout' ? 'timeout' : kind === 'cancelled' ? 'cancelled' : 'error',
+            resultState: null,
+            ticketCreated: false,
+            searchInfrastructureFailed,
+            uniqueEvidenceAdded: 0,
+            durationMs: 0,
+          });
           throw error;
         }
       }) as never,

@@ -99,6 +99,7 @@ function buildTurn(overrides: {
   rateLimit?: { check: () => Promise<never> };
   capabilities?: ModelToolCapabilities;
   signal?: AbortSignal;
+  budgetDeadlineInMs?: number;
   internalToolContext?: CatalogCompatInternalToolContext;
   prefetched?: PrefetchedSearchOutcome;
 } = {}) {
@@ -138,6 +139,7 @@ function buildTurn(overrides: {
       groundingEvidence,
       metrics: turnMetrics,
       ledger,
+      ...(overrides.budgetDeadlineInMs !== undefined ? { budgetDeadlineInMs: overrides.budgetDeadlineInMs } : {}),
       ...(overrides.internalToolContext !== undefined ? { internalToolContext: overrides.internalToolContext } : {}),
       ...(overrides.prefetched !== undefined ? { prefetched: overrides.prefetched } : {}),
     },
@@ -529,5 +531,67 @@ describe('catalog guidance composition (WP-3 B2)', () => {
     const composed = `${stable}\n\n${built.guidanceBlock}`;
     expect(composed).toContain('## compatOnlyReadTool');
     expect(stable).not.toContain('compatOnlyReadTool');
+  });
+
+  it('maps unsettled ticket write to outcome_unknown with do-not-retry error result and records ledger terminal events', async () => {
+    let pendingResolve: ((value: unknown) => void) | undefined;
+    const createTicket = vi.fn(
+      () => new Promise((resolve) => {
+        pendingResolve = resolve;
+      }),
+    );
+    const controller = new AbortController();
+    const { built, ledger } = buildTurn({
+      lastUserText: 'Please create a ticket for me.',
+      createTicket: createTicket as never,
+      budgetDeadlineInMs: 100,
+    });
+    const ticket = built.tools[TICKET_TOOL_NAME] as {
+      execute: (args: unknown, options?: unknown) => Promise<unknown>;
+    };
+    const pending = ticket.execute(
+      { question: 'unsettled issue', attempted: ['search'], documentationSearched: ['docs'] },
+      { toolCallId: 'compat-write-1', abortSignal: controller.signal },
+    );
+    await vi.waitFor(() => expect(createTicket).toHaveBeenCalledOnce());
+    controller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({
+      ticketId: null,
+      status: 'error',
+      message: 'Ticket outcome is unknown; do not retry this request.',
+    });
+    const retry = await ticket.execute(
+      { question: 'retry issue', attempted: ['search'], documentationSearched: ['docs'] },
+      { toolCallId: 'compat-write-2' },
+    );
+    expect(retry).toMatchObject({
+      ticketId: null,
+      status: 'denied',
+    });
+    expect(String((retry as { message?: string }).message)).toContain('unknown outcome');
+    expect(createTicket).toHaveBeenCalledOnce();
+    expect(ledger.calls.map((call) => call.kind)).toEqual(['outcome_unknown', 'denied']);
+    void pendingResolve;
+  });
+
+  it('records terminal ledger events when ticket execution throws cancellation', async () => {
+    const caller = new AbortController();
+    caller.abort();
+    const { built, ledger } = buildTurn({
+      lastUserText: 'Please create a ticket for me.',
+      signal: caller.signal,
+    });
+    const ticket = built.tools[TICKET_TOOL_NAME] as {
+      execute: (args: unknown, options?: unknown) => Promise<unknown>;
+    };
+    await expect(
+      ticket.execute(
+        { question: 'pre aborted', attempted: [], documentationSearched: [] },
+        { toolCallId: 'compat-cancelled-1' },
+      ),
+    ).rejects.toBeDefined();
+    expect(ledger.calls).toHaveLength(1);
+    expect(ledger.calls[0]?.kind).toBe('cancelled');
   });
 });
