@@ -26,5 +26,6 @@ registerChatProvider('google', (deps) => getGoogleChatModel(deps.modelId, deps.e
 registerChatProviderAdapter('google', {
   capabilities: GOOGLE_PROMPT_CACHE_CAPABILITIES,
   buildProviderOptions: buildGooglePromptCacheOptions,
+  toolCapabilities: { strictSchemas: 'native', inputExamples: 'description_middleware', outputSchemas: 'validated_locally', parallelCalls: true, toolCallRepair: 'unsupported', approvalHooks: 'application' },
   parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('google', usage, providerMetadata),
 });

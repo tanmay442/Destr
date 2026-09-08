@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { err, ok, ExternalServiceError } from '@app/domain';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { AppConfig } from '@app/domain/app-config';
@@ -243,12 +243,33 @@ async function run(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurn
   return chatTurn(input, deps);
 }
 
+type TicketArgs = {
+  question: string;
+  attempted: string[];
+  documentationSearched: string[];
+  context?: string;
+};
+
 type CapturedTools = {
   searchDocumentation?: {
     execute: (args: { query: string; limit?: number }, options?: { toolCallId: string }) => Promise<unknown>;
   };
-  createKnowledgeTicket?: { execute: (args: { name: string; email: string; issue: string }) => Promise<unknown> };
+  createKnowledgeTicket?: { execute: (args: TicketArgs) => Promise<unknown> };
 };
+
+const TICKET_BODY = {
+  turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+  messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'How do I reset my password? Please open a ticket.' }] }],
+} as unknown as { turnId: string; messages: ChatInputMessage[] };
+
+function ticketArgs(overrides: Partial<TicketArgs> = {}): TicketArgs {
+  return {
+    question: 'Cannot reset my password.',
+    attempted: ['searched password reset'],
+    documentationSearched: ['password reset'],
+    ...overrides,
+  };
+}
 
 function captureTools(overrides: { text?: string } = {}): {
   captured: { current: CapturedTools | undefined };
@@ -764,9 +785,13 @@ describe('chatTurn', () => {
     const out = (await captured.current?.searchDocumentation?.execute({ query: 'q' })) as {
       sets: Array<{ kind: string; results?: Array<{ content: string }> }>;
     };
-    expect(out.sets[0]?.results?.[0]?.content).toBe(
-      `<reference source="${CHUNK.source}">\n${'x'.repeat(800)}\u2026\n</reference>`,
-    );
+    const content = out.sets[0]?.results?.[0]?.content ?? '';
+    expect(content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
+    expect(content).toContain('untrusted documentation evidence');
+    expect(content).toContain('x'.repeat(800));
+    expect(content).toContain('\u2026');
+    expect(content).not.toContain('x'.repeat(801));
   });
 
   it('uses the agentic retrieval path with a rewritten query flag when effective mode is agentic', async () => {
@@ -877,14 +902,10 @@ describe('chatTurn', () => {
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
     await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'Ignored',
-      email: 'ignored@example.com',
-      issue: 'Search failed',
-    });
+    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search failed' }));
     closeLlm();
     await readParts(result.stream);
-    expect(ticket).toMatchObject({ ticketId: null, status: 'error' });
+    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as { outOfDomain?: boolean; meta?: Record<string, unknown> };
     expect(event.outOfDomain).toBe(false);
@@ -903,11 +924,7 @@ describe('chatTurn', () => {
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
     const output = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'Ignored',
-      email: 'ignored@example.com',
-      issue: 'Search was degraded',
-    });
+    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search was degraded' }));
     closeLlm();
     await readParts(result.stream);
     expect(output).toMatchObject({
@@ -918,7 +935,7 @@ describe('chatTurn', () => {
         results: [{ scores: { dense: 0.91, finalRank: 1, finalSignal: 'dense' } }],
       }],
     });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'error' });
+    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
   });
 
@@ -976,14 +993,12 @@ describe('chatTurn', () => {
   it('creates a ticket via the createKnowledgeTicket tool using the resolved user profile', async () => {
     const { deps, fakes } = makeDeps();
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = (await captured.current?.createKnowledgeTicket?.execute({
-      name: 'Hallucinated Name',
-      email: 'hallucinated@example.com',
-      issue: '  Cannot reset my password.\u0000  ',
-    })) as { ticketId: string; status: string };
+    const out = (await captured.current?.createKnowledgeTicket?.execute(
+      ticketArgs({ question: 'Cannot reset my password.' }),
+    )) as { ticketId: string; status: string };
     closeLlm();
     await readParts(result.stream);
     expect(out.status).toBe('created');
@@ -992,7 +1007,7 @@ describe('chatTurn', () => {
       userId: 'user_test',
       name: 'Real Person',
       email: 'real@example.com',
-      issue: 'Cannot reset my password.',
+      issue: expect.stringContaining('Question: Cannot reset my password.'),
     });
     expect(fakes.userResolver).toHaveBeenCalledTimes(1);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
@@ -1003,14 +1018,10 @@ describe('chatTurn', () => {
   it('does not cache a turn that opened a knowledge ticket', async () => {
     const { deps, fakes } = makeDeps();
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.createKnowledgeTicket?.execute({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'please open a ticket',
-    });
+    await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'please open a ticket' }));
     closeLlm();
     await readParts(result.stream);
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
@@ -1020,40 +1031,28 @@ describe('chatTurn', () => {
     const { deps, fakes } = makeDeps();
     fakes.createTicket.mockResolvedValueOnce(err(new ExternalServiceError('db down')) as never);
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = (await captured.current?.createKnowledgeTicket?.execute({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'my issue',
-    })) as { ticketId: null; status: string };
+    const out = (await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'my issue' }))) as { ticketId: null; status: string };
     closeLlm();
     await readParts(result.stream);
-    expect(out).toEqual({ ticketId: null, status: 'error' });
+    expect(out).toMatchObject({ ticketId: null, status: 'error' });
   });
 
   it('blocks a second ticket creation in the same turn', async () => {
     const { deps, fakes } = makeDeps();
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const first = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'first ticket',
-    });
-    const second = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'B',
-      email: 'b@b.com',
-      issue: 'second ticket',
-    });
+    const first = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'first ticket' }));
+    const second = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'second ticket' }));
     closeLlm();
     await readParts(result.stream);
     expect(fakes.createTicket).toHaveBeenCalledTimes(1);
     expect(first).toMatchObject({ ticketId: 'TKT-abcdef12', status: 'created' });
-    expect(second).toMatchObject({ ticketId: null, status: 'error' });
+    expect(second).toMatchObject({ ticketId: null, status: 'denied' });
     expect((second as { message?: string }).message).toContain('already created');
   });
 
@@ -1065,18 +1064,14 @@ describe('chatTurn', () => {
         : { ok: true, remaining: 29, resetMs: 60_000 },
     );
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'blocked by rate limit',
-    });
+    const out = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'blocked by rate limit' }));
     closeLlm();
     await readParts(result.stream);
     expect(fakes.createTicket).not.toHaveBeenCalled();
-    expect(out).toMatchObject({ ticketId: null, status: 'error' });
+    expect(out).toMatchObject({ ticketId: null, status: 'denied' });
     expect((out as { message?: string }).message).toContain('rate limited');
     expect(fakes.rateLimit.check).toHaveBeenCalledWith('ticket:user_test', { limit: 1, windowMs: 300_000 });
   });
@@ -1085,17 +1080,17 @@ describe('chatTurn', () => {
     const { deps, fakes } = makeDeps();
     fakes.userResolver.mockResolvedValueOnce({ userId: 'user_test' });
     const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.createKnowledgeTicket?.execute({ name: 'A', email: 'a@a.com', issue: 'x' });
+    await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'x' }));
     closeLlm();
     await readParts(result.stream);
     expect(fakes.createTicket).toHaveBeenCalledWith({
       userId: 'user_test',
       name: 'User',
       email: 'user_test@clerk.user',
-      issue: 'x',
+      issue: expect.stringContaining('Question: x'),
     });
   });
 
@@ -1157,17 +1152,13 @@ describe('chatTurn', () => {
     const output = await captured.current?.searchDocumentation?.execute({
       query: 'How do I reset my password?',
     });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'Ignored',
-      email: 'ignored@example.com',
-      issue: 'Search degraded',
-    });
+    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search degraded' }));
     closeLlm();
     await readParts(result.stream);
     expect(output).toMatchObject({
       sets: [{ kind: 'results', coverage: 'partial', degradedBy: ['lexical_unavailable'] }],
     });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'error' });
+    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['degraded'] }));
@@ -1217,15 +1208,11 @@ describe('chatTurn', () => {
     const output = await captured.current?.searchDocumentation?.execute({
       query: 'How do I reset my password?',
     });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute({
-      name: 'Ignored',
-      email: 'ignored@example.com',
-      issue: 'Search failed',
-    });
+    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search failed' }));
     closeLlm();
     await readParts(result.stream);
     expect(output).toMatchObject({ sets: [{ kind: 'error', code: 'retrieval_unavailable' }] });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'error' });
+    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['error'] }));
@@ -1635,5 +1622,94 @@ describe('§T6 soft turn deadline', () => {
     const parts = await readParts((res as { stream: ReadableStream }).stream);
     expect(parts.some((p) => (p as { type?: string }).type === 'data-guardrail')).toBe(false);
     expect(parts.some((p) => String((p as { delta?: string }).delta).includes('Sorry'))).toBe(false);
+  });
+});
+
+describe('chatTurn tool-catalog rollback (WP-3 B1/B3)', () => {
+  const FLAG = 'TOOL_CATALOG_ENABLED';
+  let previous: string | undefined;
+  beforeEach(() => {
+    previous = process.env[FLAG];
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env[FLAG];
+    else process.env[FLAG] = previous;
+  });
+
+  it('uses the same new ticket contract and denied semantics with the catalog disabled', async () => {
+    process.env[FLAG] = '0';
+    const { deps, fakes } = makeDeps();
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const created = (await captured.current?.createKnowledgeTicket?.execute(
+      ticketArgs({ question: 'Rollback contract check' }),
+    )) as { ticketId: string; status: string };
+    expect(created.status).toBe('created');
+    expect(fakes.createTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user_test',
+        issue: expect.stringContaining('Question: Rollback contract check'),
+      }),
+    );
+    const second = (await captured.current?.createKnowledgeTicket?.execute(
+      ticketArgs({ question: 'second' }),
+    )) as { ticketId: null; status: string; message?: string };
+    closeLlm();
+    await readParts(result.stream);
+    expect(second).toMatchObject({ ticketId: null, status: 'denied' });
+    expect(String(second.message)).toContain('already created');
+  });
+
+  it('denies ticket writes without explicit intent even with the catalog disabled', async () => {
+    process.env[FLAG] = '0';
+    const { deps, fakes } = makeDeps();
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const denied = (await captured.current?.createKnowledgeTicket?.execute(
+      ticketArgs({ question: 'no intent' }),
+    )) as { ticketId: null; status: string };
+    closeLlm();
+    await readParts(result.stream);
+    expect(denied).toMatchObject({ ticketId: null, status: 'denied' });
+    expect(fakes.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('returns error (not throw) when identity lookup fails with the catalog disabled', async () => {
+    process.env[FLAG] = '0';
+    const { deps } = makeDeps({
+      userResolver: (async () => {
+        throw new Error('identity down');
+      }) as unknown as ChatTurnDeps['userResolver'],
+    });
+    const { captured, closeLlm } = captureTools();
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const output = (await captured.current?.createKnowledgeTicket?.execute(
+      ticketArgs({ question: 'identity failure' }),
+    )) as { ticketId: null; status: string };
+    closeLlm();
+    await readParts(result.stream);
+    expect(output).toMatchObject({ ticketId: null, status: 'error' });
+  });
+
+  it('preserves search result contracts with the catalog disabled', async () => {
+    process.env[FLAG] = '0';
+    const { deps } = makeDeps();
+    const { captured } = captureTools();
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const output = (await captured.current?.searchDocumentation?.execute({ query: 'policy' })) as {
+      sets: Array<{ kind: string; subquestionId: string }>;
+      callId: string;
+    };
+    expect(output.sets[0]?.kind).toBe('results');
+    expect(output.sets[0]?.subquestionId).toBe('sq-1');
+    expect(typeof output.callId).toBe('string');
   });
 });

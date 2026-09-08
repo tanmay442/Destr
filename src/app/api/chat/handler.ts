@@ -65,6 +65,20 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
       ...(typeof comp.getRetrievalProvider === 'function'
         ? { getRetrievalProvider: comp.getRetrievalProvider }
         : {}),
+      ...((comp as unknown as Record<string, unknown>).getModelToolCapabilities !== undefined
+        ? {
+            getModelToolCapabilities: (comp as unknown as {
+              getModelToolCapabilities: () => {
+                strictSchemas: 'native' | 'emulated' | 'unsupported';
+                inputExamples: 'native' | 'description_middleware' | 'unsupported';
+                outputSchemas: 'native' | 'validated_locally';
+                parallelCalls: boolean;
+                toolCallRepair: 'supported' | 'unsupported';
+                approvalHooks: 'native' | 'application';
+              };
+            }).getModelToolCapabilities,
+          }
+        : {}),
       getEmbeddingModelId: () => comp.getEmbeddingModelId(),
       getRuntimeConfig,
       searchChunks: (cfg, query, opts) => comp.searchChunks(cfg, query, opts),

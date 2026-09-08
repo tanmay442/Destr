@@ -73,6 +73,15 @@ export interface ChatTurnDeps {
   }) => ChatModelRequestOptions | undefined;
   /** Provider-neutral retrieval adapter identity; raw queries are never included. */
   getRetrievalProvider?: () => string;
+  /** Provider-neutral tool capability facts; provider option keys stay in infrastructure. */
+  getModelToolCapabilities?: () => {
+    strictSchemas: 'native' | 'emulated' | 'unsupported';
+    inputExamples: 'native' | 'description_middleware' | 'unsupported';
+    outputSchemas: 'native' | 'validated_locally';
+    parallelCalls: boolean;
+    toolCallRepair: 'supported' | 'unsupported';
+    approvalHooks: 'native' | 'application';
+  };
   getEmbeddingModelId(): string;
   getRuntimeConfig(): Promise<AppConfig>;
   searchChunks(

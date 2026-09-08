@@ -568,6 +568,20 @@ function createComposition() {
       };
     },
     getRetrievalProvider: () => 'pgvector',
+    getModelToolCapabilities: () => {
+      try {
+        return Llm.getChatModelToolCapabilities(undefined, core.env);
+      } catch {
+        return {
+          strictSchemas: 'native',
+          inputExamples: 'native',
+          outputSchemas: 'validated_locally',
+          parallelCalls: true,
+          toolCallRepair: 'unsupported',
+          approvalHooks: 'application',
+        } as const;
+      }
+    },
     getEmbeddingModelId: () => core.embeddingModelId,
     answerCacheKey,
     cacheLeasePolicy,

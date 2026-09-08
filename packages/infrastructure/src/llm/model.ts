@@ -16,6 +16,7 @@ export interface ChatModelAdapter {
   readonly provider: string;
   readonly modelId: string;
   readonly capabilities: ChatModelProviderAdapter['capabilities'];
+  readonly toolCapabilities: NonNullable<ChatModelProviderAdapter['toolCapabilities']>;
   readonly buildProviderOptions: (
     context: PromptCacheRequestContext,
   ) => ReturnType<NonNullable<ChatModelProviderAdapter['buildProviderOptions']>>;
@@ -40,6 +41,15 @@ function noProviderOptions(): undefined {
   return undefined;
 }
 
+const DEFAULT_TOOL_CAPABILITIES_FALLBACK = {
+  strictSchemas: 'native',
+  inputExamples: 'native',
+  outputSchemas: 'validated_locally',
+  parallelCalls: true,
+  toolCallRepair: 'unsupported',
+  approvalHooks: 'application',
+} as const;
+
 export function getChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV3 {
   return getChatModelAdapter(modelId, env).model;
 }
@@ -63,6 +73,7 @@ export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultPr
       explicit: false,
       telemetry: false,
     },
+    toolCapabilities: adapter?.toolCapabilities ?? { ...DEFAULT_TOOL_CAPABILITIES_FALLBACK },
     buildProviderOptions: adapter?.buildProviderOptions ?? noProviderOptions,
     parseUsage: adapter?.parseUsage ?? (() => ({
       inputTokens: null,
@@ -80,6 +91,13 @@ export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultPr
 
 export function getChatModelCapabilities(modelId?: string, env: EnvSource = defaultProcessEnv): ChatModelAdapter['capabilities'] {
   return getChatModelAdapter(modelId, env).capabilities;
+}
+
+export function getChatModelToolCapabilities(
+  modelId?: string,
+  env: EnvSource = defaultProcessEnv,
+): ChatModelAdapter['toolCapabilities'] {
+  return getChatModelAdapter(modelId, env).toolCapabilities;
 }
 
 export function getChatModelProviderOptions(

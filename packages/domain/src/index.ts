@@ -6,3 +6,4 @@ export * from './constants';
 export * from './logger';
 export * from './sanitize-text';
 export * from './pagination';
+export * from './tool-capabilities';

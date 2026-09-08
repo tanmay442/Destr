@@ -42,6 +42,7 @@ export {
   getChatModel,
   getChatModelAdapter,
   getChatModelCapabilities,
+  getChatModelToolCapabilities,
   getChatModelProviderOptions,
   getChatModelTelemetry,
   parseChatModelUsage,

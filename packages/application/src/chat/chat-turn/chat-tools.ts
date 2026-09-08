@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { logger, sanitizeText, type AgenticResultState } from '@app/domain';
+import { logger, type AgenticResultState } from '@app/domain';
+import {
+  composeTicketIssue,
+  createKnowledgeTicketInputSchema,
+  ticketToolOutputSchema,
+} from '../../agent/tools/create-knowledge-ticket';
 import type { AppConfig } from '@app/domain/app-config';
 import {
   searchToolResultSchema,
@@ -390,66 +395,63 @@ function buildChatTools(deps: ChatTurnDeps, opts: {
     }),
     createKnowledgeTicket: deps.ai.tool({
       description:
-        'Open a knowledge ticket. Invoke this tool when a genuine documentation no-match is ticket-eligible or the user has explicitly asked to open one, file one, escalate, talk to a human, or submit a complaint. Never invoke it merely because documentation search returned an infrastructure error. When invoking, provide a structured `issue` summary with appropriate context so the reviewer can understand the full situation without reading the transcript: Product / Question / What was tried / Docs searched / User context.',
-      inputSchema: z.object({
-        name: z.string().describe("Ignored by the server — the signed-in user's name is used instead."),
-        email: z
-          .string()
-          .regex(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/)
-          .describe("Ignored by the server — the signed-in user's email is used instead."),
-        issue: z
-          .string()
-          .max(10_000)
-          .describe(
-            'Structured ticket summary in the form: Question: ...\nWhat was tried: ...\nDocs searched: ...\nUser context: ...',
-          ),
-      }),
-      execute: async ({ issue }) => {
+        'Open a knowledge ticket for a genuine documentation gap or an explicit user escalation request. Requires explicit user intent or a scoped approval; otherwise the call is denied without side effects. Never use after a search infrastructure error. Identity comes from the authenticated user, never from model input.',
+      inputSchema: createKnowledgeTicketInputSchema,
+      outputSchema: ticketToolOutputSchema,
+      execute: async (rawInput) => {
+        const parsed = createKnowledgeTicketInputSchema.safeParse(rawInput);
+        if (!parsed.success) throw parsed.error;
+        const ticketInput = parsed.data;
         if (searchInfrastructureFailed) {
-          return {
+          return ticketToolOutputSchema.parse({
             ticketId: null,
-            status: 'error',
+            status: 'denied',
             message: 'A knowledge ticket cannot be created from a failed documentation search.',
-          };
+          });
         }
         if (ticketOpenedInTurn) {
-          return {
+          return ticketToolOutputSchema.parse({
             ticketId: null,
-            status: 'error',
+            status: 'denied',
             message: 'A knowledge ticket was already created in this turn.',
-          };
+          });
         }
-        ticketOpenedInTurn = true;
         const ticketLimit = await deps.rateLimit.check(`ticket:${userId}`, { limit: 1, windowMs: 5 * 60_000 });
         if (!ticketLimit.ok) {
           const retryAfterSec = Number.isFinite(ticketLimit.retryAfterMs)
             ? Math.ceil(ticketLimit.retryAfterMs / 1000)
             : undefined;
-          return {
+          return ticketToolOutputSchema.parse({
             ticketId: null,
-            status: 'error',
+            status: 'denied',
             message:
               retryAfterSec !== undefined
                 ? `Ticket creation is rate limited for this user; retry in about ${retryAfterSec} second${retryAfterSec === 1 ? '' : 's'}.`
                 : 'Ticket creation is rate limited for this user.',
-          };
+          });
         }
-        const userProfile = await deps.userResolver(request);
+        let userProfile: { name?: string; email?: string };
+        try {
+          userProfile = await deps.userResolver(request);
+        } catch {
+          return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
+        }
         const realName = userProfile.name ?? 'User';
         const realEmail = userProfile.email ?? `${userId}@clerk.user`;
         const result = await deps.createTicket({
           userId,
           name: realName,
           email: realEmail,
-          issue: sanitizeText(issue),
+          issue: composeTicketIssue(ticketInput),
         });
         if (!result.ok) {
           logger.error('createKnowledgeTicket: createTicket failed', { error: result.error });
-          return { ticketId: null, status: 'error' };
+          return ticketToolOutputSchema.parse({ ticketId: null, status: 'error' });
         }
+        ticketOpenedInTurn = true;
         metrics.ticketCreated = true;
         metrics.ticketId = result.value.ticketId;
-        return result.value;
+        return ticketToolOutputSchema.parse(result.value);
       },
     }),
   };

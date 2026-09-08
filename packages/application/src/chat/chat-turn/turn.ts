@@ -49,6 +49,9 @@ import {
 import { parseCachedAnswer, parseTurnResult, createCachedAnswerStream, TURN_RESULT_CACHE_TTL_SEC } from './cached-answer';
 import { persistHistory, readBoundedJson } from './turn-io';
 import { buildChatTools, type PrefetchedSearchOutcome } from './chat-tools';
+import { buildCatalogToolsForTurn, isCatalogEnabled } from '../../agent/compat/chat-tools-compat';
+import { TurnToolLedger } from '../../agent/run-state';
+import { isExplicitTicketRequestText } from '../../agent/tool-approval';
 import { runHallucinationCheck, DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
 import type { ChatTurnDeps, ChatTurnRequest, ChatTurnResult, ChatModelUsageTelemetry, TurnMetrics } from './turn-types';
 import { parseGenerationUsage } from './turn-types';
@@ -367,6 +370,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const outOfDomainRef = { value: false };
   const isEmptyRef = { value: false };
   const resultStateRef = { value: null as AgenticResultState | null };
+  const toolLedger = new TurnToolLedger();
+  const catalogEnabled = isCatalogEnabled({ get: (key: string) => process.env[key] });
 
   let prefetch: PrefetchedSearchOutcome | null = null;
   if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
@@ -447,27 +452,82 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   softDeadlineSignal.addEventListener('abort', () => {
     softDeadlineFired = true;
   });
+  const turnSignal = AbortSignal.any([request.signal, softDeadlineSignal]);
+
+  const catalogTools = catalogEnabled
+    ? buildCatalogToolsForTurn(
+        {
+          searchChunks: (cfgValue, query, opts) => deps.searchChunks(cfgValue, query, opts),
+          agenticSearch: (cfgValue, query, opts) => deps.agenticSearch(cfgValue, query, opts),
+          createTicket: (ticketInput) => deps.createTicket(ticketInput) as never,
+          userResolver: async (actorId: string) => {
+            const profile = await deps.userResolver(request);
+            void actorId;
+            return {
+              ...(profile.name !== undefined ? { name: profile.name } : {}),
+              ...(profile.email !== undefined ? { email: profile.email } : {}),
+            };
+          },
+          rateLimit: deps.rateLimit,
+          capabilities: deps.getModelToolCapabilities?.(),
+          toolFactory: (toolOpts) => (deps.ai.tool as (opts: unknown) => unknown)(toolOpts as unknown) as unknown,
+        },
+        {
+          cfg,
+          effectiveMode,
+          userId,
+          turnId: turnId ?? 'turn-without-id',
+          lastUserText,
+          signal: turnSignal,
+          groundingEvidence,
+          metrics,
+          ledger: toolLedger,
+          ...(prefetch ? { prefetched: prefetch } : {}),
+        },
+      )
+    : null;
+
+  const legacyTools = catalogEnabled
+    ? null
+    : (() => {
+        const built = buildChatTools(deps, {
+          cfg,
+          effectiveMode,
+          userId,
+          request,
+          groundingEvidence,
+          outOfDomainRef,
+          isEmptyRef,
+          resultStateRef,
+          metrics,
+          ...(prefetch ? { prefetched: prefetch } : {}),
+        });
+        const ticket = (built as Record<string, { execute: (args: unknown) => Promise<unknown> }>).createKnowledgeTicket;
+        if (ticket && typeof ticket.execute === 'function') {
+          const inner = ticket.execute.bind(ticket);
+          const explicit = isExplicitTicketRequestText(lastUserText);
+          ticket.execute = async (args: unknown) => {
+            if (!explicit) {
+              return { ticketId: null, status: 'denied', message: 'Ticket creation requires explicit user intent or approval.' };
+            }
+            return inner(args);
+          };
+        }
+        return built;
+      })();
+
+  const baseSystemPrompt = buildSystemPrompt(cfg, prefetch?.kind === 'results' ? prefetch.matches : null);
+  const systemPrompt = catalogEnabled && catalogTools ? `${baseSystemPrompt}\n\n${catalogTools.guidanceBlock}` : baseSystemPrompt;
 
   const result = deps.ai.streamText({
     model: deps.getChatModel(),
-    system: buildSystemPrompt(cfg, prefetch?.kind === 'results' ? prefetch.matches : null),
+    system: systemPrompt,
     messages: await deps.ai.convertToModelMessages(compactModelHistory(messages), {
       ignoreIncompleteToolCalls: true,
     }),
     stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
-    abortSignal: AbortSignal.any([request.signal, softDeadlineSignal]),
-    tools: buildChatTools(deps, {
-      cfg,
-      effectiveMode,
-      userId,
-      request,
-      groundingEvidence,
-      outOfDomainRef,
-      isEmptyRef,
-      resultStateRef,
-      metrics,
-      ...(prefetch ? { prefetched: prefetch } : {}),
-    }),
+    abortSignal: turnSignal,
+    tools: (catalogEnabled && catalogTools ? catalogTools.tools : legacyTools) as unknown as NonNullable<Parameters<typeof deps.ai.streamText>[0]['tools']>,
     ...(modelRequestOptions?.providerOptions !== undefined
       ? { providerOptions: modelRequestOptions.providerOptions }
       : {}),
@@ -515,6 +575,16 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               type: 'data-citation',
               data: src,
             });
+          }
+          if (catalogEnabled && toolLedger.calls.length > 0) {
+            const derived = toolLedger.derive();
+            outOfDomainRef.value = derived.outOfDomain;
+            isEmptyRef.value = derived.isEmpty;
+            resultStateRef.value = derived.resultState;
+            if (derived.ticketCreated && derived.ticketId) {
+              metrics.ticketCreated = true;
+              metrics.ticketId = derived.ticketId;
+            }
           }
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
           const finalOutOfDomain = !hasGroundingEvidence && outOfDomainRef.value;

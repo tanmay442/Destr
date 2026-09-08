@@ -26,8 +26,18 @@ function capContent(content: string): string {
   return content.slice(0, end) + '\u2026';
 }
 
+function escapeReferenceText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function formatGroundingReference(chunk: RetrievedChunk): string {
-  return `<reference source="${chunk.source}">\n${capContent(chunk.content)}\n</reference>`;
+  const safeSource = escapeReferenceText(chunk.source ?? 'unknown').replace(/\n|\r/g, ' ');
+  return `<reference source="${safeSource}">\n${escapeReferenceText(capContent(chunk.content))}\n</reference>`;
 }
 
 export function addGroundingEvidence(

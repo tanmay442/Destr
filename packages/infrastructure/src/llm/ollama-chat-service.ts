@@ -15,5 +15,6 @@ export function getOllamaChatModel(modelId?: string, env: EnvSource = defaultPro
 registerChatProvider('ollama', (deps) => getOllamaChatModel(deps.modelId, deps.env));
 registerChatProviderAdapter('ollama', {
   capabilities: OLLAMA_PROMPT_CACHE_CAPABILITIES,
+  toolCapabilities: { strictSchemas: 'emulated', inputExamples: 'unsupported', outputSchemas: 'validated_locally', parallelCalls: false, toolCallRepair: 'unsupported', approvalHooks: 'application' },
   parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('ollama', usage, providerMetadata),
 });

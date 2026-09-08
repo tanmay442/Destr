@@ -27,6 +27,7 @@ export function registerChatProvider(key: string, factory: ChatModelProvider): v
  */
 export interface ChatModelProviderAdapter {
   readonly capabilities: PromptCacheCapabilities;
+  readonly toolCapabilities?: import('@app/domain').ProviderToolCapabilities;
   readonly buildProviderOptions?: (
     context: PromptCacheRequestContext,
   ) => SharedV3ProviderOptions | undefined;

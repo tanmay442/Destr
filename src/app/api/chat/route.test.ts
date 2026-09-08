@@ -288,7 +288,7 @@ async function drainResponse(res: Response): Promise<void> {
   }
 }
 
-async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
+async function captureToolsFromStreamText<T>(messageText = 'hi'): Promise<T | undefined> {
   authMock.mockResolvedValue({ userId: 'user_test' });
   let captured: T | undefined;
   streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
@@ -299,7 +299,7 @@ async function captureToolsFromStreamText<T>(): Promise<T | undefined> {
     new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
+      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: messageText }] }] }),
     }),
   );
   expect(res.status).toBe(200);
@@ -469,28 +469,37 @@ describe('/api/chat', () => {
 });
 
 describe('/api/chat createKnowledgeTicket tool', () => {
-  async function invokeToolFromStreamText(overrides: {
-    name: string;
-    email: string;
-    issue: string;
-  }) {
+  async function invokeToolFromStreamText(
+    overrides: {
+      question: string;
+      attempted: string[];
+      documentationSearched: string[];
+      context?: string;
+    },
+    messageText = 'How do I reset my password? Please open a ticket.',
+  ) {
     const tools = await captureToolsFromStreamText<{
       createKnowledgeTicket: {
-        execute: (args: { name: string; email: string; issue: string }) => Promise<unknown>;
+        execute: (args: { question: string; attempted: string[]; documentationSearched: string[]; context?: string }) => Promise<unknown>;
       };
-    }>();
+    }>(messageText);
     const tool = tools?.createKnowledgeTicket;
     expect(tool).toBeDefined();
     return tool!.execute(overrides);
   }
 
-  it('creates a ticket with a TKT- prefixed id, ignoring LLM-supplied name/email', async () => {
+  function ticketInput(overrides: Partial<{ question: string; attempted: string[]; documentationSearched: string[] }> = {}) {
+    return {
+      question: 'Cannot reset my password.',
+      attempted: ['searched password reset'],
+      documentationSearched: ['password reset'],
+      ...overrides,
+    };
+  }
+
+  it('creates a ticket with a TKT- prefixed id from the authenticated profile, never model-supplied identity', async () => {
     createTicketMock.mockResolvedValueOnce(ok({ ticketId: 'TKT-abcd1234', status: 'created' }) as never);
-    const out = await invokeToolFromStreamText({
-      name: 'Hallucinated Name',
-      email: 'hallucinated@example.com',
-      issue: 'Cannot reset my password.',
-    });
+    const out = await invokeToolFromStreamText(ticketInput({ question: 'Cannot reset my password.' }));
     expect(out).toHaveProperty('status', 'created');
     expect(out).toHaveProperty('ticketId');
     expect((out as { ticketId: string }).ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
@@ -498,7 +507,7 @@ describe('/api/chat createKnowledgeTicket tool', () => {
       userId: 'user_test',
       name: 'Real Person',
       email: 'real@example.com',
-      issue: 'Cannot reset my password.',
+      issue: expect.stringContaining('Question: Cannot reset my password.'),
     });
   });
 
@@ -511,11 +520,7 @@ describe('/api/chat createKnowledgeTicket tool', () => {
       username: 'nomail',
     });
     createTicketMock.mockResolvedValueOnce(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
-    const out = await invokeToolFromStreamText({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'no email on account',
-    });
+    const out = await invokeToolFromStreamText(ticketInput({ question: 'no email on account' }));
     expect(out).toHaveProperty('status', 'created');
     expect(createTicketMock).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'user_nomail@clerk.user' }),
@@ -526,27 +531,17 @@ describe('/api/chat createKnowledgeTicket tool', () => {
     createTicketMock
       .mockResolvedValueOnce(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never)
       .mockResolvedValueOnce(ok({ ticketId: 'TKT-bbbbbbbb', status: 'created' }) as never);
-    const out1 = await invokeToolFromStreamText({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'first ticket',
-    });
-    const out2 = await invokeToolFromStreamText({
-      name: 'B',
-      email: 'b@b.com',
-      issue: 'second ticket',
-    });
+    const out1 = await invokeToolFromStreamText(ticketInput({ question: 'first ticket' }));
+    const out2 = await invokeToolFromStreamText(ticketInput({ question: 'second ticket' }));
+    expect((out1 as { ticketId: string }).ticketId).toBeDefined();
+    expect((out2 as { ticketId: string }).ticketId).toBeDefined();
     expect((out1 as { ticketId: string }).ticketId).not.toBe((out2 as { ticketId: string }).ticketId);
   });
 
   it('returns an error status when createTicket fails', async () => {
     const { ExternalServiceError } = await import('@app/domain');
     createTicketMock.mockResolvedValueOnce(err(new ExternalServiceError('db down')) as never);
-    const out = await invokeToolFromStreamText({
-      name: 'A',
-      email: 'a@a.com',
-      issue: 'my issue',
-    });
+    const out = await invokeToolFromStreamText(ticketInput({ question: 'my issue' }));
     expect(out).toHaveProperty('status', 'error');
     expect(out).toHaveProperty('ticketId', null);
   });
@@ -577,9 +572,11 @@ describe('/api/chat searchDocumentation tool', () => {
       sets: Array<{ kind: string; results: Array<{ content: string }> }>;
     };
     const content = result.sets[0]!.results[0]!.content;
-    expect(content.startsWith('<reference source="https://docs.example.com/a.md">\n')).toBe(true);
-    expect(content.endsWith('\n</reference>')).toBe(true);
+    expect(content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
+    expect(content).toContain('https://docs.example.com/a.md');
     expect(content).toContain('x'.repeat(800) + '\u2026');
+    expect(content).not.toContain('x'.repeat(801));
     searchChunksSpy.mockRestore();
   });
 
@@ -834,7 +831,9 @@ describe('/api/chat agentic loop (Session 8)', () => {
       signal: expect.any(AbortSignal),
     });
     expect(result.sets[0]!.results).toHaveLength(1);
-    expect(result.sets[0]!.results[0]!.content).toBe('<reference source="null">\nkeep this\n</reference>');
+    expect(result.sets[0]!.results[0]!.content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(result.sets[0]!.results[0]!.content).toContain('keep this');
+    expect(result.sets[0]!.results[0]!.content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
   });
 
   it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {
@@ -914,10 +913,12 @@ async function runAgenticStreamAndRead(query: string, extraBody: Record<string, 
       streamController = controller;
     },
   });
+  let pendingTool: Promise<unknown> | null = null;
   streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
     const tools = (opts?.tools as { searchDocumentation?: { execute: (a: { query: string }) => Promise<unknown> } }) ?? {};
     if (tools.searchDocumentation) {
-      void tools.searchDocumentation.execute({ query });
+      pendingTool = tools.searchDocumentation.execute({ query });
+      void pendingTool.catch(() => undefined);
     }
     return {
       toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
@@ -933,6 +934,7 @@ async function runAgenticStreamAndRead(query: string, extraBody: Record<string, 
     }),
   );
   expect(res.status).toBe(200);
+  if (pendingTool !== null) await (pendingTool as Promise<unknown>).catch(() => undefined);
   streamController!.close();
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -1245,12 +1247,12 @@ describe('/api/chat answer cache (Session 10)', () => {
     streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
       const tools = (opts?.tools as {
         createKnowledgeTicket?: {
-          execute: (a: { name: string; email: string; issue: string }) => Promise<unknown>;
+          execute: (a: { question: string; attempted: string[]; documentationSearched: string[] }) => Promise<unknown>;
         };
       }) ?? {};
       if (tools.createKnowledgeTicket) {
         void tools.createKnowledgeTicket
-          .execute({ name: 'A', email: 'a@a.com', issue: 'please open a ticket' })
+          .execute({ question: 'please open a ticket', attempted: ['searched docs'], documentationSearched: ['docs'] })
           .finally(ticketFinished);
       }
       return {

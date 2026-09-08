@@ -30,5 +30,6 @@ registerChatProvider('openai', (deps) => getOpenAIChatModel(deps.modelId, deps.e
 registerChatProviderAdapter('openai', {
   capabilities: OPENAI_PROMPT_CACHE_CAPABILITIES,
   buildProviderOptions: buildOpenAIPromptCacheOptions,
+  toolCapabilities: { strictSchemas: 'native', inputExamples: 'native', outputSchemas: 'validated_locally', parallelCalls: true, toolCallRepair: 'unsupported', approvalHooks: 'application' },
   parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('openai', usage, providerMetadata),
 });

@@ -3,6 +3,7 @@ export * as Llm from './llm/index';
 export {
   getChatModelAdapter,
   getChatModelCapabilities,
+  getChatModelToolCapabilities,
   getChatModelProviderOptions,
   getChatModelTelemetry,
   parseChatModelUsage,
