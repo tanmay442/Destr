@@ -70,6 +70,14 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): P
   });
 }
 
+/**
+ * @deprecated WP-4: legacy deterministic rewrite/retry wrapper preserved for
+ * rollback compatibility. New code should use the structured search
+ * orchestrator (`packages/application/src/agent/search/search-orchestrator.ts`)
+ * behind the `SEARCH_STRUCTURED_PLANNER_ENABLED` flag. This wrapper keeps the
+ * corrected WP-1/WP-2 retrieval behavior (typed errors, score provenance,
+ * stable identity, over-fetch/backfill) unchanged.
+ */
 export async function agenticSearch(
   originalQuery: string,
   deps: AgenticDeps,

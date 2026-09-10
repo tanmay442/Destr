@@ -25,6 +25,8 @@ import {
   sanitizeUntrustedMetadata,
   serializeUntrustedChunk,
 } from '../prompt/serialize-untrusted-result';
+import type { OrchestratorResult } from '../search/search-orchestrator';
+import { stableChunkIdentity } from '../../rag/search/stable-chunk-identity';
 
 export const SEARCH_TOOL_NAME = 'searchDocumentation' as const;
 export const DEFAULT_SEARCH_TOOL_LIMIT = 3;
@@ -89,6 +91,19 @@ export type SearchChunksFn = (
   },
 ) => Promise<SearchChunksResult>;
 
+export type StructuredSearchFn = (
+  query: string,
+  opts: {
+    limit?: number | undefined;
+    signal?: AbortSignal | undefined;
+    excludeChunkIdentities?: ReadonlySet<string> | undefined;
+    shadow?: boolean | undefined;
+    trace?: {
+      write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
+    } | undefined;
+  },
+) => Promise<OrchestratorResult>;
+
 export type AgenticSearchFn = (
   cfg: AppConfig,
   query: string,
@@ -104,6 +119,10 @@ export interface SearchDocumentationToolDeps {
   readonly agenticSearch: AgenticSearchFn;
   readonly cfg: AppConfig;
   readonly effectiveMode: 'agentic' | 'normal';
+  readonly structuredSearch?: StructuredSearchFn | undefined;
+  readonly plannerEnabled?: boolean | undefined;
+  readonly shadowEnabled?: boolean | undefined;
+  readonly query2docEnabled?: boolean | undefined;
 }
 
 function executedQueries(queries: readonly string[]): Array<{ queryId: string; query: string }> {
@@ -178,6 +197,15 @@ export function createSearchDocumentationTool(
         const subquestionId = 'sq-1';
         const requestedLimit = input.limit ?? DEFAULT_SEARCH_TOOL_LIMIT;
         const attempts = [input.query];
+        if (deps.plannerEnabled === true && deps.structuredSearch) {
+          return runPlannerPath(deps.structuredSearch, context, call, input, callId, requestedLimit);
+        }
+        const normalResult = await runLegacyPath();
+        if (deps.shadowEnabled === true && deps.structuredSearch) {
+          await runShadowComparison(deps.structuredSearch, context, call, input, requestedLimit);
+        }
+        return normalResult;
+        async function runLegacyPath(): Promise<SearchDocumentationOutput> {
         if (deps.effectiveMode === 'agentic') {
           const result = await deps.agenticSearch(deps.cfg, input.query, {
             limit: requestedLimit,
@@ -345,9 +373,180 @@ export function createSearchDocumentationTool(
           evidenceTokensAdded: estimatedTokens(items),
           truncatedBy: diagnostics?.hasMore ? ['call_result_limit'] : [],
         } satisfies SearchToolResult);
+        }
       };
     },
   };
+}
+
+async function runPlannerPath(
+  structuredSearch: StructuredSearchFn,
+  context: AgentToolContext,
+  call: ToolExecuteCall,
+  input: SearchDocumentationInput,
+  callId: string,
+  requestedLimit: number,
+): Promise<SearchDocumentationOutput> {
+  let orchestrated: OrchestratorResult;
+  const plannerTrace = {
+    write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void {
+      context.trace.write({ ...event, sanitized: true });
+    },
+  };
+  try {
+    orchestrated = await structuredSearch(input.query, {
+      limit: requestedLimit,
+      signal: call.signal,
+      excludeChunkIdentities: context.evidence.seenChunkKeys,
+      trace: plannerTrace,
+    });
+  } catch (cause) {
+    const failure = cause instanceof SearchFailure
+      ? cause
+      : new SearchFailure('retrieval_unavailable', true, 'The documentation search is temporarily unavailable. Please try again.', cause);
+    return searchToolResultSchema.parse({
+      callId,
+      sets: [errorSet('sq-1', input.query, [input.query], failure)],
+      uniqueEvidenceAdded: 0,
+      evidenceTokensAdded: 0,
+      truncatedBy: [],
+    } satisfies SearchToolResult);
+  }
+  const truncatedBy = [...orchestrated.truncatedBy];
+  if (orchestrated.stopReason === 'physical_retrieval_ceiling' && !truncatedBy.includes('call_result_limit')) {
+    truncatedBy.push('call_result_limit');
+  }
+  truncatedBy.sort();
+  const rawLists = [...orchestrated.rawPackedBySubquestion.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  const flattened: RetrievedChunk[] = rawLists.flatMap(([, chunks]) => [...chunks]);
+  if (flattened.length === 0) {
+    return searchToolResultSchema.parse({
+      callId,
+      sets: [...orchestrated.sets],
+      uniqueEvidenceAdded: 0,
+      evidenceTokensAdded: 0,
+      truncatedBy: [...truncatedBy],
+    } satisfies SearchToolResult);
+  }
+  const unique = context.evidence.addEvidence(flattened) as readonly RetrievedChunk[];
+  if (unique.length === 0) {
+    const errors = orchestrated.sets.filter((set) => set.kind === 'error');
+    const filtered = orchestrated.sets
+      .filter((set) => set.kind === 'results')
+      .map((set) => ({
+        kind: 'no_match' as const,
+        subquestionId: set.subquestionId,
+        requestedQuery: set.requestedQuery,
+        attemptedQueries: set.kind === 'results'
+          ? set.executedQueries.map((entry) => entry.query)
+          : [set.requestedQuery],
+        reason: 'filtered_duplicates' as const,
+        ticketEligible: false,
+      }));
+    const fallbackSets: SearchSubquestionResult[] = [...errors, ...filtered];
+    if (fallbackSets.length === 0) fallbackSets.push({
+      kind: 'no_match',
+      subquestionId: 'sq-1',
+      requestedQuery: input.query,
+      attemptedQueries: [input.query],
+      reason: 'filtered_duplicates',
+      ticketEligible: false,
+    });
+    return searchToolResultSchema.parse({
+      callId,
+      sets: fallbackSets,
+      uniqueEvidenceAdded: 0,
+      evidenceTokensAdded: 0,
+      truncatedBy: [...truncatedBy],
+    } satisfies SearchToolResult);
+  }
+  const uniqueKeys = new Set(unique.map((chunk) => stableChunkIdentity(chunk)));
+  const sets: SearchSubquestionResult[] = [];
+  for (const set of orchestrated.sets) {
+    if (set.kind !== 'results') {
+      sets.push(set);
+      continue;
+    }
+    const rawForSub = orchestrated.rawPackedBySubquestion.get(set.subquestionId) ?? [];
+    const itemByKey = new Map(set.results.map((item) => {
+      const key = item.chunkUid ? `chunk_uid:${item.chunkUid}` : `document_chunk:${item.documentId}:${item.chunkIndex}`;
+      return [key, item] as const;
+    }));
+    const remaining = rawForSub.filter((chunk) => uniqueKeys.has(stableChunkIdentity(chunk)));
+    if (remaining.length === 0) {
+      sets.push({
+        kind: 'no_match',
+        subquestionId: set.subquestionId,
+        requestedQuery: set.requestedQuery,
+        attemptedQueries: set.executedQueries.map((entry) => entry.query),
+        reason: 'filtered_duplicates',
+        ticketEligible: false,
+      });
+      continue;
+    }
+    const validIds = new Set(set.executedQueries.map((entry) => entry.queryId));
+    const items = remaining.map((chunk) => {
+      const key = stableChunkIdentity(chunk);
+      const orchestratedItem = itemByKey.get(key);
+      const contributed = (orchestratedItem?.executedQueryIds ?? []).filter((queryId) => validIds.has(queryId)).sort();
+      const single = toToolItems([chunk], set.subquestionId, contributed[0] ?? set.executedQueries[0]?.queryId ?? 'q-1')[0];
+      if (!single) throw new Error('toToolItems must return one item per chunk');
+      return {
+        ...single,
+        executedQueryIds: contributed.length > 0 ? contributed : single.executedQueryIds,
+      };
+    });
+    sets.push({
+      kind: 'results',
+      subquestionId: set.subquestionId,
+      requestedQuery: set.requestedQuery,
+      executedQueries: [...set.executedQueries],
+      results: items,
+      coverage: remaining.length < rawForSub.length ? 'partial' : set.coverage,
+      hasMore: set.hasMore,
+      degradedBy: [...(set.degradedBy ?? [])],
+    });
+  }
+  sets.sort((a, b) => (a.subquestionId < b.subquestionId ? -1 : 1));
+  const allItems = sets.flatMap((set) => (set.kind === 'results' ? set.results : []));
+  return searchToolResultSchema.parse({
+    callId,
+    sets,
+    uniqueEvidenceAdded: unique.length,
+    evidenceTokensAdded: estimatedTokens(allItems),
+    truncatedBy: [...truncatedBy],
+  } satisfies SearchToolResult);
+}
+
+async function runShadowComparison(
+  structuredSearch: StructuredSearchFn,
+  context: AgentToolContext,
+  call: ToolExecuteCall,
+  input: SearchDocumentationInput,
+  requestedLimit: number,
+): Promise<void> {
+  try {
+    await structuredSearch(input.query, {
+      limit: requestedLimit,
+      signal: call.signal,
+      excludeChunkIdentities: context.evidence.seenChunkKeys,
+      shadow: true,
+      trace: {
+        write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void {
+          context.trace.write({ ...event, sanitized: true });
+        },
+      },
+    });
+    context.trace.write({
+      toolName: 'searchDocumentation',
+      callId: call.callId,
+      phase: 'success',
+      durationMs: 0,
+      sanitized: true,
+    });
+  } catch {
+    // Shadow comparison must never change user-visible results.
+  }
 }
 
 function attemptsFromFailure(requested: string, attempted: readonly string[] | undefined): string[] {

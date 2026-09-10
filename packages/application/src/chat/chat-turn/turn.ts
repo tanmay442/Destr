@@ -50,6 +50,8 @@ import { parseCachedAnswer, parseTurnResult, createCachedAnswerStream, TURN_RESU
 import { persistHistory, readBoundedJson } from './turn-io';
 import { buildChatTools, type PrefetchedSearchOutcome } from './chat-tools';
 import { buildCatalogToolsForTurn, isCatalogEnabled } from '../../agent/compat/chat-tools-compat';
+import { readPlannerFlags } from '../../agent/search/search-flags';
+import { estimateChunkTokens } from '../../agent/search/evidence-packer';
 import { TurnToolLedger } from '../../agent/run-state';
 import { isExplicitTicketRequestText } from '../../agent/tool-approval';
 import { runHallucinationCheck, DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
@@ -400,7 +402,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const turnDeadlineAt = requestStartedAt + softDeadlineMs;
 
   let prefetch: PrefetchedSearchOutcome | null = null;
-  if (cfg.prefetchFirstTurn && isFirstTurn && lastUserText.trim() !== '') {
+  const plannerPrefetchBypass = deps.structuredSearch !== undefined &&
+    readPlannerFlags({ get: (key: string) => process.env[key] }).plannerEnabled;
+  if (cfg.prefetchFirstTurn && !plannerPrefetchBypass && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchStartedAt = performance.now();
     if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
     const prefetchResult = turnSignal.aborted
@@ -475,6 +479,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         {
           searchChunks: (cfgValue, query, opts) => deps.searchChunks(cfgValue, query, opts),
           agenticSearch: (cfgValue, query, opts) => deps.agenticSearch(cfgValue, query, opts),
+          ...(deps.structuredSearch
+            ? { structuredSearch: (cfgValue, query, opts) => deps.structuredSearch?.(cfgValue, query, opts) as never }
+            : {}),
           createTicket: (ticketInput, opts) => deps.createTicket(ticketInput, opts),
           userResolver: async (actorId: string, opts) => {
             if (opts?.signal?.aborted) throw new DOMException('Ticket identity lookup was cancelled.', 'AbortError');
@@ -502,6 +509,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           ledger: toolLedger,
           budgetDeadlineInMs: softDeadlineMsRemaining,
           ...(prefetch ? { prefetched: prefetch } : {}),
+          ...(prefetch !== null
+            ? {
+                initialPhysicalUsed: cfg.hybridEnabled ? 2 : 1,
+                initialTokensUsed: prefetch.kind === 'results'
+                  ? prefetch.matches.reduce((total, chunk) => total + estimateChunkTokens(chunk), 0)
+                  : 0,
+              }
+            : {}),
         },
       );
 

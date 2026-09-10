@@ -83,6 +83,22 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
       getRuntimeConfig,
       searchChunks: (cfg, query, opts) => comp.searchChunks(cfg, query, opts),
       agenticSearch: (cfg, query, opts) => comp.agenticSearch(cfg, query, opts),
+      ...('structuredSearch' in comp && typeof (comp as { structuredSearch?: unknown }).structuredSearch === 'function'
+        ? {
+            structuredSearch: (
+              cfg: Parameters<typeof comp.searchChunks>[0],
+              query: string,
+              opts?: Parameters<typeof comp.searchChunks>[2],
+            ) =>
+              (comp as unknown as {
+                structuredSearch: (
+                  cfg: Parameters<typeof comp.searchChunks>[0],
+                  query: string,
+                  opts?: Parameters<typeof comp.searchChunks>[2],
+                ) => Promise<never>;
+              }).structuredSearch(cfg, query, opts),
+          }
+        : {}),
       hallucinationGrader: (cfg) => comp.getHallucinationGrader(cfg),
       answerCache: comp.answerCache,
       turnResultCache: comp.turnResultCache,

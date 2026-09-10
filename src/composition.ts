@@ -22,6 +22,7 @@ import {
   type AgenticDeps,
   SearchFailure,
 } from '@app/application';
+import { runStructuredSearch, type SearchBudgetLimits } from '@app/application/agent/search';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
@@ -417,6 +418,50 @@ function createComposition() {
           e,
         ));
       }
+    },
+    structuredSearch: async (
+      cfg: AppConfig,
+      query: string,
+      opts: {
+        limit?: number | undefined;
+        signal?: AbortSignal | undefined;
+        excludeChunkIdentities?: ReadonlySet<string> | undefined;
+        budgets?: Partial<SearchBudgetLimits> | undefined;
+        deadlineAt?: number | undefined;
+        trace?: {
+          write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
+        } | undefined;
+      } = {},
+    ) => {
+      const searchDeps = getSearchDeps(cfg);
+      const signal = opts.signal ?? new AbortController().signal;
+      return runStructuredSearch(
+        {
+          search: searchDeps,
+          similarityThreshold: cfg.similarityThreshold,
+          rerankerThreshold: cfg.rerankerThreshold,
+          hybridEnabled: cfg.hybridEnabled,
+          lexicalSearchMode: cfg.lexicalSearchMode,
+          mode: cfg.parentChildMode,
+          parentChildWindow: cfg.parentChildWindow,
+          rrfK: RRF_K,
+          lexicalWeight: LEXICAL_WEIGHT,
+          rsePenalty: cfg.rsePenalty,
+          rseMaxSegmentChunks: cfg.rseMaxSegmentChunks,
+          rseOverallMaxChunks: cfg.rseOverallMaxChunks,
+          rseMinSegmentValue: cfg.rseMinSegmentValue,
+        },
+        {
+          originalQuery: query,
+          callId: `structured-${Date.now().toString(36)}`,
+          requestedLimit: opts.limit ?? 3,
+          signal,
+          ...(opts.excludeChunkIdentities ? { excludeChunkIdentities: opts.excludeChunkIdentities } : {}),
+          ...(opts.budgets ? { budgets: opts.budgets } : {}),
+          ...(opts.deadlineAt !== undefined ? { deadlineAt: opts.deadlineAt } : {}),
+          ...(opts.trace ? { trace: opts.trace } : {}),
+        },
+      );
     },
     getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env).hallucinationGrader?.grade ?? null,
     getSearchDeps,

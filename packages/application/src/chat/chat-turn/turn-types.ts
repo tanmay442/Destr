@@ -22,6 +22,7 @@ import type {
   SearchChunksResult,
   SearchFailure,
 } from '../../rag/search';
+import type { OrchestratorResult } from '../../agent/search/search-orchestrator';
 import type { ChatUIMessage } from '../message-types';
 import type {
   CacheLeasePolicy,
@@ -102,6 +103,15 @@ export interface ChatTurnDeps {
       excludeChunkIdentities?: ReadonlySet<string> | undefined;
     },
   ): Promise<Result<AgenticResult, SearchFailure>>;
+  structuredSearch?: (
+    cfg: AppConfig,
+    query: string,
+    opts?: {
+      limit?: number | undefined;
+      signal?: AbortSignal | undefined;
+      excludeChunkIdentities?: ReadonlySet<string> | undefined;
+    },
+  ) => Promise<OrchestratorResult>;
   hallucinationGrader(
     cfg: AppConfig,
   ): ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;

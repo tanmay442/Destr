@@ -21,7 +21,8 @@
     "./admin/tickets": "./src/admin/tickets.ts",
     "./prompt": "./src/prompt/index.ts",
     "./prompt/build-system-prompt": "./src/prompt/build-system-prompt.ts",
-    "./chat": "./src/chat/index.ts"
+    "./chat": "./src/chat/index.ts",
+    "./agent/search": "./src/agent/search/index.ts"
   },
   "dependencies": {
     "@app/domain": "workspace:*",

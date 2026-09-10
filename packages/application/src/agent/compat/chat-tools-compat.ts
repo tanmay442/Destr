@@ -36,10 +36,27 @@ import {
 import { TurnToolLedger, type ToolCallOutcomeKind } from '../run-state';
 import { sanitizeUntrustedMetadata, serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
 import { ToolPolicyError } from '../tool-policy-pipeline';
+import { readPlannerFlags } from '../search/search-flags';
+import type { SearchBudgetLimits } from '../search/search-budget';
+import type { OrchestratorResult } from '../search/search-orchestrator';
 
 export interface CatalogCompatDeps {
   readonly searchChunks: SearchChunksFn;
   readonly agenticSearch: AgenticSearchFn;
+  readonly structuredSearch?: (
+    cfg: AppConfig,
+    query: string,
+    opts?: {
+      limit?: number | undefined;
+      signal?: AbortSignal | undefined;
+      excludeChunkIdentities?: ReadonlySet<string> | undefined;
+      budgets?: Partial<SearchBudgetLimits> | undefined;
+      deadlineAt?: number | undefined;
+      trace?: {
+        write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
+      } | undefined;
+    },
+  ) => Promise<OrchestratorResult>;
   readonly createTicket: TicketWriter;
   readonly userResolver: TicketUserResolver;
   readonly rateLimit: TicketRateLimiter;
@@ -74,6 +91,9 @@ export interface CatalogCompatTurn {
   readonly enabledTools?: ReadonlySet<string> | undefined;
   /** Remaining turn budget in ms used to align the catalog budget deadline. */
   readonly budgetDeadlineInMs?: number | undefined;
+  /** Retrieval already spent before tools run (e.g. first-turn prefetch). */
+  readonly initialPhysicalUsed?: number | undefined;
+  readonly initialTokensUsed?: number | undefined;
   /** A request-owned context; never take approval credentials from model-visible arguments. */
   readonly internalToolContext?: CatalogCompatInternalToolContext | undefined;
 }
@@ -213,11 +233,77 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     trace,
     approvals,
   };
+  const plannerFlags = readPlannerFlags({ get: (key: string) => process.env[key] });
+  const TURN_PHYSICAL_CEILING = 24;
+  const TURN_TOKEN_CEILING = 8000;
+  let sharedPhysicalUsed = Math.max(0, turn.initialPhysicalUsed ?? 0);
+  let sharedTokensUsed = Math.max(0, turn.initialTokensUsed ?? 0);
+  let chain: Promise<void> = Promise.resolve();
+  const turnDeadlineAt = Date.now() + Math.max(0, turn.budgetDeadlineInMs ?? 50_000);
   const searchDefinition = createSearchDocumentationTool({
     searchChunks: deps.searchChunks,
     agenticSearch: deps.agenticSearch,
     cfg: turn.cfg,
     effectiveMode: turn.effectiveMode,
+    ...(deps.structuredSearch
+      ? {
+          structuredSearch: async (query: string, opts?: {
+            limit?: number | undefined;
+            signal?: AbortSignal | undefined;
+            excludeChunkIdentities?: ReadonlySet<string> | undefined;
+            shadow?: boolean | undefined;
+            trace?: {
+              write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
+            } | undefined;
+          }): Promise<OrchestratorResult> => {
+            const isShadow = opts?.shadow === true;
+            const remainingPhysical = TURN_PHYSICAL_CEILING - sharedPhysicalUsed;
+            const remainingTokens = TURN_TOKEN_CEILING - sharedTokensUsed;
+            if (remainingPhysical <= 0 || remainingTokens <= 0) {
+              return {
+                sets: [{
+                  kind: 'error',
+                  subquestionId: 'sq-1',
+                  requestedQuery: query,
+                  attemptedQueries: [query],
+                  code: 'retrieval_unavailable',
+                  retryable: false,
+                  userSafeMessage: 'The documentation search budget for this turn is exhausted.',
+                }],
+                stopReason: 'physical_retrieval_ceiling',
+                plansUsed: 0,
+                physicalRetrievalsUsed: sharedPhysicalUsed,
+                isFallback: false,
+                fallbackReason: null,
+                budgets: {
+                  physicalRetrievals: { consumed: sharedPhysicalUsed, limit: TURN_PHYSICAL_CEILING, remaining: 0 },
+                  evidenceTokens: { consumed: sharedTokensUsed, limit: TURN_TOKEN_CEILING, remaining: Math.max(0, remainingTokens) },
+                },
+                uniqueEvidenceCount: 0,
+                evidenceTokens: 0,
+                truncatedBy: remainingTokens <= 0 ? ['turn_token_limit'] : [],
+                rawPackedBySubquestion: new Map(),
+                chunkProvenance: new Map(),
+              };
+            }
+            const result = await deps.structuredSearch?.(turn.cfg, query, {
+              ...(opts ?? {}),
+              deadlineAt: turnDeadlineAt,
+              ...(isShadow ? {} : {
+                budgets: {
+                  maxPhysicalRetrievals: remainingPhysical,
+                  maxEvidenceTokens: remainingTokens,
+                },
+              }),
+            }) as OrchestratorResult;
+            if (!isShadow) sharedPhysicalUsed += result.physicalRetrievalsUsed;
+            return result;
+          },
+          plannerEnabled: plannerFlags.plannerEnabled,
+          shadowEnabled: plannerFlags.shadowEnabled,
+          query2docEnabled: plannerFlags.query2docEnabled,
+        }
+      : {}),
   });
   const ticketDefinition = createKnowledgeTicketTool({
     createTicket: deps.createTicket,
@@ -246,26 +332,32 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
 
   function recordSearchOutcome(output: unknown, durationMs: number, callId: string, requestedQuery?: string): void {
     const parsed = output as {
-      sets?: Array<{ kind: string; requestedQuery?: string; attemptedQueries?: readonly string[]; executedQueries?: readonly { queryId: string; query: string }[] }>;
+      sets?: Array<{ kind: string; requestedQuery?: string; attemptedQueries?: readonly string[]; executedQueries?: readonly { queryId: string; query: string }[]; degradedBy?: readonly unknown[]; reason?: string }>;
       uniqueEvidenceAdded?: number;
     };
-    const firstKind = parsed.sets?.[0]?.kind;
+    const sets = parsed.sets ?? [];
+    const hasError = sets.some((set) => set.kind === 'error');
+    const hasDegradedResults = sets.some((set) => set.kind === 'results' && Array.isArray(set.degradedBy) && set.degradedBy.length > 0);
+    const hasResults = sets.some((set) => set.kind === 'results');
+    const hasNoMatch = sets.some((set) => set.kind === 'no_match');
     let resultState: AgenticResultState | null = null;
     let kind: 'success' | 'no_match' | 'error' | 'degraded' = 'success';
-    if (firstKind === 'results') {
-      const degraded = (parsed.sets?.[0] as { degradedBy?: readonly unknown[] })?.degradedBy;
-      const isDegraded = Array.isArray(degraded) && degraded.length > 0;
-      resultState = isDegraded ? 'degraded' : 'results';
-      kind = isDegraded ? 'degraded' : 'success';
-      if (isDegraded) searchInfrastructureFailed = true;
-    } else if (firstKind === 'no_match') {
-      const reason = (parsed.sets?.[0] as { reason?: string })?.reason;
-      resultState = reason === 'filtered_duplicates' ? 'degraded' : 'no_match';
-      kind = 'no_match';
-    } else if (firstKind === 'error') {
+    if (hasError) {
       resultState = 'error';
       kind = 'error';
       searchInfrastructureFailed = true;
+    } else if (hasDegradedResults) {
+      resultState = 'degraded';
+      kind = 'degraded';
+      searchInfrastructureFailed = true;
+    } else if (hasResults) {
+      resultState = 'results';
+      kind = 'success';
+    } else if (hasNoMatch) {
+      const firstNoMatch = sets.find((set) => set.kind === 'no_match');
+      const reason = firstNoMatch?.reason;
+      resultState = reason === 'filtered_duplicates' ? 'degraded' : 'no_match';
+      kind = 'no_match';
     }
     if (resultState) metrics.searchResultStates.push(resultState);
     try {
@@ -328,6 +420,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
         const limit = typeof parsed.limit === 'number' ? parsed.limit : undefined;
         const canReusePrefetch =
           !prefetchedConsumed &&
+          !plannerFlags.plannerEnabled &&
           turn.prefetched !== undefined &&
           turn.prefetched.query.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
         if (canReusePrefetch) {
@@ -438,12 +531,40 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           metrics.reformulationCount += 1;
         }
         const started = Date.now();
+        const preAborted = execution.signal.aborted;
         try {
-          const output = await searchBuilt.execute(
-            { query, ...(limit !== undefined ? { limit } : {}) },
-            toToolExecuteCall(execution),
-          );
+          const runSearch = chain.then(() => {
+            if (sharedPhysicalUsed >= TURN_PHYSICAL_CEILING || sharedTokensUsed >= TURN_TOKEN_CEILING) {
+              return {
+                callId,
+                sets: [{
+                  kind: 'error',
+                  subquestionId: 'sq-1',
+                  requestedQuery: query,
+                  attemptedQueries: [query],
+                  code: 'retrieval_unavailable',
+                  retryable: false,
+                  userSafeMessage: 'The documentation search budget for this turn is exhausted.',
+                }],
+                uniqueEvidenceAdded: 0,
+                evidenceTokensAdded: 0,
+                truncatedBy: sharedTokensUsed >= TURN_TOKEN_CEILING ? ['turn_token_limit'] : [],
+              };
+            }
+            return searchBuilt.execute(
+              { query, ...(limit !== undefined ? { limit } : {}) },
+              toToolExecuteCall(execution),
+            );
+          });
+          chain = runSearch.then(() => undefined, () => undefined);
+          const output = await runSearch;
           recordSearchOutcome(output, Math.max(0, Date.now() - started), callId, query);
+          sharedTokensUsed += (output as { evidenceTokensAdded?: number }).evidenceTokensAdded ?? 0;
+          if (!(plannerFlags.plannerEnabled && deps.structuredSearch)) {
+            const firstSet = (output as { sets?: Array<{ executedQueries?: readonly unknown[]; attemptedQueries?: readonly unknown[] }> }).sets?.[0];
+            const queryCount = firstSet?.executedQueries?.length ?? firstSet?.attemptedQueries?.length ?? 1;
+            sharedPhysicalUsed += Math.max(1, queryCount) * (turn.cfg.hybridEnabled ? 2 : 1);
+          }
           const withScores = output as { sets: Array<{ kind: string; results?: Array<{ scores?: RetrievedChunk['scores'] }> }> };
           if (withScores.sets[0]?.kind === 'results') {
             const items = withScores.sets[0]?.results ?? [];
@@ -462,6 +583,10 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           metrics.hitCount = (metrics.hitCount ?? 0) + uniqueAdded;
           return output;
         } catch (error) {
+          const rejectionKind = (error as { kind?: unknown } | null)?.kind;
+          if (!preAborted && rejectionKind !== 'input_validation' && rejectionKind !== 'denied' && rejectionKind !== 'budget_exceeded') {
+            sharedPhysicalUsed += turn.cfg.hybridEnabled ? 2 : 1;
+          }
           recordSearchThrownOutcome(error, Math.max(0, Date.now() - started), callId, execution.signal);
           throw error;
         } finally {

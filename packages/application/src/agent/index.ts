@@ -6,6 +6,7 @@ export * from './tool-catalog';
 export * from './run-state';
 export * from './tools/search-documentation';
 export * from './tools/create-knowledge-ticket';
+export * from './search/index';
 export * from './prompt/serialize-untrusted-result';
 export * from './prompt/build-agent-instructions';
 export * from './compat/chat-tools-compat';
