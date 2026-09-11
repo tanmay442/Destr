@@ -10,10 +10,9 @@ import type { SearchDegradation } from '../../rag/search/search-contract';
 import type { SearchSubquestionResult } from '../../rag/search/search-contract';
 import {
   dedupeQueriesWithinSubquestion,
+  createFallbackPlan,
   normalizeQueryForDedup,
   normalizeQueryText,
-  planPreservesTokens,
-  validateSearchPlan,
   type SearchPlan,
 } from './search-plan';
 import { createDeterministicPlan, resolvePlan, type PlannerFn, type PlannerInput } from './search-planner';
@@ -25,7 +24,6 @@ import {
 } from './search-quality';
 import { packEvidence } from './evidence-packer';
 import {
-  createBudgetState,
   type BudgetConsumption,
   type SearchBudgetLimits,
   type SearchStopReason,
@@ -147,6 +145,7 @@ async function runWithConcurrency<T>(
   tasks: readonly (() => Promise<T>)[],
   maxConcurrent: number,
   signal: AbortSignal,
+  abortAll: (reason: unknown) => void,
 ): Promise<T[]> {
   const results: T[] = new Array<T>(tasks.length) as T[];
   let next = 0;
@@ -166,7 +165,17 @@ async function runWithConcurrency<T>(
       })(),
     );
   }
-  await Promise.all(workers);
+  const guarded = workers.map(async (worker) => {
+    try {
+      await worker;
+    } catch (cause) {
+      abortAll(cause);
+      throw cause;
+    }
+  });
+  const settled = await Promise.allSettled(guarded);
+  const rejected = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
+  if (rejected) throw rejected.reason;
   return results;
 }
 
@@ -236,6 +245,7 @@ async function rerankOnceForSubquestion(input: {
     if (input.signal.aborted) throw input.signal.reason instanceof Error ? input.signal.reason : new Error('Search orchestrator aborted');
     const documents = input.combined.map((chunk) => chunk.content);
     const ranked = await reranker.rank(input.subquestionQuestion, documents, { signal: input.signal });
+    throwIfAborted(input.signal);
     if (ranked.length !== input.combined.length) return { ranked: input.combined, degraded: true };
     const indices = new Set<number>();
     for (const item of ranked) {
@@ -272,6 +282,16 @@ export async function runStructuredSearch(
   deps: OrchestratorDeps,
   input: OrchestratorInput,
 ): Promise<OrchestratorResult> {
+  const runAbortController = new AbortController();
+  const deadlineSignal = input.deadlineAt === undefined
+    ? null
+    : AbortSignal.timeout(Math.max(1, input.deadlineAt - Date.now()));
+  const runSignal = AbortSignal.any([
+    input.signal,
+    runAbortController.signal,
+    ...(deadlineSignal ? [deadlineSignal] : []),
+  ]);
+  const effectiveInput: OrchestratorInput = { ...input, signal: runSignal };
   const hardCallLimit = Math.max(1, Math.min(input.requestedLimit, 10));
   const limits: SearchBudgetLimits = {
     maxResultsPerSearchCall: Math.min(input.budgets?.maxResultsPerSearchCall ?? hardCallLimit, hardCallLimit),
@@ -287,27 +307,41 @@ export async function runStructuredSearch(
     maxEvidenceTokens: input.budgets?.maxEvidenceTokens ?? 8000,
     minQuotaPerSubquestion: input.budgets?.minQuotaPerSubquestion ?? 1,
   };
-  const state = createBudgetState(limits);
   const planner: PlannerFn = input.planner ?? (async (request: PlannerInput) => createDeterministicPlan(request));
   const seenKeys = input.excludeChunkIdentities ?? new Set<string>();
 
-  const budgetView = (): Record<string, BudgetConsumption> => {
+  const budgetView = (
+    plansConsumed = 0,
+    physicalConsumed = 0,
+    uniqueConsumed = 0,
+    tokenConsumed = 0,
+  ): Record<string, BudgetConsumption> => {
     const snapshot: Record<string, BudgetConsumption> = {};
     snapshot.plans = {
-      consumed: state.plansUsed,
+      consumed: plansConsumed,
       limit: limits.maxSearchPlans,
-      remaining: Math.max(0, limits.maxSearchPlans - state.plansUsed),
+      remaining: Math.max(0, limits.maxSearchPlans - plansConsumed),
     };
     snapshot.physicalRetrievals = {
-      consumed: state.physicalRetrievalsUsed,
+      consumed: physicalConsumed,
       limit: limits.maxPhysicalRetrievals,
-      remaining: Math.max(0, limits.maxPhysicalRetrievals - state.physicalRetrievalsUsed),
+      remaining: Math.max(0, limits.maxPhysicalRetrievals - physicalConsumed),
+    };
+    snapshot.uniqueChunks = {
+      consumed: uniqueConsumed,
+      limit: limits.maxUniqueEvidenceChunks,
+      remaining: Math.max(0, limits.maxUniqueEvidenceChunks - uniqueConsumed),
+    };
+    snapshot.evidenceTokens = {
+      consumed: tokenConsumed,
+      limit: limits.maxEvidenceTokens,
+      remaining: Math.max(0, limits.maxEvidenceTokens - tokenConsumed),
     };
     return snapshot;
   };
 
-  if (input.signal.aborted) {
-    const abort = classifyAbort(input.signal);
+  if (runSignal.aborted) {
+    const abort = classifyAbort(runSignal);
     return {
       sets: [
         {
@@ -376,21 +410,40 @@ export async function runStructuredSearch(
   > | null = null;
 
   let currentPlan: SearchPlan;
-  throwIfAborted(input.signal);
-  const resolved = await resolvePlan({
-    planner,
-    request: {
+  throwIfAborted(runSignal);
+  let resolved;
+  try {
+    resolved = await resolvePlan({
+      planner,
+      request: {
+        originalQuery: input.originalQuery,
+        ...(input.conversationSummary ? { conversationSummary: input.conversationSummary } : {}),
+        priorAttempts: [],
+        remainingPlans: limits.maxSearchPlans,
+        remainingMs: remainingMs(),
+        signal: runSignal,
+      },
       originalQuery: input.originalQuery,
-      ...(input.conversationSummary ? { conversationSummary: input.conversationSummary } : {}),
-      priorAttempts: [],
-      remainingPlans: limits.maxSearchPlans,
-      remainingMs: remainingMs(),
-      signal: input.signal,
-    },
-    originalQuery: input.originalQuery,
-    ...(input.trace ? { trace: input.trace } : {}),
-    callId: input.callId,
-  });
+      ...(input.trace ? { trace: input.trace } : {}),
+      callId: input.callId,
+    });
+  } catch {
+    const abort = classifyAbort(runSignal);
+    return {
+      sets: errorSetsForPlan(createFallbackPlan(input.originalQuery), input.originalQuery, abort.code, abort.userSafeMessage, abort.retryable),
+      stopReason: abort.stopReason,
+      plansUsed,
+      physicalRetrievalsUsed: physicalUsed,
+      isFallback: false,
+      fallbackReason: null,
+      budgets: budgetView(),
+      uniqueEvidenceCount: 0,
+      evidenceTokens: 0,
+      truncatedBy: [],
+      rawPackedBySubquestion: new Map(),
+      chunkProvenance: new Map(),
+    };
+  }
   currentPlan = resolved.plan;
   isFallback = resolved.isFallback;
   fallbackReason = resolved.fallbackReason;
@@ -450,8 +503,8 @@ export async function runStructuredSearch(
   }
 
   for (let round = 0; round < limits.maxSearchPlans; round += 1) {
-    if (input.signal.aborted) {
-      const abort = classifyAbort(input.signal);
+    if (runSignal.aborted) {
+      const abort = classifyAbort(runSignal);
       return {
         sets: errorSetsForPlan(currentPlan, input.originalQuery, abort.code, abort.userSafeMessage, abort.retryable),
         stopReason: abort.stopReason,
@@ -491,7 +544,13 @@ export async function runStructuredSearch(
     }
 
     const normalizedQuerySet = currentPlan.subquestions
-      .flatMap((sub) => dedupeQueriesWithinSubquestion(sub.queries).map((entry) => entry.dedupKey))
+      .map((sub) => {
+        const queries = dedupeQueriesWithinSubquestion(sub.queries)
+          .map((entry) => `${entry.query.strategy}:${entry.dedupKey}`)
+          .sort()
+          .join('\u0001');
+        return `${sub.subquestionId}:${queries}`;
+      })
       .sort()
       .join('\u0000');
     if (round > 0 && priorQuerySets.includes(normalizedQuerySet)) {
@@ -526,16 +585,17 @@ export async function runStructuredSearch(
 
     const execution = await executePlanOnce(currentPlan, {
       deps,
-      input,
+      input: effectiveInput,
       limits,
       seenKeys,
       getPhysicalUsed: () => physicalUsed,
       addPhysicalUsed: (count: number) => { physicalUsed += count; },
+      abortRun: (reason: unknown) => runAbortController.abort(reason),
     });
     physicalUsed = execution.physicalUsed;
 
     if (execution.cancelled) {
-      const abort = classifyAbort(input.signal);
+      const abort = classifyAbort(runSignal);
       return {
         sets: errorSetsForPlan(currentPlan, input.originalQuery, abort.code, abort.userSafeMessage, abort.retryable),
         stopReason: abort.stopReason,
@@ -684,43 +744,46 @@ export async function runStructuredSearch(
     }
 
     let followupPlan: SearchPlan;
+    plansUsed += 1;
     try {
-      const raw = await planner({
+      const followup = await resolvePlan({
+        planner,
+        request: {
+          originalQuery: input.originalQuery,
+          ...(input.conversationSummary ? { conversationSummary: input.conversationSummary } : {}),
+          priorAttempts: priorFeedback,
+          remainingPlans: limits.maxSearchPlans - plansUsed + 1,
+          remainingMs: remainingMs(),
+          signal: runSignal,
+        },
         originalQuery: input.originalQuery,
-        ...(input.conversationSummary ? { conversationSummary: input.conversationSummary } : {}),
-        priorAttempts: priorFeedback,
-        remainingPlans: limits.maxSearchPlans - plansUsed,
-        remainingMs: remainingMs(),
-        signal: input.signal,
+        ...(input.trace ? { trace: input.trace } : {}),
+        callId: input.callId,
       });
-      const validated = validateSearchPlan(raw);
-      if (validated.ok && planPreservesTokens(validated.plan)) {
-        followupPlan = validated.plan;
-      } else {
-        input.trace?.write({ toolName: 'searchPlanner', callId: input.callId, phase: 'error', durationMs: 0 });
-        const packed = packExecution(execution, currentPlan, limits, { isFallback, plansUsed });
-        return {
-          ...packed,
-          stopReason: 'partial_evidence',
-          plansUsed,
-          physicalRetrievalsUsed: physicalUsed,
-          isFallback,
-          fallbackReason: fallbackReason ?? 'followup_planner_malformed',
-        };
+      followupPlan = followup.plan;
+      if (followup.isFallback) {
+        isFallback = true;
+        fallbackReason ??= followup.fallbackReason === 'planner_error'
+          ? 'followup_planner_error'
+          : 'followup_planner_malformed';
       }
     } catch {
-      input.trace?.write({ toolName: 'searchPlanner', callId: input.callId, phase: 'error', durationMs: 0 });
-      const packed = packExecution(execution, currentPlan, limits, { isFallback, plansUsed });
+      const abort = classifyAbort(runSignal);
       return {
-        ...packed,
-        stopReason: 'partial_evidence',
+        sets: errorSetsForPlan(currentPlan, input.originalQuery, abort.code, abort.userSafeMessage, abort.retryable),
+        stopReason: abort.stopReason,
         plansUsed,
         physicalRetrievalsUsed: physicalUsed,
         isFallback,
-        fallbackReason: fallbackReason ?? 'followup_planner_error',
+        fallbackReason,
+        budgets: budgetView(plansUsed, physicalUsed),
+        uniqueEvidenceCount: 0,
+        evidenceTokens: 0,
+        truncatedBy: [],
+        rawPackedBySubquestion: new Map(),
+        chunkProvenance: new Map(),
       };
     }
-    plansUsed += 1;
     const executedPlan = currentPlan;
     currentPlan = followupPlan;
     if (currentPlan.intent !== 'documentation') {
@@ -813,6 +876,7 @@ async function executePlanOnce(
     seenKeys: ReadonlySet<string>;
     getPhysicalUsed: () => number;
     addPhysicalUsed: (count: number) => void;
+    abortRun: (reason: unknown) => void;
   },
 ): Promise<PlanExecution> {
   const executions = new Map<string, VariantExecution>();
@@ -912,7 +976,12 @@ async function executePlanOnce(
     await task();
   });
   try {
-    await runWithConcurrency(countedTasks, ctx.limits.maxConcurrentRetrievals, ctx.input.signal);
+    await runWithConcurrency(
+      countedTasks,
+      ctx.limits.maxConcurrentRetrievals,
+      ctx.input.signal,
+      ctx.abortRun,
+    );
   } catch (cause) {
     if (isCancellation(cause, ctx.input.signal)) {
       return { subResults: [], physicalUsed: ctx.getPhysicalUsed() + startedVariants * modalitiesPerVariant, cancelled: true, timedOut: false, physicalCeiling: false };
@@ -1208,13 +1277,22 @@ function packExecution(
       results: packedSet.results.map((chunk) => {
         const key = stableChunkIdentity(chunk);
         const contributed = (original.provenanceByKey.get(key) ?? []).filter((queryId) => validIds.has(queryId)).sort();
+        const allSubquestionIds = packed.chunkProvenance.get(key)?.subquestionIds ?? [packedSet.subquestionId];
+        const allQueryIds = [...new Set(
+          execution.subResults.flatMap((sub) => [...(sub.provenanceByKey.get(key) ?? [])]),
+        )].sort();
+        const localQueryIds = contributed.length > 0 ? contributed : [effectiveExecuted[0]?.queryId ?? 'q-1'];
         return {
           id: chunk.id,
           ...(chunk.chunkUid ? { chunkUid: chunk.chunkUid } : {}),
           documentId: chunk.documentId,
           chunkIndex: chunk.chunkIndex,
           subquestionId: packedSet.subquestionId,
-          executedQueryIds: contributed.length > 0 ? contributed : [effectiveExecuted[0]?.queryId ?? 'q-1'],
+          executedQueryIds: localQueryIds,
+          provenance: {
+            subquestionIds: [...allSubquestionIds].sort(),
+            queryIds: allQueryIds.length > 0 ? allQueryIds : localQueryIds,
+          },
           content: chunk.content,
           source: chunk.source,
           ...(chunk.title ? { documentTitle: chunk.title } : {}),

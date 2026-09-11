@@ -32,6 +32,7 @@ export const SEARCH_TOOL_NAME = 'searchDocumentation' as const;
 export const DEFAULT_SEARCH_TOOL_LIMIT = 3;
 export const SEARCH_TOOL_TIMEOUT_MS = 20_000;
 export const SEARCH_TOOL_MAX_CALLS = 4;
+export const SEARCH_PLANNER_SHADOW_TIMEOUT_MS = 5_000;
 
 export const searchDocumentationInputSchema = z.object({
   query: z
@@ -141,6 +142,7 @@ function toToolItems(
     chunkIndex: chunk.chunkIndex,
     subquestionId,
     executedQueryIds: [executedQueryId],
+    provenance: { subquestionIds: [subquestionId], queryIds: [executedQueryId] },
     content: serializeUntrustedChunk({ content: chunk.content, source: chunk.source }),
     source: chunk.source === null ? null : sanitizeUntrustedMetadata(chunk.source),
     ...(chunk.title ? { documentTitle: sanitizeUntrustedMetadata(chunk.title) } : {}),
@@ -202,7 +204,7 @@ export function createSearchDocumentationTool(
         }
         const normalResult = await runLegacyPath();
         if (deps.shadowEnabled === true && deps.structuredSearch) {
-          await runShadowComparison(deps.structuredSearch, context, call, input, requestedLimit);
+          void runShadowComparison(deps.structuredSearch, context, call, input, requestedLimit);
         }
         return normalResult;
         async function runLegacyPath(): Promise<SearchDocumentationOutput> {
@@ -430,7 +432,7 @@ async function runPlannerPath(
   }
   const unique = context.evidence.addEvidence(flattened) as readonly RetrievedChunk[];
   if (unique.length === 0) {
-    const errors = orchestrated.sets.filter((set) => set.kind === 'error');
+    const unchanged = orchestrated.sets.filter((set) => set.kind !== 'results');
     const filtered = orchestrated.sets
       .filter((set) => set.kind === 'results')
       .map((set) => ({
@@ -443,7 +445,7 @@ async function runPlannerPath(
         reason: 'filtered_duplicates' as const,
         ticketEligible: false,
       }));
-    const fallbackSets: SearchSubquestionResult[] = [...errors, ...filtered];
+    const fallbackSets: SearchSubquestionResult[] = [...unchanged, ...filtered];
     if (fallbackSets.length === 0) fallbackSets.push({
       kind: 'no_match',
       subquestionId: 'sq-1',
@@ -494,6 +496,10 @@ async function runPlannerPath(
       return {
         ...single,
         executedQueryIds: contributed.length > 0 ? contributed : single.executedQueryIds,
+        provenance: orchestratedItem?.provenance ?? {
+          subquestionIds: [set.subquestionId],
+          queryIds: contributed.length > 0 ? contributed : single.executedQueryIds,
+        },
       };
     });
     sets.push({
@@ -525,10 +531,15 @@ async function runShadowComparison(
   input: SearchDocumentationInput,
   requestedLimit: number,
 ): Promise<void> {
+  const startedAt = Date.now();
+  const shadowSignal = AbortSignal.any([
+    call.signal,
+    AbortSignal.timeout(SEARCH_PLANNER_SHADOW_TIMEOUT_MS),
+  ]);
   try {
     await structuredSearch(input.query, {
       limit: requestedLimit,
-      signal: call.signal,
+      signal: shadowSignal,
       excludeChunkIdentities: context.evidence.seenChunkKeys,
       shadow: true,
       trace: {
@@ -541,7 +552,7 @@ async function runShadowComparison(
       toolName: 'searchDocumentation',
       callId: call.callId,
       phase: 'success',
-      durationMs: 0,
+      durationMs: Math.max(0, Date.now() - startedAt),
       sanitized: true,
     });
   } catch {

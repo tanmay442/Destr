@@ -70,6 +70,10 @@ export const searchToolItemSchema = z.object({
   chunkIndex: z.number().int().nonnegative(),
   subquestionId: identifierSchema,
   executedQueryIds: z.array(identifierSchema).min(1),
+  provenance: z.object({
+    subquestionIds: z.array(identifierSchema).min(1),
+    queryIds: z.array(identifierSchema).min(1),
+  }).optional(),
   content: z.string(),
   source: z.string().nullable(),
   documentTitle: z.string().optional(),
@@ -107,6 +111,24 @@ export const searchSubquestionResultSchema = z.discriminatedUnion('kind', [
             path: ['results', index, 'executedQueryIds'],
             message: 'result query provenance must reference an executed query',
           });
+        }
+      }
+      if (result.provenance) {
+        if (!result.provenance.subquestionIds.includes(set.subquestionId)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['results', index, 'provenance', 'subquestionIds'],
+            message: 'result provenance must include its containing subquestion',
+          });
+        }
+        for (const queryId of result.executedQueryIds) {
+          if (!result.provenance.queryIds.includes(queryId)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['results', index, 'provenance', 'queryIds'],
+              message: 'result provenance must include its local executed query IDs',
+            });
+          }
         }
       }
     }

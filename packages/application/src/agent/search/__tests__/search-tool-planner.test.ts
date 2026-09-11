@@ -147,6 +147,34 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
     expect(output.sets[0].results[0]?.content).toContain('Normal path');
   });
 
+  it('returns normal results without waiting for a slow shadow comparison', async () => {
+    let releaseShadow: (() => void) | undefined;
+    const structuredSearch = vi.fn(() => new Promise<OrchestratorResult>((resolve) => {
+      releaseShadow = () => { resolve(orchestratorResult([chunk({ content: 'Late shadow.' })])); };
+    }));
+    const tool = createSearchDocumentationTool({
+      searchChunks: vi.fn(async () => ok({
+        chunks: [chunk({ content: 'Immediate normal result.' })],
+        degradedBy: [],
+        diagnostics: { hasMore: false } as never,
+      }) as never) as never,
+      agenticSearch: (async () => { throw new Error('unused'); }) as never,
+      cfg: {} as AppConfig,
+      effectiveMode: 'normal',
+      structuredSearch: structuredSearch as never,
+      plannerEnabled: false,
+      shadowEnabled: true,
+    });
+
+    const output = await tool.create(makeContext())(
+      { query: 'password reset' },
+      { callId: 'call-slow-shadow', signal: new AbortController().signal },
+    );
+    expect(output.sets[0]?.kind).toBe('results');
+    expect(structuredSearch).toHaveBeenCalledTimes(1);
+    releaseShadow?.();
+  });
+
   it('preserves per-chunk multi-variant provenance through serialization', async () => {
     const first = chunk({ id: 1, documentId: 10, chunkUid: 'uid-10-0', content: 'First evidence.' });
     const second = chunk({ id: 2, documentId: 11, chunkUid: 'uid-11-0', content: 'Second evidence.' });
@@ -172,6 +200,60 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
     for (const item of output.sets[0].results) {
       for (const queryId of item.executedQueryIds) expect(validIds.has(queryId)).toBe(true);
     }
+  });
+
+  it('preserves shared-chunk multi-subquestion provenance through the tool boundary', async () => {
+    const shared = chunk();
+    const base = orchestratorResult([shared]);
+    const first = base.sets[0];
+    if (!first || first.kind !== 'results') throw new Error('expected results');
+    const structuredSearch = vi.fn(async (): Promise<OrchestratorResult> => ({
+      ...base,
+      sets: [
+        {
+          ...first,
+          subquestionId: 'sq-account',
+          executedQueries: [{ queryId: 'q-account', query: 'account policy' }],
+          results: first.results.map((item) => ({
+            ...item,
+            subquestionId: 'sq-account',
+            executedQueryIds: ['q-account'],
+            provenance: { subquestionIds: ['sq-account', 'sq-refund'], queryIds: ['q-account', 'q-refund'] },
+          })),
+        },
+        {
+          kind: 'no_match',
+          subquestionId: 'sq-refund',
+          requestedQuery: 'refund policy',
+          attemptedQueries: ['refund policy'],
+          reason: 'filtered_duplicates',
+          ticketEligible: false,
+        },
+      ],
+      rawPackedBySubquestion: new Map([['sq-account', [shared]], ['sq-refund', []]]),
+      chunkProvenance: new Map([[
+        'chunk_uid:uid-10-0',
+        { subquestionIds: ['sq-account', 'sq-refund'], queryIds: ['q-account', 'q-refund'] },
+      ]]),
+    }));
+    const tool = createSearchDocumentationTool({
+      searchChunks: (async () => { throw new Error('unused'); }) as never,
+      agenticSearch: (async () => { throw new Error('unused'); }) as never,
+      cfg: {} as AppConfig,
+      effectiveMode: 'normal',
+      structuredSearch: structuredSearch as never,
+      plannerEnabled: true,
+    });
+    const output = await tool.create(makeContext())(
+      { query: 'account and refund policy' },
+      { callId: 'call-shared-provenance', signal: new AbortController().signal },
+    );
+    const resultSet = output.sets.find((set) => set.kind === 'results');
+    if (!resultSet || resultSet.kind !== 'results') throw new Error('expected results');
+    expect(resultSet.results[0]?.provenance).toEqual({
+      subquestionIds: ['sq-account', 'sq-refund'],
+      queryIds: ['q-account', 'q-refund'],
+    });
   });
 
   it('infrastructure failures remain typed errors and never become no_match', async () => {

@@ -381,10 +381,45 @@ describe('WP-4 review corrections', () => {
     expect(cancelledResult.sets[0]).toMatchObject({ kind: 'error', code: 'cancelled' });
   });
 
-  it('a leaky follow-up plan keeps current results and is traced', async () => {
+  it('aborts every started retrieval when the local deadline expires', async () => {
+    const observedSignals: AbortSignal[] = [];
+    const waitForAbort = (_value: unknown, options: { signal?: AbortSignal }): Promise<never> => {
+      const signal = options.signal;
+      if (!signal) throw new Error('expected retrieval signal');
+      observedSignals.push(signal);
+      return new Promise<never>(() => undefined);
+    };
     const chunks = baseChunks({
-      searchByLexical: vi.fn().mockResolvedValue([row({ id: 1, documentId: 1 })]),
+      searchByVector: vi.fn(waitForAbort),
+      searchByLexical: vi.fn(waitForAbort),
     });
+    const planner = async () => ({
+      intent: 'documentation',
+      subquestions: [{
+        subquestionId: 'sq-1',
+        question: 'password reset documentation procedure',
+        queries: [
+          { queryId: 'q-1', text: 'password reset', strategy: 'original', rationaleCode: 'normalized' },
+          { queryId: 'q-2', text: 'password recovery', strategy: 'semantic', rationaleCode: 'remove_chatter' },
+        ],
+      }],
+    });
+    const result = await runStructuredSearch({ search: makeDeps(chunks) }, {
+      originalQuery: 'password reset documentation procedure',
+      callId: 'call-local-deadline',
+      requestedLimit: 3,
+      signal: new AbortController().signal,
+      deadlineAt: Date.now() + 20,
+      planner: planner as never,
+    });
+    expect(['timeout', 'deadline_exceeded']).toContain(result.stopReason);
+    expect(observedSignals.length).toBeGreaterThan(0);
+    expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it('a malformed follow-up plan falls back to the normalized original query and is traced', async () => {
+    const lexical = vi.fn().mockResolvedValue([row({ id: 1, documentId: 1 })]);
+    const chunks = baseChunks({ searchByLexical: lexical });
     const trace: { toolName: string; callId: string; phase: string; durationMs: number | null }[] = [];
     let calls = 0;
     const planner = async () => {
@@ -417,10 +452,41 @@ describe('WP-4 review corrections', () => {
       trace: { write: (event) => { trace.push(event); } },
     });
     expect(calls).toBe(2);
-    expect(result.stopReason).toBe('partial_evidence');
-    expect(result.plansUsed).toBe(1);
+    expect(result.plansUsed).toBe(2);
+    expect(result.isFallback).toBe(true);
+    expect(result.fallbackReason).toBe('followup_planner_malformed');
+    expect(lexical.mock.calls.some((call) => call[0] === 'ERR-4291 retry procedure steps guide handbook')).toBe(true);
     expect(trace.length).toBeGreaterThan(0);
     expect(result.sets[0]?.kind).toBe('results');
+  });
+
+  it('does not reuse an old result set when the same query is reassigned to a different subquestion', async () => {
+    const lexical = vi.fn().mockResolvedValue([row({ id: 1, documentId: 1 })]);
+    const chunks = baseChunks({ searchByLexical: lexical });
+    let calls = 0;
+    const planner = async () => {
+      calls += 1;
+      const subquestionId = calls === 1 ? 'sq-account' : 'sq-refund';
+      return {
+        intent: 'documentation',
+        subquestions: [{
+          subquestionId,
+          question: 'Acme policy documentation details',
+          queries: [{ queryId: `q-${calls}`, text: 'Acme policy', strategy: 'original', rationaleCode: calls === 1 ? 'normalized' : 'coverage_gap' }],
+        }],
+      };
+    };
+    const result = await runStructuredSearch({ search: makeDeps(chunks) }, {
+      originalQuery: 'Acme policy documentation details',
+      callId: 'call-reassigned-query',
+      requestedLimit: 3,
+      signal: new AbortController().signal,
+      planner: planner as never,
+      budgets: { maxResultsPerSubquestion: 3, maxSearchPlans: 2 },
+    });
+    expect(calls).toBe(2);
+    expect(lexical).toHaveBeenCalledTimes(2);
+    expect(result.sets.some((set) => set.subquestionId === 'sq-refund')).toBe(true);
   });
 
   it('physical-ceiling exhaustion still returns a valid non-empty tool payload', async () => {

@@ -92,8 +92,17 @@ export function extractPreservedTokens(query: string): readonly string[] {
 }
 
 export function queryPreservesTokens(query: string, tokens: readonly string[]): boolean {
-  const lowered = query.toLowerCase();
-  return tokens.every((token) => lowered.includes(token.toLowerCase()));
+  const normalized = query.replace(/\s+/g, ' ').trim();
+  return tokens.every((token) => {
+    const normalizedToken = token.replace(/\s+/g, ' ').trim();
+    if (normalizedToken.length === 0) return true;
+    if ((normalizedToken.startsWith('"') && normalizedToken.endsWith('"')) ||
+        (normalizedToken.startsWith("'") && normalizedToken.endsWith("'"))) {
+      return normalized.toLowerCase().includes(normalizedToken.toLowerCase());
+    }
+    const escaped = normalizedToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'i').test(normalized);
+  });
 }
 
 export function hasErrorCodeLike(query: string): boolean {
@@ -128,7 +137,14 @@ export function dedupeQueriesWithinSubquestion(
   }));
 }
 
-export function planPreservesTokens(plan: SearchPlan): boolean {
+export function planPreservesTokens(plan: SearchPlan, originalQuery?: string): boolean {
+  if (originalQuery !== undefined) {
+    const originalTokens = extractPreservedTokens(originalQuery);
+    const completePlanText = plan.subquestions
+      .flatMap((sub) => [sub.question, ...sub.queries.map((query) => query.text)])
+      .join(' ');
+    if (!queryPreservesTokens(completePlanText, originalTokens)) return false;
+  }
   for (const sub of plan.subquestions) {
     const preserved = extractPreservedTokens(sub.question);
     if (preserved.length === 0) continue;
@@ -162,8 +178,16 @@ export function validateSearchPlan(raw: unknown): { ok: true; plan: SearchPlan }
 }
 
 export function createFallbackPlan(originalQuery: string): SearchPlan {
-  const normalized = normalizeQueryText(originalQuery);
-  const safeText = normalized.length > 0 ? normalized : originalQuery.trim().slice(0, 100) || 'documentation';
+  const normalized = originalQuery.replace(/\s+/g, ' ').trim();
+  const preserved = extractPreservedTokens(originalQuery);
+  const suffix = preserved.join(' ');
+  const suffixBudget = Math.min(SEARCH_PLAN_MAX_QUERY_CHARS, suffix.length);
+  const prefixBudget = Math.max(0, SEARCH_PLAN_MAX_QUERY_CHARS - suffixBudget - (suffixBudget > 0 ? 1 : 0));
+  const compact = `${normalized.slice(0, prefixBudget)}${suffixBudget > 0 ? ` ${suffix.slice(0, suffixBudget)}` : ''}`.trim();
+  const normalizedBounded = normalized.slice(0, SEARCH_PLAN_MAX_QUERY_CHARS);
+  const safeText = queryPreservesTokens(normalizedBounded, preserved)
+    ? normalizedBounded || 'documentation'
+    : compact.length > 0 ? compact : originalQuery.trim().slice(0, 100) || 'documentation';
   return searchPlanSchema.parse({
     intent: 'documentation',
     subquestions: [

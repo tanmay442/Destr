@@ -5,11 +5,12 @@ import {
   extractPreservedTokens,
   normalizeQueryForDedup,
   normalizeQueryText,
+  planPreservesTokens,
   queryPreservesTokens,
   searchPlanSchema,
   validateSearchPlan,
 } from '../search-plan';
-import { createDeterministicPlan } from '../search-planner';
+import { createDeterministicPlan, resolvePlan } from '../search-planner';
 
 describe('SearchPlan contract (WP-4 Section 7.5)', () => {
   it('accepts the exact schema-derived contract with operational rationale codes only', () => {
@@ -99,6 +100,36 @@ describe('SearchPlan contract (WP-4 Section 7.5)', () => {
         expect(queryPreservesTokens(query.text, preserved)).toBe(true);
       }
     }
+  });
+
+  it('uses token boundaries and rejects plans that drop original preserved terms', async () => {
+    expect(queryPreservesTokens('capital expenditure policy', ['API'])).toBe(false);
+    const dropped = {
+      intent: 'documentation' as const,
+      subquestions: [{
+        subquestionId: 'sq-1',
+        question: 'generic connection problem',
+        queries: [{ queryId: 'q-1', text: 'connection troubleshooting', strategy: 'semantic' as const, rationaleCode: 'normalized' as const }],
+      }],
+    };
+    expect(planPreservesTokens(dropped, 'Acme API ERR-4291 on v2.4.1')).toBe(false);
+    const resolved = await resolvePlan({
+      planner: async () => dropped,
+      request: { originalQuery: 'Acme API ERR-4291 on v2.4.1', remainingPlans: 2, remainingMs: 5000 },
+      originalQuery: 'Acme API ERR-4291 on v2.4.1',
+    });
+    expect(resolved.isFallback).toBe(true);
+    expect(resolved.fallbackReason).toBe('planner_preservation');
+    const fallbackText = resolved.plan.subquestions[0]?.queries[0]?.text ?? '';
+    expect(queryPreservesTokens(fallbackText, extractPreservedTokens('Acme API ERR-4291 on v2.4.1'))).toBe(true);
+  });
+
+  it('retains preserved terms near the end of a long fallback query', () => {
+    const original = `${'generic troubleshooting words '.repeat(30)}Acme API ERR-9876 v9.8.7`;
+    const fallback = createFallbackPlan(original);
+    const text = fallback.subquestions[0]?.queries[0]?.text ?? '';
+    expect(text.length).toBeLessThanOrEqual(500);
+    expect(queryPreservesTokens(text, extractPreservedTokens(original))).toBe(true);
   });
 
   it('vague input creates useful genuinely distinct variants', () => {

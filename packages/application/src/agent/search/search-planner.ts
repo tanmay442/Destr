@@ -286,7 +286,13 @@ export async function resolvePlan(input: {
   let raw: unknown;
   try {
     raw = await input.planner(input.request);
-  } catch {
+    if (input.request.signal?.aborted) {
+      throw input.request.signal.reason instanceof Error
+        ? input.request.signal.reason
+        : new Error('Search planner aborted');
+    }
+  } catch (cause) {
+    if (input.request.signal?.aborted) throw cause;
     const plan = createFallbackPlan(input.originalQuery);
     input.trace?.write({
       toolName: 'searchPlanner',
@@ -297,7 +303,7 @@ export async function resolvePlan(input: {
     return { plan, isFallback: true, fallbackReason: 'planner_error', rawValid: false };
   }
   const validated = validateSearchPlan(raw);
-  if (validated.ok && planPreservesTokens(validated.plan)) {
+  if (validated.ok && planPreservesTokens(validated.plan, input.originalQuery)) {
     return { plan: validated.plan, isFallback: false, fallbackReason: null, rawValid: true };
   }
   const plan = createFallbackPlan(input.originalQuery);
