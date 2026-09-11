@@ -1,8 +1,5 @@
-import type { InferUIMessageChunk } from 'ai';
 import { logger } from '@app/domain';
-import type { ChatUIMessage } from '../message-types';
-
-type UIMessage = ChatUIMessage;
+import type { ChatChunk } from '../chat-chunks';
 
 const DEFAULT_TURN_SOFT_DEADLINE_MS = 50_000;
 const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
@@ -10,7 +7,7 @@ const DEFAULT_JUDGE_MAX_WALL_MS = 20_000;
 export { DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS };
 
 async function runHallucinationCheck(opts: {
-  controller: ReadableStreamDefaultController<InferUIMessageChunk<UIMessage>>;
+  controller: ReadableStreamDefaultController<ChatChunk>;
   result: { text: PromiseLike<string> };
   groundingDocuments: string[];
   hallucinationGrader: ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
@@ -25,7 +22,7 @@ async function runHallucinationCheck(opts: {
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: true, offerTicket: true },
-    } as InferUIMessageChunk<UIMessage>);
+    });
     return { blocked: true, timedOut: false };
   }
 
@@ -63,7 +60,7 @@ async function runHallucinationCheck(opts: {
     controller.enqueue({
       type: 'data-guardrail',
       data: { outOfDomain: false, offerTicket: true },
-    } as InferUIMessageChunk<UIMessage>);
+    });
   }
   return { blocked: ungrounded, timedOut };
 }

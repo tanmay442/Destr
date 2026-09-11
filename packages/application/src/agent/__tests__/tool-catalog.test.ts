@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { ok } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import {
-  createDefaultBudget,
   createInMemoryTraceWriter,
   type AgentToolContext,
   type AgentToolDefinition,
 } from '../tool-contract';
+import { createAgentRunBudget } from '../agent-budget';
 import {
   DEFAULT_TOOL_CAPABILITIES,
   EMULATED_EXAMPLE_CAPABILITIES,
@@ -56,7 +56,7 @@ function makeContext(): AgentToolContext {
     actor: { userId: 'user_test' },
     turnId: 'turn_test',
     signal: new AbortController().signal,
-    budget: createDefaultBudget({ maxTotalToolCalls: 10 }),
+    budget: createAgentRunBudget({ nowMs: Date.now(), overrides: { maxTotalToolCalls: 10 } }),
     evidence: {
       seenChunkKeys: new Set<string>(),
       addEvidence: (chunks) => chunks,

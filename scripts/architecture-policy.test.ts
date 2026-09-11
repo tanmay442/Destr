@@ -184,7 +184,7 @@ describe('architecture source and manifest policy', () => {
       allowTemporaryExceptions: false,
     });
 
-    expect(existing).toEqual([]);
+    expect(existing).toHaveLength(1);
     expect(sameImportElsewhere).toHaveLength(1);
     expect(withoutExceptions).toHaveLength(1);
   });

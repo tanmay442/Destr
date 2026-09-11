@@ -100,6 +100,7 @@ export async function withTimeout<T>(
   reconcileBudgetMs?: number | (() => number | undefined),
 ): Promise<T> {
   for (const signal of sourceSignals) throwIfAborted(signal, toolName);
+  if (ms <= 0) throw timeoutError(toolName, ms);
   const linked = linkAbortSignals(sourceSignals);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancellationListener: (() => void) | undefined;
@@ -218,9 +219,11 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
         finish('denied');
         throw new ToolPolicyError('budget_exceeded', 'Total tool call limit reached for this turn.');
       }
-      if (now() > context.budget.deadlineAt) {
+      const workDeadlineAt = context.budget.deadlineAt - context.budget.finalizeReserveMs;
+      const remainingWorkMs = Math.max(0, workDeadlineAt - now());
+      if (remainingWorkMs <= 0) {
         finish('timeout');
-        throw new ToolPolicyError('timeout', `${definition.name} skipped: turn deadline exceeded.`);
+        throw new ToolPolicyError('timeout', `${definition.name} skipped: turn work budget exceeded.`);
       }
       if (definition.policy.effect === 'write' && definition.policy.requiresApproval) {
         const normalized = normalizeToolArgs(parsedInput.data);
@@ -242,8 +245,9 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
       }
       counts.byTool.set(definition.name, currentForTool + 1);
       counts.total += 1;
+      const timeoutMs = Math.min(definition.policy.timeoutMs, Math.max(0, workDeadlineAt - now()));
       const reconcileBudgetMs = definition.policy.effect === 'write'
-        ? () => Math.max(0, context.budget.deadlineAt - now())
+        ? () => Math.max(0, workDeadlineAt - now())
         : undefined;
       const result = await withTimeout(
         (signal) => inner(parsedInput.data, {
@@ -251,7 +255,7 @@ export function wrapToolWithPolicy<TInput, TOutput>(input: {
           signal,
           ...(call.approvalToken !== undefined ? { approvalToken: call.approvalToken } : {}),
         }),
-        definition.policy.timeoutMs,
+        timeoutMs,
         definition.name,
         [context.signal, call.signal],
         definition.policy.effect === 'write',

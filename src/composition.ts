@@ -22,7 +22,7 @@ import {
   type AgenticDeps,
   SearchFailure,
 } from '@app/application';
-import { runStructuredSearch, type SearchBudgetLimits } from '@app/application/agent/search';
+import { runStructuredSearch } from '@app/application/agent/search';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
 import {
   RRF_K, LEXICAL_WEIGHT, RERANK_TOP_N, CANDIDATE_POOL,
@@ -44,22 +44,40 @@ import { logger } from './lib/logger';
 import { respond, respondResult } from './lib/http';
 import { MAX_LEGACY_LIST_OFFSET, MAX_LIST_LIMIT } from '@app/domain';
 import { after } from 'next/server';
-import {
-  tool,
-  convertToModelMessages,
-  streamText,
-  stepCountIs,
-  createUIMessageStreamResponse,
-  createUIMessageStream,
-} from 'ai';
+import { createUIMessageStream } from 'ai';
+import type { ChatTurnModelPort, StructuredSearchOptions } from '@app/application/chat';
+import { createAgentModelBackend, defineAgentModelTool } from '@app/infrastructure/llm';
 
-const modelGateway = {
-  streamText,
-  tool,
-  stepCountIs,
-  convertToModelMessages,
-  createUIMessageStream,
-  createUIMessageStreamResponse,
+/**
+ * Neutral model-invocation seam for the application chat turn. Provider
+ * mechanics (tool envelopes, single-step invocation, usage parsing) live in
+ * the infrastructure adapter; the application owns tools, budgets, and the
+ * agent loop. `createUIMessageStreamResponse` stays here because HTTP/SSE
+ * serialization is the route layer's responsibility.
+ */
+const modelGateway: ChatTurnModelPort = {
+  createStream: (input) =>
+    createUIMessageStream({
+      execute: ({ writer }) => input.execute(writer as never),
+    }) as never,
+  defineTool: (input) =>
+    defineAgentModelTool({
+      description: input.description,
+      inputSchema: input.inputSchema,
+      ...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
+      ...(input.inputExamples !== undefined ? { inputExamples: input.inputExamples } : {}),
+      ...(input.strict !== undefined ? { strict: input.strict } : {}),
+    }),
+  createModelBackend: (input) =>
+    createAgentModelBackend({
+      model: Llm.getChatModel(input.model.modelId, core.env),
+      tools: input.tools,
+      ...(input.providerOptions !== undefined
+        ? { providerOptions: input.providerOptions as never }
+        : {}),
+      parseUsage: Llm.getChatModelAdapter(input.model.modelId, core.env).parseUsage,
+      ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
+    }) as never,
 };
 
 export type ModelGateway = typeof modelGateway;
@@ -422,16 +440,7 @@ function createComposition() {
     structuredSearch: async (
       cfg: AppConfig,
       query: string,
-      opts: {
-        limit?: number | undefined;
-        signal?: AbortSignal | undefined;
-        excludeChunkIdentities?: ReadonlySet<string> | undefined;
-        budgets?: Partial<SearchBudgetLimits> | undefined;
-        deadlineAt?: number | undefined;
-        trace?: {
-          write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
-        } | undefined;
-      } = {},
+      opts: StructuredSearchOptions = {},
     ) => {
       const searchDeps = getSearchDeps(cfg);
       const signal = opts.signal ?? new AbortController().signal;
@@ -593,7 +602,7 @@ function createComposition() {
     blobStorage,
     modelGateway,
     getEmbeddingModel: () => Llm.getEmbeddingModel(core.env),
-    getChatModel: (modelId?: string) => Llm.getChatModel(modelId, core.env),
+    getChatModel: (modelId?: string) => ({ modelId: Llm.getChatModel(modelId, core.env).modelId }),
     allowedChatFileOrigins: new Set(
       (process.env.CHAT_FILE_ALLOWED_ORIGINS ?? '')
         .split(',')

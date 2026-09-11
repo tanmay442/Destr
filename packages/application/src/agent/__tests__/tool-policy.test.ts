@@ -6,7 +6,8 @@ import type {
   EvidenceChunk,
   ToolExecuteCall,
 } from '../tool-contract';
-import { createDefaultBudget, createInMemoryTraceWriter } from '../tool-contract';
+import { createInMemoryTraceWriter } from '../tool-contract';
+import { createAgentRunBudget } from '../agent-budget';
 import {
   createApprovalPolicyForTurn,
   InMemoryToolApprovalPolicy,
@@ -64,6 +65,7 @@ function makeDefinition(overrides?: {
 function makeContext(overrides?: {
   readonly signal?: AbortSignal;
   readonly maxTotalToolCalls?: number;
+  readonly maxCallsByTool?: Readonly<Record<string, number>>;
   readonly deadlineInMs?: number;
   readonly approvals?: AgentToolContext['approvals'];
 }): { readonly context: AgentToolContext; readonly abort: () => void } {
@@ -72,9 +74,14 @@ function makeContext(overrides?: {
     actor: { userId: 'user-1' },
     turnId: 'turn-1',
     signal: overrides?.signal ?? controller.signal,
-    budget: createDefaultBudget({
-      maxTotalToolCalls: overrides?.maxTotalToolCalls ?? 10,
+    budget: createAgentRunBudget({
+      nowMs: Date.now(),
       deadlineInMs: overrides?.deadlineInMs ?? 50_000,
+      finalizeReserveMs: 0,
+      overrides: {
+        maxTotalToolCalls: overrides?.maxTotalToolCalls ?? 10,
+        ...(overrides?.maxCallsByTool !== undefined ? { maxCallsByTool: overrides.maxCallsByTool } : {}),
+      },
     }),
     evidence: {
       get seenChunkKeys(): ReadonlySet<string> {
@@ -445,7 +452,7 @@ describe('tool policy wrappers', () => {
       userId: 'user-1',
       turnId: 'turn-1',
     });
-    const { context } = makeContext({ approvals });
+    const { context } = makeContext({ approvals, maxCallsByTool: { createKnowledgeTicket: 10 } });
     const definition = makeDefinition({ name: 'createKnowledgeTicket', effect: 'write', requiresApproval: true });
     const counts = createPolicyCounts();
     const wrapped = wrapToolWithPolicy({

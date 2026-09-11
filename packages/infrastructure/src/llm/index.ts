@@ -180,6 +180,12 @@ export {
   createAuxModels,
 };
 export { judgeRelevance, judgeFaithfulness } from './judge';
+export { createAgentModelBackend, defineAgentModelTool } from './agent-backend';
+export type {
+  AgentBackendMessage,
+  AgentBackendStep,
+  AgentBackendToolMap,
+} from './agent-backend';
 
 /** Resolve the embedding model id string for the active provider.
  *  Used to stamp `DocumentChunk.embeddingModel` metadata. */

@@ -1,12 +1,3 @@
-import type {
-  convertToModelMessages,
-  createUIMessageStream,
-  stepCountIs,
-  streamText,
-  tool,
-  InferUIMessageChunk,
-} from 'ai';
-import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
 import { z } from 'zod';
 import type {
   AnswerCache,
@@ -23,21 +14,37 @@ import type {
   SearchFailure,
 } from '../../rag/search';
 import type { OrchestratorResult } from '../../agent/search/search-orchestrator';
-import type { ChatUIMessage } from '../message-types';
+import type { SearchBudgetLimits } from '../../agent/search/search-budget';
+import type { ChatChunk, ChatModelRef, ChatProviderOptions, ChatStreamWriter } from '../chat-chunks';
+import type { AgentModelBackend } from '../../agent/model-backend';
 import type {
   CacheLeasePolicy,
   CacheLeaseTelemetry,
 } from '../cache-lease';
 
-type UIMessage = ChatUIMessage;
-
-export type AiSdk = {
-  streamText: typeof streamText;
-  tool: typeof tool;
-  stepCountIs: typeof stepCountIs;
-  convertToModelMessages: typeof convertToModelMessages;
-  createUIMessageStream: typeof createUIMessageStream;
-};
+/**
+ * Narrow model-invocation seam. The application selects tools and owns the
+ * agent loop; infrastructure executes single model steps behind this port.
+ * Provider option keys and response parsing stay in infrastructure adapters.
+ */
+export interface ChatTurnModelPort {
+  createStream(input: {
+    readonly execute: (writer: ChatStreamWriter) => void;
+  }): ReadableStream<ChatChunk>;
+  defineTool(input: {
+    readonly description: string;
+    readonly inputSchema: unknown;
+    readonly outputSchema?: unknown;
+    readonly inputExamples?: readonly { readonly input: unknown }[] | undefined;
+    readonly strict?: boolean | undefined;
+  }): unknown;
+  createModelBackend(input: {
+    readonly model: ChatModelRef;
+    readonly tools: Readonly<Record<string, unknown>>;
+    readonly providerOptions?: ChatProviderOptions | undefined;
+    readonly maxOutputTokens?: number | undefined;
+  }): AgentModelBackend;
+}
 
 /** Provider-neutral usage facts returned by an infrastructure model adapter. */
 export interface ChatModelUsageTelemetry {
@@ -57,14 +64,26 @@ export interface ChatModelUsageTelemetry {
  * option keys, capability objects, and parsing remain inside infrastructure.
  */
 export interface ChatModelRequestOptions {
-  providerOptions?: SharedV3ProviderOptions;
+  providerOptions?: ChatProviderOptions;
   telemetry?: Record<string, unknown>;
   parseUsage?: (usage: unknown, providerMetadata?: unknown) => ChatModelUsageTelemetry;
 }
 
+export interface StructuredSearchOptions {
+  limit?: number | undefined;
+  signal?: AbortSignal | undefined;
+  excludeChunkIdentities?: ReadonlySet<string> | undefined;
+  budgets?: Partial<SearchBudgetLimits> | undefined;
+  deadlineAt?: number | undefined;
+  shadow?: boolean | undefined;
+  trace?: {
+    write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
+  } | undefined;
+}
+
 export interface ChatTurnDeps {
-  ai: AiSdk;
-  getChatModel(): LanguageModelV3;
+  modelGateway: ChatTurnModelPort;
+  getChatModel(): ChatModelRef;
   getChatModelId(): string;
   /** Trusted origins from which the configured model provider may fetch files. */
   allowedChatFileOrigins?: ReadonlySet<string>;
@@ -106,11 +125,7 @@ export interface ChatTurnDeps {
   structuredSearch?: (
     cfg: AppConfig,
     query: string,
-    opts?: {
-      limit?: number | undefined;
-      signal?: AbortSignal | undefined;
-      excludeChunkIdentities?: ReadonlySet<string> | undefined;
-    },
+    opts?: StructuredSearchOptions,
   ) => Promise<OrchestratorResult>;
   hallucinationGrader(
     cfg: AppConfig,
@@ -177,7 +192,7 @@ export interface ChatTurnRequest {
 export type ChatTurnResult =
   | {
       kind: 'stream';
-      stream: ReadableStream<InferUIMessageChunk<UIMessage>>;
+      stream: ReadableStream<ChatChunk>;
       meta: { turnId: string | null; mode: 'vector' | 'agentic'; cacheHit: boolean };
     }
   | { kind: 'rate-limited'; retryAfterSec: string | undefined }

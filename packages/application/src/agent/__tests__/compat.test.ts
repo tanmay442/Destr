@@ -4,7 +4,7 @@ import type { AppConfig } from '@app/domain/app-config';
 import { SearchFailure } from '../../rag/search/search-contract';
 import type { RetrievedChunk } from '../../rag/search/search-types';
 import { createGroundingEvidence } from '../../chat/grounding-evidence';
-import type { PrefetchedSearchOutcome } from '../../chat/chat-turn/chat-tools';
+import type { PrefetchedSearchOutcome } from '../compat/chat-tools-compat';
 import type { TurnMetrics } from '../../chat/chat-turn/turn-types';
 import { TurnToolLedger } from '../run-state';
 import {
@@ -484,7 +484,8 @@ describe('catalog guidance composition (WP-3 B2)', () => {
     const { z } = await import('zod');
     const { asUntypedTool, createToolCatalog } = await import('../tool-catalog');
     const { DEFAULT_TOOL_CAPABILITIES } = await import('../model-tool-capabilities');
-    const { createDefaultBudget, createInMemoryTraceWriter } = await import('../tool-contract');
+    const { createInMemoryTraceWriter } = await import('../tool-contract');
+    const { createAgentRunBudget } = await import('../agent-budget');
     const { InMemoryToolApprovalPolicy } = await import('../tool-approval');
     const { buildCompactToolGuidance } = await import('../prompt/build-agent-instructions');
     const { buildStableSystemPrompt } = await import('../../prompt/build-system-prompt');
@@ -514,7 +515,7 @@ describe('catalog guidance composition (WP-3 B2)', () => {
       actor: { userId: 'user_test' },
       turnId: 'turn_guidance',
       signal: new AbortController().signal,
-      budget: createDefaultBudget({ maxTotalToolCalls: 10 }),
+      budget: createAgentRunBudget({ nowMs: Date.now(), overrides: { maxTotalToolCalls: 10 } }),
       evidence: { seenChunkKeys: new Set<string>(), addEvidence: (chunks: readonly unknown[]) => chunks },
       trace: createInMemoryTraceWriter(),
       approvals: new InMemoryToolApprovalPolicy({ explicitTicketRequest: false, userId: 'user_test', turnId: 'turn_guidance' }),

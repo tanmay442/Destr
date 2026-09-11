@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:agent": "vitest run packages/application/src/agent packages/application/src/rag packages/application/src/chat/__tests__/chat-turn.test.ts",
     "test:ui": "vitest --ui",
     "test:watch": "vitest",
     "test:ci": "bash -c 'trap \"tsx scripts/teardown-test-db.ts\" EXIT INT TERM; tsx scripts/setup-test-db.ts && vitest run --reporter=dot'",

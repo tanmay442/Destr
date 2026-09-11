@@ -18,47 +18,7 @@ interface TemporaryException {
   readonly removalWorkPackage: 'WP-5';
 }
 
-const TEMPORARY_EXCEPTIONS: readonly TemporaryException[] = [
-  {
-    layer: 'application',
-    file: 'packages/application/package.json',
-    specifier: 'ai',
-    removalWorkPackage: 'WP-5',
-  },
-  {
-    layer: 'application',
-    file: 'packages/application/package.json',
-    specifier: '@ai-sdk/provider',
-    removalWorkPackage: 'WP-5',
-  },
-  ...[
-    'packages/application/src/chat/message-types.ts',
-    'packages/application/src/chat/chat-turn/cached-answer.ts',
-    'packages/application/src/chat/chat-turn/hallucination.ts',
-    'packages/application/src/chat/chat-turn/turn.ts',
-    'packages/application/src/chat/chat-turn/turn-types.ts',
-    'packages/application/src/chat/__tests__/chat-turn.test.ts',
-  ].map(
-    (file): TemporaryException => ({
-      layer: 'application',
-      file,
-      specifier: 'ai',
-      removalWorkPackage: 'WP-5',
-    }),
-  ),
-  {
-    layer: 'application',
-    file: 'packages/application/src/chat/chat-turn/turn-types.ts',
-    specifier: '@ai-sdk/provider',
-    removalWorkPackage: 'WP-5',
-  },
-  {
-    layer: 'application',
-    file: 'packages/application/src/chat/__tests__/chat-turn.test.ts',
-    specifier: '@ai-sdk/provider',
-    removalWorkPackage: 'WP-5',
-  },
-];
+const TEMPORARY_EXCEPTIONS: readonly TemporaryException[] = [];
 
 /**
  * Canonical vendor/package families forbidden to application and domain code.

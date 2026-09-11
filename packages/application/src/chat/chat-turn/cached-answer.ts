@@ -1,13 +1,9 @@
-import type { InferUIMessageChunk } from 'ai';
 import { dedupeCitations } from '../dedupe-citations';
 import type { EmittedCitation } from '../emit-citations';
-import type { ChatUIMessage } from '../message-types';
+import type { ChatChunk, ChatStreamFactory } from '../chat-chunks';
 import { TURN_FINGERPRINT_VERSION } from '../turn-fingerprint';
-import type { AiSdk } from './turn-types';
 import type { AgenticResultState } from '@app/domain';
 import type { RetrievalScores } from '../../rag/search';
-
-type UIMessage = ChatUIMessage;
 
 const TURN_RESULT_CACHE_TTL_SEC = 86_400;
 
@@ -104,13 +100,13 @@ function parseTurnResult(
 export { parseTurnResult };
 
 function createCachedAnswerStream(
-  ai: AiSdk,
+  factory: ChatStreamFactory,
   cachedAnswer: CachedAnswerPayload,
   historyPersisted: boolean,
   conversationId: string | undefined,
-): ReadableStream<InferUIMessageChunk<UIMessage>> {
-  return ai.createUIMessageStream<UIMessage>({
-    execute: ({ writer }) => {
+): ReadableStream<ChatChunk> {
+  return factory.createStream({
+    execute: (writer) => {
       writer.write({ type: 'text-start', id: 'cached' });
       writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
       writer.write({ type: 'text-end', id: 'cached' });

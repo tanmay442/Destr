@@ -26,8 +26,6 @@
   },
   "dependencies": {
     "@app/domain": "workspace:*",
-    "@ai-sdk/provider": "^3.0.13",
-    "ai": "^6.0.221",
     "zod": "^4.4.3"
   }
 }

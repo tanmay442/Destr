@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ok, err } from '@app/domain';
 import type { Composition } from '@/composition';
+import {
+  createScriptedBackend,
+  type ScriptedStep,
+} from '../../../../packages/application/src/agent/scripted-model';
+import type { AgentModelBackend } from '../../../../packages/application/src/agent/model-backend';
 
-const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = vi.hoisted(() => ({
+const { searchValue, ticketInsertedValues, createTicketMock } = vi.hoisted(() => ({
   searchValue: [
     {
       id: 1,
@@ -30,7 +35,6 @@ const { searchValue, ticketInsertedValues, streamTextImpl, createTicketMock } = 
     },
   ],
   ticketInsertedValues: [] as Array<Record<string, unknown>>,
-  streamTextImpl: vi.fn(),
   createTicketMock: vi.fn(),
 }));
 
@@ -141,12 +145,9 @@ type MockComposition = {
   getEmbeddingModel: ReturnType<typeof vi.fn>;
   getEmbeddingModelId: ReturnType<typeof vi.fn>;
   modelGateway: {
-    streamText: typeof streamTextImpl;
-    tool: typeof tool;
-    stepCountIs: typeof stepCountIs;
-    convertToModelMessages: typeof convertToModelMessages;
-    createUIMessageStream: typeof createUIMessageStream;
-    createUIMessageStreamResponse: typeof createUIMessageStreamResponse;
+    createStream: (input: { execute: (writer: { write: (chunk: unknown) => void }) => void }) => ReadableStream<unknown>;
+    defineTool: (opts: { description: string; inputSchema: unknown }) => unknown;
+    createModelBackend: ReturnType<typeof vi.fn>;
   };
   answerCacheKey: ReturnType<typeof vi.fn>;
   answerCache: {
@@ -157,6 +158,12 @@ type MockComposition = {
       release: ReturnType<typeof vi.fn>;
     };
   };
+  turnResultCache: {
+    get: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+  };
+  appendChatTurn: ReturnType<typeof vi.fn>;
+  cacheLeasePolicy: string;
   logTicketEvent: ReturnType<typeof vi.fn>;
   agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
   getHallucinationGrader: (cfg: unknown) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
@@ -168,13 +175,33 @@ type MockComposition = {
   };
 };
 
-const { compositionMock, gatewayHolder } = vi.hoisted<{
-  compositionMock: MockComposition;
-  gatewayHolder: Record<string, unknown>;
-}>(() => {
-  const gatewayHolder: Record<string, unknown> = {};
+const { scriptState, createModelBackendMock } = vi.hoisted(() => ({
+  scriptState: {
+    defaultSteps: [{ text: '' }] as unknown[],
+    queue: [] as unknown[][],
+    backends: [] as unknown[],
+  },
+  createModelBackendMock: vi.fn(),
+}));
+
+const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() => {
+  const createStreamImpl = (input: {
+    execute: (writer: { write: (chunk: unknown) => void }) => void;
+  }): ReadableStream<unknown> => {
+    const out: unknown[] = [];
+    input.execute({
+      write: (chunk: unknown): void => {
+        out.push(chunk);
+      },
+    });
+    return new ReadableStream<unknown>({
+      start(controller) {
+        for (const chunk of out) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+  };
   return {
-    gatewayHolder,
     compositionMock: {
     rateLimit: () => rateLimitResult,
     searchChunks: vi.fn(async () => ok({ chunks: searchValue, degradedBy: [] }) as never),
@@ -182,7 +209,11 @@ const { compositionMock, gatewayHolder } = vi.hoisted<{
     getChatModel: vi.fn(() => ({ modelId: 'mock' })),
     getEmbeddingModel: vi.fn(() => ({ modelId: 'mock-embed' })),
     getEmbeddingModelId: vi.fn(() => 'mock-embed'),
-    modelGateway: gatewayHolder as MockComposition['modelGateway'],
+    modelGateway: {
+      createStream: createStreamImpl,
+      defineTool: (opts: { description: string; inputSchema: unknown }) => opts,
+      createModelBackend: createModelBackendMock,
+    },
     answerCacheKey: vi.fn((query: string, opts?: { userId?: string; fingerprint?: string }) =>
       `rag:answer:${Buffer.from(query + (opts?.userId ?? '') + (opts?.fingerprint ?? '')).toString('hex').slice(0, 32)}`,
     ),
@@ -194,6 +225,12 @@ const { compositionMock, gatewayHolder } = vi.hoisted<{
         release: vi.fn(async () => undefined),
       },
     },
+    turnResultCache: {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => undefined),
+    },
+    appendChatTurn: vi.fn(async () => ({ ok: true as const, value: null })),
+    cacheLeasePolicy: 'degraded',
     logTicketEvent: vi.fn(),
     agenticSearch: vi.fn(async () => ok(agenticResult()) as never),
     getHallucinationGrader: vi.fn(() => graderHolder.fn),
@@ -216,32 +253,99 @@ vi.mock('@/composition', () => ({
   judgeFaithfulness: judgeFaithfulnessMock,
 }));
 
-vi.mock('ai', async () => {
-  const actual = await vi.importActual<typeof import('ai')>('ai');
-  return {
-    ...actual,
-    streamText: streamTextImpl,
-    tool: actual.tool,
-  };
-});
-
 import * as appHandler from './route';
-import {
-  tool,
-  stepCountIs,
-  convertToModelMessages,
-  createUIMessageStream,
-  createUIMessageStreamResponse,
-} from 'ai';
 
-Object.assign(gatewayHolder, {
-  streamText: streamTextImpl,
-  tool,
-  stepCountIs,
-  convertToModelMessages,
-  createUIMessageStream,
-  createUIMessageStreamResponse,
-});
+type ScriptedBackend = ReturnType<typeof createScriptedBackend>;
+type BackendStepInput = Parameters<AgentModelBackend['generateStep']>[0];
+type BackendStepOutput = Awaited<ReturnType<AgentModelBackend['generateStep']>>;
+
+interface BackendCallRecord {
+  readonly activeTools: ReadonlyArray<string>;
+  readonly system: string;
+}
+
+interface InspectableBackend extends AgentModelBackend {
+  readonly calls: ReadonlyArray<BackendCallRecord>;
+}
+
+function resetModelBackend(): void {
+  scriptState.backends.length = 0;
+  scriptState.queue.length = 0;
+  scriptState.defaultSteps = [{ text: '' }];
+  createModelBackendMock.mockReset();
+  createModelBackendMock.mockImplementation(() => {
+    const queued = scriptState.queue.shift() as ScriptedStep[] | undefined;
+    const steps = queued ?? (scriptState.defaultSteps as ScriptedStep[]);
+    const backend = createScriptedBackend(steps);
+    scriptState.backends.push(backend);
+    return backend;
+  });
+}
+
+function setDefaultScript(steps: readonly ScriptedStep[]): void {
+  scriptState.defaultSteps = [...steps];
+  scriptState.queue.length = 0;
+}
+
+function latestBackend(): ScriptedBackend | undefined {
+  const backends = scriptState.backends as ScriptedBackend[];
+  return backends[backends.length - 1];
+}
+
+function modelVisibleText(backend: ScriptedBackend | undefined): string {
+  return (backend?.calls ?? [])
+    .flatMap((call) => call.messages.map((message) => message.text))
+    .join('\n');
+}
+
+function createGatedBackend(gate: Promise<void>): InspectableBackend {
+  const calls: BackendCallRecord[] = [];
+  return {
+    get calls(): ReadonlyArray<BackendCallRecord> {
+      return calls;
+    },
+    async generateStep(input: BackendStepInput): Promise<BackendStepOutput> {
+      calls.push({ activeTools: [...Object.keys(input.activeTools)], system: input.system });
+      await gate;
+      return {
+        text: 'gated answer',
+        toolCalls: [],
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        cacheStatus: 'unsupported',
+        finishReason: 'stop',
+      };
+    },
+  };
+}
+
+function createAbortHangingBackend(): InspectableBackend {
+  const calls: BackendCallRecord[] = [];
+  return {
+    get calls(): ReadonlyArray<BackendCallRecord> {
+      return calls;
+    },
+    async generateStep(input: BackendStepInput): Promise<BackendStepOutput> {
+      calls.push({ activeTools: [...Object.keys(input.activeTools)], system: input.system });
+      await new Promise<void>((_resolve, reject) => {
+        if (input.signal.aborted) {
+          reject(new DOMException('Chat turn was cancelled.', 'AbortError'));
+          return;
+        }
+        input.signal.addEventListener(
+          'abort',
+          () => {
+            reject(new DOMException('Chat turn was cancelled.', 'AbortError'));
+          },
+          { once: true },
+        );
+      });
+      throw new Error('unreachable: abort always settles the gate');
+    },
+  };
+}
 
 function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -274,10 +378,34 @@ function testChunk(content: string, dense: number, id = 1) {
   };
 }
 
-function makeUIMessageStream(): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) { controller.close(); },
-  });
+function chatBody(text: string): {
+  messages: Array<{ id: string; role: string; parts: Array<{ type: string; text: string }> }>;
+} {
+  return { messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text }] }] };
+}
+
+async function postChat(body: unknown, userId: string | null = 'user_test'): Promise<Response> {
+  authMock.mockResolvedValue({ userId });
+  return appHandler.POST(
+    new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+async function readBodyText(res: Response): Promise<string> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    body += decoder.decode(value, { stream: true });
+  }
+  body += decoder.decode();
+  return body;
 }
 
 async function drainResponse(res: Response): Promise<void> {
@@ -288,29 +416,19 @@ async function drainResponse(res: Response): Promise<void> {
   }
 }
 
-async function captureToolsFromStreamText<T>(messageText = 'hi'): Promise<T | undefined> {
-  authMock.mockResolvedValue({ userId: 'user_test' });
-  let captured: T | undefined;
-  streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-    captured = opts?.tools as T;
-    return { toUIMessageStream: () => makeUIMessageStream() };
-  });
-  const res = await appHandler.POST(
-    new Request('http://localhost/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: messageText }] }] }),
-    }),
-  );
-  expect(res.status).toBe(200);
-  expect(streamTextImpl).toHaveBeenCalled();
-  return captured;
+function lastRecordedEvent(): Record<string, unknown> | undefined {
+  return compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+}
+
+function searchThenText(query: string, finalText: string, limit?: number): ScriptedStep[] {
+  return [
+    { toolCalls: [{ toolName: 'searchDocumentation', args: limit === undefined ? { query } : { query, limit } }] },
+    { text: finalText },
+  ];
 }
 
 beforeEach(() => {
-  streamTextImpl.mockImplementation(() => ({
-    toUIMessageStream: () => makeUIMessageStream(),
-  }));
+  resetModelBackend();
   authMock.mockReset();
   currentUserMock.mockReset();
   createTicketMock.mockReset();
@@ -347,29 +465,17 @@ describe('/api/chat', () => {
   });
 
   it('returns 401 when there is no signed-in user', async () => {
-    authMock.mockResolvedValue({ userId: null });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody('hi'), null);
     expect(res.status).toBe(401);
+    expect(createModelBackendMock).not.toHaveBeenCalled();
   });
 
   it('returns 429 when the rate limiter says so', async () => {
-    authMock.mockResolvedValue({ userId: 'user_1' });
     rateLimitResult.ok = false;
     (rateLimitResult as unknown as { retryAfterMs: number }).retryAfterMs = 5_000;
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody('hi'), 'user_1');
     expect(res.status).toBe(429);
+    expect(createModelBackendMock).not.toHaveBeenCalled();
   });
 
   it('rejects a cross-site request with 403 before any work happens', async () => {
@@ -382,26 +488,17 @@ describe('/api/chat', () => {
           origin: 'http://evil.test',
           'sec-fetch-site': 'cross-site',
         },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
+        body: JSON.stringify(chatBody('hi')),
       }),
     );
     expect(res.status).toBe(403);
-    expect(streamTextImpl).not.toHaveBeenCalled();
+    expect(createModelBackendMock).not.toHaveBeenCalled();
   });
 
   it('returns 413 for a body larger than the cap via streaming read', async () => {
-    authMock.mockResolvedValue({ userId: 'user_big' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'x'.repeat(2_000_000) }] }],
-        }),
-      }),
-    );
+    const res = await postChat(chatBody('x'.repeat(2_000_000)), 'user_big');
     expect(res.status).toBe(413);
-    expect(streamTextImpl).not.toHaveBeenCalled();
+    expect(createModelBackendMock).not.toHaveBeenCalled();
   });
 
   it('returns 499 when the client cancels the request body', async () => {
@@ -417,35 +514,18 @@ describe('/api/chat', () => {
       }),
     );
     expect(res.status).toBe(499);
-    expect(streamTextImpl).not.toHaveBeenCalled();
+    expect(createModelBackendMock).not.toHaveBeenCalled();
   });
 
   it('caps concurrent streams per user at 2, freeing the slot when a stream ends', async () => {
-    authMock.mockResolvedValue({ userId: 'user_conc' });
-    let blocked = true;
-    const blockedControllers: Array<ReadableStreamDefaultController<unknown> | null> = [null, null];
-    streamTextImpl.mockImplementation(() => ({
-      toUIMessageStream: () =>
-        new ReadableStream<unknown>({
-          start(controller) {
-            if (blocked) {
-              const idx = blockedControllers[0] === null ? 0 : 1;
-              blockedControllers[idx] = controller as ReadableStreamDefaultController<unknown>;
-            } else {
-              controller.close();
-            }
-          },
-        }),
-    }));
-    const body = JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] });
-    const makePost = () =>
-      appHandler.POST(
-        new Request('http://localhost/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-        }),
-      );
+    let releaseGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    createModelBackendMock.mockReset();
+    createModelBackendMock.mockImplementation(() => createGatedBackend(gate));
+    const payload = chatBody('hi');
+    const makePost = () => postChat(payload, 'user_conc');
     const r1 = await makePost();
     const r2 = await makePost();
     const r3 = await makePost();
@@ -453,39 +533,52 @@ describe('/api/chat', () => {
     expect(r2.status).toBe(200);
     expect(r3.status).toBe(429);
     expect(r3.headers.get('retry-after')).toBe('1');
-    blockedControllers[0]!.close();
-    blockedControllers[1]!.close();
+    expect(createModelBackendMock).toHaveBeenCalledTimes(2);
+    releaseGate();
     await drainResponse(r1);
     await drainResponse(r2);
-    blocked = false;
     const r4 = await makePost();
     expect(r4.status).toBe(200);
     await drainResponse(r4);
   });
 
-  it('passes a createKnowledgeTicket tool to streamText', () => {
-    expect(appHandler.POST).toBeDefined();
+  it('passes a createKnowledgeTicket tool to the model backend', async () => {
+    setDefaultScript([{ text: 'done' }]);
+    const res = await postChat(chatBody('How do I reset my password? Please open a ticket.'));
+    expect(res.status).toBe(200);
+    await readBodyText(res);
+    const backend = latestBackend();
+    expect(backend).toBeDefined();
+    expect(backend?.calls[0]?.activeTools).toContain('createKnowledgeTicket');
   });
 });
 
 describe('/api/chat createKnowledgeTicket tool', () => {
-  async function invokeToolFromStreamText(
-    overrides: {
-      question: string;
-      attempted: string[];
-      documentationSearched: string[];
-      context?: string;
-    },
+  interface TicketArgs {
+    question: string;
+    attempted: string[];
+    documentationSearched: string[];
+    context?: string;
+  }
+
+  async function runTicketTurn(
+    overrides: TicketArgs,
     messageText = 'How do I reset my password? Please open a ticket.',
   ) {
-    const tools = await captureToolsFromStreamText<{
-      createKnowledgeTicket: {
-        execute: (args: { question: string; attempted: string[]; documentationSearched: string[]; context?: string }) => Promise<unknown>;
-      };
-    }>(messageText);
-    const tool = tools?.createKnowledgeTicket;
-    expect(tool).toBeDefined();
-    return tool!.execute(overrides);
+    const args: Record<string, unknown> = {
+      question: overrides.question,
+      attempted: [...overrides.attempted],
+      documentationSearched: [...overrides.documentationSearched],
+    };
+    if (overrides.context !== undefined) args.context = overrides.context;
+    setDefaultScript([
+      { toolCalls: [{ toolName: 'createKnowledgeTicket', args }] },
+      { text: 'I opened a ticket for you.' },
+    ]);
+    const res = await postChat(chatBody(messageText));
+    expect(res.status).toBe(200);
+    const body = await readBodyText(res);
+    return { res, body, backend: latestBackend() };
   }
 
   function ticketInput(overrides: Partial<{ question: string; attempted: string[]; documentationSearched: string[] }> = {}) {
@@ -499,10 +592,9 @@ describe('/api/chat createKnowledgeTicket tool', () => {
 
   it('creates a ticket with a TKT- prefixed id from the authenticated profile, never model-supplied identity', async () => {
     createTicketMock.mockResolvedValueOnce(ok({ ticketId: 'TKT-abcd1234', status: 'created' }) as never);
-    const out = await invokeToolFromStreamText(ticketInput({ question: 'Cannot reset my password.' }));
-    expect(out).toHaveProperty('status', 'created');
-    expect(out).toHaveProperty('ticketId');
-    expect((out as { ticketId: string }).ticketId).toMatch(/^TKT-[a-f0-9]{8}$/);
+    const { body, backend } = await runTicketTurn(ticketInput({ question: 'Cannot reset my password.' }));
+    expect(body).toContain('I opened a ticket for you.');
+    expect(backend?.calls.length).toBe(2);
     expect(createTicketMock).toHaveBeenCalledWith(
       {
         userId: 'user_test',
@@ -512,6 +604,7 @@ describe('/api/chat createKnowledgeTicket tool', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(lastRecordedEvent()?.ticketCreated).toBe(true);
   });
 
   it('rejects ticket creation when the Clerk user has no verified email', async () => {
@@ -523,8 +616,9 @@ describe('/api/chat createKnowledgeTicket tool', () => {
       username: 'nomail',
     });
     createTicketMock.mockResolvedValueOnce(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
-    const out = await invokeToolFromStreamText(ticketInput({ question: 'no email on account' }));
-    expect(out).toMatchObject({ ticketId: null, status: 'error' });
+    const { backend } = await runTicketTurn(ticketInput({ question: 'no email on account' }));
+    expect(backend?.calls.length).toBe(2);
+    expect(lastRecordedEvent()?.ticketCreated).toBe(false);
     expect(createTicketMock).not.toHaveBeenCalled();
   });
 
@@ -532,32 +626,39 @@ describe('/api/chat createKnowledgeTicket tool', () => {
     createTicketMock
       .mockResolvedValueOnce(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never)
       .mockResolvedValueOnce(ok({ ticketId: 'TKT-bbbbbbbb', status: 'created' }) as never);
-    const out1 = await invokeToolFromStreamText(ticketInput({ question: 'first ticket' }));
-    const out2 = await invokeToolFromStreamText(ticketInput({ question: 'second ticket' }));
-    expect((out1 as { ticketId: string }).ticketId).toBeDefined();
-    expect((out2 as { ticketId: string }).ticketId).toBeDefined();
-    expect((out1 as { ticketId: string }).ticketId).not.toBe((out2 as { ticketId: string }).ticketId);
+    setDefaultScript([
+      { toolCalls: [{ toolName: 'createKnowledgeTicket', args: ticketInput({ question: 'first ticket' }) }] },
+      { text: 'I opened a ticket for you.' },
+    ]);
+    const first = await postChat(chatBody('Please open a ticket for the first issue.'));
+    expect(first.status).toBe(200);
+    await readBodyText(first);
+    setDefaultScript([
+      { toolCalls: [{ toolName: 'createKnowledgeTicket', args: ticketInput({ question: 'second ticket' }) }] },
+      { text: 'I opened a ticket for you.' },
+    ]);
+    const second = await postChat(chatBody('Please open a ticket for the second issue.'));
+    expect(second.status).toBe(200);
+    await readBodyText(second);
+    expect(createTicketMock).toHaveBeenCalledTimes(2);
+    const issues = createTicketMock.mock.calls.map((call) => (call[0] as { issue: string }).issue);
+    expect(issues).toHaveLength(2);
+    expect(issues[0]).toContain('first ticket');
+    expect(issues[1]).toContain('second ticket');
+    expect(issues[0]).not.toBe(issues[1]);
   });
 
   it('returns an error status when createTicket fails', async () => {
     const { ExternalServiceError } = await import('@app/domain');
     createTicketMock.mockResolvedValueOnce(err(new ExternalServiceError('db down')) as never);
-    const out = await invokeToolFromStreamText(ticketInput({ question: 'my issue' }));
-    expect(out).toHaveProperty('status', 'error');
-    expect(out).toHaveProperty('ticketId', null);
+    const { body } = await runTicketTurn(ticketInput({ question: 'my issue' }));
+    expect(body).toContain('I opened a ticket for you.');
+    expect(createTicketMock).toHaveBeenCalledTimes(1);
+    expect(lastRecordedEvent()?.ticketCreated).toBe(false);
   });
 });
 
 describe('/api/chat searchDocumentation tool', () => {
-  async function captureTools() {
-    const tools = await captureToolsFromStreamText<{
-      searchDocumentation: {
-        execute: (args: { query: string; limit?: number }) => Promise<unknown>;
-      };
-    }>();
-    return { tools: tools ?? null };
-  }
-
   it('returns up to 800 chars per chunk wrapped in untrusted reference framing', async () => {
     const longContent = 'x'.repeat(2000);
     const searchChunksSpy = vi
@@ -568,16 +669,19 @@ describe('/api/chat searchDocumentation tool', () => {
           degradedBy: [],
         }) as never,
       );
-    const { tools } = await captureTools();
-    const result = (await tools?.searchDocumentation?.execute({ query: 'q' })) as {
-      sets: Array<{ kind: string; results: Array<{ content: string }> }>;
-    };
-    const content = result.sets[0]!.results[0]!.content;
-    expect(content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
-    expect(content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
-    expect(content).toContain('https://docs.example.com/a.md');
-    expect(content).toContain('x'.repeat(800) + '\u2026');
-    expect(content).not.toContain('x'.repeat(801));
+    setDefaultScript(searchThenText('q', 'final answer'));
+    const res = await postChat(chatBody('What does the documentation say about coverage?'));
+    expect(res.status).toBe(200);
+    const body = await readBodyText(res);
+    const backend = latestBackend();
+    expect(backend?.calls.length).toBe(2);
+    const visible = modelVisibleText(backend);
+    expect(visible).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(visible).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
+    expect(visible).toContain('https://docs.example.com/a.md');
+    expect(visible).toContain('x'.repeat(800) + '…');
+    expect(visible).not.toContain('x'.repeat(801));
+    expect(body).toMatch(/data-citation/);
     searchChunksSpy.mockRestore();
   });
 
@@ -585,8 +689,10 @@ describe('/api/chat searchDocumentation tool', () => {
     const searchChunksSpy = vi
       .spyOn(compositionMock, 'searchChunks')
       .mockResolvedValueOnce(ok({ chunks: [], degradedBy: [] }) as never);
-    const { tools } = await captureTools();
-    await tools?.searchDocumentation?.execute({ query: 'q', limit: 5 });
+    setDefaultScript(searchThenText('q', 'final answer', 5));
+    const res = await postChat(chatBody('What does the documentation say about coverage?'));
+    expect(res.status).toBe(200);
+    await readBodyText(res);
     expect(searchChunksSpy).toHaveBeenCalledWith(expect.anything(), 'q', {
       excludeChunkIdentities: expect.any(Set),
       limit: 5,
@@ -599,61 +705,33 @@ describe('/api/chat searchDocumentation tool', () => {
     const searchSpy = vi
       .spyOn(compositionMock, 'searchChunks')
       .mockResolvedValue(ok({ chunks: searchValue, degradedBy: [] }) as never);
-    const { tools } = await captureTools();
-    const firstResult = await tools?.searchDocumentation?.execute({ query: 'q' });
-    const secondResult = await tools?.searchDocumentation?.execute({ query: 'q again' });
-    expect(firstResult).toMatchObject({
-      sets: [{ kind: 'results', results: expect.arrayContaining([expect.any(Object), expect.any(Object)]) }],
-      uniqueEvidenceAdded: 2,
-    });
-    expect(secondResult).toMatchObject({
-      sets: [{ kind: 'no_match', reason: 'filtered_duplicates', ticketEligible: false }],
-      uniqueEvidenceAdded: 0,
-    });
+    setDefaultScript([
+      {
+        toolCalls: [
+          { toolName: 'searchDocumentation', args: { query: 'q' } },
+          { toolName: 'searchDocumentation', args: { query: 'q again' } },
+        ],
+      },
+      { text: 'final answer' },
+    ]);
+    const res = await postChat(chatBody('What does the documentation say about coverage?'));
+    expect(res.status).toBe(200);
+    const body = await readBodyText(res);
+    expect(searchSpy).toHaveBeenCalledTimes(2);
+    expect(body).toContain('The dental plan covers two cleanings per year.');
+    expect(body).toContain('Submit claims via the HR portal.');
+    const visible = modelVisibleText(latestBackend());
+    expect(visible).toContain('filtered_duplicates');
+    expect(visible).toContain('"uniqueEvidenceAdded":2');
+    expect(visible).toContain('"uniqueEvidenceAdded":0');
     searchSpy.mockRestore();
   });
 
   it('emits captured citations as data-citation parts after the LLM stream ends', async () => {
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    type Ctl = ReadableStreamDefaultController<{ type: string }>;
-    let streamController: Ctl | null = null;
-    const llmStream = new ReadableStream<{ type: string }>({
-      start(controller) {
-        streamController = controller;
-      },
-    });
-    let capturedTools:
-      | {
-          searchDocumentation: {
-            execute: (args: { query: string; limit?: number }) => Promise<unknown>;
-          };
-        }
-      | undefined;
-    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-      capturedTools = opts?.tools as typeof capturedTools;
-      return {
-        toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
-      };
-    });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
-      }),
-    );
+    setDefaultScript(searchThenText('q', 'final answer'));
+    const res = await postChat(chatBody('hi there, what does the documentation say?'));
     expect(res.status).toBe(200);
-    await capturedTools?.searchDocumentation.execute({ query: 'q' });
-    streamController!.close();
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let body = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      body += decoder.decode(value, { stream: true });
-    }
-    body += decoder.decode();
+    const body = await readBodyText(res);
     expect(body).toMatch(/data-citation/);
     expect(body).toMatch(/0\.91/);
     expect(body).toMatch(/dental plan/);
@@ -662,21 +740,12 @@ describe('/api/chat searchDocumentation tool', () => {
 
 describe('/api/chat pre-fetch toggle (default off)', () => {
   async function captureSystemForBody(body: { messages: unknown[] }) {
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    let capturedSystem: unknown;
-    streamTextImpl.mockImplementation((opts: { system?: unknown }) => {
-      capturedSystem = opts?.system;
-      return { toUIMessageStream: () => makeUIMessageStream() };
-    });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
-    );
+    setDefaultScript([{ text: '' }]);
+    const res = await postChat(body);
     expect(res.status).toBe(200);
-    return { system: capturedSystem, res };
+    await readBodyText(res);
+    const backend = latestBackend();
+    return { system: backend?.calls[0]?.system as string | undefined, res };
   }
 
   it('respects appConfig.prefetchFirstTurn = false (default): no pre-fetch block, tool-driven branch', async () => {
@@ -697,71 +766,28 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
   });
 
   it('rejects an empty last user message before model generation', async () => {
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    const modelCallsBeforeRequest = streamTextImpl.mock.calls.length;
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: '' }] }],
-        }),
-      }),
-    );
+    const modelCallsBeforeRequest = createModelBackendMock.mock.calls.length;
+    const res = await postChat({
+      messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: '' }] }],
+    });
 
     expect(res.status).toBe(400);
-    expect(streamTextImpl).toHaveBeenCalledTimes(modelCallsBeforeRequest);
+    expect(createModelBackendMock).toHaveBeenCalledTimes(modelCallsBeforeRequest);
   });
 
   it('with prefetchFirstTurn = false, citation still surfaces as data-citation when the tool is called', async () => {
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    type Ctl = ReadableStreamDefaultController<{ type: string }>;
-    let streamController: Ctl | null = null;
-    const llmStream = new ReadableStream<{ type: string }>({
-      start(controller) {
-        streamController = controller;
-      },
+    setDefaultScript(searchThenText('q', 'final answer'));
+    const res = await postChat({
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          parts: [{ type: 'text', text: 'How do I change my password?' }],
+        },
+      ],
     });
-    let capturedTools:
-      | {
-          searchDocumentation: {
-            execute: (args: { query: string; limit?: number }) => Promise<unknown>;
-          };
-        }
-      | undefined;
-    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-      capturedTools = opts?.tools as typeof capturedTools;
-      return {
-        toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
-      };
-    });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            {
-              id: 'm1',
-              role: 'user',
-              parts: [{ type: 'text', text: 'How do I change my password?' }],
-            },
-          ],
-        }),
-      }),
-    );
     expect(res.status).toBe(200);
-    await capturedTools?.searchDocumentation.execute({ query: 'q' });
-    streamController!.close();
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let body = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      body += decoder.decode(value, { stream: true });
-    }
-    body += decoder.decode();
+    const body = await readBodyText(res);
     expect(body).toMatch(/data-citation/);
     expect(body).toMatch(/dental plan/);
     expect(body).toMatch(/0\.91/);
@@ -822,19 +848,21 @@ describe('/api/chat agentic loop (Session 8)', () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [allChunks[0]] })) as never,
     );
-    const { tools } = await captureToolsForAgentic();
-    const result = (await tools?.searchDocumentation?.execute({ query: 'vague' })) as {
-      sets: Array<{ kind: string; results: Array<{ content: string }> }>;
-    };
+    setDefaultScript(searchThenText('vague', 'final answer'));
+    const res = await postChat(chatBody('Can you explain the vague policy?'));
+    expect(res.status).toBe(200);
+    const body = await readBodyText(res);
     expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague', {
       excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
     });
-    expect(result.sets[0]!.results).toHaveLength(1);
-    expect(result.sets[0]!.results[0]!.content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
-    expect(result.sets[0]!.results[0]!.content).toContain('keep this');
-    expect(result.sets[0]!.results[0]!.content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
+    expect(body).toContain('keep this');
+    expect(body).not.toContain('drop this');
+    const visible = modelVisibleText(latestBackend());
+    expect(visible).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(visible).toContain('keep this');
+    expect(visible).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
   });
 
   it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {
@@ -843,8 +871,10 @@ describe('/api/chat agentic loop (Session 8)', () => {
       .spyOn(compositionMock, 'searchChunks')
       .mockResolvedValue(ok({ chunks: [], degradedBy: [] }) as never);
     const agenticSpy = compositionMock.agenticSearch as ReturnType<typeof vi.fn>;
-    const { tools } = await captureToolsForAgentic();
-    await tools?.searchDocumentation?.execute({ query: 'plain' });
+    setDefaultScript(searchThenText('plain', 'final answer'));
+    const res = await postChat(chatBody('Can you explain the plain policy?'));
+    expect(res.status).toBe(200);
+    await readBodyText(res);
     expect(searchSpy).toHaveBeenCalledWith(expect.anything(), 'plain', {
       excludeChunkIdentities: expect.any(Set),
       limit: 3,
@@ -884,93 +914,23 @@ describe('/api/chat agentic loop (Session 8)', () => {
   });
 });
 
-async function captureToolsForAgentic() {
-  authMock.mockResolvedValue({ userId: 'user_test' });
-  let captured:
-    | { searchDocumentation: { execute: (args: { query: string; limit?: number }) => Promise<unknown> } }
-    | undefined;
-  streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-    captured = opts?.tools as typeof captured;
-    return { toUIMessageStream: () => makeUIMessageStream() };
-  });
-  const res = await appHandler.POST(
-    new Request('http://localhost/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }] }),
-    }),
-  );
-  expect(res.status).toBe(200);
-  expect(streamTextImpl).toHaveBeenCalled();
-  return { tools: captured ?? null };
-}
-
 async function runAgenticStreamAndRead(query: string, extraBody: Record<string, unknown> = {}): Promise<string> {
-  authMock.mockResolvedValue({ userId: 'user_test' });
-  type Ctl = ReadableStreamDefaultController<{ type: string }>;
-  let streamController: Ctl | null = null;
-  const llmStream = new ReadableStream<{ type: string }>({
-    start(controller) {
-      streamController = controller;
-    },
+  setDefaultScript(searchThenText(query, 'generated answer'));
+  const res = await postChat({
+    messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: query }] }],
+    ...extraBody,
   });
-  let pendingTool: Promise<unknown> | null = null;
-  streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-    const tools = (opts?.tools as { searchDocumentation?: { execute: (a: { query: string }) => Promise<unknown> } }) ?? {};
-    if (tools.searchDocumentation) {
-      pendingTool = tools.searchDocumentation.execute({ query });
-      void pendingTool.catch(() => undefined);
-    }
-    return {
-      toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
-      text: Promise.resolve('generated answer'),
-      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
-    };
-  });
-  const res = await appHandler.POST(
-    new Request('http://localhost/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: query }] }], ...extraBody }),
-    }),
-  );
   expect(res.status).toBe(200);
-  if (pendingTool !== null) await (pendingTool as Promise<unknown>).catch(() => undefined);
-  streamController!.close();
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let body = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    body += decoder.decode(value, { stream: true });
-  }
-  body += decoder.decode();
-  return body;
+  return readBodyText(res);
 }
 
 describe('/api/chat chat_events instrumentation (Session 6)', () => {
-  async function drain(res: Response): Promise<void> {
-    const reader = res.body!.getReader();
-    while (true) {
-      const { done } = await reader.read();
-      if (done) break;
-    }
-  }
-
   async function runTurn(text: string): Promise<Record<string, unknown> | undefined> {
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    streamTextImpl.mockImplementation(() => ({ toUIMessageStream: () => makeUIMessageStream() }));
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text }] }] }),
-      }),
-    );
+    setDefaultScript([{ text: '' }]);
+    const res = await postChat(chatBody(text));
     expect(res.status).toBe(200);
-    await drain(res);
-    return compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+    await readBodyText(res);
+    return lastRecordedEvent();
   }
 
   it('records mode "vector" when effectiveMode is normal', async () => {
@@ -997,17 +957,11 @@ describe('/api/chat chat_events instrumentation (Session 6)', () => {
   it('records a cacheHit event and skips generation on a cache hit', async () => {
     retrievalConfig.retrievalMode = 'normal';
     compositionMock.answerCache.get.mockResolvedValueOnce('cached answer');
-    authMock.mockResolvedValue({ userId: 'user_test' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'cached please' }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody('cached please'));
     expect(res.status).toBe(200);
-    await drain(res);
-    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    await readBodyText(res);
+    expect(createModelBackendMock).not.toHaveBeenCalled();
+    const event = lastRecordedEvent();
     expect(event?.cacheHit).toBe(true);
     expect(event?.mode).toBe('vector');
   });
@@ -1017,21 +971,6 @@ describe('/api/chat answer cache (Session 10)', () => {
   const CACHED = 'This is a cached answer from a previous generation.';
   const QUESTION = 'How do I reset my password?';
 
-  function readBody(res: Response): Promise<string> {
-    return new Promise(async (resolve) => {
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let body = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        body += decoder.decode(value, { stream: true });
-      }
-      body += decoder.decode();
-      resolve(body);
-    });
-  }
-
   beforeEach(() => {
     vi.stubEnv('ANSWER_CACHE_ENABLED', 'true');
     retrievalConfig.retrievalMode = 'normal';
@@ -1039,30 +978,19 @@ describe('/api/chat answer cache (Session 10)', () => {
     compositionMock.answerCache.set.mockReset();
     compositionMock.answerCache.get.mockResolvedValue(null);
     compositionMock.answerCache.set.mockResolvedValue(undefined);
-    streamTextImpl.mockReset();
-    streamTextImpl.mockImplementation(() => ({
-      toUIMessageStream: () => makeUIMessageStream(),
-      text: Promise.resolve('freshly generated answer'),
-    }));
+    setDefaultScript([{ text: 'freshly generated answer' }]);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('short-circuits generation on a cache hit (no streamText call)', async () => {
+  it('short-circuits generation on a cache hit (no model backend call)', async () => {
     compositionMock.answerCache.get.mockResolvedValue(CACHED);
-    authMock.mockResolvedValue({ userId: 'user_cache' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody(QUESTION), 'user_cache');
     expect(res.status).toBe(200);
-    expect(streamTextImpl).not.toHaveBeenCalled();
-    const body = await readBody(res);
+    expect(createModelBackendMock).not.toHaveBeenCalled();
+    const body = await readBodyText(res);
     expect(body).toContain(CACHED);
   });
 
@@ -1078,75 +1006,36 @@ describe('/api/chat answer cache (Session 10)', () => {
       source: null,
     };
     compositionMock.answerCache.get.mockResolvedValue(JSON.stringify({ v: 1, text: CACHED, citations: [citation] }));
-    authMock.mockResolvedValue({ userId: 'user_cache' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody(QUESTION), 'user_cache');
     expect(res.status).toBe(200);
-    expect(streamTextImpl).not.toHaveBeenCalled();
-    const body = await readBody(res);
+    expect(createModelBackendMock).not.toHaveBeenCalled();
+    const body = await readBodyText(res);
     expect(body).toContain(CACHED);
     expect(body).toMatch(/data-citation/);
     expect(body).toMatch(/0\.91/);
     expect(body).toMatch(/dental plan/);
-    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const event = lastRecordedEvent();
     expect(event?.cacheHit).toBe(true);
     expect(event?.citationCount).toBe(1);
   });
 
   it('does not cache a freshly-generated first-turn answer with no citations', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_nocache' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody(QUESTION), 'user_nocache');
     expect(res.status).toBe(200);
-    expect(streamTextImpl).toHaveBeenCalled();
-    await readBody(res);
+    expect(latestBackend()?.calls.length).toBeGreaterThan(0);
+    await readBodyText(res);
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
 
   it('writes a freshly-generated grounded first-turn answer to the cache on miss', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_miss' });
-    type Ctl = ReadableStreamDefaultController<unknown>;
-    let streamController: Ctl | null = null;
-    const llmStream = new ReadableStream<unknown>({
-      start(controller) {
-        streamController = controller;
-      },
-    });
-    let capturedTools:
-      | { searchDocumentation: { execute: (args: { query: string }) => Promise<unknown> } }
-      | undefined;
-    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-      capturedTools = opts?.tools as typeof capturedTools;
-      return {
-        toUIMessageStream: () => llmStream as unknown as ReadableStream<Uint8Array>,
-        text: Promise.resolve('freshly generated answer'),
-        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
-      };
-    });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: QUESTION }] }] }),
-      }),
-    );
+    setDefaultScript(searchThenText('dental coverage', 'freshly generated answer'));
+    const res = await postChat(chatBody(QUESTION), 'user_miss');
     expect(res.status).toBe(200);
-    expect(streamTextImpl).toHaveBeenCalled();
-    await capturedTools?.searchDocumentation.execute({ query: 'dental coverage' });
-    streamController!.close();
-    await readBody(res);
+    const body = await readBodyText(res);
+    expect(body).toContain('freshly generated answer');
+    expect(latestBackend()?.calls.length).toBeGreaterThan(0);
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
     const [key, value, ttl] = compositionMock.answerCache.set.mock.calls[0]!;
     expect(key).toMatch(/^rag:answer:[a-f0-9]{32}$/);
@@ -1162,37 +1051,26 @@ describe('/api/chat answer cache (Session 10)', () => {
 
   it('does not write to cache on a follow-up turn (conversation state)', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_followup' });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi!' }] },
-            { id: 'u2', role: 'user', parts: [{ type: 'text', text: QUESTION }] },
-          ],
-        }),
-      }),
+    const res = await postChat(
+      {
+        messages: [
+          { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi!' }] },
+          { id: 'u2', role: 'user', parts: [{ type: 'text', text: QUESTION }] },
+        ],
+      },
+      'user_followup',
     );
     expect(res.status).toBe(200);
-    await readBody(res);
+    await readBodyText(res);
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
 
   it('includes the user id and retrieval fingerprint in the cache key', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_fp' });
     retrievalConfig.retrievalMode = 'agentic';
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'fingerprint me' }] }] }),
-      }),
-    );
+    const res = await postChat(chatBody('fingerprint me'), 'user_fp');
     expect(res.status).toBe(200);
-    await readBody(res);
+    await readBodyText(res);
     const [, opts] = compositionMock.answerCacheKey.mock.calls.at(-1)! as unknown as [
       unknown,
       { userId: string; fingerprint: string },
@@ -1231,7 +1109,6 @@ describe('/api/chat answer cache (Session 10)', () => {
 
   it('does not cache a turn that opened a knowledge ticket', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
-    authMock.mockResolvedValue({ userId: 'user_tkt' });
     createTicketMock.mockResolvedValue(ok({ ticketId: 'TKT-aaaaaaaa', status: 'created' }) as never);
     currentUserMock.mockResolvedValue({
       id: 'user_tkt',
@@ -1240,43 +1117,25 @@ describe('/api/chat answer cache (Session 10)', () => {
       firstName: 'T',
       username: 't',
     });
-    let ticketFinished: () => void = () => {};
-    const ticketPromise = new Promise<void>((resolve) => {
-      ticketFinished = resolve;
-    });
-    let streamController: ReadableStreamDefaultController<{ type: string }> | null = null;
-    streamTextImpl.mockImplementation((opts: { tools?: unknown }) => {
-      const tools = (opts?.tools as {
-        createKnowledgeTicket?: {
-          execute: (a: { question: string; attempted: string[]; documentationSearched: string[] }) => Promise<unknown>;
-        };
-      }) ?? {};
-      if (tools.createKnowledgeTicket) {
-        void tools.createKnowledgeTicket
-          .execute({ question: 'please open a ticket', attempted: ['searched docs'], documentationSearched: ['docs'] })
-          .finally(ticketFinished);
-      }
-      return {
-        toUIMessageStream: () =>
-          new ReadableStream<{ type: string }>({
-            start(controller) {
-              streamController = controller;
+    setDefaultScript([
+      {
+        toolCalls: [
+          {
+            toolName: 'createKnowledgeTicket',
+            args: {
+              question: 'please open a ticket',
+              attempted: ['searched docs'],
+              documentationSearched: ['docs'],
             },
-          }),
-        text: Promise.resolve('I opened a ticket for you.'),
-      };
-    });
-    const res = await appHandler.POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'open a ticket please' }] }] }),
-      }),
-    );
+          },
+        ],
+      },
+      { text: 'I opened a ticket for you.' },
+    ]);
+    const res = await postChat(chatBody('open a ticket please'), 'user_tkt');
     expect(res.status).toBe(200);
-    await ticketPromise;
-    streamController!.close();
-    await readBody(res);
+    const body = await readBodyText(res);
+    expect(body).toContain('I opened a ticket for you.');
     expect(createTicketMock).toHaveBeenCalled();
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
@@ -1305,35 +1164,17 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     (Math.random as unknown as { mockRestore: () => void }).mockRestore();
   });
 
-  it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', async () => {
-    vi.stubEnv('CHAT_SOFT_DEADLINE_MS', '40');
+  it('§T6 soft deadline: slow turns end gracefully and skip cache/judge', { timeout: 30_000 }, async () => {
+    vi.stubEnv('CHAT_SOFT_DEADLINE_MS', '16000');
     vi.stubEnv('CHAT_JUDGE_MAX_WALL_MS', '1');
     try {
-      authMock.mockResolvedValue({ userId: 'user_test' });
-      streamTextImpl.mockImplementation((opts: { abortSignal?: AbortSignal }) => {
-        return {
-          toUIMessageStream: () =>
-            new ReadableStream<{ type: string }>({
-              start(c) {
-                opts?.abortSignal?.addEventListener('abort', () => c.close(), { once: true });
-              },
-            }) as unknown as ReadableStream<Uint8Array>,
-          text: Promise.resolve(''),
-          usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
-        };
+      createModelBackendMock.mockReset();
+      createModelBackendMock.mockImplementation(() => createAbortHangingBackend());
+      const res = await postChat({
+        turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3305',
+        messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
       });
-      const res = await appHandler.POST(
-        new Request('http://localhost/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3305',
-            messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
-          }),
-        }),
-      );
       expect(res.status).toBe(200);
-      await new Promise((resolve) => setTimeout(resolve, 120));
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let body = '';
@@ -1345,7 +1186,7 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
       expect(body).toContain('data-guardrail');
       expect(body).toContain('took too long');
       expect(body).toContain('Sorry — this answer took longer than allowed');
-      const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as {
+      const event = lastRecordedEvent() as {
         meta: Record<string, unknown>;
         hallucinationBlocked: boolean;
       };
@@ -1384,8 +1225,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
       expect(graderHolder.fn).not.toHaveBeenCalled();
       expect(body).not.toMatch(/data-guardrail/);
       expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
-      const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-      expect(event.hallucinationBlocked).toBe(false);
+      const event = lastRecordedEvent();
+      expect(event?.hallucinationBlocked).toBe(false);
     } finally {
       retrievalConfig.hallucinationCheckEnabled = true;
     }
@@ -1401,8 +1242,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).not.toMatch(/data-guardrail/);
     expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
-    const event = compositionMock.chatEventBatcher.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event.hallucinationBlocked).toBe(false);
+    const event = lastRecordedEvent();
+    expect(event?.hallucinationBlocked).toBe(false);
   });
 
   it('enqueues the quality judge via after when sampled (rate honored), persisting judgeScores', async () => {

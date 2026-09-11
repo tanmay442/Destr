@@ -4,10 +4,10 @@ import type { AppConfig } from '@app/domain/app-config';
 import { SearchFailure } from '../../rag/search/search-contract';
 import type { RetrievedChunk } from '../../rag/search/search-types';
 import {
-  createDefaultBudget,
   createInMemoryTraceWriter,
   type AgentToolContext,
 } from '../tool-contract';
+import { createAgentRunBudget } from '../agent-budget';
 import { InMemoryToolApprovalPolicy } from '../tool-approval';
 import { asUntypedTool, createToolCatalog } from '../tool-catalog';
 import { DEFAULT_TOOL_CAPABILITIES } from '../model-tool-capabilities';
@@ -64,7 +64,7 @@ function makeContext(overrides: Partial<AgentToolContext> = {}): AgentToolContex
     actor: { userId: 'user_test' },
     turnId: 'turn_test',
     signal: new AbortController().signal,
-    budget: createDefaultBudget({ maxTotalToolCalls: 10 }),
+    budget: createAgentRunBudget({ nowMs: Date.now(), overrides: { maxTotalToolCalls: 10 } }),
     evidence: {
       seenChunkKeys: new Set<string>(),
       addEvidence: (chunks) => chunks,

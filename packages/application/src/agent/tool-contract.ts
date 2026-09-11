@@ -1,4 +1,7 @@
 import type { z } from 'zod';
+import type { AgentRunBudget } from './agent-budget';
+
+export type { AgentRunBudget };
 
 export type ToolEffect = 'read' | 'write';
 
@@ -14,26 +17,6 @@ export interface ToolPolicy {
   readonly requiresApproval: boolean;
   readonly maxCallsPerTurn: number;
   readonly timeoutMs: number;
-}
-
-export interface AgentRunBudget {
-  readonly deadlineAt: number;
-  readonly maxTotalToolCalls: number;
-  readonly maxCallsByTool: Readonly<Record<string, number>>;
-}
-
-export function createDefaultBudget(input: {
-  nowMs?: number;
-  maxTotalToolCalls?: number;
-  maxCallsByTool?: Readonly<Record<string, number>>;
-  deadlineInMs?: number;
-}): AgentRunBudget {
-  const now = input.nowMs ?? Date.now();
-  return {
-    deadlineAt: now + (input.deadlineInMs ?? 50_000),
-    maxTotalToolCalls: input.maxTotalToolCalls ?? 10,
-    maxCallsByTool: input.maxCallsByTool ?? {},
-  };
 }
 
 export interface GroundingEvidenceCollector {

@@ -11,7 +11,6 @@ import {
   type TicketWriter,
 } from '../tools/create-knowledge-ticket';
 import {
-  createDefaultBudget,
   createInMemoryTraceWriter,
   type AgentToolContext,
   type EvidenceChunk,
@@ -19,6 +18,7 @@ import {
   type ToolApprovalPolicy,
   type ToolExecuteCall,
 } from '../tool-contract';
+import { createAgentRunBudget } from '../agent-budget';
 import { InMemoryToolApprovalPolicy, normalizeToolArgs } from '../tool-approval';
 import {DefaultToolCatalog, asUntypedTool} from '../tool-catalog';
 import { DEFAULT_TOOL_CAPABILITIES } from '../model-tool-capabilities';
@@ -49,7 +49,7 @@ function makeContext(input: {
     actor: { userId: input.userId ?? USER_ID },
     turnId: input.turnId ?? TURN_ID,
     signal: controller.signal,
-    budget: createDefaultBudget({ maxTotalToolCalls: 10, maxCallsByTool: {} }),
+    budget: createAgentRunBudget({ nowMs: Date.now(), overrides: { maxTotalToolCalls: 10, maxCallsByTool: {} } }),
     evidence: makeEvidence(),
     trace: createInMemoryTraceWriter(),
     approvals: input.approvals,

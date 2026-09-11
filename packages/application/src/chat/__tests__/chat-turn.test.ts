@@ -1,16 +1,27 @@
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 import { err, ok, ExternalServiceError } from '@app/domain';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
 import type { AppConfig } from '@app/domain/app-config';
 import { SearchFailure, type RetrievalDiagnostics, type RetrievedChunk } from '../../rag/search';
 import type { AgenticResult } from '../../rag/agentic-search';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
-import { buildChatTools, searchDocumentationInputSchema } from '../chat-turn/chat-tools';
+import {
+  searchDocumentationInputSchema,
+  SEARCH_TOOL_NAME,
+} from '../../agent/tools/search-documentation';
+import { TICKET_TOOL_NAME } from '../../agent/tools/create-knowledge-ticket';
+import {
+  createScriptedBackend,
+  type ScriptedBackendCall,
+  type ScriptedStep,
+} from '../../agent/scripted-model';
+import { buildCatalogToolsForTurn } from '../../agent/compat/chat-tools-compat';
 import { TurnToolLedger } from '../../agent/run-state';
 import { createGroundingEvidence } from '../grounding-evidence';
 import { legacySearchResultCacheFingerprint } from '../cache-key';
 import { TURN_FINGERPRINT_VERSION, turnRequestFingerprint } from '../turn-fingerprint';
 import type { ChatInputMessage } from '../message-types';
+import type { ChatChunk } from '../chat-chunks';
+import type { TurnMetrics } from '../chat-turn/turn-types';
 
 function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
   return {
@@ -27,16 +38,6 @@ function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
     ...overrides,
   };
 }
-
-const { streamTextMock, stepCountMock, aiReal } = vi.hoisted(() => ({
-  streamTextMock: vi.fn(),
-  stepCountMock: vi.fn((n: number) => `budget:${n}`),
-  aiReal: {} as {
-    tool?: typeof import('ai')['tool'];
-    convertToModelMessages?: typeof import('ai')['convertToModelMessages'];
-    createUIMessageStream?: typeof import('ai')['createUIMessageStream'];
-  },
-}));
 
 const CHUNK: RetrievedChunk = {
   id: 1,
@@ -106,7 +107,47 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
   } as AppConfig;
 }
 
-type DepsOverrides = Partial<Omit<ChatTurnDeps, 'getRuntimeConfig'>> & {
+interface RecordedBackend {
+  readonly calls: readonly ScriptedBackendCall[];
+}
+
+function createScriptController() {
+  let queue: readonly ScriptedStep[] = [{ text: 'Hello world' }];
+  const seen: RecordedBackend[] = [];
+  const gateway: ChatTurnDeps['modelGateway'] = {
+    createStream: ({ execute }) =>
+      new ReadableStream<ChatChunk>({
+        start(controller) {
+          const chunks: ChatChunk[] = [];
+          execute({
+            write: (chunk) => {
+              chunks.push(chunk);
+            },
+          });
+          for (const chunk of chunks) controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    defineTool: (opts) => opts,
+    createModelBackend: (input) => {
+      void input.model;
+      void input.tools;
+      const backend = createScriptedBackend(queue);
+      seen.push(backend);
+      return backend;
+    },
+  };
+  return {
+    gateway,
+    seen,
+    setScript: (...steps: ScriptedStep[]) => {
+      queue = steps;
+    },
+    last: () => seen.at(-1),
+  };
+}
+
+type DepsOverrides = Partial<Omit<ChatTurnDeps, 'getRuntimeConfig' | 'modelGateway'>> & {
   cfg?: AppConfig;
 };
 
@@ -151,32 +192,55 @@ function makeDeps(overrides: DepsOverrides = {}) {
     void args;
     return { conversationId: 'conv-1' };
   });
+  const script = createScriptController();
+  const {
+    cfg: _cfgOverride,
+    searchChunks: searchChunksOverride,
+    agenticSearch: agenticSearchOverride,
+    hallucinationGrader: hallucinationGraderOverride,
+    answerCache: answerCacheOverride,
+    turnResultCache,
+    answerCacheKey: answerCacheKeyOverride,
+    rateLimit: rateLimitOverride,
+    createTicket: createTicketOverride,
+    userResolver: userResolverOverride,
+    eventSink: eventSinkOverride,
+    historySink: historySinkOverride,
+    judgeScheduler,
+    qualityJudge,
+    traceEnabled,
+    ...passthrough
+  } = overrides;
+  void _cfgOverride;
   const deps: ChatTurnDeps = {
-    ai: {
-      streamText: streamTextMock,
-      stepCountIs: stepCountMock,
-      tool: aiReal.tool,
-      convertToModelMessages: aiReal.convertToModelMessages,
-      createUIMessageStream: aiReal.createUIMessageStream,
-    } as unknown as ChatTurnDeps['ai'],
-    getChatModel: () => ({} as LanguageModelV3),
-    getChatModelId: () => 'gpt-4o-mini',
+    modelGateway: script.gateway,
+    getChatModel: () => ({ modelId: 'test-chat' }),
+    getChatModelId: () => 'test-chat',
     getEmbeddingModelId: () => 'emb-3',
     getRuntimeConfig: async () => cfg,
-    searchChunks: overrides.searchChunks ?? searchChunks,
-    agenticSearch: overrides.agenticSearch ?? agenticSearch,
-    hallucinationGrader: overrides.hallucinationGrader ?? (() => null),
-    answerCache: overrides.answerCache ?? answerCache,
-    ...(overrides.turnResultCache ? { turnResultCache: overrides.turnResultCache } : {}),
-    answerCacheKey: overrides.answerCacheKey ?? answerCacheKey,
-    rateLimit: overrides.rateLimit ?? rateLimit,
-    createTicket: overrides.createTicket ?? createTicket,
-    userResolver: overrides.userResolver ?? userResolver,
-    eventSink: overrides.eventSink ?? { record, flush },
-    historySink: overrides.historySink ?? { appendTurn },
-    ...(overrides.judgeScheduler ? { judgeScheduler: overrides.judgeScheduler } : {}),
-    ...(overrides.qualityJudge ? { qualityJudge: overrides.qualityJudge } : {}),
-    traceEnabled: overrides.traceEnabled ?? false,
+    getModelToolCapabilities: () => ({
+      strictSchemas: 'native',
+      inputExamples: 'native',
+      outputSchemas: 'validated_locally',
+      parallelCalls: true,
+      toolCallRepair: 'unsupported',
+      approvalHooks: 'application',
+    }),
+    searchChunks: searchChunksOverride ?? searchChunks,
+    agenticSearch: agenticSearchOverride ?? agenticSearch,
+    hallucinationGrader: hallucinationGraderOverride ?? (() => null),
+    answerCache: answerCacheOverride ?? answerCache,
+    ...(turnResultCache ? { turnResultCache } : {}),
+    answerCacheKey: answerCacheKeyOverride ?? answerCacheKey,
+    rateLimit: rateLimitOverride ?? rateLimit,
+    createTicket: createTicketOverride ?? createTicket,
+    userResolver: userResolverOverride ?? userResolver,
+    eventSink: eventSinkOverride ?? { record, flush },
+    historySink: historySinkOverride ?? { appendTurn },
+    ...(judgeScheduler ? { judgeScheduler } : {}),
+    ...(qualityJudge ? { qualityJudge } : {}),
+    traceEnabled: traceEnabled ?? false,
+    ...passthrough,
   };
   return {
     deps,
@@ -192,6 +256,9 @@ function makeDeps(overrides: DepsOverrides = {}) {
       record,
       flush,
       appendTurn,
+      setScript: script.setScript,
+      backends: script.seen,
+      lastBackend: script.last,
     },
   };
 }
@@ -210,26 +277,6 @@ const BASIC_BODY: { turnId: string; messages: ChatInputMessage[] } = {
   messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'How do I reset my password?' }] }],
 };
 
-function scriptedStream(): ReadableStream<{ type: string; [k: string]: unknown }> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue({ type: 'text-start', id: 'a' });
-      controller.enqueue({ type: 'text-delta', id: 'a', delta: 'Hello' });
-      controller.enqueue({ type: 'text-delta', id: 'a', delta: ' world' });
-      controller.enqueue({ type: 'text-end', id: 'a' });
-      controller.close();
-    },
-  });
-}
-
-function defaultStreamTextResult(overrides: { text?: string } = {}) {
-  return {
-    toUIMessageStream: () => scriptedStream() as Readonly<unknown> as never,
-    text: Promise.resolve(overrides.text ?? 'Hello world'),
-    usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
-  };
-}
-
 async function readParts(stream: ReadableStream): Promise<unknown[]> {
   const parts: unknown[] = [];
   const reader = (stream as ReadableStream<unknown>).getReader();
@@ -245,6 +292,17 @@ async function run(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurn
   return chatTurn(input, deps);
 }
 
+function searchStep(query: string, limit?: number): ScriptedStep {
+  return {
+    toolCalls: [
+      {
+        toolName: SEARCH_TOOL_NAME,
+        args: limit === undefined ? { query } : { query, limit },
+      },
+    ],
+  };
+}
+
 type TicketArgs = {
   question: string;
   attempted: string[];
@@ -252,12 +310,18 @@ type TicketArgs = {
   context?: string;
 };
 
-type CapturedTools = {
-  searchDocumentation?: {
-    execute: (args: { query: string; limit?: number }, options?: { toolCallId: string }) => Promise<unknown>;
-  };
-  createKnowledgeTicket?: { execute: (args: TicketArgs) => Promise<unknown> };
-};
+function ticketStep(args: TicketArgs): ScriptedStep {
+  return { toolCalls: [{ toolName: TICKET_TOOL_NAME, args }] };
+}
+
+function textStep(text: string): ScriptedStep {
+  return { text };
+}
+
+function transcript(backend: RecordedBackend | undefined): string {
+  if (!backend) return '';
+  return backend.calls.flatMap((call) => call.messages.map((message) => message.text)).join('\n');
+}
 
 const TICKET_BODY = {
   turnId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
@@ -273,54 +337,23 @@ function ticketArgs(overrides: Partial<TicketArgs> = {}): TicketArgs {
   };
 }
 
-function captureTools(overrides: { text?: string } = {}): {
-  captured: { current: CapturedTools | undefined };
-  closeLlm: () => void;
-} {
-  const captured: { current: CapturedTools | undefined } = { current: undefined };
-  let llmController: ReadableStreamDefaultController | null = null;
-  streamTextMock.mockImplementation((opts: { tools?: CapturedTools }) => {
-    captured.current = opts?.tools;
-    const stream = new ReadableStream({
-      start(controller) {
-        llmController = controller;
-      },
-    });
-    return {
-      toUIMessageStream: () => stream as unknown as never,
-      text: Promise.resolve(overrides.text ?? 'Hello world'),
-      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
-    };
-  });
-  return {
-    captured,
-    closeLlm: () => llmController?.close(),
-  };
-}
-
-beforeEach(async () => {
-  const actual = await vi.importActual<typeof import('ai')>('ai');
-  aiReal.tool = actual.tool;
-  aiReal.convertToModelMessages = actual.convertToModelMessages;
-  aiReal.createUIMessageStream = actual.createUIMessageStream;
-  streamTextMock.mockReset();
-  stepCountMock.mockClear();
-  streamTextMock.mockImplementation(() => defaultStreamTextResult());
-});
-
 describe('chatTurn', () => {
   it('returns a stream response for a valid request', async () => {
-    const { deps } = makeDeps();
+    const { deps, fakes } = makeDeps();
+    fakes.setScript(textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(fakes.backends).toHaveLength(1);
     const parts = await readParts(result.stream);
-    expect(parts.map((p) => (p as { type: string }).type)).toEqual([
-      'text-start',
-      'text-delta',
-      'text-delta',
-      'text-end',
+    expect(parts).toEqual([
+      { type: 'text-start', id: 'agent-3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
+      {
+        type: 'text-delta',
+        id: 'agent-3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+        delta: 'Hello world',
+      },
+      { type: 'text-end', id: 'agent-3f2504e0-4f89-41d3-9a0c-0305e82c3301' },
     ]);
   });
 
@@ -329,13 +362,14 @@ describe('chatTurn', () => {
     fakes.rateLimit.check.mockResolvedValueOnce({ ok: false, retryAfterMs: 5000 } as never);
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result).toEqual({ kind: 'rate-limited', retryAfterSec: '5' });
-    expect(streamTextMock).not.toHaveBeenCalled();
+    expect(fakes.backends).toHaveLength(0);
   });
 
   it('rejects an invalid request body', async () => {
-    const { deps } = makeDeps();
+    const { deps, fakes } = makeDeps();
     const result = await run({ request: makeRequest({}), userId: 'user_test' }, deps);
     expect(result.kind).toBe('invalid-request');
+    expect(fakes.backends).toHaveLength(0);
   });
 
   it('rejects a payload that is too large after parsing', async () => {
@@ -354,7 +388,7 @@ describe('chatTurn', () => {
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    expect(streamTextMock).not.toHaveBeenCalled();
+    expect(fakes.backends).toHaveLength(0);
     expect(result.meta.cacheHit).toBe(true);
     const parts = await readParts(result.stream);
     expect(parts).toEqual([
@@ -394,7 +428,7 @@ describe('chatTurn', () => {
       }),
     };
     const { deps, fakes } = makeDeps({ cfg, turnResultCache });
-    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'once' }));
+    fakes.setScript(textStep('once'));
 
     const first = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(first.kind).toBe('stream');
@@ -404,7 +438,7 @@ describe('chatTurn', () => {
     const second = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(second.kind).toBe('stream');
     if (second.kind !== 'stream') return;
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(fakes.backends).toHaveLength(1);
     expect(await readParts(second.stream)).toContainEqual({ type: 'text-delta', id: 'cached', delta: 'once' });
     expect(turnResultCache.set).toHaveBeenCalledWith(
       expect.stringContaining('rag:turn-result:v2:'),
@@ -459,13 +493,13 @@ describe('chatTurn', () => {
         : null),
       set: vi.fn(async () => undefined),
     };
-    const { deps } = makeDeps({ cfg, turnResultCache });
+    const { deps, fakes } = makeDeps({ cfg, turnResultCache });
 
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
 
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    expect(streamTextMock).not.toHaveBeenCalled();
+    expect(fakes.backends).toHaveLength(0);
     expect(await readParts(result.stream)).toContainEqual({
       type: 'text-delta',
       id: 'cached',
@@ -501,13 +535,13 @@ describe('chatTurn', () => {
       set: vi.fn(async () => undefined),
       coordination: { scope: 'distributed' as const, acquire },
     };
-    const { deps } = makeDeps({ cfg, turnResultCache });
+    const { deps, fakes } = makeDeps({ cfg, turnResultCache });
 
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
 
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    expect(streamTextMock).not.toHaveBeenCalled();
+    expect(fakes.backends).toHaveLength(0);
     expect(acquire).toHaveBeenCalledWith(stableKey, expect.any(Number));
     expect(await readParts(result.stream)).toContainEqual({
       type: 'text-delta',
@@ -540,7 +574,7 @@ describe('chatTurn', () => {
 
   it('writes a freshly generated grounded first-turn answer to the cache on miss', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
-    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'freshly generated answer' }));
+    fakes.setScript(textStep('freshly generated answer'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
@@ -572,7 +606,7 @@ describe('chatTurn', () => {
 
   it('does not cache a first-turn answer that has no citations (ungrounded)', async () => {
     const { deps, fakes } = makeDeps();
-    streamTextMock.mockImplementation(() => defaultStreamTextResult({ text: 'ungrounded answer' }));
+    fakes.setScript(textStep('ungrounded answer'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
@@ -608,7 +642,7 @@ describe('chatTurn', () => {
     ];
     expect(ctx.userId).toBe('user_fp');
     expect(ctx.embeddingModel).toBe('emb-3');
-    expect(ctx.chatModel).toBe('gpt-4o-mini');
+    expect(ctx.chatModel).toBe('test-chat');
     expect(ctx.fingerprint).toContain('"mode":"agentic"');
     expect(ctx.fingerprint).toContain('"retrievalMode":"agentic"');
     expect(ctx.fingerprint).toContain('"promptVersion":4');
@@ -617,18 +651,14 @@ describe('chatTurn', () => {
 
   it('does not cache an out-of-domain answer', async () => {
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () =>
-        ok(agenticOk({ chunks: [], resultQuery: null, outOfDomain: true, isEmpty: true, resultState: 'no_match' })),
-      ),
+      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
+      searchChunks: vi.fn(async () => ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) })),
       hallucinationGrader: () => async () => 'yes' as const,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(true);
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
@@ -640,29 +670,23 @@ describe('chatTurn', () => {
   it('does not turn a later empty search into an out-of-domain wall after evidence was found', async () => {
     const longChunk = { ...CHUNK, content: `${'x'.repeat(300)} supported detail` };
     const grader = vi.fn(async () => 'yes' as const);
+    const agenticSearch = vi.fn(async () =>
+      ok(agenticOk({ chunks: [], resultQuery: null, outOfDomain: true, isEmpty: true, resultState: 'no_match' })),
+    );
+    const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(async () =>
+      ok({ chunks: [longChunk], degradedBy: [], diagnostics: testDiagnostics(1) }),
+    );
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi
-        .fn()
-        .mockResolvedValueOnce(ok(agenticOk({ chunks: [longChunk] })))
-        .mockResolvedValueOnce(ok(agenticOk({ chunks: [], resultQuery: null, outOfDomain: true, isEmpty: true, resultState: 'no_match' }))),
+      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
+      searchChunks,
+      agenticSearch,
       hallucinationGrader: () => grader,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('follow-up detail query'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const firstOutput = await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    const secondOutput = await captured.current?.searchDocumentation?.execute({ query: 'q again' });
-    closeLlm();
     const parts = await readParts(result.stream);
-    expect(firstOutput).toMatchObject({
-      sets: [{ kind: 'results', results: [{ subquestionId: 'sq-1' }] }],
-      uniqueEvidenceAdded: 1,
-    });
-    expect(secondOutput).toMatchObject({
-      sets: [{ kind: 'no_match', reason: 'no_relevant_evidence', ticketEligible: true }],
-      uniqueEvidenceAdded: 0,
-    });
+    expect(agenticSearch).toHaveBeenCalledTimes(1);
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
     expect(grader).toHaveBeenCalledWith(expect.stringContaining('supported detail'), 'Hello world');
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
@@ -675,12 +699,10 @@ describe('chatTurn', () => {
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       hallucinationGrader: () => async () => 'no' as const,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
       data: { outOfDomain: boolean; offerTicket: boolean };
@@ -697,55 +719,45 @@ describe('chatTurn', () => {
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       hallucinationGrader: () => async () => 'yes' as const,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
   });
 
-  it('emits deduplicated citations after the llm stream ends', async () => {
+  it('emits deduplicated citations after the agent run ends', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    expect(captured.current?.searchDocumentation).toBeDefined();
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    await captured.current?.searchDocumentation?.execute({ query: 'q again' });
-    closeLlm();
     const parts = await readParts(result.stream);
     const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation') as Array<{
       data: { scores: RetrievedChunk['scores']; snippet: string };
     }>;
     expect(citations).toHaveLength(2);
     expect(citations.map((c) => c.data.scores.dense)).toEqual([0.91, 0.62]);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.citationCount).toBe(2);
     expect((event?.meta as Record<string, unknown>)?.documentIds).toEqual([10]);
   });
 
-  it('does not pass duplicate chunks to the model or citation stream', async () => {
-    const { deps, fakes } = makeDeps();
-    fakes.searchChunks.mockResolvedValue(ok({ chunks: [CHUNK], degradedBy: [] }) as never);
-    const { captured, closeLlm } = captureTools();
+  it('does not pass duplicate chunks to the citation stream', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    fakes.searchChunks.mockResolvedValue(ok({ chunks: [CHUNK], degradedBy: [], diagnostics: testDiagnostics(1) }) as never);
+    fakes.setScript(searchStep('policy details'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
-    expect(result.kind).toBe('stream');
-    if (result.kind !== 'stream') return;
-    const firstOutput = await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    const secondOutput = await captured.current?.searchDocumentation?.execute({ query: 'q again' });
-    closeLlm();
-    expect(firstOutput).toMatchObject({ sets: [{ kind: 'results', results: [{ id: 1 }] }] });
-    expect(secondOutput).toMatchObject({
-      sets: [{ kind: 'no_match', reason: 'filtered_duplicates', ticketEligible: false }],
-    });
+    if (result.kind !== 'stream') throw new Error('expected stream');
     const parts = await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(2);
     const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
     expect(citations).toHaveLength(1);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['results', 'degraded'] }));
   });
 
   it('passes prior stable identities so a later overlapping call can backfill unseen evidence', async () => {
@@ -755,21 +767,12 @@ describe('chatTurn', () => {
       const next = exclusionSnapshots.length === 1 ? CHUNK : CHUNK2;
       return ok({ chunks: [next], degradedBy: [], diagnostics: testDiagnostics(1) });
     });
-    const { deps } = makeDeps({ searchChunks });
-    const { captured, closeLlm } = captureTools();
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }), searchChunks });
+    fakes.setScript(searchStep('policy details'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-
-    const first = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    const second = await captured.current?.searchDocumentation?.execute({ query: 'policy details' });
-    closeLlm();
     const parts = await readParts(result.stream);
 
-    expect(first).toMatchObject({ sets: [{ kind: 'results', results: [{ id: 1 }] }] });
-    expect(second).toMatchObject({
-      sets: [{ kind: 'results', results: [{ id: 2 }] }],
-      uniqueEvidenceAdded: 1,
-    });
     expect(exclusionSnapshots).toEqual([[], ['document_chunk:10:0']]);
     expect(parts.filter((part) => (part as { type: string }).type === 'data-citation')).toHaveLength(2);
   });
@@ -780,30 +783,26 @@ describe('chatTurn', () => {
       chunks: [{ ...CHUNK, content: 'x'.repeat(2000) }],
       degradedBy: [],
     }) as never);
-    const { captured } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = (await captured.current?.searchDocumentation?.execute({ query: 'q' })) as {
-      sets: Array<{ kind: string; results?: Array<{ content: string }> }>;
-    };
-    const content = out.sets[0]?.results?.[0]?.content ?? '';
-    expect(content).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
-    expect(content).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
-    expect(content).toContain('untrusted documentation evidence');
-    expect(content).toContain('x'.repeat(800));
-    expect(content).toContain('\u2026');
-    expect(content).not.toContain('x'.repeat(801));
+    await readParts(result.stream);
+    const body = transcript(fakes.lastBackend());
+    expect(body).toContain('~~~ BEGIN UNTRUSTED EVIDENCE');
+    expect(body).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
+    expect(body).toContain('untrusted documentation evidence');
+    expect(body).toContain('x'.repeat(800));
+    expect(body).toContain('…');
+    expect(body).not.toContain('x'.repeat(801));
   });
 
   it('uses the agentic retrieval path with a rewritten query flag when effective mode is agentic', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic' }) });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('vague'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'vague' });
-    closeLlm();
     await readParts(result.stream);
     expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', {
       excludeChunkIdentities: expect.any(Set),
@@ -811,18 +810,20 @@ describe('chatTurn', () => {
       signal: expect.any(AbortSignal),
     });
     expect(fakes.searchChunks).not.toHaveBeenCalled();
+    const body = transcript(fakes.lastBackend());
+    expect(body).toContain('"requestedQuery":"vague"');
+    expect(body).toContain('"query":"rewritten"');
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect((event?.meta as Record<string, unknown>)?.rewritten).toBe(true);
     expect(event?.mode).toBe('agentic');
   });
 
   it('gates on effective mode, not function truthiness: normal mode uses plain search', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured } = captureTools();
+    fakes.setScript(searchStep('plain'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'plain' });
+    await readParts(result.stream);
     expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'plain', {
       excludeChunkIdentities: expect.any(Set),
       limit: 3,
@@ -833,24 +834,11 @@ describe('chatTurn', () => {
 
   it.each(['normal', 'agentic'] as const)('honors the requested result limit in %s mode', async (mode) => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: mode }) });
-    const { captured } = captureTools();
+    fakes.setScript(searchStep('policy', 1), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const output = await captured.current?.searchDocumentation?.execute(
-      { query: 'policy', limit: 1 },
-      { toolCallId: `tool-${mode}` },
-    );
-    expect(output).toMatchObject({
-      callId: `tool-${mode}`,
-      sets: [{
-        kind: 'results',
-        subquestionId: 'sq-1',
-        executedQueries: [{ queryId: 'q-1', query: mode === 'agentic' ? 'rewritten' : 'policy' }],
-        results: [{ executedQueryIds: ['q-1'], subquestionId: 'sq-1' }],
-      }],
-      uniqueEvidenceAdded: 1,
-    });
+    const parts = await readParts(result.stream);
     if (mode === 'agentic') {
       expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'policy', {
         excludeChunkIdentities: expect.any(Set),
@@ -864,6 +852,8 @@ describe('chatTurn', () => {
         signal: expect.any(AbortSignal),
       });
     }
+    const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
+    expect(citations).toHaveLength(1);
   });
 
   it('rejects a whitespace-only query at the tool input boundary', () => {
@@ -878,18 +868,18 @@ describe('chatTurn', () => {
     ['cancelled', false],
   ] as const)('returns a sanitized %s tool error without ticket eligibility', async (code, retryable) => {
     const failure = new SearchFailure(code, retryable, 'Safe search failure message.');
-    const { deps } = makeDeps({
+    const { deps, fakes } = makeDeps({
       searchChunks: vi.fn(async () => err(failure)),
     });
-    const { captured } = captureTools();
+    fakes.setScript(searchStep('policy'), textStep('done'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const output = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    expect(output).toMatchObject({
-      sets: [{ kind: 'error', code, retryable, userSafeMessage: 'Safe search failure message.' }],
-      uniqueEvidenceAdded: 0,
-    });
-    expect((output as { sets: Array<Record<string, unknown>> }).sets[0]).not.toHaveProperty('ticketEligible');
+    await readParts(result.stream);
+    const body = transcript(fakes.lastBackend());
+    expect(body).toContain(`"code":"${code}"`);
+    expect(body).toContain(`"retryable":${retryable ? 'true' : 'false'}`);
+    expect(body).toContain('Safe search failure message.');
+    expect(body).not.toContain('ticketEligible');
   });
 
   it('prevents a search infrastructure error from enabling a ticket side effect', async () => {
@@ -900,18 +890,21 @@ describe('chatTurn', () => {
         'The documentation search is temporarily unavailable. Please try again.',
       ))),
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      searchStep('policy'),
+      ticketStep(ticketArgs({ question: 'Search failed' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search failed' }));
-    closeLlm();
     await readParts(result.stream);
-    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
-    const event = fakes.record.mock.calls.at(-1)?.[0] as { outOfDomain?: boolean; meta?: Record<string, unknown> };
+    const backend = fakes.lastBackend();
+    expect(backend?.calls).toHaveLength(2);
+    expect(backend?.calls[0]?.activeTools).toEqual(['searchDocumentation']);
+    expect(backend?.calls[1]?.activeTools).toEqual(['searchDocumentation']);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as { outOfDomain?: boolean };
     expect(event.outOfDomain).toBe(false);
-    expect(event.meta?.resultState).toBe('error');
   });
 
   it('returns a partial degraded result and blocks a ticket side effect', async () => {
@@ -922,23 +915,21 @@ describe('chatTurn', () => {
         diagnostics: testDiagnostics(1),
       })),
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      searchStep('policy'),
+      ticketStep(ticketArgs({ question: 'Search was degraded' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const output = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search was degraded' }));
-    closeLlm();
     await readParts(result.stream);
-    expect(output).toMatchObject({
-      sets: [{
-        kind: 'results',
-        coverage: 'partial',
-        degradedBy: ['lexical_unavailable'],
-        results: [{ scores: { dense: 0.91, finalRank: 1, finalSignal: 'dense' } }],
-      }],
-    });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
+    const body = transcript(fakes.lastBackend());
+    expect(body).toContain('"coverage":"partial"');
+    expect(body).toContain('lexical_unavailable');
     expect(fakes.createTicket).not.toHaveBeenCalled();
+    const backend = fakes.lastBackend();
+    expect(backend?.calls).toHaveLength(2);
+    expect(backend?.calls[1]?.activeTools).toEqual(['searchDocumentation']);
   });
 
   it('uses agentic executed-query provenance in an error result', async () => {
@@ -949,62 +940,122 @@ describe('chatTurn', () => {
       undefined,
       ['rewritten policy query'],
     );
-    const { deps } = makeDeps({
+    const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       agenticSearch: vi.fn(async () => err(failure)),
     });
-    const { captured } = captureTools();
+    fakes.setScript(searchStep('policy'), textStep('done'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const output = await captured.current?.searchDocumentation?.execute({ query: 'policy' });
-    expect(output).toMatchObject({
-      sets: [{ kind: 'error', requestedQuery: 'policy', attemptedQueries: ['rewritten policy query'] }],
+    await readParts(result.stream);
+    expect(transcript(fakes.lastBackend())).toContain('rewritten policy query');
+  });
+
+  it('bounds a perpetual search script within the agentic step budget', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic', agentStepBudget: 8 }) });
+    fakes.agenticSearch.mockResolvedValue(ok(agenticOk({
+      chunks: [],
+      resultQuery: null,
+      outOfDomain: false,
+      isEmpty: true,
+      resultState: 'no_match',
+    })));
+    fakes.setScript(
+      ...Array.from({ length: 12 }, (_, index) => searchStep(`budget-probe-${index + 1}`)),
+    );
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    const backend = fakes.lastBackend();
+    expect(backend).toBeDefined();
+    expect(backend?.calls.length).toBeLessThanOrEqual(8);
+  });
+
+  it('bounds a perpetual search script within the fixed normal budget of 5 steps', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.searchChunks.mockResolvedValue(ok({
+      chunks: [],
+      degradedBy: [],
+      diagnostics: testDiagnostics(0),
+    }) as never);
+    fakes.setScript(
+      ...Array.from({ length: 12 }, (_, index) => searchStep(`budget-probe-${index + 1}`)),
+    );
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    const backend = fakes.lastBackend();
+    expect(backend).toBeDefined();
+    expect(backend?.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it('enforces the configured max model steps before tool ceilings bind', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic', agentStepBudget: 2 }) });
+    fakes.agenticSearch.mockResolvedValue(ok(agenticOk({
+      chunks: [],
+      resultQuery: null,
+      outOfDomain: false,
+      isEmpty: true,
+      resultState: 'no_match',
+    })));
+    fakes.setScript(
+      ...Array.from({ length: 6 }, (_, index) => searchStep(`ceiling-probe-${index + 1}`)),
+    );
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    expect(fakes.lastBackend()?.calls.length).toBe(2);
+  });
+
+  it('cancels the turn when the request aborts mid-generation', async () => {
+    const hangingSearch = vi.fn<ChatTurnDeps['searchChunks']>(async (_cfg, _query, opts) => {
+      void _cfg;
+      void _query;
+      await new Promise<never>((_resolve, reject) => {
+        void _resolve;
+        const signal = opts?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException('aborted', 'AbortError'));
+          return;
+        }
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+      return ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) });
     });
-  });
-
-  it('applies the agentic step budget when effective mode is agentic', async () => {
-    const { deps } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic', agentStepBudget: 8 }) });
-    await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
-    const opts = streamTextMock.mock.calls[0]?.[0] as { stopWhen: unknown };
-    expect(opts.stopWhen).toBe('budget:8');
-    expect(stepCountMock).toHaveBeenCalledWith(8);
-  });
-
-  it('applies the fixed budget of 5 steps in normal mode', async () => {
-    const { deps } = makeDeps();
-    await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
-    const opts = streamTextMock.mock.calls[0]?.[0] as { stopWhen: unknown };
-    expect(opts.stopWhen).toBe('budget:5');
-    expect(stepCountMock).toHaveBeenCalledWith(5);
-  });
-
-  it('propagates the request abort signal to the model call', async () => {
-    const { deps } = makeDeps();
+    const { deps, fakes } = makeDeps({ searchChunks: hangingSearch });
+    fakes.setScript(searchStep('q'), textStep('late answer'));
     const controller = new AbortController();
+    const body = {
+      ...BASIC_BODY,
+      conversationId: 'a0000000-0000-4000-8000-000000000001',
+    };
     const result = await run(
-      { request: makeRequest(BASIC_BODY, { signal: controller.signal }), userId: 'user_test' },
+      { request: makeRequest(body, { signal: controller.signal }), userId: 'user_test' },
       deps,
     );
     expect(result.kind).toBe('stream');
-    const opts = streamTextMock.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
-    expect(opts.abortSignal).toBeDefined();
+    if (result.kind !== 'stream') return;
+    await vi.waitFor(() => expect(hangingSearch).toHaveBeenCalled());
     controller.abort();
-    expect(opts.abortSignal.aborted).toBe(true);
+    await expect(readParts(result.stream)).rejects.toThrow('Chat stream interrupted');
+    expect(fakes.appendTurn).not.toHaveBeenCalled();
   });
 
   it('creates a ticket via the createKnowledgeTicket tool using the resolved user profile', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'Cannot reset my password.' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = (await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'Cannot reset my password.' }),
-    )) as { ticketId: string; status: string };
-    closeLlm();
     await readParts(result.stream);
-    expect(out.status).toBe('created');
-    expect(out.ticketId).toBe('TKT-abcdef12');
+    expect(transcript(fakes.lastBackend())).toContain('"status":"created"');
+    expect(transcript(fakes.lastBackend())).toContain('TKT-abcdef12');
     expect(fakes.createTicket).toHaveBeenCalledWith(
       {
         userId: 'user_test',
@@ -1016,19 +1067,17 @@ describe('chatTurn', () => {
     );
     expect(fakes.userResolver).toHaveBeenCalledTimes(1);
     expect(fakes.userResolver).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(event?.ticketCreated).toBe(true);
-    expect((event?.meta as Record<string, unknown>)?.ticketId).toBe('TKT-abcdef12');
   });
 
   it('does not cache a turn that opened a knowledge ticket', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'please open a ticket' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'please open a ticket' }));
-    closeLlm();
     await readParts(result.stream);
     expect(fakes.answerCache.set).not.toHaveBeenCalled();
   });
@@ -1036,30 +1085,30 @@ describe('chatTurn', () => {
   it('returns an error status when createTicket fails', async () => {
     const { deps, fakes } = makeDeps();
     fakes.createTicket.mockResolvedValueOnce(err(new ExternalServiceError('db down')) as never);
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(ticketStep(ticketArgs({ question: 'my issue' })), textStep('Hello world'));
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = (await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'my issue' }))) as { ticketId: null; status: string };
-    closeLlm();
-    await readParts(result.stream);
-    expect(out).toMatchObject({ ticketId: null, status: 'error' });
+    const parts = await readParts(result.stream);
+    expect(parts.some((p) => (p as { type: string }).type === 'text-delta')).toBe(true);
+    expect(fakes.createTicket).toHaveBeenCalledTimes(1);
+    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event?.ticketCreated).toBeFalsy();
   });
 
   it('blocks a second ticket creation in the same turn', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'first ticket' })),
+      ticketStep(ticketArgs({ question: 'second ticket' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const first = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'first ticket' }));
-    const second = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'second ticket' }));
-    closeLlm();
     await readParts(result.stream);
     expect(fakes.createTicket).toHaveBeenCalledTimes(1);
-    expect(first).toMatchObject({ ticketId: 'TKT-abcdef12', status: 'created' });
-    expect(second).toMatchObject({ ticketId: null, status: 'denied' });
-    expect((second as { message?: string }).message).toContain('already created');
+    expect(transcript(fakes.lastBackend())).toContain('TKT-abcdef12');
   });
 
   it('rate limits ticket creation to one per user per 5 minutes', async () => {
@@ -1069,16 +1118,16 @@ describe('chatTurn', () => {
         ? { ok: false, retryAfterMs: 120_000 }
         : { ok: true, remaining: 29, resetMs: 60_000 },
     );
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'blocked by rate limit' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'blocked by rate limit' }));
-    closeLlm();
     await readParts(result.stream);
     expect(fakes.createTicket).not.toHaveBeenCalled();
-    expect(out).toMatchObject({ ticketId: null, status: 'denied' });
-    expect((out as { message?: string }).message).toContain('rate limited');
+    expect(transcript(fakes.lastBackend())).toContain('rate limited');
     expect(fakes.rateLimit.check).toHaveBeenCalledWith(
       'ticket:user_test',
       { limit: 1, windowMs: 300_000 },
@@ -1089,59 +1138,56 @@ describe('chatTurn', () => {
   it('rejects ticket creation when the authenticated resolver has no usable profile', async () => {
     const { deps, fakes } = makeDeps();
     fakes.userResolver.mockResolvedValueOnce({ userId: 'user_test' });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(ticketStep(ticketArgs({ question: 'x' })), textStep('Hello world'));
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const out = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'x' }));
-    closeLlm();
     await readParts(result.stream);
-    expect(out).toMatchObject({ ticketId: null, status: 'error' });
     expect(fakes.createTicket).not.toHaveBeenCalled();
+    const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(event?.ticketCreated).toBeFalsy();
   });
 
   it('pre-fetches chunks into the system prompt on the first turn when enabled', async () => {
-    const { deps } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
-    await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
-    const opts = streamTextMock.mock.calls[0]?.[0] as { system: string };
-    expect(opts.system).toMatch(/Pre-fetched Reference Data/);
-    expect(opts.system).toContain('The dental plan covers two cleanings per year.');
-  });
-
-  it('reuses a normalized exact-match prefetch once and records that path', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
-    const { captured, closeLlm } = captureTools();
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const output = await captured.current?.searchDocumentation?.execute({ query: '  how do i reset my password?  ' });
-    closeLlm();
     await readParts(result.stream);
+    const system = fakes.lastBackend()?.calls[0]?.system ?? '';
+    expect(system).toMatch(/Pre-fetched Reference Data/);
+    expect(system).toContain('The dental plan covers two cleanings per year.');
+  });
+
+  it('reuses an overlapping prefetch query without a second retrieval and dedupes the prefetch evidence', async () => {
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    fakes.setScript(searchStep('  how do i reset my password?  '), textStep('Hello world'));
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    const parts = await readParts(result.stream);
     expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
-    expect(output).toMatchObject({ sets: [{ kind: 'results', coverage: 'sufficient', degradedBy: [] }] });
+    const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
+    expect(citations).toHaveLength(2);
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
     expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'exact_match_reused' }));
     expect(event.meta?.reformulationCount).toBe(0);
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['results'] }));
   });
 
-  it('returns a typed no-match when an exact-match prefetch found no evidence', async () => {
+  it('reuses an exact-match prefetch that found no evidence without a second retrieval', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
     fakes.searchChunks.mockResolvedValueOnce(ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) }));
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('How do I reset my password?'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const output = await captured.current?.searchDocumentation?.execute({
-      query: 'How do I reset my password?',
-    });
-    closeLlm();
-    await readParts(result.stream);
-    expect(output).toMatchObject({
-      sets: [{ kind: 'no_match', reason: 'no_relevant_evidence', ticketEligible: true }],
-      uniqueEvidenceAdded: 0,
-    });
+    const parts = await readParts(result.stream);
     expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
+    expect(citations).toHaveLength(0);
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'exact_match_reused' }));
+    expect(event.meta?.reformulationCount).toBe(0);
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['no_match'] }));
   });
 
@@ -1152,32 +1198,33 @@ describe('chatTurn', () => {
       degradedBy: ['lexical_unavailable'],
       diagnostics: testDiagnostics(1),
     }));
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      searchStep('How do I reset my password?'),
+      ticketStep(ticketArgs({ question: 'Search degraded' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    const output = await captured.current?.searchDocumentation?.execute({
-      query: 'How do I reset my password?',
-    });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search degraded' }));
-    closeLlm();
-    await readParts(result.stream);
-    expect(output).toMatchObject({
-      sets: [{ kind: 'results', coverage: 'partial', degradedBy: ['lexical_unavailable'] }],
-    });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
+    const parts = await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
+    expect(citations).toHaveLength(1);
     expect(fakes.createTicket).not.toHaveBeenCalled();
+    const backend = fakes.lastBackend();
+    expect(backend?.calls).toHaveLength(2);
+    for (const call of backend?.calls ?? []) {
+      expect(call.activeTools).not.toContain('createKnowledgeTicket');
+    }
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['degraded'] }));
   });
 
   it('performs a new search for a reformulated prefetch query and records it', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('password recovery policy'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    await captured.current?.searchDocumentation?.execute({ query: 'password recovery policy' });
-    closeLlm();
     await readParts(result.stream);
     expect(fakes.searchChunks).toHaveBeenCalledTimes(2);
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
@@ -1186,16 +1233,19 @@ describe('chatTurn', () => {
   });
 
   it('does not pre-fetch on a follow-up turn even when enabled', async () => {
-    const { deps } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ prefetchFirstTurn: true }) });
     const body = {
       messages: [
         { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hi!' }] },
         { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'and for grade 7?' }] },
       ],
     };
-    await run({ request: makeRequest(body), userId: 'user_test' }, deps);
-    const opts = streamTextMock.mock.calls[0]?.[0] as { system: string };
-    expect(opts.system).not.toMatch(/Pre-fetched Reference Data/);
+    const result = await run({ request: makeRequest(body), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    const system = fakes.lastBackend()?.calls[0]?.system ?? '';
+    expect(system).not.toMatch(/Pre-fetched Reference Data/);
   });
 
   it('preserves a prefetch failure and prevents it from enabling a ticket', async () => {
@@ -1205,22 +1255,28 @@ describe('chatTurn', () => {
       true,
       'The documentation search is temporarily unavailable. Please try again.',
     )));
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      searchStep('How do I reset my password?'),
+      ticketStep(ticketArgs({ question: 'Search failed' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const opts = streamTextMock.mock.calls[0]?.[0] as { system: string };
-    expect(opts.system).not.toMatch(/Pre-fetched Reference Data/);
-    const output = await captured.current?.searchDocumentation?.execute({
-      query: 'How do I reset my password?',
-    });
-    const ticket = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: 'Search failed' }));
-    closeLlm();
-    await readParts(result.stream);
-    expect(output).toMatchObject({ sets: [{ kind: 'error', code: 'retrieval_unavailable' }] });
-    expect(ticket).toMatchObject({ ticketId: null, status: 'denied' });
+    const parts = await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    const system = fakes.lastBackend()?.calls[0]?.system ?? '';
+    expect(system).not.toMatch(/Pre-fetched Reference Data/);
+    const citations = parts.filter((p) => (p as { type: string }).type === 'data-citation');
+    expect(citations).toHaveLength(0);
     expect(fakes.createTicket).not.toHaveBeenCalled();
+    const backend = fakes.lastBackend();
+    for (const call of backend?.calls ?? []) {
+      expect(call.activeTools).not.toContain('createKnowledgeTicket');
+    }
     const event = fakes.record.mock.calls.at(-1)?.[0] as { meta?: Record<string, unknown> };
+    expect(event.meta?.prefetch).toEqual(expect.objectContaining({ status: 'exact_match_reused' }));
+    expect(event.meta?.reformulationCount).toBe(0);
     expect(event.meta?.search).toEqual(expect.objectContaining({ resultStates: ['error'] }));
   });
 
@@ -1229,8 +1285,6 @@ describe('chatTurn', () => {
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const opts = streamTextMock.mock.calls[0]?.[0] as { stopWhen: unknown };
-    expect(opts.stopWhen).toBe('budget:8');
     await readParts(result.stream);
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(event?.mode).toBe('agentic');
@@ -1255,11 +1309,9 @@ describe('chat history persistence', () => {
 
   it('persists a completed turn through the history sink', async () => {
     const { deps, fakes } = makeDeps();
-    const scripted = captureTools({ text: 'grounded answer' });
+    fakes.setScript(searchStep('reset password'), textStep('grounded answer'));
     const result = await run({ request: makeRequest(HISTORY_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await scripted.captured.current!.searchDocumentation!.execute({ query: 'reset password' });
-    scripted.closeLlm();
     await readParts(result.stream);
     expect(fakes.appendTurn).toHaveBeenCalledTimes(1);
     const call = fakes.appendTurn.mock.calls[0]![0] as Record<string, unknown>;
@@ -1304,21 +1356,10 @@ describe('chat history persistence', () => {
     expect(fakes.appendTurn).not.toHaveBeenCalled();
   });
 
-  it('does not persist when the turn is aborted mid-stream', async () => {
+  it('does not persist when the turn is aborted before the model runs', async () => {
     const { deps, fakes } = makeDeps();
     const abortController = new AbortController();
     abortController.abort();
-    streamTextMock.mockImplementation(() => ({
-      toUIMessageStream: () =>
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'text-start', id: 'a' });
-            controller.error(new Error('This operation was aborted'));
-          },
-        }) as unknown as never,
-      text: Promise.resolve('partial answer'),
-      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
-    }));
     const resultOrError = await run(
       { request: makeRequest(HISTORY_BODY, { signal: abortController.signal }), userId: 'user_test' },
       deps,
@@ -1328,6 +1369,7 @@ describe('chat history persistence', () => {
     );
     expect(resultOrError.error).toMatchObject({ name: 'AbortError' });
     expect(fakes.appendTurn).not.toHaveBeenCalled();
+    expect(fakes.backends).toHaveLength(0);
     if (resultOrError.result === null || resultOrError.result.kind !== 'stream') return;
     await readParts(resultOrError.result.stream).catch(() => undefined);
   });
@@ -1384,17 +1426,13 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
 
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () =>
-        ok(agenticOk({ chunks: [], resultQuery: null, outOfDomain: true, isEmpty: true, resultState: 'no_match' })),
-      ),
+      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
+      searchChunks: vi.fn(async () => ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) })),
       hallucinationGrader: () => async () => 'yes' as const,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     const guardrail = parts.find((p) => (p as { type: string }).type === 'data-guardrail') as {
       data: Record<string, unknown>;
@@ -1410,11 +1448,9 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
       agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => grader,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     expect(grader).not.toHaveBeenCalled();
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
@@ -1430,27 +1466,23 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
           throw new Error('grade model down');
         }),
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
     expect(fakes.answerCache.set).toHaveBeenCalledTimes(1);
   });
 
   it('still offers a ticket on an explicit grounded:no', async () => {
-    const { deps } = makeDeps({
+    const fixtures = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
       agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => async () => 'no' as const,
     });
-    const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
+    fixtures.fakes.setScript(searchStep('q'), textStep('Hello world'));
+    const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, fixtures.deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     const parts = await readParts(result.stream);
     const guardrails = parts.filter((p) => (p as { type: string }).type === 'data-guardrail') as Array<{
       data: Record<string, unknown>;
@@ -1473,11 +1505,9 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
       judgeScheduler,
       qualityJudge,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     await readParts(result.stream);
     expect(judgeScheduler).toHaveBeenCalledTimes(1);
     expect(qualityJudge).toHaveBeenCalledTimes(1);
@@ -1494,30 +1524,28 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
   it('never enqueues the judge when the sample rate suppresses it or citations are absent', async () => {
     const qualityJudge = vi.fn(async () => undefined);
     const judgeScheduler = vi.fn();
-    const { deps } = makeDeps({
+    const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 0 }),
       agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => async () => 'yes' as const,
       judgeScheduler,
       qualityJudge,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     await readParts(result.stream);
     expect(judgeScheduler).not.toHaveBeenCalled();
 
-    const deps2 = makeDeps({
+    const fixtures = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1 }),
       agenticSearch: vi.fn(async () => ok(agenticOk())),
       judgeScheduler,
       qualityJudge,
-    }).deps;
-    const result2 = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps2);
+    });
+    fixtures.fakes.setScript(textStep('Hello world'));
+    const result2 = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, fixtures.deps);
     if (result2.kind !== 'stream') throw new Error('expected stream');
-    closeLlm();
     await readParts(result2.stream);
     expect(judgeScheduler).not.toHaveBeenCalled();
   });
@@ -1525,17 +1553,15 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
   it('skips the judge when captureQueryText is disabled (privacy)', async () => {
     const qualityJudge = vi.fn(async () => undefined);
     const judgeScheduler = vi.fn();
-    const { deps } = makeDeps({
+    const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1, captureQueryText: false }),
       agenticSearch: vi.fn(async () => ok(agenticOk())),
       judgeScheduler,
       qualityJudge,
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(searchStep('q'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await captured.current?.searchDocumentation?.execute({ query: 'q' });
-    closeLlm();
     await readParts(result.stream);
     expect(judgeScheduler).not.toHaveBeenCalled();
     expect(qualityJudge).not.toHaveBeenCalled();
@@ -1563,20 +1589,25 @@ describe('§T6 soft turn deadline', () => {
     }
   });
 
-  it('ends a slow generation with graceful guardrail + notice, skipping cache and judge', async () => {
-    streamTextMock.mockImplementation((opts: { abortSignal?: AbortSignal }) => ({
-      toUIMessageStream: () =>
-        new ReadableStream({
-          start(controller) {
-            opts?.abortSignal?.addEventListener('abort', () => controller.close(), { once: true });
-          },
-        }) as Readonly<unknown> as never,
-      text: Promise.resolve(''),
-      usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
-    }));
-    const { deps } = makeDeps();
-    deps.turnSoftDeadlineMs = 40;
-    deps.judgeMaxWallMs = 1;
+  it('ends a slow generation with graceful guardrail + notice, skipping cache and judge', { timeout: 30_000 }, async () => {
+    const hangingSearch = vi.fn<ChatTurnDeps['searchChunks']>(async (_cfg, _query, opts) => {
+      void _cfg;
+      void _query;
+      await new Promise<never>((_resolve, reject) => {
+        void _resolve;
+        const signal = opts?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException('aborted', 'AbortError'));
+          return;
+        }
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+      return ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) });
+    });
+    const fixtures = makeDeps({ searchChunks: hangingSearch });
+    fixtures.deps.turnSoftDeadlineMs = 16_000;
+    fixtures.deps.judgeMaxWallMs = 1;
+    fixtures.fakes.setScript(searchStep('slow question'), textStep('unreached'));
     const request = new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1584,7 +1615,7 @@ describe('§T6 soft turn deadline', () => {
         messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'slow question' }] }],
       }),
     });
-    const res = await run({ request, userId: 'user_test' }, deps);
+    const res = await run({ request, userId: 'user_test' }, fixtures.deps);
     expect(res.kind).toBe('stream');
     const parts = await readParts((res as { stream: ReadableStream }).stream);
 
@@ -1600,8 +1631,8 @@ describe('§T6 soft turn deadline', () => {
       ),
     ).toBe(true);
 
-    expect(deps.eventSink.record).toHaveBeenCalledTimes(1);
-    const event = (deps.eventSink.record as unknown as Mock).mock.calls[0]![0] as {
+    expect(fixtures.deps.eventSink.record).toHaveBeenCalledTimes(1);
+    const event = (fixtures.deps.eventSink.record as unknown as Mock).mock.calls[0]![0] as {
       meta: Record<string, unknown>;
       hallucinationBlocked: boolean;
     };
@@ -1611,7 +1642,7 @@ describe('§T6 soft turn deadline', () => {
     expect(event.meta).not.toHaveProperty('resultState');
     expect(event.meta).not.toHaveProperty('degraded');
     expect(event.hallucinationBlocked).toBe(false);
-    expect(deps.answerCache.set).not.toHaveBeenCalled();
+    expect(fixtures.fakes.answerCache.set).not.toHaveBeenCalled();
   });
 
   it('never arms the guardian on fast turns (no deadline parts)', async () => {
@@ -1635,110 +1666,103 @@ describe('§T6 soft turn deadline', () => {
   });
 });
 
-describe('chatTurn tool-catalog rollback (WP-3 B1/B3)', () => {
-  const FLAG = 'TOOL_CATALOG_ENABLED';
-  let previous: string | undefined;
-  beforeEach(() => {
-    previous = process.env[FLAG];
-  });
-  afterEach(() => {
-    if (previous === undefined) delete process.env[FLAG];
-    else process.env[FLAG] = previous;
-  });
-
-  it('uses the same new ticket contract and denied semantics with the catalog disabled', async () => {
-    process.env[FLAG] = '0';
+describe('chatTurn single catalog path (WP-3 intent, formerly rollback)', () => {
+  it('uses the same ticket contract and denied semantics on the single path', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'Single-path contract check' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const created = (await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'Rollback contract check' }),
-    )) as { ticketId: string; status: string };
-    expect(created.status).toBe('created');
+    await readParts(result.stream);
+    expect(transcript(fakes.lastBackend())).toContain('TKT-abcdef12');
     expect(fakes.createTicket).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user_test',
-        issue: expect.stringContaining('Question: Rollback contract check'),
+        issue: expect.stringContaining('Question: Single-path contract check'),
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-    const second = (await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'second' }),
-    )) as { ticketId: null; status: string; message?: string };
-    closeLlm();
-    await readParts(result.stream);
-    expect(second).toMatchObject({ ticketId: null, status: 'denied' });
-    expect(String(second.message)).toContain('already created');
   });
 
-  it('denies ticket writes without explicit intent even with the catalog disabled', async () => {
-    process.env[FLAG] = '0';
+  it('prevents a second ticket write in the same turn through tool visibility', async () => {
     const { deps, fakes } = makeDeps();
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      ticketStep(ticketArgs({ question: 'first ticket' })),
+      ticketStep(ticketArgs({ question: 'second ticket' })),
+      textStep('Hello world'),
+    );
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    expect(fakes.createTicket).toHaveBeenCalledTimes(1);
+    expect(fakes.lastBackend()?.calls.length).toBe(2);
+  });
+
+  it('denies ticket writes without explicit intent on the single path', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.setScript(ticketStep(ticketArgs({ question: 'no intent' })), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const denied = (await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'no intent' }),
-    )) as { ticketId: null; status: string };
-    closeLlm();
-    await readParts(result.stream);
-    expect(denied).toMatchObject({ ticketId: null, status: 'denied' });
+    const parts = await readParts(result.stream);
     expect(fakes.createTicket).not.toHaveBeenCalled();
+    const backend = fakes.lastBackend();
+    expect(backend?.calls).toHaveLength(1);
+    expect(backend?.calls[0]?.activeTools).toEqual(['searchDocumentation']);
+    expect(parts).toEqual([]);
   });
 
-  it('returns error (not throw) when identity lookup fails with the catalog disabled', async () => {
-    process.env[FLAG] = '0';
-    const { deps } = makeDeps({
+  it('returns error (not throw) when identity lookup fails on the single path', async () => {
+    const { deps, fakes } = makeDeps({
       userResolver: (async () => {
         throw new Error('identity down');
       }) as unknown as ChatTurnDeps['userResolver'],
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(ticketStep(ticketArgs({ question: 'identity failure' })), textStep('Hello world'));
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const output = (await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'identity failure' }),
-    )) as { ticketId: null; status: string };
-    closeLlm();
-    await readParts(result.stream);
-    expect(output).toMatchObject({ ticketId: null, status: 'error' });
-  });
-
-  it('latches a thrown rollback search failure and denies a later ticket write', async () => {
-    process.env[FLAG] = '0';
-    const { deps, fakes } = makeDeps({
-      searchChunks: async () => {
-        throw new Error('provider secret must not authorize a write');
-      },
-    });
-    const { captured, closeLlm } = captureTools();
-    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
-    expect(result.kind).toBe('stream');
-    if (result.kind !== 'stream') return;
-    await expect(captured.current?.searchDocumentation?.execute({ query: 'password reset' })).rejects.toThrow();
-    const output = await captured.current?.createKnowledgeTicket?.execute(
-      ticketArgs({ question: 'must remain denied' }),
-    );
-    closeLlm();
-    await readParts(result.stream);
-    expect(output).toMatchObject({ ticketId: null, status: 'denied' });
+    const parts = await readParts(result.stream);
+    expect(parts.some((p) => (p as { type: string }).type === 'text-delta')).toBe(true);
     expect(fakes.createTicket).not.toHaveBeenCalled();
   });
 
-  it('bounds an unsettled legacy ticket write and blocks a second attempt', async () => {
-    process.env[FLAG] = '0';
-    const { deps, fakes } = makeDeps();
+  it('sanitizes a thrown search failure and still denies a ticket after infrastructure failure', async () => {
+    const { deps, fakes } = makeDeps({
+      searchChunks: (async () => {
+        throw new Error('provider secret must not authorize a write');
+      }) as unknown as ChatTurnDeps['searchChunks'],
+    });
+    fakes.setScript(
+      searchStep('password reset'),
+      ticketStep(ticketArgs({ question: 'explicit escalation after a failed search' })),
+      textStep('Hello world'),
+    );
+    const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    await readParts(result.stream);
+    const body = transcript(fakes.lastBackend());
+    expect(body).toContain('"kind":"failed"');
+    expect(body).not.toContain('provider secret must not authorize a write');
+    expect(body).toContain('"status":"denied"');
+    expect(body).toContain('A knowledge ticket cannot be created from a failed documentation search.');
+    expect(fakes.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unsettled ticket write and blocks a second attempt', { timeout: 20_000 }, async () => {
+    const { fakes } = makeDeps();
     fakes.createTicket.mockImplementation(async () => new Promise<never>(() => undefined));
     const ledger = new TurnToolLedger();
     const groundingEvidence = createGroundingEvidence();
-    const metrics = {
+    const metrics: TurnMetrics = {
       retrieveMs: 0,
       prefetchMs: null,
-      prefetchStatus: 'disabled' as const,
+      prefetchStatus: 'disabled',
       firstTokenMs: null,
       hallucinationMs: null,
       hitCount: null,
@@ -1750,113 +1774,127 @@ describe('chatTurn tool-catalog rollback (WP-3 B1/B3)', () => {
       reformulationCount: 0,
     };
     const controller = new AbortController();
-    const tools = buildChatTools(deps, {
-      cfg: makeCfg(),
-      effectiveMode: 'normal',
-      userId: 'user_test',
-      request: makeRequest(TICKET_BODY),
-      groundingEvidence,
-      ledger,
-      metrics,
-      deadlineAt: Date.now() + 100,
-    });
-    const ticket = tools.createKnowledgeTicket as {
+    const ticketEnvelope = buildCatalogToolsForTurn(
+      {
+        searchChunks: fakes.searchChunks,
+        agenticSearch: fakes.agenticSearch,
+        createTicket: fakes.createTicket,
+        userResolver: (async () => ({ name: 'Real Person', email: 'real@example.com' })) as unknown as never,
+        rateLimit: fakes.rateLimit,
+        toolFactory: (opts) => opts,
+      },
+      {
+        cfg: makeCfg(),
+        effectiveMode: 'normal',
+        userId: 'user_test',
+        turnId: 'turn-without-id',
+        lastUserText: 'How do I reset my password? Please open a ticket.',
+        signal: controller.signal,
+        groundingEvidence,
+        metrics,
+        ledger,
+        budgetDeadlineInMs: 50_000,
+      },
+    ).tools[TICKET_TOOL_NAME];
+    const ticket = ticketEnvelope as unknown as {
       execute: (args: unknown, options?: unknown) => Promise<unknown>;
     };
     const pending = ticket.execute(ticketArgs({ question: 'unsettled write' }), {
-      toolCallId: 'legacy-write-1',
+      toolCallId: 'single-write-1',
+      callId: 'single-write-1',
+      signal: controller.signal,
       abortSignal: controller.signal,
     });
-    await vi.waitFor(() => expect(fakes.createTicket).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fakes.createTicket).toHaveBeenCalledTimes(1));
     controller.abort();
     await expect(pending).resolves.toMatchObject({
       ticketId: null,
       status: 'error',
       message: 'Ticket outcome is unknown; do not retry this request.',
     });
-    const retry = await ticket.execute(ticketArgs({ question: 'retry write' }), { toolCallId: 'legacy-write-2' });
+    const retry = await ticket.execute(ticketArgs({ question: 'retry write' }), {
+      toolCallId: 'single-write-2',
+      callId: 'single-write-2',
+      signal: controller.signal,
+      abortSignal: controller.signal,
+    });
     expect(retry).toMatchObject({ ticketId: null, status: 'denied' });
     expect(String((retry as { message?: string }).message)).toContain('unknown outcome');
-    expect(fakes.createTicket).toHaveBeenCalledOnce();
+    expect(fakes.createTicket).toHaveBeenCalledTimes(1);
     expect(ledger.calls.map((call) => call.kind)).toEqual(['outcome_unknown', 'denied']);
   });
 
-  it('preserves search result contracts with the catalog disabled', async () => {
-    process.env[FLAG] = '0';
-    const { deps } = makeDeps();
-    const { captured } = captureTools();
+  it('preserves search result contracts on the single path', async () => {
+    const { deps, fakes } = makeDeps();
+    fakes.setScript(searchStep('policy'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
-    const output = (await captured.current?.searchDocumentation?.execute({ query: 'policy' })) as {
-      sets: Array<{ kind: string; subquestionId: string }>;
-      callId: string;
-    };
-    expect(output.sets[0]?.kind).toBe('results');
-    expect(output.sets[0]?.subquestionId).toBe('sq-1');
-    expect(typeof output.callId).toBe('string');
+    await readParts(result.stream);
+    expect(fakes.searchChunks).toHaveBeenCalledTimes(1);
+    expect(transcript(fakes.lastBackend())).toContain('"kind":"results"');
+    expect(transcript(fakes.lastBackend())).toContain('"subquestionId":"sq-1"');
   });
 });
 
-describe('legacy rollback cancellation classification (P1-5)', () => {
-  const FLAG = 'TOOL_CATALOG_ENABLED';
-  let previous: string | undefined;
-  beforeEach(() => {
-    previous = process.env[FLAG];
-  });
-  afterEach(() => {
-    if (previous === undefined) delete process.env[FLAG];
-    else process.env[FLAG] = previous;
-  });
-
-  async function runLegacySearchFailure(impl: () => Promise<never>, ticketQuestion = 'must remain denied') {
-    process.env[FLAG] = '0';
+describe('single-path cancellation classification (P1-5)', () => {
+  async function runSearchFailure(impl: () => Promise<never>) {
     const { deps, fakes } = makeDeps({
       searchChunks: impl as unknown as ChatTurnDeps['searchChunks'],
     });
-    const { captured, closeLlm } = captureTools();
+    fakes.setScript(
+      searchStep('q'),
+      ticketStep(ticketArgs({ question: 'explicit escalation after a failed search' })),
+      textStep('Hello world'),
+    );
     const result = await run({ request: makeRequest(TICKET_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') throw new Error('expected stream');
-    await expect(captured.current?.searchDocumentation?.execute({ query: 'q' })).rejects.toThrow();
-    const denied = await captured.current?.createKnowledgeTicket?.execute(ticketArgs({ question: ticketQuestion }));
-    closeLlm();
     await readParts(result.stream);
-    return { denied, fakes };
+    return { transcript: transcript(fakes.lastBackend()), fakes };
   }
 
-  it('denies a later ticket after a dependency error', async () => {
-    const { denied, fakes } = await runLegacySearchFailure(async () => {
+  it('classifies a dependency error without leaking internals and still denies escalation after failure', async () => {
+    const { transcript: body, fakes } = await runSearchFailure(async () => {
       throw new Error('provider down');
     });
-    expect(denied).toMatchObject({ ticketId: null, status: 'denied' });
+    expect(body).toContain('"kind":"failed"');
+    expect(body).not.toContain('provider down');
+    expect(body).toContain('"status":"denied"');
+    expect(body).toContain('A knowledge ticket cannot be created from a failed documentation search.');
     expect(fakes.createTicket).not.toHaveBeenCalled();
   });
 
-  it('denies a later ticket after caller cancellation', async () => {
-    const { denied, fakes } = await runLegacySearchFailure(async () => {
+  it('classifies caller cancellation distinctly and still denies escalation after failure', async () => {
+    const { transcript: body, fakes } = await runSearchFailure(async () => {
       throw new DOMException('aborted', 'AbortError');
     });
-    expect(denied).toMatchObject({ ticketId: null, status: 'denied' });
+    expect(body).toContain('"kind":"cancelled"');
+    expect(body).not.toContain('aborted');
+    expect(body).toContain('"status":"denied"');
+    expect(body).toContain('A knowledge ticket cannot be created from a failed documentation search.');
     expect(fakes.createTicket).not.toHaveBeenCalled();
   });
 
-  it('denies a later ticket after a timeout', async () => {
-    const { denied, fakes } = await runLegacySearchFailure(async () => {
+  it('classifies a timeout without leaking internals and still denies escalation after failure', async () => {
+    const { transcript: body, fakes } = await runSearchFailure(async () => {
       throw new DOMException('timed out', 'TimeoutError');
     });
-    expect(denied).toMatchObject({ ticketId: null, status: 'denied' });
+    expect(body).toContain('"kind":"failed"');
+    expect(body).not.toContain('timed out');
+    expect(body).toContain('"status":"denied"');
+    expect(body).toContain('A knowledge ticket cannot be created from a failed documentation search.');
     expect(fakes.createTicket).not.toHaveBeenCalled();
   });
 
-  it('records cancelled, timeout, and error as distinct ledger kinds with one terminal outcome each', async () => {
+  it('records cancelled and error as distinct ledger kinds with one terminal outcome each', async () => {
     async function ledgerKindFor(throwable: unknown): Promise<string> {
       const ledger = new TurnToolLedger();
       const groundingEvidence = createGroundingEvidence();
-      const metrics = {
+      const metrics: TurnMetrics = {
         retrieveMs: 0,
         prefetchMs: null,
-        prefetchStatus: 'disabled' as const,
+        prefetchStatus: 'disabled',
         firstTokenMs: null,
         hallucinationMs: null,
         hitCount: null,
@@ -1867,25 +1905,44 @@ describe('legacy rollback cancellation classification (P1-5)', () => {
         rewritten: false,
         reformulationCount: 0,
       };
-      const request = makeRequest(BASIC_BODY);
-      const { deps } = makeDeps({
-        searchChunks: (async () => {
-          throw throwable;
-        }) as unknown as ChatTurnDeps['searchChunks'],
+      const controller = new AbortController();
+      const throwingSearch = vi.fn<ChatTurnDeps['searchChunks']>(async () => {
+        throw throwable;
       });
-      const tools = buildChatTools(deps, {
-        cfg: makeCfg(),
-        effectiveMode: 'normal',
-        userId: 'user_test',
-        request,
-        groundingEvidence,
-        ledger,
-        metrics,
-      });
-      const search = tools.searchDocumentation as {
+      const { fakes } = makeDeps();
+      const searchEnvelope = buildCatalogToolsForTurn(
+        {
+          searchChunks: throwingSearch,
+          agenticSearch: fakes.agenticSearch,
+          createTicket: fakes.createTicket,
+          userResolver: (async () => ({ name: 'Real Person', email: 'real@example.com' })) as unknown as never,
+          rateLimit: fakes.rateLimit,
+          toolFactory: (opts) => opts,
+        },
+        {
+          cfg: makeCfg(),
+          effectiveMode: 'normal',
+          userId: 'user_test',
+          turnId: 'turn-without-id',
+          lastUserText: 'How do I reset my password?',
+          signal: controller.signal,
+          groundingEvidence,
+          metrics,
+          ledger,
+          budgetDeadlineInMs: 50_000,
+        },
+      ).tools[SEARCH_TOOL_NAME];
+      const search = searchEnvelope as unknown as {
         execute: (args: unknown, opts?: unknown) => Promise<unknown>;
       };
-      await expect(search.execute({ query: 'q' }, { toolCallId: 'call-ledger-check' })).rejects.toThrow();
+      await expect(
+        search.execute({ query: 'q' }, {
+          toolCallId: 'call-ledger-check',
+          callId: 'call-ledger-check',
+          signal: controller.signal,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow();
       expect(ledger.calls).toHaveLength(1);
       expect(ledger.calls[0]?.callId).toBe('call-ledger-check');
       expect(ledger.calls[0]?.resultState).toBe('error');
@@ -1893,7 +1950,7 @@ describe('legacy rollback cancellation classification (P1-5)', () => {
     }
     expect(await ledgerKindFor(new Error('provider down'))).toBe('error');
     expect(await ledgerKindFor(new DOMException('aborted', 'AbortError'))).toBe('cancelled');
-    expect(await ledgerKindFor(new DOMException('timed out', 'TimeoutError'))).toBe('timeout');
+    expect(await ledgerKindFor(new DOMException('timed out', 'TimeoutError'))).toBe('error');
   });
 });
 

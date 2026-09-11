@@ -2,16 +2,36 @@ import { randomUUID } from 'node:crypto';
 import type { AppConfig } from '@app/domain/app-config';
 import type { AgenticResultState } from '@app/domain';
 import type { RetrievedChunk } from '../../rag/search/search-types';
+import type { SearchDegradation, SearchFailure } from '../../rag/search';
 import { addGroundingEvidence, type GroundingEvidence } from '../../chat/grounding-evidence';
-import type { TurnMetrics } from '../../chat/chat-turn/turn-types';
-import type { PrefetchedSearchOutcome } from '../../chat/chat-turn/chat-tools';
+import type { StructuredSearchOptions, TurnMetrics } from '../../chat/chat-turn/turn-types';
+import type { BuiltToolInstance, BuiltToolSet } from '../tool-catalog';
+
+export interface SearchUsage {
+  readonly plansUsed: number;
+  readonly physicalRetrievalsUsed: number;
+  readonly uniqueEvidenceAdded: number;
+  readonly evidenceTokensAdded: number;
+}
+
+export type PrefetchedSearchOutcome =
+  | {
+      kind: 'results';
+      query: string;
+      matches: RetrievedChunk[];
+      degradedBy: readonly SearchDegradation[];
+      usage?: SearchUsage | undefined;
+    }
+  | { kind: 'no_match'; query: string; usage?: SearchUsage | undefined }
+  | { kind: 'error'; query: string; failure: SearchFailure; usage?: SearchUsage | undefined };
 import type {
   AgentToolContext,
   AgentTraceWriter,
   GroundingEvidenceCollector,
   ToolExecuteCall,
+  ToolApprovalPolicy,
 } from '../tool-contract';
-import { createDefaultBudget } from '../tool-contract';
+import { createAgentRunBudget, type AgentRunBudget } from '../agent-budget';
 import {
   DEFAULT_TOOL_CAPABILITIES,
   type ModelToolCapabilities,
@@ -37,7 +57,6 @@ import { TurnToolLedger, type ToolCallOutcomeKind } from '../run-state';
 import { sanitizeUntrustedMetadata, serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
 import { ToolPolicyError } from '../tool-policy-pipeline';
 import { readPlannerFlags } from '../search/search-flags';
-import type { SearchBudgetLimits } from '../search/search-budget';
 import type { OrchestratorResult } from '../search/search-orchestrator';
 
 export interface CatalogCompatDeps {
@@ -46,16 +65,7 @@ export interface CatalogCompatDeps {
   readonly structuredSearch?: (
     cfg: AppConfig,
     query: string,
-    opts?: {
-      limit?: number | undefined;
-      signal?: AbortSignal | undefined;
-      excludeChunkIdentities?: ReadonlySet<string> | undefined;
-      budgets?: Partial<SearchBudgetLimits> | undefined;
-      deadlineAt?: number | undefined;
-      trace?: {
-        write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
-      } | undefined;
-    },
+    opts?: StructuredSearchOptions,
   ) => Promise<OrchestratorResult>;
   readonly createTicket: TicketWriter;
   readonly userResolver: TicketUserResolver;
@@ -66,7 +76,7 @@ export interface CatalogCompatDeps {
     outputSchema: unknown;
     inputExamples?: readonly { readonly input: unknown }[];
     strict?: boolean;
-    execute: (args: never, options: unknown) => Promise<unknown>;
+    execute: (args: unknown, options: unknown) => Promise<unknown>;
   }) => unknown;
   readonly capabilities?: ModelToolCapabilities | undefined;
 }
@@ -89,21 +99,51 @@ export interface CatalogCompatTurn {
   readonly ledger: TurnToolLedger;
   readonly prefetched?: PrefetchedSearchOutcome | undefined;
   readonly enabledTools?: ReadonlySet<string> | undefined;
-  /** Remaining turn budget in ms used to align the catalog budget deadline. */
+  /** The immutable budget created by chatTurn for this request. */
+  readonly budget?: AgentRunBudget | undefined;
+  /** Remaining turn budget in ms for direct compatibility callers without a budget. */
   readonly budgetDeadlineInMs?: number | undefined;
   /** Retrieval already spent before tools run (e.g. first-turn prefetch). */
+  readonly initialPlansUsed?: number | undefined;
   readonly initialPhysicalUsed?: number | undefined;
+  readonly initialUniqueEvidenceUsed?: number | undefined;
   readonly initialTokensUsed?: number | undefined;
   /** A request-owned context; never take approval credentials from model-visible arguments. */
   readonly internalToolContext?: CatalogCompatInternalToolContext | undefined;
+  readonly approvals?: ToolApprovalPolicy | undefined;
+}
+
+export interface CatalogCompatToolEnvelope {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: BuiltToolInstance['inputSchema'];
+  readonly outputSchema: BuiltToolInstance['outputSchema'];
+  readonly inputExamples?: readonly { readonly input: unknown }[] | undefined;
+  readonly strict?: boolean | undefined;
+  readonly internalToolContext?: CatalogCompatInternalToolContext | undefined;
+  execute(args: unknown, options?: CatalogCompatExecutionOptions): Promise<unknown>;
+}
+
+export interface CatalogCompatExecutionOptions {
+  readonly toolCallId?: string | undefined;
+  readonly abortSignal?: AbortSignal | undefined;
+  readonly approvalToken?: string | undefined;
+  readonly experimental_context?: CatalogCompatInternalToolContext | undefined;
 }
 
 export interface CatalogCompatResult {
   readonly tools: Record<string, unknown>;
+  readonly executionTools: Record<string, CatalogCompatToolEnvelope>;
   readonly trace: AgentTraceWriter;
   readonly ledger: TurnToolLedger;
   readonly catalogVersion: string;
   readonly guidanceBlock: string;
+  /**
+   * Inner catalog set (request-scoped tool instances with policy wrappers).
+   * The SupportAgent loop drives these instances; the `tools` record above
+   * carries the same instances in provider-tool envelopes for the model.
+   */
+  readonly built: BuiltToolSet;
 }
 
 interface ParsedToolExecutionOptions {
@@ -142,6 +182,8 @@ function validatedApprovalToken(
   if (internal === undefined) return undefined;
   if (internal.userId !== turn.userId || internal.turnId !== turn.turnId) return undefined;
   if (options?.experimental_context !== undefined && options.experimental_context !== internal) return undefined;
+  const requestedToken = options?.approvalToken;
+  if (typeof requestedToken === 'string' && requestedToken.trim() !== '') return requestedToken.trim();
   const token = internal.approvalToken;
   return typeof token === 'string' && token.trim() !== '' ? token.trim() : undefined;
 }
@@ -205,6 +247,10 @@ function toEvidenceCollector(groundingEvidence: GroundingEvidence): GroundingEvi
   };
 }
 
+/**
+ * @deprecated The chat path always uses SupportAgent. This legacy probe no
+ * longer selects an execution path.
+ */
 export function isCatalogEnabled(env: { get(key: string): string | undefined }): boolean {
   const raw = env.get('TOOL_CATALOG_ENABLED');
   if (raw === undefined) return true;
@@ -213,90 +259,182 @@ export function isCatalogEnabled(env: { get(key: string): string | undefined }):
   return true;
 }
 
+function readNonNegativeInt(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function physicalRetrievalsFromDiagnostics(value: unknown): number {
+  if (!isRecord(value)) return 0;
+  let count = 0;
+  for (const key of ['dense', 'lexical']) {
+    const stage = value[key];
+    if (!isRecord(stage)) continue;
+    const status = stage.status;
+    if (typeof status === 'string' && status !== 'not_run') count += 1;
+  }
+  return count;
+}
+
+function exhaustedOrchestratorResult(
+  query: string,
+  input: {
+    plansUsed: number;
+    physicalRetrievalsUsed: number;
+    uniqueEvidenceUsed: number;
+    evidenceTokensUsed: number;
+    maxSearchPlans: number;
+    maxPhysicalRetrievals: number;
+    maxUniqueEvidenceChunks: number;
+    maxEvidenceTokens: number;
+    reason: 'turn_token_limit' | 'physical_retrieval_ceiling';
+  },
+): OrchestratorResult {
+  return {
+    sets: [{
+      kind: 'error',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      attemptedQueries: [query],
+      code: 'retrieval_unavailable',
+      retryable: false,
+      userSafeMessage: 'The documentation search budget for this turn is exhausted.',
+    }],
+    stopReason: input.reason,
+    plansUsed: 0,
+    physicalRetrievalsUsed: 0,
+    isFallback: false,
+    fallbackReason: null,
+    budgets: {
+      plans: {
+        consumed: input.plansUsed,
+        limit: input.maxSearchPlans,
+        remaining: Math.max(0, input.maxSearchPlans - input.plansUsed),
+      },
+      physicalRetrievals: {
+        consumed: input.physicalRetrievalsUsed,
+        limit: input.maxPhysicalRetrievals,
+        remaining: Math.max(0, input.maxPhysicalRetrievals - input.physicalRetrievalsUsed),
+      },
+      uniqueChunks: {
+        consumed: input.uniqueEvidenceUsed,
+        limit: input.maxUniqueEvidenceChunks,
+        remaining: Math.max(0, input.maxUniqueEvidenceChunks - input.uniqueEvidenceUsed),
+      },
+      evidenceTokens: {
+        consumed: input.evidenceTokensUsed,
+        limit: input.maxEvidenceTokens,
+        remaining: Math.max(0, input.maxEvidenceTokens - input.evidenceTokensUsed),
+      },
+    },
+    uniqueEvidenceCount: 0,
+    evidenceTokens: 0,
+    truncatedBy: input.reason === 'turn_token_limit' ? ['turn_token_limit'] : [],
+    rawPackedBySubquestion: new Map(),
+    chunkProvenance: new Map(),
+  };
+}
+
 export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogCompatTurn): CatalogCompatResult {
   const trace = createInMemoryTraceWriter();
-  const approvals = createApprovalPolicyForTurn({
+  const approvals = turn.approvals ?? createApprovalPolicyForTurn({
     lastUserText: turn.lastUserText,
     userId: turn.userId,
     turnId: turn.turnId,
+  });
+  const budget = turn.budget ?? createAgentRunBudget({
+    nowMs: Date.now(),
+    finalizeReserveMs: 0,
+    ...(turn.budgetDeadlineInMs !== undefined ? { deadlineInMs: Math.max(0, turn.budgetDeadlineInMs) } : {}),
+    overrides: {
+      maxTotalToolCalls: 10,
+      maxCallsByTool: { [SEARCH_TOOL_NAME]: 4, [TICKET_TOOL_NAME]: 1 },
+    },
   });
   const context: AgentToolContext = {
     actor: { userId: turn.userId },
     turnId: turn.turnId,
     signal: turn.signal,
-    budget: createDefaultBudget({
-      maxTotalToolCalls: 10,
-      maxCallsByTool: { [SEARCH_TOOL_NAME]: 4, [TICKET_TOOL_NAME]: 1 },
-      ...(turn.budgetDeadlineInMs !== undefined ? { deadlineInMs: Math.max(0, turn.budgetDeadlineInMs) } : {}),
-    }),
+    budget,
     evidence: toEvidenceCollector(turn.groundingEvidence),
     trace,
     approvals,
   };
   const plannerFlags = readPlannerFlags({ get: (key: string) => process.env[key] });
-  const TURN_PHYSICAL_CEILING = 24;
-  const TURN_TOKEN_CEILING = 8000;
+  let sharedPlansUsed = Math.max(0, turn.initialPlansUsed ?? 0);
   let sharedPhysicalUsed = Math.max(0, turn.initialPhysicalUsed ?? 0);
+  let sharedUniqueEvidenceUsed = Math.max(0, turn.initialUniqueEvidenceUsed ?? 0);
   let sharedTokensUsed = Math.max(0, turn.initialTokensUsed ?? 0);
   let chain: Promise<void> = Promise.resolve();
-  const turnDeadlineAt = Date.now() + Math.max(0, turn.budgetDeadlineInMs ?? 50_000);
+  const workDeadlineAt = budget.deadlineAt - budget.finalizeReserveMs;
+  let lastStructuredResult: OrchestratorResult | null = null;
+  let lastSearchExecutionUsage: SearchUsage | null = null;
+  const structuredSearch = deps.structuredSearch;
   const searchDefinition = createSearchDocumentationTool({
-    searchChunks: deps.searchChunks,
-    agenticSearch: deps.agenticSearch,
+    searchChunks: async (cfg, query, opts) => {
+      const result = await deps.searchChunks(cfg, query, opts);
+      lastStructuredResult = null;
+      lastSearchExecutionUsage = {
+        plansUsed: 0,
+        physicalRetrievalsUsed: result.ok ? physicalRetrievalsFromDiagnostics(result.value.diagnostics) : 0,
+        uniqueEvidenceAdded: 0,
+        evidenceTokensAdded: 0,
+      };
+      return result;
+    },
+    agenticSearch: async (cfg, query, opts) => {
+      const result = await deps.agenticSearch(cfg, query, opts);
+      lastStructuredResult = null;
+      lastSearchExecutionUsage = {
+        plansUsed: 0,
+        physicalRetrievalsUsed: result.ok
+          ? result.value.retrievalDiagnostics.reduce((total, diagnostics) => total + physicalRetrievalsFromDiagnostics(diagnostics), 0)
+          : 0,
+        uniqueEvidenceAdded: 0,
+        evidenceTokensAdded: 0,
+      };
+      return result;
+    },
     cfg: turn.cfg,
     effectiveMode: turn.effectiveMode,
-    ...(deps.structuredSearch
+    ...(structuredSearch
       ? {
-          structuredSearch: async (query: string, opts?: {
-            limit?: number | undefined;
-            signal?: AbortSignal | undefined;
-            excludeChunkIdentities?: ReadonlySet<string> | undefined;
-            shadow?: boolean | undefined;
-            trace?: {
-              write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
-            } | undefined;
-          }): Promise<OrchestratorResult> => {
+          structuredSearch: async (query: string, opts?: StructuredSearchOptions): Promise<OrchestratorResult> => {
             const isShadow = opts?.shadow === true;
-            const remainingPhysical = TURN_PHYSICAL_CEILING - sharedPhysicalUsed;
-            const remainingTokens = TURN_TOKEN_CEILING - sharedTokensUsed;
-            if (remainingPhysical <= 0 || remainingTokens <= 0) {
-              return {
-                sets: [{
-                  kind: 'error',
-                  subquestionId: 'sq-1',
-                  requestedQuery: query,
-                  attemptedQueries: [query],
-                  code: 'retrieval_unavailable',
-                  retryable: false,
-                  userSafeMessage: 'The documentation search budget for this turn is exhausted.',
-                }],
-                stopReason: 'physical_retrieval_ceiling',
-                plansUsed: 0,
+            const remainingPhysical = budget.maxPhysicalRetrievals - sharedPhysicalUsed;
+            const remainingTokens = budget.maxEvidenceTokens - sharedTokensUsed;
+            const remainingPlans = budget.maxSearchPlans - sharedPlansUsed;
+            const remainingUnique = budget.maxUniqueEvidenceChunks - sharedUniqueEvidenceUsed;
+            if (!isShadow && (remainingPhysical <= 0 || remainingTokens <= 0 || remainingPlans <= 0 || remainingUnique <= 0)) {
+              return exhaustedOrchestratorResult(query, {
+                plansUsed: sharedPlansUsed,
                 physicalRetrievalsUsed: sharedPhysicalUsed,
-                isFallback: false,
-                fallbackReason: null,
-                budgets: {
-                  physicalRetrievals: { consumed: sharedPhysicalUsed, limit: TURN_PHYSICAL_CEILING, remaining: 0 },
-                  evidenceTokens: { consumed: sharedTokensUsed, limit: TURN_TOKEN_CEILING, remaining: Math.max(0, remainingTokens) },
-                },
-                uniqueEvidenceCount: 0,
-                evidenceTokens: 0,
-                truncatedBy: remainingTokens <= 0 ? ['turn_token_limit'] : [],
-                rawPackedBySubquestion: new Map(),
-                chunkProvenance: new Map(),
-              };
+                uniqueEvidenceUsed: sharedUniqueEvidenceUsed,
+                evidenceTokensUsed: sharedTokensUsed,
+                maxSearchPlans: budget.maxSearchPlans,
+                maxPhysicalRetrievals: budget.maxPhysicalRetrievals,
+                maxUniqueEvidenceChunks: budget.maxUniqueEvidenceChunks,
+                maxEvidenceTokens: budget.maxEvidenceTokens,
+                reason: remainingTokens <= 0 ? 'turn_token_limit' : 'physical_retrieval_ceiling',
+              });
             }
-            const result = await deps.structuredSearch?.(turn.cfg, query, {
+            const result = await structuredSearch(turn.cfg, query, {
               ...(opts ?? {}),
-              deadlineAt: turnDeadlineAt,
+              deadlineAt: Math.min(opts?.deadlineAt ?? workDeadlineAt, workDeadlineAt),
               ...(isShadow ? {} : {
                 budgets: {
+                  maxSearchPlans: remainingPlans,
                   maxPhysicalRetrievals: remainingPhysical,
+                  maxUniqueEvidenceChunks: remainingUnique,
                   maxEvidenceTokens: remainingTokens,
+                  maxResultsPerSearchCall: budget.maxResultsPerSearchCall,
+                  maxCandidatesPerModality: budget.maxCandidatesPerModality,
+                  maxResultsPerSubquestion: budget.maxResultsPerSubquestion,
+                  maxConcurrentRetrievals: budget.maxConcurrentRetrievals,
+                  minQuotaPerSubquestion: 1,
                 },
               }),
-            }) as OrchestratorResult;
-            if (!isShadow) sharedPhysicalUsed += result.physicalRetrievalsUsed;
+            });
+            if (!isShadow) lastStructuredResult = result;
             return result;
           },
           plannerEnabled: plannerFlags.plannerEnabled,
@@ -330,12 +468,35 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   const searchBuilt = built.tools.get(SEARCH_TOOL_NAME);
   const ticketBuilt = built.tools.get(TICKET_TOOL_NAME);
 
-  function recordSearchOutcome(output: unknown, durationMs: number, callId: string, requestedQuery?: string): void {
-    const parsed = output as {
-      sets?: Array<{ kind: string; requestedQuery?: string; attemptedQueries?: readonly string[]; executedQueries?: readonly { queryId: string; query: string }[]; degradedBy?: readonly unknown[]; reason?: string }>;
-      uniqueEvidenceAdded?: number;
+  function readSearchUsage(value: unknown): SearchUsage {
+    if (!isRecord(value)) {
+      return { plansUsed: 0, physicalRetrievalsUsed: 0, uniqueEvidenceAdded: 0, evidenceTokensAdded: 0 };
+    }
+    return {
+      plansUsed: readNonNegativeInt(value.plansUsed),
+      physicalRetrievalsUsed: readNonNegativeInt(value.physicalRetrievalsUsed),
+      uniqueEvidenceAdded: readNonNegativeInt(value.uniqueEvidenceAdded),
+      evidenceTokensAdded: readNonNegativeInt(value.evidenceTokensAdded),
     };
-    const sets = parsed.sets ?? [];
+  }
+
+  function addSearchUsage(output: unknown, usage: SearchUsage): Record<string, unknown> {
+    const record = isRecord(output) ? { ...output } : {};
+    return {
+      ...record,
+      plansUsed: usage.plansUsed,
+      physicalRetrievalsUsed: usage.physicalRetrievalsUsed,
+      uniqueEvidenceAdded: usage.uniqueEvidenceAdded,
+      evidenceTokensAdded: usage.evidenceTokensAdded,
+    };
+  }
+
+  function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: number, callId: string, requestedQuery?: string): void {
+    const parsed = isRecord(output) ? output : {};
+    const rawSets = parsed.sets;
+    const sets = Array.isArray(rawSets)
+      ? rawSets.filter((set): set is Readonly<Record<string, unknown>> => isRecord(set))
+      : [];
     const hasError = sets.some((set) => set.kind === 'error');
     const hasDegradedResults = sets.some((set) => set.kind === 'results' && Array.isArray(set.degradedBy) && set.degradedBy.length > 0);
     const hasResults = sets.some((set) => set.kind === 'results');
@@ -361,11 +522,18 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     }
     if (resultState) metrics.searchResultStates.push(resultState);
     try {
-      const first = parsed.sets?.[0];
-      const requested = requestedQuery ?? first?.requestedQuery;
+      const first = sets[0];
+      const requested = requestedQuery ?? (typeof first?.requestedQuery === 'string' ? first.requestedQuery : undefined);
       if (requested) {
-        const executed = first?.executedQueries?.map((entry) => entry.query) ?? [];
-        const attempted = first?.attemptedQueries ?? [];
+        const executedEntries = Array.isArray(first?.executedQueries)
+          ? first.executedQueries.filter(isRecord)
+          : [];
+        const executed = executedEntries
+          .map((entry) => typeof entry.query === 'string' ? entry.query : '')
+          .filter((query) => query !== '');
+        const attempted = Array.isArray(first?.attemptedQueries)
+          ? first.attemptedQueries.filter((query): query is string => typeof query === 'string')
+          : [];
         const candidates = executed.length > 0 ? executed : attempted;
         if (candidates.some((candidate) => candidate !== requested)) {
           metrics.rewritten = true;
@@ -382,7 +550,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
       resultState,
       ticketCreated: false,
       searchInfrastructureFailed,
-      uniqueEvidenceAdded: typeof parsed.uniqueEvidenceAdded === 'number' ? parsed.uniqueEvidenceAdded : 0,
+      uniqueEvidenceAdded: usage.uniqueEvidenceAdded,
       durationMs,
     });
   }
@@ -404,16 +572,11 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   }
 
   const tools: Record<string, unknown> = {};
+  const executionTools: Record<string, CatalogCompatToolEnvelope> = {};
   if (searchBuilt) {
-    tools[SEARCH_TOOL_NAME] = deps.toolFactory({
-      description: searchBuilt.description,
-      inputSchema: searchBuilt.inputSchema,
-      outputSchema: searchBuilt.outputSchema,
-      ...(searchBuilt.inputExamples !== undefined ? { inputExamples: searchBuilt.inputExamples } : {}),
-      ...(searchBuilt.strict !== undefined ? { strict: searchBuilt.strict } : {}),
-      execute: (async (args: never, options: unknown) => {
-        const execution = parseToolExecutionOptions(options, turn, SEARCH_TOOL_NAME);
-        const { callId } = execution;
+    const executeSearch = async (args: unknown, options: unknown): Promise<unknown> => {
+      const execution = parseToolExecutionOptions(options, turn, SEARCH_TOOL_NAME);
+      const { callId } = execution;
         const t0 = Date.now();
         const parsed = args as { query?: unknown; limit?: unknown };
         const query = typeof parsed.query === 'string' ? parsed.query : '';
@@ -450,6 +613,8 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
                 retryable: prefetch.failure.retryable,
                 userSafeMessage: prefetch.failure.userSafeMessage,
               }],
+              plansUsed: 0,
+              physicalRetrievalsUsed: 0,
               uniqueEvidenceAdded: 0,
               evidenceTokensAdded: 0,
               truncatedBy: [],
@@ -476,6 +641,8 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
                 reason: 'no_relevant_evidence',
                 ticketEligible: true,
               }],
+              plansUsed: 0,
+              physicalRetrievalsUsed: 0,
               uniqueEvidenceAdded: 0,
               evidenceTokensAdded: 0,
               truncatedBy: [],
@@ -520,6 +687,8 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
               hasMore: truncated,
               degradedBy: [...prefetch.degradedBy],
             }],
+            plansUsed: 0,
+            physicalRetrievalsUsed: 0,
             uniqueEvidenceAdded: 0,
             evidenceTokensAdded: 0,
             truncatedBy: truncated ? ['call_result_limit'] : [],
@@ -531,26 +700,33 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           metrics.reformulationCount += 1;
         }
         const started = Date.now();
-        const preAborted = execution.signal.aborted;
         try {
           const runSearch = chain.then(() => {
-            if (sharedPhysicalUsed >= TURN_PHYSICAL_CEILING || sharedTokensUsed >= TURN_TOKEN_CEILING) {
+            const remainingPhysical = budget.maxPhysicalRetrievals - sharedPhysicalUsed;
+            const remainingTokens = budget.maxEvidenceTokens - sharedTokensUsed;
+            const remainingUnique = budget.maxUniqueEvidenceChunks - sharedUniqueEvidenceUsed;
+            const plannerExhausted = plannerFlags.plannerEnabled && sharedPlansUsed >= budget.maxSearchPlans;
+            if (remainingPhysical <= 0 || remainingTokens <= 0 || remainingUnique <= 0 || plannerExhausted) {
               return {
                 callId,
                 sets: [{
-                  kind: 'error',
+                  kind: 'error' as const,
                   subquestionId: 'sq-1',
                   requestedQuery: query,
                   attemptedQueries: [query],
-                  code: 'retrieval_unavailable',
+                  code: 'retrieval_unavailable' as const,
                   retryable: false,
                   userSafeMessage: 'The documentation search budget for this turn is exhausted.',
                 }],
+                plansUsed: 0,
+                physicalRetrievalsUsed: 0,
                 uniqueEvidenceAdded: 0,
                 evidenceTokensAdded: 0,
-                truncatedBy: sharedTokensUsed >= TURN_TOKEN_CEILING ? ['turn_token_limit'] : [],
+                truncatedBy: remainingTokens <= 0 ? ['turn_token_limit' as const] : [],
               };
             }
+            lastStructuredResult = null;
+            lastSearchExecutionUsage = null;
             return searchBuilt.execute(
               { query, ...(limit !== undefined ? { limit } : {}) },
               toToolExecuteCall(execution),
@@ -558,52 +734,80 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           });
           chain = runSearch.then(() => undefined, () => undefined);
           const output = await runSearch;
-          recordSearchOutcome(output, Math.max(0, Date.now() - started), callId, query);
-          sharedTokensUsed += (output as { evidenceTokensAdded?: number }).evidenceTokensAdded ?? 0;
-          if (!(plannerFlags.plannerEnabled && deps.structuredSearch)) {
-            const firstSet = (output as { sets?: Array<{ executedQueries?: readonly unknown[]; attemptedQueries?: readonly unknown[] }> }).sets?.[0];
-            const queryCount = firstSet?.executedQueries?.length ?? firstSet?.attemptedQueries?.length ?? 1;
-            sharedPhysicalUsed += Math.max(1, queryCount) * (turn.cfg.hybridEnabled ? 2 : 1);
-          }
-          const withScores = output as { sets: Array<{ kind: string; results?: Array<{ scores?: RetrievedChunk['scores'] }> }> };
-          if (withScores.sets[0]?.kind === 'results') {
-            const items = withScores.sets[0]?.results ?? [];
-            for (const item of items) {
-              if (!item.scores) continue;
-              const scores = item.scores as unknown as Record<string, unknown>;
+          const baseUsage = lastStructuredResult === null
+            ? (lastSearchExecutionUsage ?? {
+                plansUsed: 0,
+                physicalRetrievalsUsed: 0,
+                uniqueEvidenceAdded: 0,
+                evidenceTokensAdded: 0,
+              })
+            : {
+                plansUsed: lastStructuredResult.plansUsed,
+                physicalRetrievalsUsed: lastStructuredResult.physicalRetrievalsUsed,
+                uniqueEvidenceAdded: 0,
+                evidenceTokensAdded: 0,
+              };
+          const rawUsage = readSearchUsage(output);
+          const usage: SearchUsage = {
+            plansUsed: baseUsage.plansUsed,
+            physicalRetrievalsUsed: baseUsage.physicalRetrievalsUsed,
+            uniqueEvidenceAdded: rawUsage.uniqueEvidenceAdded,
+            evidenceTokensAdded: rawUsage.evidenceTokensAdded,
+          };
+          const enrichedOutput = addSearchUsage(output, usage);
+          recordSearchOutcome(enrichedOutput, usage, Math.max(0, Date.now() - started), callId, query);
+          sharedPlansUsed += usage.plansUsed;
+          sharedPhysicalUsed += usage.physicalRetrievalsUsed;
+          sharedUniqueEvidenceUsed += usage.uniqueEvidenceAdded;
+          sharedTokensUsed += usage.evidenceTokensAdded;
+          const withScores = isRecord(enrichedOutput) ? enrichedOutput : {};
+          const rawOutputSets = withScores.sets;
+          const outputSets = Array.isArray(rawOutputSets)
+            ? rawOutputSets.filter((set): set is Readonly<Record<string, unknown>> => isRecord(set))
+            : [];
+          const firstSet = outputSets[0];
+          if (firstSet?.kind === 'results' && Array.isArray(firstSet.results)) {
+            for (const item of firstSet.results) {
+              if (!isRecord(item) || !isRecord(item.scores)) continue;
               for (const signal of ['dense', 'lexical', 'fusion', 'reranker'] as const) {
-                const value = scores[signal];
+                const value = item.scores[signal];
                 if (typeof value !== 'number' || !Number.isFinite(value)) continue;
                 const previous = metrics.maxRetrievalScores[signal];
                 if (previous === undefined || value > previous) metrics.maxRetrievalScores[signal] = value;
               }
             }
           }
-          const uniqueAdded = (output as { uniqueEvidenceAdded?: number }).uniqueEvidenceAdded ?? 0;
-          metrics.hitCount = (metrics.hitCount ?? 0) + uniqueAdded;
-          return output;
+          metrics.hitCount = (metrics.hitCount ?? 0) + usage.uniqueEvidenceAdded;
+          return enrichedOutput;
         } catch (error) {
-          const rejectionKind = (error as { kind?: unknown } | null)?.kind;
-          if (!preAborted && rejectionKind !== 'input_validation' && rejectionKind !== 'denied' && rejectionKind !== 'budget_exceeded') {
-            sharedPhysicalUsed += turn.cfg.hybridEnabled ? 2 : 1;
-          }
           recordSearchThrownOutcome(error, Math.max(0, Date.now() - started), callId, execution.signal);
           throw error;
         } finally {
           metrics.retrieveMs += Math.max(0, Date.now() - started);
         }
-      }) as never,
+    };
+    tools[SEARCH_TOOL_NAME] = deps.toolFactory({
+      description: searchBuilt.description,
+      inputSchema: searchBuilt.inputSchema,
+      outputSchema: searchBuilt.outputSchema,
+      ...(searchBuilt.inputExamples !== undefined ? { inputExamples: searchBuilt.inputExamples } : {}),
+      ...(searchBuilt.strict !== undefined ? { strict: searchBuilt.strict } : {}),
+      execute: executeSearch,
     });
+    executionTools[SEARCH_TOOL_NAME] = {
+      name: SEARCH_TOOL_NAME,
+      description: searchBuilt.description,
+      inputSchema: searchBuilt.inputSchema,
+      outputSchema: searchBuilt.outputSchema,
+      ...(searchBuilt.inputExamples !== undefined ? { inputExamples: searchBuilt.inputExamples } : {}),
+      ...(searchBuilt.strict !== undefined ? { strict: searchBuilt.strict } : {}),
+      ...(turn.internalToolContext !== undefined ? { internalToolContext: turn.internalToolContext } : {}),
+      execute: executeSearch,
+    };
   }
   if (ticketBuilt) {
-    tools[TICKET_TOOL_NAME] = deps.toolFactory({
-      description: ticketBuilt.description,
-      inputSchema: ticketBuilt.inputSchema,
-      outputSchema: ticketBuilt.outputSchema,
-      ...(ticketBuilt.inputExamples !== undefined ? { inputExamples: ticketBuilt.inputExamples } : {}),
-      ...(ticketBuilt.strict !== undefined ? { strict: ticketBuilt.strict } : {}),
-      execute: (async (args: never, options: unknown) => {
-        const execution = parseToolExecutionOptions(options, turn, TICKET_TOOL_NAME);
+    const executeTicket = async (args: unknown, options: unknown): Promise<unknown> => {
+      const execution = parseToolExecutionOptions(options, turn, TICKET_TOOL_NAME);
         const { callId } = execution;
         if (searchInfrastructureFailed) {
           ledger.record({
@@ -744,8 +948,25 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           });
           throw error;
         }
-      }) as never,
+    };
+    tools[TICKET_TOOL_NAME] = deps.toolFactory({
+      description: ticketBuilt.description,
+      inputSchema: ticketBuilt.inputSchema,
+      outputSchema: ticketBuilt.outputSchema,
+      ...(ticketBuilt.inputExamples !== undefined ? { inputExamples: ticketBuilt.inputExamples } : {}),
+      ...(ticketBuilt.strict !== undefined ? { strict: ticketBuilt.strict } : {}),
+      execute: executeTicket,
     });
+    executionTools[TICKET_TOOL_NAME] = {
+      name: TICKET_TOOL_NAME,
+      description: ticketBuilt.description,
+      inputSchema: ticketBuilt.inputSchema,
+      outputSchema: ticketBuilt.outputSchema,
+      ...(ticketBuilt.inputExamples !== undefined ? { inputExamples: ticketBuilt.inputExamples } : {}),
+      ...(ticketBuilt.strict !== undefined ? { strict: ticketBuilt.strict } : {}),
+      ...(turn.internalToolContext !== undefined ? { internalToolContext: turn.internalToolContext } : {}),
+      execute: executeTicket,
+    };
   }
-  return { tools, trace, ledger, catalogVersion: TOOL_CATALOG_VERSION, guidanceBlock: built.guidanceBlock };
+  return { tools, executionTools, trace, ledger, catalogVersion: TOOL_CATALOG_VERSION, guidanceBlock: built.guidanceBlock, built };
 }

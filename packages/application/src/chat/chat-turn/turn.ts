@@ -1,5 +1,5 @@
-import type { InferUIMessageChunk } from 'ai';
 import { randomUUID } from 'node:crypto';
+import type { ChatChunk, ChatStreamWriter } from '../chat-chunks';
 import {
   CHAT_RATE_LIMIT,
   logger,
@@ -34,6 +34,7 @@ import {
   type ChatInputMessage,
   type ChatUIMessage,
 } from '../message-types';
+import type { AgentModelMessage, AgentModelMessagePart } from '../../agent/model-backend';
 import {
   createCacheLease,
   waitForCachedAnswer,
@@ -47,18 +48,93 @@ import {
   TURN_FINGERPRINT_VERSION,
 } from '../turn-fingerprint';
 import { parseCachedAnswer, parseTurnResult, createCachedAnswerStream, TURN_RESULT_CACHE_TTL_SEC } from './cached-answer';
+
+/**
+ * Adapt one compat-wrapped tool envelope to the catalog instance shape the
+ * SupportAgent loop drives. Execution stays inside the request-scoped envelope.
+ */
+function toAgentToolInstance(name: string, envelope: CatalogCompatToolEnvelope): BuiltToolInstance {
+  return {
+    name,
+    description: envelope.description,
+    inputSchema: envelope.inputSchema,
+    outputSchema: envelope.outputSchema,
+    inputExamples: undefined,
+    strict: undefined,
+    execute: (rawInput, call) => envelope.execute(rawInput, {
+      toolCallId: call.callId,
+      abortSignal: call.signal,
+      ...(call.approvalToken !== undefined ? { approvalToken: call.approvalToken } : {}),
+      ...(envelope.internalToolContext !== undefined
+        ? { experimental_context: envelope.internalToolContext }
+        : {}),
+    }),
+    policyEffect: name === TICKET_TOOL_NAME ? 'write' : 'read',
+  };
+}
 import { persistHistory, readBoundedJson } from './turn-io';
-import { buildChatTools, type PrefetchedSearchOutcome } from './chat-tools';
-import { buildCatalogToolsForTurn, isCatalogEnabled } from '../../agent/compat/chat-tools-compat';
+import {
+  buildCatalogToolsForTurn,
+  type CatalogCompatToolEnvelope,
+  type PrefetchedSearchOutcome,
+} from '../../agent/compat/chat-tools-compat';
+import { createAgentRunBudget } from '../../agent/agent-budget';
+import { createSupportAgent, SEARCH_TOOL_NAME, TICKET_TOOL_NAME } from '../../agent/support-agent';
+import { DEFAULT_TOOL_CAPABILITIES } from '../../agent/model-tool-capabilities';
+import { readSupportAgentFlag } from '../../agent/agent-flags';
+import { createApprovalPolicyForTurn } from '../../agent/tool-approval';
+import type { BuiltToolInstance, ToolCatalog } from '../../agent/tool-catalog';
 import { readPlannerFlags } from '../../agent/search/search-flags';
 import { estimateChunkTokens } from '../../agent/search/evidence-packer';
 import { TurnToolLedger } from '../../agent/run-state';
-import { isExplicitTicketRequestText } from '../../agent/tool-approval';
 import { runHallucinationCheck, DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
 import type { ChatTurnDeps, ChatTurnRequest, ChatTurnResult, ChatModelUsageTelemetry, TurnMetrics } from './turn-types';
-import { parseGenerationUsage } from './turn-types';
 
-type UIMessage = ChatUIMessage;
+function physicalRetrievalsFromDiagnostics(value: unknown): number {
+  if (typeof value !== 'object' || value === null) return 0;
+  const record = value as Record<string, unknown>;
+  let count = 0;
+  for (const key of ['dense', 'lexical']) {
+    const stage = record[key];
+    if (typeof stage !== 'object' || stage === null) continue;
+    const status = (stage as Record<string, unknown>).status;
+    if (typeof status === 'string' && status !== 'not_run') count += 1;
+  }
+  return count;
+}
+
+function toAgentModelMessage(message: ChatUIMessage): AgentModelMessage {
+  const parts: AgentModelMessagePart[] = [];
+  for (const part of message.parts) {
+    if (part.type === 'text' || part.type === 'reasoning') {
+      parts.push({ type: 'text', text: part.text });
+    } else if (part.type === 'file') {
+      parts.push({
+        type: 'file',
+        url: part.url,
+        mediaType: part.mediaType,
+        ...(part.filename !== undefined ? { filename: part.filename } : {}),
+      });
+    }
+  }
+  return {
+    role: message.role,
+    text: parts.filter((part): part is Extract<AgentModelMessagePart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\\n'),
+    parts,
+  };
+}
+
+function successfulAgentStop(kind: string): boolean {
+  return kind === 'completed' || kind === 'no_tool_requested';
+}
+
+function fallbackTextForAgentStop(kind: string): string {
+  if (kind === 'approval_interrupted') return 'I need your confirmation before I can create a knowledge ticket.';
+  if (kind === 'model_content_filter') return 'I could not provide a response for this request.';
+  return 'I could not finish this response within the request limits. Please try again.';
+}
 
 export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
   const turnStart = input.startedAt ?? performance.now();
@@ -262,7 +338,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         });
         await releaseLeases();
         const stream = createCachedAnswerStream(
-          deps.ai,
+          deps.modelGateway,
           cachedAnswer,
           historyPersisted,
           parsed.data.conversationId,
@@ -341,8 +417,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         }),
       });
       await releaseLeases();
-      const stream = deps.ai.createUIMessageStream<UIMessage>({
-        execute: ({ writer }) => {
+      const stream = deps.modelGateway.createStream({
+        execute: (writer: ChatStreamWriter) => {
           writer.write({ type: 'text-start', id: 'cached' });
           writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
           writer.write({ type: 'text-end', id: 'cached' });
@@ -376,7 +452,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     resultState: null as AgenticResultState | null,
   };
   const toolLedger = new TurnToolLedger();
-  const catalogEnabled = isCatalogEnabled({ get: (key: string) => process.env[key] });
 
   // One turn wall-clock deadline shared by prefetch, tools, and the model
   // loop. Created before prefetch so prefetch cannot escape the turn
@@ -389,18 +464,26 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     softDeadlineMs = maxSoftDeadlineMs;
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
-  const elapsedBeforePrefetch = Date.now() - requestStartedAt;
-  // An already-expired budget must abort immediately; a one-second floor here
-  // would let the model run past the application's hard wall-time boundary.
-  const softDeadlineMsForPrefetch = Math.max(0, softDeadlineMs - elapsedBeforePrefetch);
+  const agentFlag = readSupportAgentFlag({ get: (key: string) => process.env[key] });
+  const agentBudget = createAgentRunBudget({
+    nowMs: requestStartedAt,
+    deadlineInMs: softDeadlineMs,
+    finalizeReserveMs: Math.min(15_000, softDeadlineMs),
+    overrides: {
+      maxModelSteps: effectiveMode === 'agentic' ? cfg.agentStepBudget : 5,
+      ...(agentFlag.enabled ? {} : { maxModelSteps: 1 }),
+    },
+  });
+  const workDeadlineAt = agentBudget.deadlineAt - agentBudget.finalizeReserveMs;
+  // The turn signal stops model and tool work before the finalization reserve;
+  // persistence, lease release, and stream closure keep the remaining budget.
+  const softDeadlineMsForPrefetch = Math.max(0, workDeadlineAt - Date.now());
   const softDeadlineSignal = AbortSignal.timeout(softDeadlineMsForPrefetch);
   let softDeadlineFired = false;
   softDeadlineSignal.addEventListener('abort', () => {
     softDeadlineFired = true;
   });
   const turnSignal = AbortSignal.any([request.signal, softDeadlineSignal]);
-  const turnDeadlineAt = requestStartedAt + softDeadlineMs;
-
   let prefetch: PrefetchedSearchOutcome | null = null;
   const plannerPrefetchBypass = deps.structuredSearch !== undefined &&
     readPlannerFlags({ get: (key: string) => process.env[key] }).plannerEnabled;
@@ -418,7 +501,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     metrics.prefetchStatus = 'performed';
     if (!prefetchResult.ok) {
       logger.error('First-turn pre-fetch failed', { code: prefetchResult.error.code });
-      prefetch = { kind: 'error', query: lastUserText, failure: prefetchResult.error };
+      prefetch = {
+        kind: 'error',
+        query: lastUserText,
+        failure: prefetchResult.error,
+        usage: { plansUsed: 0, physicalRetrievalsUsed: 0, uniqueEvidenceAdded: 0, evidenceTokensAdded: 0 },
+      };
       metrics.searchResultStates.push('error');
       prefetchedToolState.resultState = 'error';
     } else {
@@ -444,12 +532,27 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             true,
             'The documentation search is temporarily unavailable. Please try again.',
           ),
+          usage: {
+            plansUsed: 0,
+            physicalRetrievalsUsed: physicalRetrievalsFromDiagnostics(prefetchResult.value.diagnostics),
+            uniqueEvidenceAdded: 0,
+            evidenceTokensAdded: 0,
+          },
         };
         metrics.searchResultStates.push('error');
         prefetchedToolState.resultState = 'error';
         metrics.hitCount = 0;
       } else if (chunks.length === 0) {
-        prefetch = { kind: 'no_match', query: lastUserText };
+        prefetch = {
+          kind: 'no_match',
+          query: lastUserText,
+          usage: {
+            plansUsed: 0,
+            physicalRetrievalsUsed: physicalRetrievalsFromDiagnostics(prefetchResult.value.diagnostics),
+            uniqueEvidenceAdded: 0,
+            evidenceTokensAdded: 0,
+          },
+        };
         metrics.searchResultStates.push('no_match');
         prefetchedToolState.resultState = 'no_match';
         prefetchedToolState.outOfDomain = true;
@@ -457,7 +560,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         metrics.hitCount = 0;
       } else {
         const matches = addGroundingEvidence(groundingEvidence, chunks);
-        prefetch = { kind: 'results', query: lastUserText, matches, degradedBy };
+        prefetch = {
+          kind: 'results',
+          query: lastUserText,
+          matches,
+          degradedBy,
+          usage: {
+            plansUsed: 0,
+            physicalRetrievalsUsed: physicalRetrievalsFromDiagnostics(prefetchResult.value.diagnostics),
+            uniqueEvidenceAdded: matches.length,
+            evidenceTokensAdded: matches.reduce((total, chunk) => total + estimateChunkTokens(chunk), 0),
+          },
+        };
         const state: AgenticResultState = degradedBy.length > 0 ? 'degraded' : 'results';
         metrics.searchResultStates.push(state);
         prefetchedToolState.resultState = state;
@@ -471,16 +585,21 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     prefixVersion: SYSTEM_PROMPT_PREFIX_VERSION,
   });
 
-  const softDeadlineMsRemaining = Math.max(0, turnDeadlineAt - Date.now());
-
-  // Build module-owned guidance for both execution paths so the rollback path
-  // cannot drift back to a hand-maintained prompt contract.
+  // Single production path: module-owned tool guidance plus the project-owned
+  // SupportAgent loop. Rollback at the agent seam is configuration (see
+  // SUPPORT_AGENT_ENABLED), never a second policy implementation.
+  const structuredSearch = deps.structuredSearch;
+  const turnApprovals = createApprovalPolicyForTurn({
+    lastUserText,
+    userId,
+    turnId: turnId ?? 'turn-without-id',
+  });
   const catalogTools = buildCatalogToolsForTurn(
         {
           searchChunks: (cfgValue, query, opts) => deps.searchChunks(cfgValue, query, opts),
           agenticSearch: (cfgValue, query, opts) => deps.agenticSearch(cfgValue, query, opts),
-          ...(deps.structuredSearch
-            ? { structuredSearch: (cfgValue, query, opts) => deps.structuredSearch?.(cfgValue, query, opts) as never }
+          ...(structuredSearch
+            ? { structuredSearch: (cfgValue, query, opts) => structuredSearch(cfgValue, query, opts) }
             : {}),
           createTicket: (ticketInput, opts) => deps.createTicket(ticketInput, opts),
           userResolver: async (actorId: string, opts) => {
@@ -495,7 +614,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           },
           rateLimit: deps.rateLimit,
           capabilities: deps.getModelToolCapabilities?.(),
-          toolFactory: (toolOpts) => (deps.ai.tool as (opts: unknown) => unknown)(toolOpts as unknown) as unknown,
+          toolFactory: deps.modelGateway.defineTool,
         },
         {
           cfg,
@@ -507,67 +626,23 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           groundingEvidence,
           metrics,
           ledger: toolLedger,
-          budgetDeadlineInMs: softDeadlineMsRemaining,
+          budget: agentBudget,
+          approvals: turnApprovals,
+          internalToolContext: {
+            userId,
+            turnId: turnId ?? 'turn-without-id',
+          },
           ...(prefetch ? { prefetched: prefetch } : {}),
-          ...(prefetch !== null
+          ...(prefetch?.usage
             ? {
-                initialPhysicalUsed: cfg.hybridEnabled ? 2 : 1,
-                initialTokensUsed: prefetch.kind === 'results'
-                  ? prefetch.matches.reduce((total, chunk) => total + estimateChunkTokens(chunk), 0)
-                  : 0,
+                initialPlansUsed: prefetch.usage.plansUsed,
+                initialPhysicalUsed: prefetch.usage.physicalRetrievalsUsed,
+                initialUniqueEvidenceUsed: prefetch.usage.uniqueEvidenceAdded,
+                initialTokensUsed: prefetch.usage.evidenceTokensAdded,
               }
             : {}),
         },
       );
-
-  const legacyTools = catalogEnabled
-    ? null
-    : (() => {
-        const built = buildChatTools(deps, {
-          cfg,
-          effectiveMode,
-          userId,
-          request,
-          groundingEvidence,
-          ledger: toolLedger,
-          metrics,
-          signal: turnSignal,
-          deadlineAt: turnDeadlineAt,
-          ...(prefetch ? { prefetched: prefetch } : {}),
-        });
-        const ticket = (built as Record<string, {
-          execute: (args: unknown, options?: {
-            readonly abortSignal?: AbortSignal | undefined;
-            readonly toolCallId?: string | undefined;
-          }) => Promise<unknown>;
-        }>).createKnowledgeTicket;
-        if (ticket && typeof ticket.execute === 'function') {
-          const inner = ticket.execute.bind(ticket);
-          const explicit = isExplicitTicketRequestText(lastUserText);
-          ticket.execute = async (args: unknown, options?: {
-            readonly abortSignal?: AbortSignal | undefined;
-            readonly toolCallId?: string | undefined;
-          }) => {
-            if (!explicit) {
-              toolLedger.record({
-                toolName: 'createKnowledgeTicket',
-                callId: typeof options?.toolCallId === 'string' && options.toolCallId.trim() !== ''
-                  ? options.toolCallId.trim().slice(0, 100)
-                  : `legacy-ticket-${crypto.randomUUID()}`,
-                kind: 'denied',
-                resultState: null,
-                ticketCreated: false,
-                searchInfrastructureFailed: false,
-                uniqueEvidenceAdded: 0,
-                durationMs: 0,
-              });
-              return { ticketId: null, status: 'denied', message: 'Ticket creation requires explicit user intent or approval.' };
-            }
-            return inner(args, options);
-          };
-        }
-        return built;
-      })();
 
   const deriveToolState = () => {
     if (toolLedger.calls.length > 0) return toolLedger.derive();
@@ -583,42 +658,140 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const baseSystemPrompt = buildSystemPrompt(cfg, prefetch?.kind === 'results' ? prefetch.matches : null);
   const systemPrompt = `${baseSystemPrompt}\n\n${catalogTools.guidanceBlock}`;
 
-  const result = deps.ai.streamText({
+  // One request/agent deadline seam (F-15): a single immutable run budget
+  // carries the turn wall-clock deadline plus an explicit finalization
+  // reserve into the agent loop and every tool. The full route/dependency
+  // ledger remains WP-8 scope.
+  const agentEnabledTools = agentFlag.enabled
+    ? new Set([SEARCH_TOOL_NAME, TICKET_TOOL_NAME])
+    : new Set<string>();
+  // The agent loop drives the compat-wrapped tool envelopes (prefetch
+  // reuse, turn ceilings, ledger/metrics recording, ticket safety latches),
+  // never the raw catalog instances. Policy lives once in compat; the agent
+  // adds loop, budget, and stop policy only.
+  const agentCatalog: ToolCatalog = {
+    buildForRun: (input) => {
+      const tools = new Map<string, BuiltToolInstance>();
+      for (const [name, envelope] of Object.entries(catalogTools.executionTools)) {
+        if (!input.enabledTools.has(name)) continue;
+        tools.set(name, toAgentToolInstance(name, envelope));
+      }
+      return {
+        tools,
+        guidanceBlock: catalogTools.guidanceBlock,
+        catalogVersion: catalogTools.catalogVersion,
+        capabilities: input.capabilities,
+      };
+    },
+  };
+  // Model-visible tools are the same compat envelopes the loop executes,
+  // built with real schemas and no `execute` (input-only: the SDK returns
+  // calls without executing; execution stays in the catalog).
+  const modelTools: Record<string, unknown> = {};
+  for (const [name, envelope] of Object.entries(catalogTools.executionTools)) {
+    modelTools[name] = deps.modelGateway.defineTool({
+      description: envelope.description,
+      inputSchema: envelope.inputSchema,
+      outputSchema: envelope.outputSchema,
+      ...(envelope.inputExamples !== undefined ? { inputExamples: envelope.inputExamples } : {}),
+      ...(envelope.strict !== undefined ? { strict: envelope.strict } : {}),
+    });
+  }
+  const agentCapabilities = deps.getModelToolCapabilities?.() ?? { ...DEFAULT_TOOL_CAPABILITIES };
+  const agentBackend = deps.modelGateway.createModelBackend({
     model: deps.getChatModel(),
-    system: systemPrompt,
-    messages: await deps.ai.convertToModelMessages(compactModelHistory(messages), {
-      ignoreIncompleteToolCalls: true,
-    }),
-    stopWhen: deps.ai.stepCountIs(effectiveMode === 'agentic' ? cfg.agentStepBudget : 5),
-    abortSignal: turnSignal,
-    tools: (catalogEnabled ? catalogTools.tools : legacyTools) as unknown as NonNullable<Parameters<typeof deps.ai.streamText>[0]['tools']>,
+    tools: modelTools,
     ...(modelRequestOptions?.providerOptions !== undefined
       ? { providerOptions: modelRequestOptions.providerOptions }
       : {}),
+    ...(agentBudget.maxOutputTokens !== undefined ? { maxOutputTokens: agentBudget.maxOutputTokens } : {}),
   });
+  const compactedHistory = compactModelHistory(messages);
+  const currentMessageIndex = [...compactedHistory]
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find((entry) => entry.message.role === 'user')?.index ?? (compactedHistory.length - 1);
+  const currentMessage = compactedHistory[currentMessageIndex];
+  const agentHistory = compactedHistory
+    .filter((_, index) => index !== currentMessageIndex)
+    .map(toAgentModelMessage);
 
-  const llmStream = result.toUIMessageStream<UIMessage>({ originalMessages: messages });
-
-  const citationStream = new ReadableStream<InferUIMessageChunk<UIMessage>>({
+  const citationStream = new ReadableStream<ChatChunk>({
     start(controller) {
-      const reader = llmStream.getReader();
       (async () => {
         let partialText = '';
         let generationCompletedCleanly = false;
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (metrics.firstTokenMs === null && value.type.startsWith('text')) {
+          const agentRun = await createSupportAgent().run({
+            runId: turnId ?? randomUUID(),
+            actor: { userId },
+            turnId: turnId ?? 'turn-without-id',
+            userText: lastUserText,
+            history: agentHistory,
+            ...(currentMessage !== undefined ? { currentMessage: toAgentModelMessage(currentMessage) } : {}),
+            initialSearchUsage: prefetch?.usage,
+            systemPrompt,
+            signal: turnSignal,
+            budget: agentBudget,
+            capabilities: agentCapabilities,
+            enabledTools: agentEnabledTools,
+            catalog: agentCatalog,
+            toolContext: {
+              actor: { userId },
+              turnId: turnId ?? 'turn-without-id',
+              evidence: {
+                get seenChunkKeys(): ReadonlySet<string> {
+                  return groundingEvidence.seenChunkKeys;
+                },
+                addEvidence: (chunks) => addGroundingEvidence(
+                  groundingEvidence,
+                  [...chunks] as unknown as Parameters<typeof addGroundingEvidence>[1],
+                ),
+              },
+              trace: catalogTools.trace,
+              approvals: turnApprovals,
+            },
+            backend: agentBackend,
+          });
+          if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
+          generationCompletedCleanly = successfulAgentStop(agentRun.stopReason.kind) && !softDeadlineSignal.aborted;
+          const timedOut = softDeadlineFired && !request.signal.aborted && !generationCompletedCleanly;
+          const fallbackReason = timedOut
+            ? 'turn_deadline'
+            : generationCompletedCleanly
+              ? undefined
+              : `agent_stop:${agentRun.stopReason.kind}`;
+          const finalCandidateText = generationCompletedCleanly
+            ? agentRun.text
+            : timedOut
+              ? ''
+              : fallbackTextForAgentStop(agentRun.stopReason.kind);
+          if (finalCandidateText !== '') {
+            const textId = `agent-${turnId ?? 'text'}`;
+            controller.enqueue({ type: 'text-start', id: textId });
+            if (metrics.firstTokenMs === null) {
               metrics.firstTokenMs = Math.round(performance.now() - turnStart);
             }
-            if (value.type === 'text-delta') {
-              partialText += value.delta;
-            }
-            controller.enqueue(value);
+            controller.enqueue({ type: 'text-delta', id: textId, delta: finalCandidateText });
+            partialText = finalCandidateText;
+            controller.enqueue({ type: 'text-end', id: textId });
           }
-          generationCompletedCleanly = !softDeadlineSignal.aborted;
-          const timedOut = softDeadlineFired && !request.signal.aborted && !generationCompletedCleanly;
+          logger.info('chat.turn.agent_run', {
+            event: 'chat.turn.agent_run',
+            turnId,
+            stopReason: agentRun.stopReason.kind,
+            totalModelSteps: agentRun.summary.totalModelSteps,
+            totalToolCalls: agentRun.summary.totalToolCalls,
+            callsByTool: agentRun.summary.callsByTool,
+            searchCalls: agentRun.summary.searchCalls,
+            searchPlans: agentRun.summary.searchPlans,
+            physicalRetrievals: agentRun.summary.physicalRetrievals,
+            uniqueEvidenceChunks: agentRun.summary.uniqueEvidenceChunks,
+            evidenceTokens: agentRun.summary.evidenceTokens,
+            inputTokensUsed: agentRun.summary.inputTokensUsed,
+            outputTokensUsed: agentRun.summary.outputTokensUsed,
+            supportAgentEnabled: agentFlag.enabled,
+          });
           if (timedOut) {
             controller.enqueue({
               type: 'data-guardrail',
@@ -641,7 +814,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             });
           }
           const derivedToolState = deriveToolState();
-          if (catalogEnabled && derivedToolState.ticketCreated && derivedToolState.ticketId) {
+          if (derivedToolState.ticketCreated && derivedToolState.ticketId) {
               metrics.ticketCreated = true;
               metrics.ticketId = derivedToolState.ticketId;
           }
@@ -652,14 +825,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
           let hallucinationBlocked = false;
           let hallucinationTimedOut = false;
-          if (timedOut) {
+          if (timedOut || !generationCompletedCleanly) {
           } else if (hallucinationBudgetMs <= 0) {
             hallucinationTimedOut = true;
             logger.warn('hallucination check skipped: no wall-time budget', { remainingWallMs });
           } else {
             const hallucinationResult = await runHallucinationCheck({
               controller,
-              result,
+              result: { text: Promise.resolve(finalCandidateText) },
               groundingDocuments: groundingEvidence.documents,
               hallucinationGrader: deps.hallucinationGrader(cfg),
               enabled: cfg.hallucinationCheckEnabled,
@@ -675,6 +848,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             cacheKey &&
             cacheLease?.isOwned() === true &&
             !timedOut &&
+            generationCompletedCleanly &&
             shouldCache({
               citations: finalCitations,
               blocked: hallucinationBlocked,
@@ -685,7 +859,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             })
           ) {
             try {
-              const finalAnswer = await result.text;
+              const finalAnswer = finalCandidateText;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 if (deps.traceEnabled) {
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
@@ -712,10 +886,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             turnResultKey &&
             turnResultCoordinationKey &&
             turnLease?.isOwned() === true &&
-            !timedOut
+            !timedOut &&
+            generationCompletedCleanly
           ) {
             try {
-              const finalAnswer = await result.text;
+              const finalAnswer = finalCandidateText;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 const guardrail = hallucinationBlocked
                   ? {
@@ -762,21 +937,36 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               logger.warn('Turn result cache write skipped', { error: String(err) });
             }
           }
-          const usageCandidate = result.totalUsage !== undefined ? result.totalUsage : result.usage;
-          const usageValue = await Promise.resolve(usageCandidate).catch(() => null);
-          const parsedUsage = parseGenerationUsage(usageValue);
+          // Step-level usage is summed from the agent run's per-step
+          // telemetry (F-14). A null total means no step reported tokens;
+          // it is never presented as a zero-cost cache hit.
+          let tokensIn: number | null = null;
+          let tokensOut: number | null = null;
+          let cacheReadSum: number | null = null;
+          let cacheWriteSum: number | null = null;
+          let cacheReported = false;
+          for (const step of agentRun.stepTelemetry) {
+            if (step.inputTokens !== null) tokensIn = (tokensIn ?? 0) + step.inputTokens;
+            if (step.outputTokens !== null) tokensOut = (tokensOut ?? 0) + step.outputTokens;
+            if (step.cacheReadTokens !== null) cacheReadSum = (cacheReadSum ?? 0) + step.cacheReadTokens;
+            if (step.cacheWriteTokens !== null) cacheWriteSum = (cacheWriteSum ?? 0) + step.cacheWriteTokens;
+            if (step.cacheStatus === 'reported') cacheReported = true;
+          }
+          const parsedUsage = { inputTokens: tokensIn, outputTokens: tokensOut };
           let promptCacheUsage: ChatModelUsageTelemetry | null = null;
-          if (modelRequestOptions?.parseUsage) {
-            try {
-              const providerMetadata = result.providerMetadata === undefined
-                ? undefined
-                : await Promise.resolve(result.providerMetadata).catch(() => undefined);
-              promptCacheUsage = modelRequestOptions.parseUsage(usageValue, providerMetadata);
-            } catch (cause: unknown) {
-              logger.warn('chat.model.prompt_cache_usage_parse_failed', {
-                error: String(cause),
-              });
-            }
+          if (agentRun.stepTelemetry.length > 0) {
+            const status = cacheReported ? 'reported' as const : 'unsupported' as const;
+            promptCacheUsage = {
+              inputTokens: tokensIn,
+              inputTokensStatus: tokensIn !== null ? 'reported' : 'unsupported',
+              cachedInputTokens: cacheReadSum,
+              cachedInputTokensStatus: status,
+              cacheReadTokens: cacheReadSum,
+              cacheReadStatus: status,
+              cacheWriteTokens: cacheWriteSum,
+              cacheWriteStatus: status,
+              cacheHitRatio: null,
+            };
           }
           const inputTokens = promptCacheUsage?.inputTokens ?? parsedUsage.inputTokens;
           const outputTokens = parsedUsage.outputTokens;
@@ -802,7 +992,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               documentIds: citationDocumentIds(finalCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
-              resultState: timedOut ? undefined : derivedToolState.resultState ?? undefined,
+              resultState: !generationCompletedCleanly ? undefined : derivedToolState.resultState ?? undefined,
               searchResultStates: metrics.searchResultStates,
               retrievalScoreMaxima: metrics.maxRetrievalScores,
               modelTelemetry: modelRequestOptions?.telemetry,
@@ -824,7 +1014,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
               reformulationCount: metrics.reformulationCount,
               retrievalProvider: deps.getRetrievalProvider?.() ?? 'unknown',
               retrievalMode: persistedMode,
-              ...(timedOut ? { fallbackReason: 'turn_deadline' as const } : {}),
+              ...(fallbackReason !== undefined ? { fallbackReason } : {}),
             }),
           });
           logger.info('chat.turn.timings', {
@@ -841,7 +1031,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
             totalMs,
           });
-          const persistedText = await Promise.resolve(result.text).catch(() => partialText);
+          const persistedText = finalCandidateText !== '' ? finalCandidateText : partialText;
           const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -864,7 +1054,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                       notice: true,
                       message: TURN_DEADLINE_BANNER_MESSAGE,
                     }
-                  : null,
+                  : !generationCompletedCleanly
+                    ? {
+                        outOfDomain: false,
+                        offerTicket: false,
+                        notice: true,
+                        message: fallbackTextForAgentStop(agentRun.stopReason.kind),
+                      }
+                    : null,
             }),
           });
           if (historyPersisted && parsed.data.conversationId) {
@@ -878,13 +1075,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             deps.judgeScheduler &&
             deps.qualityJudge &&
             !timedOut &&
+            generationCompletedCleanly &&
             Math.random() < cfg.judgeSampleRate &&
             finalCitations.length > 0 &&
             !isEmpty &&
             performance.now() - turnStart <= judgeMaxWallMs &&
             cfg.captureQueryText !== false
           ) {
-            const answer = await Promise.resolve(result.text).catch(() => partialText);
+            const answer = finalCandidateText !== '' ? finalCandidateText : partialText;
             const snippets = finalCitations.map((c) => c.snippet);
             const qualityJudge = deps.qualityJudge;
             deps.judgeScheduler(() =>

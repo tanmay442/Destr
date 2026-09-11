@@ -1,4 +1,3 @@
-import type { UIMessage } from 'ai';
 import type { ValidatedChatFile } from './chat-file';
 import type { RetrievalScores } from '../rag/search';
 
@@ -33,10 +32,35 @@ export type ChatDataParts = {
   'conversation-persisted': { conversationId: string };
 };
 
-export type ChatUIMessage = UIMessage<
-  { citations?: ChatCitationData[] },
-  ChatDataParts
->;
+export type ChatTextPart = { readonly type: 'text'; readonly text: string };
+export type ChatReasoningPart = { readonly type: 'reasoning'; readonly text: string };
+export type ChatFilePart = {
+  readonly type: 'file';
+  readonly url: string;
+  readonly mediaType: string;
+  readonly filename?: string | undefined;
+};
+export type ChatCitationPart = { readonly type: 'data-citation'; readonly data: ChatCitationData };
+export type ChatGuardrailPart = { readonly type: 'data-guardrail'; readonly data: ChatGuardrailData };
+export type ChatPersistedPart = {
+  readonly type: 'data-conversation-persisted';
+  readonly data: { readonly conversationId: string };
+};
+
+export type ChatUIPart =
+  | ChatTextPart
+  | ChatReasoningPart
+  | ChatFilePart
+  | ChatCitationPart
+  | ChatGuardrailPart
+  | ChatPersistedPart;
+
+export interface ChatUIMessage {
+  readonly id: string;
+  readonly role: 'user' | 'assistant';
+  readonly metadata?: { readonly citations?: readonly ChatCitationData[] } | undefined;
+  readonly parts: readonly ChatUIPart[];
+}
 
 export type ChatInputPart =
   | { type: 'text'; text: string }
