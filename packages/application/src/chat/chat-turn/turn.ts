@@ -755,7 +755,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           });
           if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
           generationCompletedCleanly = successfulAgentStop(agentRun.stopReason.kind) && !softDeadlineSignal.aborted;
-          const timedOut = softDeadlineFired && !request.signal.aborted && !generationCompletedCleanly;
+          const agentDeadlineExceeded = agentRun.stopReason.kind === 'deadline_exceeded';
+          const timedOut =
+            (softDeadlineFired || agentDeadlineExceeded) &&
+            !request.signal.aborted &&
+            !generationCompletedCleanly;
           const fallbackReason = timedOut
             ? 'turn_deadline'
             : generationCompletedCleanly

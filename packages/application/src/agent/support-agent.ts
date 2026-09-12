@@ -376,6 +376,12 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       );
     }
     if (!canStartNewModelStep(input.budget, stepNumber - 1, now)) {
+      if (now >= input.budget.deadlineAt - input.budget.finalizeReserveMs) {
+        return finish(
+          { kind: 'deadline_exceeded', nowMs: now, deadlineAt: input.budget.deadlineAt },
+          snapshot(),
+        );
+      }
       return finish(
         { kind: 'max_model_steps', used: stepNumber - 1, limit: input.budget.maxModelSteps },
         snapshot(),
@@ -756,6 +762,12 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
     }
     const afterRound = Date.now();
     if (afterRound > input.budget.deadlineAt) {
+      return finish(
+        { kind: 'deadline_exceeded', nowMs: afterRound, deadlineAt: input.budget.deadlineAt },
+        snapshot(),
+      );
+    }
+    if (afterRound >= input.budget.deadlineAt - input.budget.finalizeReserveMs) {
       return finish(
         { kind: 'deadline_exceeded', nowMs: afterRound, deadlineAt: input.budget.deadlineAt },
         snapshot(),
