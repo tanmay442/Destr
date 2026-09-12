@@ -1,5 +1,6 @@
-import { TOOL_CONTENT_CAP } from '@app/domain';
 import { stableChunkIdentities, type RetrievedChunk } from '../rag/search';
+import { serializeUntrustedChunk } from '../agent/prompt/serialize-untrusted-result';
+import { evidenceStableKey, type StructuredEvidenceItem } from '../agent/grounding/grounding-decision';
 import { emitCitations, type EmittedCitation } from './emit-citations';
 
 const MAX_UNIQUE_GROUNDING_CHUNKS = 30;
@@ -8,6 +9,7 @@ export interface GroundingEvidence {
   citations: EmittedCitation[];
   documents: string[];
   seenChunkKeys: Set<string>;
+  structured: StructuredEvidenceItem[];
 }
 
 export function createGroundingEvidence(): GroundingEvidence {
@@ -15,31 +17,60 @@ export function createGroundingEvidence(): GroundingEvidence {
     citations: [],
     documents: [],
     seenChunkKeys: new Set<string>(),
+    structured: [],
   };
 }
 
-function capContent(content: string): string {
-  if (content.length <= TOOL_CONTENT_CAP) return content;
-  let end = TOOL_CONTENT_CAP;
-  const code = content.charCodeAt(end - 1);
-  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
-  return content.slice(0, end) + '\u2026';
+export interface SearchProvenanceAttachment {
+  readonly callId: string;
+  readonly subquestionId: string;
+  readonly queryIds: readonly string[];
+  readonly items: readonly {
+    readonly chunkUid?: string | undefined;
+    readonly documentId: number;
+    readonly chunkIndex: number;
+  }[];
 }
 
-function escapeReferenceText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function mergeUnique(existing: readonly string[], additions: readonly string[]): string[] {
+  const merged = [...existing];
+  for (const value of additions) {
+    if (!merged.includes(value)) merged.push(value);
+  }
+  return merged;
 }
 
-export function formatGroundingReference(chunk: RetrievedChunk): string {
-  const safeSource = escapeReferenceText(chunk.source ?? 'unknown').replace(/\n|\r/g, ' ');
-  return `<reference source="${safeSource}">\n${escapeReferenceText(capContent(chunk.content))}\n</reference>`;
+export function attachSearchProvenance(
+  evidence: GroundingEvidence,
+  attachment: SearchProvenanceAttachment,
+): void {
+  if (attachment.callId.trim() === '' || attachment.subquestionId.trim() === '') return;
+  for (const item of attachment.items) {
+    const key = evidenceStableKey(item);
+    const structuredIndex = evidence.structured.findIndex((entry) => evidenceStableKey(entry) === key);
+    if (structuredIndex >= 0) {
+      const entry = evidence.structured[structuredIndex];
+      if (entry === undefined) continue;
+      evidence.structured[structuredIndex] = {
+        ...entry,
+        subquestionIds: mergeUnique(entry.subquestionIds, [attachment.subquestionId]),
+        callIds: mergeUnique(entry.callIds, [attachment.callId]),
+        queryIds: mergeUnique(entry.queryIds, attachment.queryIds),
+      };
+    }
+    for (let index = 0; index < evidence.citations.length; index += 1) {
+      const citation = evidence.citations[index];
+      if (citation === undefined) continue;
+      if (evidenceStableKey(citation) !== key) continue;
+      evidence.citations[index] = {
+        ...citation,
+        ...(citation.callId !== undefined ? {} : { callId: attachment.callId }),
+        ...(citation.subquestionId !== undefined ? {} : { subquestionId: attachment.subquestionId }),
+        queryIds: mergeUnique(citation.queryIds ?? [], attachment.queryIds),
+      };
+    }
+  }
 }
-
 export function addGroundingEvidence(
   evidence: GroundingEvidence,
   chunks: RetrievedChunk[],
@@ -52,8 +83,24 @@ export function addGroundingEvidence(
     if (evidence.citations.length + citationSources.length > MAX_UNIQUE_GROUNDING_CHUNKS) break;
     for (const key of keys) evidence.seenChunkKeys.add(key);
     uniqueChunks.push(chunk);
-    evidence.documents.push(formatGroundingReference(chunk));
+    // All model-visible document formatting goes through the centralized
+    // untrusted-result seam; this module must not build its own wrapper.
+    evidence.documents.push(serializeUntrustedChunk({ content: chunk.content, source: chunk.source }));
     evidence.citations.push(...emitCitations([...citationSources]));
+    // Tool-call provenance (callId/subquestionId/queryIds) is attached
+    // after execution via attachSearchProvenance: RetrievedChunk carries no
+    // provenance fields, so new entries start empty here.
+    // One entry per unique chunk; already-seen chunks skip entirely.
+    evidence.structured.push({
+      ...(chunk.chunkUid ? { chunkUid: chunk.chunkUid } : {}),
+      documentId: chunk.documentId,
+      chunkIndex: chunk.chunkIndex,
+      subquestionIds: [],
+      callIds: [],
+      queryIds: [],
+      content: chunk.content,
+      source: chunk.source,
+    });
   }
   return uniqueChunks;
 }

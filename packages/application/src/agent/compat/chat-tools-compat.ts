@@ -3,7 +3,7 @@ import type { AppConfig } from '@app/domain/app-config';
 import type { AgenticResultState } from '@app/domain';
 import type { RetrievedChunk } from '../../rag/search/search-types';
 import type { SearchDegradation, SearchFailure } from '../../rag/search';
-import { addGroundingEvidence, type GroundingEvidence } from '../../chat/grounding-evidence';
+import { addGroundingEvidence, attachSearchProvenance, type GroundingEvidence } from '../../chat/grounding-evidence';
 import type { StructuredSearchOptions, TurnMetrics } from '../../chat/chat-turn/turn-types';
 import type { BuiltToolInstance, BuiltToolSet } from '../tool-catalog';
 
@@ -491,7 +491,37 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     };
   }
 
-  function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: number, callId: string, requestedQuery?: string): void {
+  function attachProvenanceFromOutput(groundingEvidence: GroundingEvidence, callId: string, output: unknown): void {
+  if (!isRecord(output)) return;
+  const sets = Array.isArray(output.sets) ? output.sets.filter(isRecord) : [];
+  for (const set of sets) {
+    if (set.kind !== 'results') continue;
+    if (typeof set.subquestionId !== 'string' || set.subquestionId.trim() === '') continue;
+    const executed = Array.isArray(set.executedQueries) ? set.executedQueries.filter(isRecord) : [];
+    const queryIds = executed
+      .map((entry) => entry.queryId)
+      .filter((queryId): queryId is string => typeof queryId === 'string' && queryId.trim() !== '');
+    const results = Array.isArray(set.results) ? set.results.filter(isRecord) : [];
+    const items = [];
+    for (const item of results) {
+      if (typeof item.documentId !== 'number' || typeof item.chunkIndex !== 'number') continue;
+      items.push({
+        documentId: item.documentId,
+        chunkIndex: item.chunkIndex,
+        ...(typeof item.chunkUid === 'string' && item.chunkUid.trim() !== '' ? { chunkUid: item.chunkUid } : {}),
+      });
+    }
+    if (items.length === 0) continue;
+    attachSearchProvenance(groundingEvidence, {
+      callId,
+      subquestionId: set.subquestionId,
+      queryIds,
+      items,
+    });
+  }
+}
+
+function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: number, callId: string, requestedQuery?: string): void {
     const parsed = isRecord(output) ? output : {};
     const rawSets = parsed.sets;
     const sets = Array.isArray(rawSets)
@@ -663,7 +693,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             uniqueEvidenceAdded: 0,
             durationMs: Math.max(0, Date.now() - t0),
           });
-          return {
+          const prefetchOutput = {
             callId,
             sets: [{
               kind: 'results',
@@ -693,6 +723,8 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             evidenceTokensAdded: 0,
             truncatedBy: truncated ? ['call_result_limit'] : [],
           };
+          attachProvenanceFromOutput(turn.groundingEvidence, callId, prefetchOutput);
+          return prefetchOutput;
         }
         if (turn.prefetched !== undefined && !prefetchQueryChanged) {
           prefetchQueryChanged = true;
@@ -756,6 +788,7 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
           };
           const enrichedOutput = addSearchUsage(output, usage);
           recordSearchOutcome(enrichedOutput, usage, Math.max(0, Date.now() - started), callId, query);
+          attachProvenanceFromOutput(turn.groundingEvidence, callId, enrichedOutput);
           sharedPlansUsed += usage.plansUsed;
           sharedPhysicalUsed += usage.physicalRetrievalsUsed;
           sharedUniqueEvidenceUsed += usage.uniqueEvidenceAdded;

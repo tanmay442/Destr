@@ -14,6 +14,11 @@ interface CachedAnswerPayload {
   citations: EmittedCitation[];
   requestFingerprint?: string;
   fingerprintVersion?: number;
+  grounding?: {
+    kind: 'verified' | 'rejected' | 'unverified';
+    reason?: string;
+    traceVersion?: string;
+  };
   guardrail?: {
     outOfDomain: boolean;
     offerTicket: boolean;
@@ -43,6 +48,7 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         citations?: unknown;
         requestFingerprint?: unknown;
         fingerprintVersion?: unknown;
+        grounding?: unknown;
         guardrail?: unknown;
         search?: unknown;
       };
@@ -67,6 +73,16 @@ function parseCachedAnswer(value: string, expectedKind?: 'turn-result'): CachedA
         };
         if (typeof candidate.fingerprintVersion === 'number') {
           result.fingerprintVersion = candidate.fingerprintVersion;
+        }
+        if (typeof candidate.grounding === 'object' && candidate.grounding !== null) {
+          const marker = candidate.grounding as Record<string, unknown>;
+          if (marker.kind === 'verified' || marker.kind === 'rejected' || marker.kind === 'unverified') {
+            result.grounding = {
+              kind: marker.kind,
+              ...(typeof marker.reason === 'string' ? { reason: marker.reason.slice(0, 100) } : {}),
+              ...(typeof marker.traceVersion === 'string' ? { traceVersion: marker.traceVersion.slice(0, 100) } : {}),
+            };
+          }
         }
         if (typeof candidate.guardrail === 'object' && candidate.guardrail !== null) {
           result.guardrail = candidate.guardrail as NonNullable<CachedAnswerPayload['guardrail']>;

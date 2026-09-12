@@ -670,6 +670,7 @@ describe('/api/chat searchDocumentation tool', () => {
         }) as never,
       );
     setDefaultScript(searchThenText('q', 'final answer'));
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     const res = await postChat(chatBody('What does the documentation say about coverage?'));
     expect(res.status).toBe(200);
     const body = await readBodyText(res);
@@ -714,6 +715,7 @@ describe('/api/chat searchDocumentation tool', () => {
       },
       { text: 'final answer' },
     ]);
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     const res = await postChat(chatBody('What does the documentation say about coverage?'));
     expect(res.status).toBe(200);
     const body = await readBodyText(res);
@@ -729,6 +731,7 @@ describe('/api/chat searchDocumentation tool', () => {
 
   it('emits captured citations as data-citation parts after the LLM stream ends', async () => {
     setDefaultScript(searchThenText('q', 'final answer'));
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     const res = await postChat(chatBody('hi there, what does the documentation say?'));
     expect(res.status).toBe(200);
     const body = await readBodyText(res);
@@ -777,6 +780,7 @@ describe('/api/chat pre-fetch toggle (default off)', () => {
 
   it('with prefetchFirstTurn = false, citation still surfaces as data-citation when the tool is called', async () => {
     setDefaultScript(searchThenText('q', 'final answer'));
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     const res = await postChat({
       messages: [
         {
@@ -848,6 +852,7 @@ describe('/api/chat agentic loop (Session 8)', () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [allChunks[0]] })) as never,
     );
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     setDefaultScript(searchThenText('vague', 'final answer'));
     const res = await postChat(chatBody('Can you explain the vague policy?'));
     expect(res.status).toBe(200);
@@ -956,7 +961,12 @@ describe('/api/chat chat_events instrumentation (Session 6)', () => {
 
   it('records a cacheHit event and skips generation on a cache hit', async () => {
     retrievalConfig.retrievalMode = 'normal';
-    compositionMock.answerCache.get.mockResolvedValueOnce('cached answer');
+    compositionMock.answerCache.get.mockResolvedValueOnce(JSON.stringify({
+      v: 2,
+      text: 'cached answer',
+      citations: [],
+      grounding: { kind: 'verified' },
+    }));
     const res = await postChat(chatBody('cached please'));
     expect(res.status).toBe(200);
     await readBodyText(res);
@@ -986,7 +996,9 @@ describe('/api/chat answer cache (Session 10)', () => {
   });
 
   it('short-circuits generation on a cache hit (no model backend call)', async () => {
-    compositionMock.answerCache.get.mockResolvedValue(CACHED);
+    compositionMock.answerCache.get.mockResolvedValue(
+      JSON.stringify({ v: 2, text: CACHED, citations: [], grounding: { kind: 'verified' } }),
+    );
     const res = await postChat(chatBody(QUESTION), 'user_cache');
     expect(res.status).toBe(200);
     expect(createModelBackendMock).not.toHaveBeenCalled();
@@ -1005,7 +1017,12 @@ describe('/api/chat answer cache (Session 10)', () => {
       sectionTitle: 'Dental',
       source: null,
     };
-    compositionMock.answerCache.get.mockResolvedValue(JSON.stringify({ v: 1, text: CACHED, citations: [citation] }));
+    compositionMock.answerCache.get.mockResolvedValue(JSON.stringify({
+      v: 1,
+      text: CACHED,
+      citations: [citation],
+      grounding: { kind: 'verified' },
+    }));
     const res = await postChat(chatBody(QUESTION), 'user_cache');
     expect(res.status).toBe(200);
     expect(createModelBackendMock).not.toHaveBeenCalled();
@@ -1030,6 +1047,7 @@ describe('/api/chat answer cache (Session 10)', () => {
 
   it('writes a freshly-generated grounded first-turn answer to the cache on miss', async () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
+    graderHolder.fn = vi.fn(async () => 'yes' as const);
     setDefaultScript(searchThenText('dental coverage', 'freshly generated answer'));
     const res = await postChat(chatBody(QUESTION), 'user_miss');
     expect(res.status).toBe(200);
@@ -1214,7 +1232,7 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
   });
 
-  it('skips runHallucinationCheck entirely when hallucinationCheckEnabled is off', async () => {
+  it('fails closed without calling the grader when hallucinationCheckEnabled is off', async () => {
     retrievalConfig.hallucinationCheckEnabled = false;
     try {
       compositionMock.agenticSearch = vi.fn(async () =>
@@ -1223,8 +1241,11 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
       graderHolder.fn = vi.fn(async () => 'no' as const);
       const body = await runAgenticStreamAndRead('what is the policy?');
       expect(graderHolder.fn).not.toHaveBeenCalled();
-      expect(body).not.toMatch(/data-guardrail/);
+      expect(body).not.toContain('generated answer');
+      expect(body).toContain("couldn't complete source verification");
+      expect(body).not.toMatch(/data-citation/);
       expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
+      expect(compositionMock.turnResultCache.set).not.toHaveBeenCalled();
       const event = lastRecordedEvent();
       expect(event?.hallucinationBlocked).toBe(false);
     } finally {
@@ -1232,7 +1253,7 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     }
   });
 
-  it('treats a hallucination grader infra failure as pass (fail-open): no banner, answer cached', async () => {
+  it('treats a hallucination grader infra failure as unverified (fail-closed): safe response, nothing cached', async () => {
     compositionMock.agenticSearch = vi.fn(async () =>
       ok(agenticResult({ chunks: [CHUNK_A] })) as never,
     );
@@ -1240,8 +1261,10 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
       throw new Error('grade model down');
     });
     const body = await runAgenticStreamAndRead('what is the policy?');
-    expect(body).not.toMatch(/data-guardrail/);
-    expect(compositionMock.answerCache.set).toHaveBeenCalledTimes(1);
+    expect(body).not.toContain('generated answer');
+    expect(body).toContain("couldn't complete source verification");
+    expect(body).not.toMatch(/data-citation/);
+    expect(compositionMock.answerCache.set).not.toHaveBeenCalled();
     const event = lastRecordedEvent();
     expect(event?.hallucinationBlocked).toBe(false);
   });

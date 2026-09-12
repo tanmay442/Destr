@@ -22,6 +22,8 @@ export interface EventMetaInput {
   retrievalMode?: 'agentic' | 'vector' | undefined;
 
   judgeScores?: (JudgeScores & { judgedAt: string }) | undefined;
+  /** Pre-release grounding decision telemetry (secret-free counts/enums only). */
+  grounding?: Record<string, number | string | boolean | null> | undefined;
 }
 
 /**
@@ -60,5 +62,6 @@ export function buildEventMeta(input: EventMetaInput): Record<string, unknown> {
     };
   }
   if (input.judgeScores !== undefined) meta.judgeScores = { ...input.judgeScores };
+  if (input.grounding !== undefined) meta.grounding = { ...input.grounding };
   return meta;
 }

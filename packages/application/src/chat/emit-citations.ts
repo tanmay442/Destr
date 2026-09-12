@@ -13,6 +13,9 @@ export interface EmittedCitation {
   page: number | null;
   sectionTitle: string | null;
   source: string | null;
+  callId?: string | undefined;
+  subquestionId?: string | undefined;
+  queryIds?: readonly string[] | undefined;
 }
 
 function truncateSnippet(content: string, max: number): string {
@@ -23,8 +26,17 @@ function truncateSnippet(content: string, max: number): string {
   return content.slice(0, end) + '\u2026';
 }
 
+/** Optional retrieval provenance a chunk may carry into citation emission. */
+export interface CitationProvenance {
+  readonly callId?: string | undefined;
+  readonly subquestionId?: string | undefined;
+  readonly queryIds?: readonly string[] | undefined;
+}
+
+export type CitableChunk = RetrievedChunk & CitationProvenance;
+
 export function emitCitations(
-  chunks: RetrievedChunk[],
+  chunks: CitableChunk[],
   snippetMax = CITATION_SNIPPET_MAX,
 ): EmittedCitation[] {
   return chunks.map((m) => ({
@@ -39,6 +51,9 @@ export function emitCitations(
     page: m.page,
     sectionTitle: m.sectionTitle,
     source: m.source,
+    ...(m.callId !== undefined ? { callId: m.callId } : {}),
+    ...(m.subquestionId !== undefined ? { subquestionId: m.subquestionId } : {}),
+    ...(m.queryIds !== undefined ? { queryIds: [...m.queryIds] } : {}),
   }));
 }
 

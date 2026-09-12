@@ -87,8 +87,16 @@ import type { BuiltToolInstance, ToolCatalog } from '../../agent/tool-catalog';
 import { readPlannerFlags } from '../../agent/search/search-flags';
 import { estimateChunkTokens } from '../../agent/search/evidence-packer';
 import { TurnToolLedger } from '../../agent/run-state';
-import { runHallucinationCheck, DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
+import { DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
 import type { ChatTurnDeps, ChatTurnRequest, ChatTurnResult, ChatModelUsageTelemetry, TurnMetrics } from './turn-types';
+import { validateCitations } from '../../agent/grounding/citation-validator';
+import { assembleGroundingInput } from '../../agent/grounding/grounding-evidence-input';
+import { runGroundingCheck } from '../../agent/grounding/grounding-check';
+import { readGroundedReleaseFlag } from '../../agent/grounding/grounding-flags';
+import { GROUNDING_TRACE_VERSION, toLogFields } from '../../agent/grounding/grounding-telemetry';
+import { safeResponseFor } from '../../agent/grounding/safe-response';
+import { serializeUntrustedChunk } from '../../agent/prompt/serialize-untrusted-result';
+import type { GroundingCitation, GroundingDecision } from '../../agent/grounding/grounding-decision';
 
 function physicalRetrievalsFromDiagnostics(value: unknown): number {
   if (typeof value !== 'object' || value === null) return 0;
@@ -135,6 +143,11 @@ function fallbackTextForAgentStop(kind: string): string {
   if (kind === 'model_content_filter') return 'I could not provide a response for this request.';
   return 'I could not finish this response within the request limits. Please try again.';
 }
+
+// Upper bound for one grounding-grader call. The effective timeout is the
+// smaller of this cap and the remaining turn work budget, so verification
+// can never borrow the mandatory finalization reserve (WP-5 seam).
+const GROUNDING_GRADER_TIMEOUT_MS = 10_000;
 
 export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Promise<ChatTurnResult> {
   const turnStart = input.startedAt ?? performance.now();
@@ -267,9 +280,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       const readTurnState = async () => {
         const current = await turnResultCache.get(turnResultKey).catch(() => null);
         const currentState = current ? parseTurnResult(current, turnRequestHash) : null;
+        // Fail closed: only verified grounded outcomes replay. Marked
+        // non-verified entries are never written, and legacy unmarked
+        // entries predate release gating, so both are treated as a miss.
+        if (currentState && 'answer' in currentState && currentState.answer.grounding?.kind !== 'verified') {
+          return null;
+        }
         if (currentState) return currentState;
         const compatible = await turnResultCache.get(turnResultCoordinationKey).catch(() => null);
-        return compatible ? parseTurnResult(compatible, turnRequestHash) : null;
+        const compatibleState = compatible ? parseTurnResult(compatible, turnRequestHash) : null;
+        if (compatibleState && 'answer' in compatibleState && compatibleState.answer.grounding?.kind !== 'verified') {
+          return null;
+        }
+        return compatibleState;
       };
       let turnState = await readTurnState();
       if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
@@ -382,6 +405,17 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }
     if (cached) {
       if (deps.traceEnabled) logger.info('rag.cache.hit', { key: cacheKey });
+      const cachedAnswer = parseCachedAnswer(cached);
+      if (cachedAnswer.grounding?.kind !== 'verified') {
+        // Fail closed: only verified grounded answers replay from the
+        // answer cache. Legacy unmarked entries predate release gating and
+        // any non-verified marker must never replay as an answer.
+        if (deps.traceEnabled) logger.info('rag.cache.unverified_skip', { key: cacheKey });
+        cached = null;
+      }
+    }
+    if (cached) {
+      if (deps.traceEnabled) logger.info('rag.cache.replay', { key: cacheKey });
       const cachedAnswer = parseCachedAnswer(cached);
       deps.eventSink.record({
         turnId,
@@ -770,16 +804,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             : timedOut
               ? ''
               : fallbackTextForAgentStop(agentRun.stopReason.kind);
-          if (finalCandidateText !== '') {
-            const textId = `agent-${turnId ?? 'text'}`;
-            controller.enqueue({ type: 'text-start', id: textId });
-            if (metrics.firstTokenMs === null) {
-              metrics.firstTokenMs = Math.round(performance.now() - turnStart);
-            }
-            controller.enqueue({ type: 'text-delta', id: textId, delta: finalCandidateText });
-            partialText = finalCandidateText;
-            controller.enqueue({ type: 'text-end', id: textId });
-          }
+          // WP-6: the candidate stays server-side until the grounding release
+          // decision below. No candidate text, citation, or cache publication
+          // may happen before the release policy runs.
           logger.info('chat.turn.agent_run', {
             event: 'chat.turn.agent_run',
             turnId,
@@ -810,13 +837,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             });
             controller.enqueue({ type: 'text-end', id: tid });
           }
-          const finalCitations = dedupeCitations(capturedCitations);
-          for (const src of finalCitations) {
-            controller.enqueue({
-              type: 'data-citation',
-              data: src,
-            });
-          }
+          const answerReadyMs = Math.round(performance.now() - turnStart);
           const derivedToolState = deriveToolState();
           if (derivedToolState.ticketCreated && derivedToolState.ticketId) {
               metrics.ticketCreated = true;
@@ -824,37 +845,208 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }
           const hasGroundingEvidence = groundingEvidence.documents.length > 0;
           const finalOutOfDomain = !hasGroundingEvidence && derivedToolState.outOfDomain;
-          const hallucinationStart = performance.now();
-          const remainingWallMs = MAX_DURATION_MS - (Date.now() - requestStartedAt);
-          const hallucinationBudgetMs = Math.min(12_000, Math.max(0, remainingWallMs - 2_000));
-          let hallucinationBlocked = false;
-          let hallucinationTimedOut = false;
+          // Documentation grounding is required whenever the turn collected
+          // evidence or sought it (genuine no-match wall). Casual no-tool
+          // turns release directly, as before.
+          const documentationRequired =
+            hasGroundingEvidence || derivedToolState.outOfDomain || derivedToolState.isEmpty;
+          const ticketEligible = !hasGroundingEvidence && derivedToolState.outOfDomain;
+          const releaseEnabled = readGroundedReleaseFlag({ get: (key: string) => process.env[key] }).enabled;
+
+          const releaseBufferedText = (text: string): void => {
+            if (text === '') return;
+            const textId = `agent-${turnId ?? 'text'}`;
+            controller.enqueue({ type: 'text-start', id: textId });
+            if (metrics.firstTokenMs === null) {
+              metrics.firstTokenMs = Math.round(performance.now() - turnStart);
+            }
+            controller.enqueue({ type: 'text-delta', id: textId, delta: text });
+            partialText = text;
+            controller.enqueue({ type: 'text-end', id: textId });
+          };
+
+          const verificationStart = performance.now();
+          let releasedText = '';
+          let releasedCitations = dedupeCitations(capturedCitations);
+          // withholdCandidate distinguishes fail-closed outcomes (rejected /
+          // unverified-safe) from explicit releases: only casual answers and
+          // grader-verified answers release their candidate.
+          let withholdCandidate = true;
+          let groundingDecision: GroundingDecision | null = null;
+          let groundingReason: string | null = null;
+          let groundingValidatorOutcome: 'valid' | 'invalid' | 'skipped' = 'skipped';
+          let groundingValidatorReason: string | null = null;
+          let groundingGraderOutcome: 'supported' | 'unsupported' | 'timeout' | 'unavailable' | 'malformed' | 'skipped' = 'skipped';
+          let groundingTimedOut = false;
+          let groundingEvidenceChunks = groundingEvidence.structured.length;
+          let groundingEvidenceTokens = 0;
+          let groundingCitationCount = releasedCitations.length;
+          let groundingValidCitations = 0;
+          const keepValidCitations = (valid: readonly GroundingCitation[]): void => {
+            releasedCitations = releasedCitations.filter((citation) =>
+              valid.some((entry) =>
+                (entry.chunkUid ?? null) === (citation.chunkUid ?? null) &&
+                entry.documentId === citation.documentId &&
+                entry.chunkIndex === citation.chunkIndex,
+              ),
+            );
+          };
           if (timedOut || !generationCompletedCleanly) {
-          } else if (hallucinationBudgetMs <= 0) {
-            hallucinationTimedOut = true;
-            logger.warn('hallucination check skipped: no wall-time budget', { remainingWallMs });
+            // Deadline and agent-stop fallbacks below; no grounding verification.
+          } else if (!documentationRequired) {
+            releasedText = finalCandidateText;
+            withholdCandidate = false;
+            groundingDecision = { kind: 'verified', citations: [] };
           } else {
-            const hallucinationResult = await runHallucinationCheck({
-              controller,
-              result: { text: Promise.resolve(finalCandidateText) },
-              groundingDocuments: groundingEvidence.documents,
-              hallucinationGrader: deps.hallucinationGrader(cfg),
-              enabled: cfg.hallucinationCheckEnabled,
-              outOfDomain: finalOutOfDomain,
-              timeoutMs: hallucinationBudgetMs,
+            const rawCandidateCitations: readonly unknown[] = releasedCitations.map((citation) => ({
+              id: citation.id,
+              ...(citation.chunkUid !== undefined ? { chunkUid: citation.chunkUid } : {}),
+              documentId: citation.documentId,
+              chunkIndex: citation.chunkIndex,
+              ...(citation.subquestionId !== undefined ? { subquestionId: citation.subquestionId } : {}),
+              snippet: citation.snippet,
+            }));
+            groundingCitationCount = rawCandidateCitations.length;
+            const validation = validateCitations({
+              citations: rawCandidateCitations,
+              evidence: groundingEvidence.structured,
+              documentationRequired: true,
             });
-            hallucinationBlocked = hallucinationResult.blocked;
-            hallucinationTimedOut = hallucinationResult.timedOut;
+            if (validation.kind === 'invalid') {
+              groundingValidatorOutcome = 'invalid';
+              groundingValidatorReason = validation.reason;
+              groundingDecision = { kind: 'rejected', reason: validation.reason };
+              groundingReason = validation.reason;
+            } else {
+              groundingValidatorOutcome = 'valid';
+              const groundingInput = assembleGroundingInput({
+                evidence: groundingEvidence.structured,
+                answeredSubquestionIds: [...new Set(groundingEvidence.structured.flatMap((item) => item.subquestionIds))],
+                maxUniqueChunks: agentBudget.maxUniqueEvidenceChunks,
+                maxEvidenceTokens: agentBudget.maxEvidenceTokens,
+                serializeChunk: (item) => serializeUntrustedChunk({ content: item.content, source: item.source ?? null }),
+              });
+              groundingEvidenceChunks = groundingInput.totalUniqueChunks;
+              groundingEvidenceTokens = groundingInput.totalTokens;
+              const validCitations = validation.validCitations;
+              groundingValidCitations = validCitations.length;
+              {
+                if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
+                const remainingWorkMs = Math.max(0, workDeadlineAt - Date.now());
+                // A disabled hallucination check is passed to the runner as an
+                // unavailable grader: deterministic validation still applies,
+                // but documentation answers fail closed without verification.
+                const checkResult = await runGroundingCheck({
+                  candidateText: finalCandidateText,
+                  documentationRequired: true,
+                  citations: validCitations,
+                  evidence: groundingEvidence.structured,
+                  documentsText: groundingInput.documentsText,
+                  evidenceChunks: groundingInput.totalUniqueChunks,
+                  evidenceTokens: groundingInput.totalTokens,
+                  validatorOutcome: 'valid',
+                  validatorReason: null,
+                  validCitations,
+                  grader: cfg.hallucinationCheckEnabled ? deps.hallucinationGrader(cfg) : null,
+                  releaseEnabled,
+                  timeoutMs: remainingWorkMs <= 0 ? 0 : Math.min(GROUNDING_GRADER_TIMEOUT_MS, remainingWorkMs),
+                  signal: turnSignal,
+                });
+                if (checkResult.status === 'cancelled') {
+                  // Request cancellation aborts the turn without persisting;
+                  // a fired work deadline fails closed as a timeout instead.
+                  if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
+                  groundingDecision = { kind: 'unverified', reason: 'timeout' };
+                  groundingReason = 'timeout';
+                  groundingGraderOutcome = 'timeout';
+                  groundingTimedOut = true;
+                } else {
+                  groundingDecision = checkResult.decision;
+                  groundingReason = checkResult.decision.kind === 'verified' ? null : checkResult.decision.reason;
+                  groundingGraderOutcome = checkResult.telemetry.graderOutcome;
+                  groundingTimedOut = checkResult.telemetry.timedOut;
+                  if (checkResult.decision.kind === 'verified') {
+                    releasedText = finalCandidateText;
+                    withholdCandidate = false;
+                    keepValidCitations(checkResult.decision.citations);
+                  }
+                }
+              }
+            }
           }
-          metrics.hallucinationMs = Math.round(performance.now() - hallucinationStart);
+          const verificationMs = Math.round(performance.now() - verificationStart);
+          metrics.hallucinationMs = verificationMs;
+          if (groundingDecision !== null && !withholdCandidate) {
+            releaseBufferedText(releasedText);
+            for (const src of releasedCitations) {
+              controller.enqueue({
+                type: 'data-citation',
+                data: src,
+              });
+            }
+          } else if (groundingDecision !== null) {
+            const safe = safeResponseFor({
+              decisionKind: groundingDecision.kind === 'rejected' ? 'rejected' : 'unverified',
+              reason: groundingReason ?? groundingDecision.kind,
+              ticketEligible,
+            });
+            releasedText = safe.text;
+            releasedCitations = [];
+            releaseBufferedText(releasedText);
+            controller.enqueue({
+              type: 'data-guardrail',
+              data: {
+                outOfDomain: finalOutOfDomain,
+                offerTicket: groundingDecision.kind === 'rejected' ? true : safe.offerTicket,
+              },
+            });
+          }
+          const answerReleasedMs = groundingDecision === null ? null : Math.round(performance.now() - turnStart);
+          const groundingLogFields = toLogFields({
+            answerReadyMs,
+            verificationMs,
+            answerReleasedMs,
+            decisionKind: groundingDecision?.kind ?? 'cancelled',
+            decisionReason: groundingReason,
+            validatorOutcome: groundingValidatorOutcome,
+            validatorReason: groundingValidatorReason,
+            graderOutcome: groundingGraderOutcome,
+            cancelled: groundingDecision === null,
+            timedOut: groundingTimedOut,
+            attribution: groundingDecision === null
+              ? 'request_cancelled'
+              : groundingTimedOut
+                ? 'grounding_timeout'
+                : groundingGraderOutcome === 'unavailable'
+                  ? 'grader_unavailable'
+                  : groundingGraderOutcome === 'malformed'
+                    ? 'grader_malformed'
+                    : 'none',
+            evidenceChunks: groundingEvidenceChunks,
+            evidenceTokens: groundingEvidenceTokens,
+            citationCount: groundingCitationCount,
+            validCitationCount: groundingValidCitations,
+            traceVersion: GROUNDING_TRACE_VERSION,
+          });
+          logger.info('chat.turn.grounding', {
+            event: 'chat.turn.grounding',
+            turnId,
+            ...groundingLogFields,
+          });
+          // Event/telemetry-compatible outcome flags. Rejected replaces the
+          // old hallucination-blocked signal; unverified is never presented
+          // as grounded and never enters the grounded answer cache.
+          const hallucinationBlocked = groundingDecision?.kind === 'rejected';
+          const hallucinationTimedOut = groundingTimedOut;
           const isEmpty = !hasGroundingEvidence && (derivedToolState.isEmpty || finalOutOfDomain);
           if (
             cacheKey &&
             cacheLease?.isOwned() === true &&
             !timedOut &&
             generationCompletedCleanly &&
+            groundingDecision?.kind === 'verified' &&
             shouldCache({
-              citations: finalCitations,
+              citations: releasedCitations,
               blocked: hallucinationBlocked,
               hallucinationTimedOut,
               isEmpty,
@@ -863,7 +1055,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             })
           ) {
             try {
-              const finalAnswer = finalCandidateText;
+              const finalAnswer = releasedText;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 if (deps.traceEnabled) {
                   logger.info('rag.cache.set', { key: cacheKey, length: finalAnswer.length });
@@ -872,7 +1064,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   JSON.stringify({
                     v: SEARCH_RESULT_CONTRACT_VERSION,
                     text: finalAnswer,
-                    citations: finalCitations,
+                    citations: releasedCitations,
+                    grounding: { kind: 'verified', traceVersion: GROUNDING_TRACE_VERSION },
                     search: {
                       resultStates: metrics.searchResultStates,
                       scoreMaxima: metrics.maxRetrievalScores,
@@ -891,10 +1084,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             turnResultCoordinationKey &&
             turnLease?.isOwned() === true &&
             !timedOut &&
-            generationCompletedCleanly
+            generationCompletedCleanly &&
+            groundingDecision?.kind === 'verified'
           ) {
             try {
-              const finalAnswer = finalCandidateText;
+              const finalAnswer = releasedText;
               if (finalAnswer && finalAnswer.trim() !== '') {
                 const guardrail = hallucinationBlocked
                   ? {
@@ -903,13 +1097,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                       isEmpty,
                     }
                   : undefined;
+                const groundingMarker = {
+                  kind: 'verified' as const,
+                  traceVersion: GROUNDING_TRACE_VERSION,
+                };
                 const versionedPayload = JSON.stringify({
                   v: SEARCH_RESULT_CONTRACT_VERSION,
                   kind: 'turn-result',
                   requestFingerprint: turnRequestHash.current,
                   fingerprintVersion: TURN_FINGERPRINT_VERSION,
                   text: finalAnswer,
-                  citations: finalCitations,
+                  citations: releasedCitations,
+                  grounding: groundingMarker,
                   search: {
                     resultStates: metrics.searchResultStates,
                     scoreMaxima: metrics.maxRetrievalScores,
@@ -923,6 +1122,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                   fingerprintVersion: TURN_FINGERPRINT_VERSION,
                   text: finalAnswer,
                   citations: [],
+                  grounding: groundingMarker,
                   ...(guardrail ? { guardrail } : {}),
                 });
                 const publishResult = await turnLease.publish(
@@ -988,17 +1188,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             outOfDomain: finalOutOfDomain,
             hallucinationBlocked,
             ticketCreated: metrics.ticketCreated,
-            citationCount: finalCitations.length,
+            citationCount: releasedCitations.length,
             tokensIn: inputTokens,
             tokensOut: outputTokens,
             meta: buildEventMeta({
               rewritten: metrics.rewritten,
-              documentIds: citationDocumentIds(finalCitations),
+              documentIds: citationDocumentIds(releasedCitations),
               ticketId: metrics.ticketCreated ? metrics.ticketId : null,
               isEmpty,
               resultState: !generationCompletedCleanly ? undefined : derivedToolState.resultState ?? undefined,
               searchResultStates: metrics.searchResultStates,
               retrievalScoreMaxima: metrics.maxRetrievalScores,
+              grounding: groundingDecision === null ? undefined : { ...groundingLogFields },
               modelTelemetry: modelRequestOptions?.telemetry,
               promptCache: promptCacheUsage
                 ? {
@@ -1035,7 +1236,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             generateMs: Math.max(0, totalMs - metrics.retrieveMs),
             totalMs,
           });
-          const persistedText = finalCandidateText !== '' ? finalCandidateText : partialText;
+          // History persists only the released outcome, never a withheld
+          // candidate. Safe fallbacks persist their safe text; cancelled
+          // turns never reach this point (the catch path persists nothing
+          // except the ticket sentinel).
+          const persistedText = releasedText !== '' ? releasedText : partialText;
           const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -1045,8 +1250,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             assistantMessage: buildAssistantMessageLike({
               turnId,
               text: persistedText || partialText,
-              citations: finalCitations,
-              guardrail: hallucinationBlocked
+              citations: releasedCitations,
+              guardrail: groundingDecision?.kind === 'rejected'
+                ? {
+                    outOfDomain: finalOutOfDomain,
+                    offerTicket: true,
+                  }
+                : groundingDecision?.kind === 'unverified' && generationCompletedCleanly && !timedOut && releasedText !== finalCandidateText
+                  ? {
+                      outOfDomain: finalOutOfDomain,
+                      offerTicket: ticketEligible,
+                    }
+                : timedOut
                 ? {
                     outOfDomain: derivedToolState.outOfDomain,
                     offerTicket: true,
@@ -1080,14 +1295,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             deps.qualityJudge &&
             !timedOut &&
             generationCompletedCleanly &&
+            groundingDecision?.kind === 'verified' &&
             Math.random() < cfg.judgeSampleRate &&
-            finalCitations.length > 0 &&
+            releasedCitations.length > 0 &&
             !isEmpty &&
             performance.now() - turnStart <= judgeMaxWallMs &&
             cfg.captureQueryText !== false
           ) {
-            const answer = finalCandidateText !== '' ? finalCandidateText : partialText;
-            const snippets = finalCitations.map((c) => c.snippet);
+            const answer = releasedText !== '' ? releasedText : partialText;
+            const snippets = releasedCitations.map((c) => c.snippet);
             const qualityJudge = deps.qualityJudge;
             deps.judgeScheduler(() =>
               qualityJudge({
