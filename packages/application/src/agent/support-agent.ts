@@ -43,6 +43,13 @@ import { TICKET_TOOL_NAME } from './tools/create-knowledge-ticket';
 export { SEARCH_TOOL_NAME, TICKET_TOOL_NAME };
 import type { AgentModelBackend, AgentModelMessage } from './model-backend';
 import type { ToolCatalog } from './tool-catalog';
+import { TOOL_CATALOG_VERSION } from './tool-catalog';
+import type { AgentTraceWriter as AgentEventTraceWriter } from './observability/trace-writer';
+import {
+  createEvent,
+  mapAgentStopToTerminal,
+  type AgentEventContext,
+} from './observability/agent-event';
 import type { AgentToolContext } from './tool-contract';
 import { canStartNewModelStep, childTimeoutMs } from './agent-budget';
 import type { AgentRunBudget as FullBudget } from './agent-budget';
@@ -103,6 +110,14 @@ export interface SupportAgentInput {
   } | undefined;
   readonly backend: AgentModelBackend;
   readonly nowMs?: number;
+  /**
+   * Optional typed-telemetry sink (WP-7 measurement only). When present the
+   * loop emits turn/model-step/tool events plus exactly one turn.terminal
+   * per run. Emission never throws and never changes loop decisions; when
+   * absent the loop behaves exactly as before.
+   */
+  readonly eventTrace?: AgentEventTraceWriter | undefined;
+  readonly eventContext?: AgentEventContext | undefined;
 }
 
 export interface SupportAgentRun {
@@ -251,6 +266,58 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
   const telemetry: AgentStepTelemetry[] = [];
   let modelSteps = 0;
 
+  // Typed telemetry emission (WP-7 measurement only). Attributes carry only
+  // bounded codes/counts/identifiers from the bounded tool catalog — never
+  // user text, tool arguments, document content, or provider payloads.
+  // Emission never throws and never changes loop decisions.
+  let telemetrySeq = 0;
+  const emitTelemetry = (fields: Record<string, unknown>): void => {
+    if (input.eventTrace === undefined) return;
+    try {
+      telemetrySeq += 1;
+      input.eventTrace.emit(
+        createEvent({
+          eventVersion: 1,
+          eventId: `${input.runId}-e${telemetrySeq}`.slice(0, 180),
+          traceId: (input.eventContext?.traceId ?? input.runId).slice(0, 180),
+          turnId: input.turnId,
+          startedAt: new Date().toISOString(),
+          elapsedMs: Math.max(0, Date.now() - startedAtMs),
+          configurationFingerprint: (input.eventContext?.configurationFingerprint ?? 'unknown').slice(0, 180),
+          agentBudgetVersion: (input.eventContext?.agentBudgetVersion ?? 'unknown').slice(0, 180),
+          toolCatalogVersion: TOOL_CATALOG_VERSION,
+          deploymentVersion: (input.eventContext?.deploymentVersion ?? 'unknown').slice(0, 180),
+          ...(input.eventContext?.region !== undefined ? { region: input.eventContext.region } : {}),
+          attributes: {},
+          ...fields,
+        }),
+      );
+    } catch {
+      // Telemetry emission must never break the agent loop.
+    }
+  };
+  const finishTelemetry = (stopReason: AgentStopReason, totals: RunTotals): void => {
+    const releasedOutput =
+      totals.text !== '' ? 'qualified_answer' : stopReason.kind === 'cancelled' ? 'no_output' : 'withheld';
+    emitTelemetry({
+      eventType: 'turn.terminal',
+      status: 'completed',
+      terminalState: mapAgentStopToTerminal(stopReason),
+      decisiveReason: stopReason.kind,
+      releasedOutput,
+      budgetConsumed: {
+        modelSteps,
+        toolCalls: telemetry.filter((row) => row.toolName !== null).length,
+        searchCalls: totals.searchCalls,
+        physicalRetrievals: totals.physicalRetrievals,
+        uniqueEvidenceChunks: totals.uniqueEvidenceChunks,
+        evidenceTokens: totals.evidenceTokens,
+      },
+      persistenceStatus: 'skipped',
+      stopReasonCode: stopReason.kind,
+    });
+  };
+
   const finish = (stopReason: AgentStopReason, totals: RunTotals): SupportAgentRun => {
     const endedAtMs = Date.now();
     const summary = summarizeRun({
@@ -272,6 +339,7 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
     // the model made no calls) so summarizeRun call totals stay exact;
     // restore the true model-step count here.
     const corrected: AgentRunSummary = Object.freeze({ ...summary, totalModelSteps: modelSteps });
+    finishTelemetry(stopReason, totals);
     if (stopReason.kind === 'completed' || stopReason.kind === 'no_tool_requested') {
       state = appendEvent(state, { type: 'run_completed', atMs: endedAtMs, summary: corrected });
     } else {
@@ -308,6 +376,9 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       runId: input.runId,
       atMs: input.nowMs ?? startedAtMs,
     });
+    // Admitted turns always open with turn.started so the exactly-one
+    // terminal below keeps ordering validity (spec 7.2/18.1).
+    emitTelemetry({ eventType: 'turn.started', status: 'started' });
     return finish({ kind: 'cancelled' }, emptyTotals(''));
   }
 
@@ -330,6 +401,7 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
     runId: input.runId,
     atMs: input.nowMs ?? startedAtMs,
   });
+  emitTelemetry({ eventType: 'turn.started', status: 'started' });
 
   const messages: AgentModelMessage[] = resolveMessages(input.userText, input.history, input.currentMessage);
   const explicitTicketRequest = EXPLICIT_TICKET_REQUEST.test(input.userText);
@@ -446,6 +518,12 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       activeTools: Object.freeze([...activeNames]),
       atMs: stepStartedAt,
     });
+    emitTelemetry({
+      eventType: 'model.step.started',
+      status: 'started',
+      stepNumber,
+      attributes: { activeToolCount: activeNames.length },
+    });
 
     const timeoutMs = childTimeoutMs(input.budget, Date.now(), MODEL_P95_ESTIMATE_MS);
     let step: Awaited<ReturnType<AgentModelBackend['generateStep']>>;
@@ -468,9 +546,13 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       if (isTimeoutError(error)) {
         return finish({ kind: 'timeout', timeoutMs }, snapshot());
       }
-      // Unexpected backend failure: propagate without a stop event. The
-      // caller/integrator owns failed status; recording a stop reason here
-      // would mislabel the outcome.
+      // Unexpected backend failure: the error still propagates to the
+      // caller/integrator unchanged, but the admitted turn already emitted
+      // turn.started, so close it with a dependency_error terminal first
+      // (model_error maps to dependency_error; see mapAgentStopToTerminal).
+      // Emission is try/caught and decision-neutral; error identity and
+      // propagation are untouched.
+      finishTelemetry({ kind: 'model_error' }, snapshot());
       throw error;
     }
 
@@ -551,6 +633,22 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       }
     };
 
+    const emitStepCompleted = (): void => {
+      emitTelemetry({
+        eventType: 'model.step.completed',
+        status: 'completed',
+        stepNumber,
+        finishReason: step.finishReason,
+        inputTokensTotal: step.inputTokens,
+        cacheReadTokens: step.cacheReadTokens,
+        cacheWriteTokens: step.cacheWriteTokens,
+        uncachedTokens: null,
+        outputTokens: step.outputTokens,
+        tokenStatus: step.cacheStatus,
+        toolCallsUsed: executedThisStep.length,
+      });
+    };
+
     const stopMidStep = (reason: AgentStopReason): SupportAgentRun => {
       state = appendEvent(state, {
         type: 'step_finished',
@@ -559,6 +657,7 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
         atMs: Date.now(),
       });
       recordStepTelemetry();
+      emitStepCompleted();
       return finish(reason, snapshot());
     };
 
@@ -640,6 +739,12 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
         argsHash,
         atMs: Date.now(),
       });
+      emitTelemetry({
+        eventType: 'tool.started',
+        status: 'started',
+        toolName: call.toolName,
+        callId: call.toolCallId,
+      });
       const callStartedAt = Date.now();
       let result: unknown;
       let failedKind: string | null = null;
@@ -702,6 +807,19 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
         kind: failedKind ?? 'success',
         durationMs: Math.max(0, Date.now() - callStartedAt),
       });
+      const toolTerminalStatus =
+        failedKind === null ? 'completed' : failedKind === 'cancelled' ? 'cancelled' : failedKind === 'denied' || failedKind === 'budget_exceeded' ? 'denied' : 'failed';
+      const toolResultKind =
+        failedKind === null ? 'success' : failedKind === 'timeout' ? 'timeout' : failedKind === 'cancelled' ? 'cancelled' : failedKind === 'denied' || failedKind === 'budget_exceeded' ? 'denied' : 'error';
+      emitTelemetry({
+        eventType: 'tool.terminal',
+        status: toolTerminalStatus,
+        toolName: call.toolName,
+        callId: call.toolCallId,
+        resultKind: toolResultKind,
+        durationMs: Math.max(0, Date.now() - callStartedAt),
+        reasonCode: failedKind ?? undefined,
+      });
       messages.push({
         role: 'assistant',
         text: `Tool ${call.toolName} returned: ${truncateResult(result)}`,
@@ -756,6 +874,7 @@ async function run(input: SupportAgentInput): Promise<SupportAgentRun> {
       atMs: Date.now(),
     });
     recordStepTelemetry();
+    emitStepCompleted();
 
     if (input.signal.aborted) {
       return finish({ kind: 'cancelled' }, snapshot());

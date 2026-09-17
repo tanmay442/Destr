@@ -156,9 +156,84 @@ jobs:
       - name: Run eval (mock)
         run: pnpm eval
 
+      - name: Run retrieval eval (mock gate)
+        run: pnpm eval:retrieval
+
+      - name: Run agent trajectory eval (mock gate)
+        run: pnpm eval:agent:mock
+
+      - name: Run adversarial eval (mock gate)
+        run: pnpm eval:agent:adversarial
+
+      - name: Run cost eval (mock gate)
+        run: pnpm eval:agent:cost
+
       - name: Upload golden report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: golden-report
           path: eval/golden-report.json
+          if-no-files-found: warn
+
+      - name: Upload agent reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-eval-reports
+          path: eval/agent-*.json
+          if-no-files-found: warn
+
+  eval-agent-real:
+    if: github.event_name == 'schedule' || inputs.run_real == true
+    name: Agent Eval (real-model matrix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    env:
+      EVAL_REAL: '1'
+      EVAL_FAITHFULNESS_THRESHOLD: '0.7'
+      EVAL_COST_CEILING_USD: ${{ secrets.EVAL_COST_CEILING_USD }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CHAT_PROVIDER: ${{ secrets.CHAT_PROVIDER }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      CUSTOM_LLM_API_KEY: ${{ secrets.CUSTOM_LLM_API_KEY }}
+      CUSTOM_LLM_BASE_URL: ${{ secrets.CUSTOM_LLM_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: |
+          echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run real-model agent matrix (unverified without keys/budget)
+        run: pnpm eval:agent:real
+
+      - name: Upload real-model agent report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-real-report
+          path: eval/agent-real-report.json
           if-no-files-found: warn
