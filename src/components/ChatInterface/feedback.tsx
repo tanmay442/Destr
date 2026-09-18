@@ -1,12 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
-  Search,
-  FileStack,
-  FileCheck,
   Clock,
   ThumbsUp,
   ThumbsDown,
@@ -57,31 +53,18 @@ export function FeedbackControl({
 }
 
 export function StatusStages() {
-  const [stage, setStage] = useState(0);
-
-  useEffect(() => {
-    if (stage >= 3) return;
-    const timer = setTimeout(() => setStage((s) => s + 1), 5000);
-    return () => clearTimeout(timer);
-  }, [stage]);
-
-  const stages = [
-    { icon: Search, label: 'Searching from the sources' },
-    { icon: FileStack, label: 'Compiling them' },
-    { icon: FileCheck, label: 'Finalizing output' },
-    { icon: Clock, label: 'Just a moment' },
-  ];
-
-  const { icon: Icon, label } = stages[stage]!;
-
+  // WP-8 F-29: timer-invented phases removed. This is a truthful static
+  // indicator that claims no specific server phase. Real phase progress
+  // renders through AgentProgress when the server emits transient
+  // data-agent-progress events (see AgentProgress.tsx).
   return (
     <span
       aria-label="Generating response"
       className="flex items-center gap-2 text-sm text-muted-foreground"
       data-testid="chat-thinking"
     >
-      <Icon className="size-4 animate-pulse" aria-hidden />
-      <span>{label}</span>
+      <Clock className="size-4 animate-pulse" aria-hidden />
+      <span>Working on your request</span>
     </span>
   );
 }

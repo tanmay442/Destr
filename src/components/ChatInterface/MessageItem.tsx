@@ -21,6 +21,11 @@ export const MessageItem = memo(function MessageItem({
   onVote: (message: MyUIMessage, turnId: string, feedback: FeedbackVote) => void;
 }) {
   const isUser = message.role === 'user';
+  // WP-8 Task E (F-29): transient `data-agent-progress` parts are
+  // transport-only progress signals and must never render as content or
+  // citations. This component allowlists only text/citation/guardrail parts,
+  // so progress parts are deliberately not selected below and never reach
+  // the DOM.
   const textParts = message.parts.filter((p) => p.type === 'text');
   const citations = message.parts.filter(
     (p) => p.type === 'data-citation',

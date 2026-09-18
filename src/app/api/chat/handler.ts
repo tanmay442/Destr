@@ -1,6 +1,11 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
-import { getComposition, TRACE_ENABLED } from '@/composition';
+import { getComposition, judgeQueueRemotePublish, TRACE_ENABLED } from '@/composition';
+import type { Composition } from '@/composition';
 import { chatTurn } from '@app/application/chat';
+import { readWp8Flag } from '@app/application/runtime/wp8-flags';
+import { decodeJudgePayload } from '@app/application/capacity/background-queue';
+import { createJudgeScheduler, createQualityJudge } from './judge';
+import { createJudgeQueuePort } from './judge-queue-port';
 import { NextResponse } from 'next/server';
 import { createUIMessageStreamResponse } from 'ai';
 import { logger } from '@/lib/logger';
@@ -8,8 +13,48 @@ import { readBoundedText } from '@/lib/http';
 import { CHAT_MAX_BODY_BYTES } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { normalizeRateLimitDecision } from './rate-limit';
-import { acquireChatSlot, chatSlotOwners, positiveIntEnv, releaseOwnedChatSlot, releaseSlotWhenStreamEnds } from './slots';
+import { acquireChatSlot, chatSlotOwners, positiveIntEnv, releaseOwnedChatSlot, releaseSlotWhenStreamEnds, acquireDistributedChatSlot, isDistributedAdmissionEnabled, releaseDistributedSlot, trackDistributedSlot } from './slots';
 import { getMetaPatchers, runJudge, scheduleAfter, scheduleFlush } from './judge';
+
+/**
+ * Registers the inline judge worker on the durable queue once per process
+ * (WP-8 F-39). Remote deliveries execute through the judge-worker route; the
+ * inline pump covers buffer mode (no remote publish configured), and the
+ * seam falls back inline whenever the queue sheds. Repeat deliveries are
+ * safe: judge scoring overwrites the same turn's judgeScores.
+ */
+let judgeWorkerRegistered = false;
+function ensureJudgeWorker(
+  comp: Composition,
+  queue: {
+    registerHandler(
+      kind: 'judge',
+      handler: (job: { turnId?: string | undefined; payload?: unknown }) => Promise<void>,
+    ): void;
+  },
+): void {
+  if (judgeWorkerRegistered) return;
+  judgeWorkerRegistered = true;
+  queue.registerHandler('judge', async (job) => {
+    // Stored payloads are flat string maps (snippets travel as JSON per the
+    // shared codec); malformed payloads are dropped, never partially run.
+    const decoded = decodeJudgePayload(job.payload ?? {});
+    if (decoded === null) {
+      logger.warn('judge.worker.invalid_payload', { jobId: 'inline' });
+      return;
+    }
+    const patchers = getMetaPatchers(comp);
+    await runJudge({
+      question: decoded.question,
+      snippets: [...decoded.snippets],
+      documents: decoded.documents,
+      answer: decoded.answer,
+      turnId: typeof job.turnId === 'string' && job.turnId !== '' ? job.turnId : 'unknown',
+      eventMetaPatcher: patchers.eventMeta,
+      batcherPatcher: patchers.batcher,
+    });
+  });
+}
 
 export async function streamChatResponseUseCase(req: Request): Promise<Response> {
   const turnStart = performance.now();
@@ -28,7 +73,28 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
     if (released) return;
     released = true;
     releaseOwnedChatSlot(req, userId);
+    // Exactly-once distributed release; TTL expiry recovers missed paths.
+    void releaseDistributedSlot(req).catch(() => undefined);
   };
+  // WP-8 F-35: distributed per-user lease behind an independent flag. The
+  // local map above stays as a fast-path; correctness across instances comes
+  // from this lease. Rejection happens before body parsing/model work with
+  // an explicit Retry-After. Degradation falls back to the local decision.
+  if (isDistributedAdmissionEnabled()) {
+    const distributed = await acquireDistributedChatSlot(getComposition().answerCache, userId);
+    if (distributed.kind === 'held') {
+      release();
+      return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+    }
+    if (distributed.kind === 'acquired') {
+      trackDistributedSlot(req, distributed.handle);
+    } else {
+      logger.warn('chat.admission.distributed_unavailable', {
+        reason: distributed.reason,
+        turnId: 'admission',
+      });
+    }
+  }
   const contentType = req.headers.get('content-type');
   if (!contentType?.includes('application/json')) {
     release();
@@ -48,6 +114,20 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
     signal: req.signal,
   });
   const comp = getComposition();
+  // WP-8 F-39: durable sampled-judge path behind an independent flag. Flag
+  // off (default): identical to the pre-WP-8 after() behavior. Flag on: judge
+  // work is enqueued as serializable jobs (idempotent per turn) and executed
+  // through the queue pump; shed/unavailable queues fall back inline.
+  const durableJudgeEnabled =
+    readWp8Flag({ get: (key: string) => process.env[key] }, 'durableJudgeQueue').enabled;
+  const durableJudgeQueue = durableJudgeEnabled
+    ? createJudgeQueuePort(comp.judgeQueue, { remotePublish: judgeQueueRemotePublish })
+    : undefined;
+  if (durableJudgeEnabled) ensureJudgeWorker(comp, comp.judgeQueue);
+  // Per-request durability outbox linking the enqueue decision (qualityJudge)
+  // to the pump decision (judgeScheduler): a remotely-published job skips the
+  // local pump so one sampled turn never pays for two judge runs.
+  let judgeDurable = false;
   const result = await chatTurn(
     { request: boundedReq, userId, startedAt: turnStart },
     {
@@ -142,17 +222,29 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
           return result.value;
         },
       },
-      judgeScheduler: (task) => scheduleAfter(() => void task()),
+      judgeScheduler: createJudgeScheduler({
+        enabled: durableJudgeEnabled,
+        queue: durableJudgeQueue,
+        scheduleAfter,
+        isDurable: () => judgeDurable,
+      }),
       turnSoftDeadlineMs: turnSoftDeadlineMs,
       judgeMaxWallMs: judgeMaxWallMs,
-      qualityJudge: (ctx) => {
-        const patchers = getMetaPatchers(comp);
-        return runJudge({
-          ...ctx,
-          eventMetaPatcher: patchers.eventMeta,
-          batcherPatcher: patchers.batcher,
-        });
-      },
+      qualityJudge: createQualityJudge({
+        enabled: durableJudgeEnabled,
+        queue: durableJudgeQueue,
+        reportDurable: (durable) => {
+          judgeDurable = durable;
+        },
+        runInline: (ctx) => {
+          const patchers = getMetaPatchers(comp);
+          return runJudge({
+            ...ctx,
+            eventMetaPatcher: patchers.eventMeta,
+            batcherPatcher: patchers.batcher,
+          });
+        },
+      }),
       traceEnabled: TRACE_ENABLED,
     },
   );

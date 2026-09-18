@@ -47,6 +47,10 @@ import { after } from 'next/server';
 import { createUIMessageStream } from 'ai';
 import type { ChatTurnModelPort, StructuredSearchOptions } from '@app/application/chat';
 import { createAgentModelBackend, defineAgentModelTool } from '@app/infrastructure/llm';
+import {
+  DurableBackgroundJobQueue,
+  createQstashPublish,
+} from '@app/infrastructure/capacity/background-job-queue';
 
 /**
  * Neutral model-invocation seam for the application chat turn. Provider
@@ -336,6 +340,66 @@ function getAgenticDeps(
 }
 
 const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
+
+/**
+ * Public base URL for the durable judge worker (WP-8 F-39).
+ *
+ * Mirrors the ingest-worker convention: an explicit
+ * QSTASH_JUDGE_WORKER_URL wins, then NEXT_PUBLIC_APP_URL / VERCEL_URL.
+ * Empty means no remote consumer is reachable; the queue still gives bounded
+ * concurrency, retries, dead-lettering, and backlog observability around
+ * inline pumped execution, and remote publish stays disabled.
+ */
+export function resolveJudgeWorkerUrl(): string {
+  const explicit = process.env.QSTASH_JUDGE_WORKER_URL;
+  if (explicit && explicit.trim()) return explicit.trim().replace(/\/+$/, '');
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (appUrl && appUrl.trim()) {
+    try {
+      return new URL(appUrl).origin;
+    } catch {
+    }
+  }
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl && vercelUrl.trim()) {
+    return `https://${vercelUrl.trim().replace(/^https?:\/\//, '')}`;
+  }
+  return '';
+}
+
+/**
+ * Durable sampled-judge queue (WP-8 F-39). Remote QStash publish is attached
+ * only when QSTASH_TOKEN and a worker URL are both present; otherwise the
+ * queue resolves to disabled-safe mode, where enqueues shed observably and
+ * the judge seam falls back inline — never pretending at remote durability.
+ * Construction never throws: a misconfigured queue degrades to the same
+ * posture as no queue.
+ */
+function createJudgeQueue(): {
+  queue: DurableBackgroundJobQueue;
+  remotePublish: boolean;
+} {
+  try {
+    const token = process.env.QSTASH_TOKEN;
+    const baseUrl = resolveJudgeWorkerUrl();
+    if (token && token.trim() !== '' && baseUrl !== '') {
+      return {
+        queue: new DurableBackgroundJobQueue({
+          publish: createQstashPublish({ url: `${baseUrl}/api/queue/judge-worker`, token }),
+        }),
+        remotePublish: true,
+      };
+    }
+    return { queue: new DurableBackgroundJobQueue(), remotePublish: false };
+  } catch (error) {
+    logger.warn('judge.queue_init_failed', { error: error instanceof Error ? error.message : String(error) });
+    return { queue: new DurableBackgroundJobQueue(), remotePublish: false };
+  }
+}
+
+const { queue: judgeQueue, remotePublish: judgeQueueRemotePublish } = createJudgeQueue();
+
+export { judgeQueueRemotePublish };
 
 function createComposition() {
   const auditDeps = { audit: core.auditRepo };
@@ -652,6 +716,7 @@ function createComposition() {
     session: Auth.clerkSessionStore,
     rateLimit: (key: string, opts: { limit: number; windowMs: number }, signal?: AbortSignal) =>
       rateLimiter.check(key, opts, signal),
+    judgeQueue,
   };
 }
 

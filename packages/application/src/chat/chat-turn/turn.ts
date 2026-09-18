@@ -30,6 +30,7 @@ import { createChatRequestSchema } from '../request-schema';
 import { resolveTurnId } from '../turn-id';
 import {
   compactModelHistory,
+  HISTORY_SHAPE_VERSION,
   toChatUIMessages,
   type ChatInputMessage,
   type ChatUIMessage,
@@ -78,7 +79,11 @@ import {
   type CatalogCompatToolEnvelope,
   type PrefetchedSearchOutcome,
 } from '../../agent/compat/chat-tools-compat';
-import { createAgentRunBudget } from '../../agent/agent-budget';
+import { createDeadlineLedger } from '../../runtime/deadline-ledger';
+import { readWp8Flag } from '../../runtime/wp8-flags';
+import { createAgentProgressSink, type AgentProgressSink } from '../../chat/progress/progress-sink';
+import type { AgentProgressEvent } from '../../chat/progress/progress-event';
+import { buildPromptPrefixVersion, computeSchemaDigest } from '../../agent/prompt/prefix-version';
 import { createSupportAgent, SEARCH_TOOL_NAME, TICKET_TOOL_NAME } from '../../agent/support-agent';
 import { DEFAULT_TOOL_CAPABILITIES } from '../../agent/model-tool-capabilities';
 import { readSupportAgentFlag } from '../../agent/agent-flags';
@@ -188,6 +193,116 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const capturedCitations = groundingEvidence.citations;
 
   const turnId = resolveTurnId(parsed.data.turnId);
+
+  // WP-8 F-29/F-42: application-owned truthful progress. The sink is created
+  // only when WP8_SERVER_PROGRESS_ENABLED=1; when absent every helper below
+  // is a no-op and the turn behaves byte-identically to before. Events are
+  // buffered until a stream starts, then drained as a prelude; the main
+  // stream switches to live emission. Emission is measurement-only and never
+  // throws into turn logic.
+  const progressEnabled =
+    readWp8Flag({ get: (key: string) => process.env[key] }, 'serverProgress').enabled;
+  const progressBuffered: AgentProgressEvent[] = [];
+  let progressLive = false;
+  let progressEnqueue: ((chunk: ChatChunk) => void) | null = null;
+  const progressSink: AgentProgressSink | null = progressEnabled
+    ? createAgentProgressSink({
+        turnId: turnId ?? 'turn-without-id',
+        onEmit: (event) => {
+          if (progressLive && progressEnqueue !== null) {
+            progressEnqueue({ type: 'data-agent-progress', data: event });
+          } else {
+            progressBuffered.push(event);
+          }
+        },
+      })
+    : null;
+  const progressElapsedMs = (): number => Math.max(0, Math.round(performance.now() - turnStart));
+  const emitProgress = (
+    phase: 'accepted' | 'checking_cache' | 'drafting' | 'verifying' | 'saving',
+    status: 'started' | 'updated' | 'completed' | 'failed',
+    labelCode: 'request_accepted' | 'cache_checking' | 'cache_hit' | 'draft_ready' | 'verify_running' | 'save_done',
+    extra?: { readonly completed?: number | undefined; readonly total?: number | undefined },
+  ): void => {
+    if (progressSink === null) return;
+    try {
+      progressSink.emit({
+        id: `${turnId ?? 'turn-without-id'}:${phase}`.slice(0, 100),
+        phase,
+        status,
+        labelCode,
+        elapsedMs: progressElapsedMs(),
+        ...(extra?.completed !== undefined || extra?.total !== undefined
+          ? {
+              ...(extra?.completed !== undefined ? { completed: extra.completed } : {}),
+              ...(extra?.total !== undefined ? { total: extra.total } : {}),
+            }
+          : {}),
+      });
+    } catch {
+      // Progress is measurement-only; it never breaks the turn.
+    }
+  };
+  const finishProgress = (outcome: 'complete' | 'degraded' | 'cancelled'): void => {
+    if (progressSink === null) return;
+    try {
+      progressSink.flush();
+      const base = {
+        id: `${turnId ?? 'turn-without-id'}:${outcome}`.slice(0, 100),
+        labelCode: (
+          outcome === 'complete'
+            ? 'answer_complete'
+            : outcome === 'degraded'
+              ? 'degraded_partial'
+              : 'request_cancelled'
+        ) as 'answer_complete' | 'degraded_partial' | 'request_cancelled',
+        elapsedMs: progressElapsedMs(),
+      };
+      if (outcome === 'complete') progressSink.complete(base);
+      else if (outcome === 'degraded') progressSink.degrade(base);
+      else progressSink.cancel(base);
+    } catch {
+      // Progress is measurement-only; it never breaks the turn.
+    }
+  };
+  /** Drain buffered events as stream prelude chunks (cache-hit replays). */
+  const drainProgressPrelude = (): ChatChunk[] => {
+    if (progressSink === null) return [];
+    try {
+      progressSink.flush();
+    } catch {
+      // Progress is measurement-only; it never breaks the turn.
+    }
+    const prelude = progressBuffered.map((event): ChatChunk => ({
+      type: 'data-agent-progress',
+      data: event,
+    }));
+    progressBuffered.length = 0;
+    return prelude;
+  };
+  /** Switch the main stream to live emission after draining the buffer. */
+  const goLiveProgress = (enqueue: (chunk: ChatChunk) => void): void => {
+    if (progressSink === null) return;
+    progressLive = true;
+    progressEnqueue = enqueue;
+    for (const chunk of drainProgressPrelude()) enqueue(chunk);
+  };
+  /**
+   * End progress for non-stream rejections (idempotency conflict, cache
+   * wait-timeout, cache unavailable). The turn terminal contract is
+   * stream-scoped: these paths return typed HTTP statuses with no stream to
+   * carry parts, so the sink is disposed and its buffer dropped. Nothing
+   * user-visible leaks; the sink owns no timers.
+   */
+  const abandonProgress = (): void => {
+    if (progressSink === null) return;
+    try {
+      progressSink.dispose();
+    } catch {
+      // Progress is measurement-only; it never breaks the turn.
+    }
+  };
+  emitProgress('accepted', 'started', 'request_accepted');
   const turnRequestHash = {
     current: turnRequestFingerprint({
       conversationId: parsed.data.conversationId,
@@ -276,6 +391,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   };
 
   try {
+    const progressCacheLookupActive =
+      (turnResultCache && turnResultKey && turnResultCoordinationKey) ||
+      cacheKey
+      ? true
+      : false;
+    if (progressCacheLookupActive) {
+      emitProgress('checking_cache', 'started', 'cache_checking');
+    }
     if (turnResultCache && turnResultKey && turnResultCoordinationKey) {
       const readTurnState = async () => {
         const current = await turnResultCache.get(turnResultKey).catch(() => null);
@@ -295,6 +418,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         return compatibleState;
       };
       let turnState = await readTurnState();
+      abandonProgress();
       if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
       if (!turnState) {
         const lease = createCacheLease(
@@ -307,6 +431,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         if (leaseResult.kind === 'acquired') {
           turnLease = lease;
           turnState = await readTurnState();
+          abandonProgress();
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
         } else if (leaseResult.kind === 'held') {
           const remainingWaitMs = Math.max(
@@ -318,9 +443,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             signal: request.signal,
           });
           turnState = await readTurnState();
+          abandonProgress();
           if (turnState && 'conflict' in turnState) return { kind: 'idempotency-conflict' };
+          abandonProgress();
           if (!turnState) return { kind: 'cache-wait-timeout' };
         } else {
+          abandonProgress();
           return { kind: 'cache-unavailable' };
         }
       }
@@ -360,11 +488,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }),
         });
         await releaseLeases();
+        emitProgress('checking_cache', 'completed', 'cache_hit');
+        finishProgress('complete');
         const stream = createCachedAnswerStream(
           deps.modelGateway,
           cachedAnswer,
           historyPersisted,
           parsed.data.conversationId,
+          drainProgressPrelude(),
         );
         leasesEscaped = true;
         return {
@@ -398,8 +529,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           timeoutMs: remainingWaitMs,
           signal: request.signal,
         });
+        abandonProgress();
         if (!cached) return { kind: 'cache-wait-timeout' };
       } else {
+        abandonProgress();
         return { kind: 'cache-unavailable' };
       }
     }
@@ -451,8 +584,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
         }),
       });
       await releaseLeases();
+      emitProgress('checking_cache', 'completed', 'cache_hit');
+      finishProgress('complete');
       const stream = deps.modelGateway.createStream({
         execute: (writer: ChatStreamWriter) => {
+          for (const chunk of drainProgressPrelude()) writer.write(chunk);
           writer.write({ type: 'text-start', id: 'cached' });
           writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
           writer.write({ type: 'text-end', id: 'cached' });
@@ -479,6 +615,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     }
     if (deps.traceEnabled) logger.info('rag.cache.miss', { key: cacheKey });
     }
+    if (progressCacheLookupActive) {
+      emitProgress('checking_cache', 'completed', 'cache_checking');
+    }
 
   const prefetchedToolState = {
     outOfDomain: false,
@@ -487,9 +626,15 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   };
   const toolLedger = new TurnToolLedger();
 
-  // One turn wall-clock deadline shared by prefetch, tools, and the model
-  // loop. Created before prefetch so prefetch cannot escape the turn
-  // envelope. Full deadline-ledger accounting remains WP-8 scope.
+  // WP-8 F-30: one request-level deadline ledger at the turn seam. The
+  // ledger owns the absolute deadlineAt; the WP-5 AgentRunBudget derives
+  // from that same instant via toAgentRunBudget, so platform/app/reserve
+  // arithmetic lives once. Values are identical to the pre-WP-8 budget
+  // (soft deadline + min(15s, soft) reserve); no model/tool/search/
+  // evidence/token/retry/cost budget is raised. The 55s clamped path
+  // predates the 10s reserve floor and is preserved verbatim (see
+  // docs/runtime/route-duration-decision.md); the ledger still refuses
+  // new work that cannot fit its expected duration plus the reserve.
   const rawSoftDeadlineMs = deps.turnSoftDeadlineMs ?? DEFAULT_TURN_SOFT_DEADLINE_MS;
   const maxSoftDeadlineMs = MAX_DURATION_MS - 5_000;
   let softDeadlineMs = rawSoftDeadlineMs;
@@ -499,14 +644,18 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
   const agentFlag = readSupportAgentFlag({ get: (key: string) => process.env[key] });
-  const agentBudget = createAgentRunBudget({
-    nowMs: requestStartedAt,
-    deadlineInMs: softDeadlineMs,
-    finalizeReserveMs: Math.min(15_000, softDeadlineMs),
-    overrides: {
-      maxModelSteps: effectiveMode === 'agentic' ? cfg.agentStepBudget : 5,
-      ...(agentFlag.enabled ? {} : { maxModelSteps: 1 }),
+  const turnLedger = createDeadlineLedger(
+    {
+      acceptedAtMs: requestStartedAt,
+      platformLimitMs: softDeadlineMs + Math.min(15_000, softDeadlineMs),
+      appHardStopMs: softDeadlineMs,
+      finalizeReserveMs: Math.min(15_000, softDeadlineMs),
     },
+    { parentSignal: request.signal },
+  );
+  const agentBudget = turnLedger.toAgentRunBudget({
+    maxModelSteps: effectiveMode === 'agentic' ? cfg.agentStepBudget : 5,
+    ...(agentFlag.enabled ? {} : { maxModelSteps: 1 }),
   });
   const workDeadlineAt = agentBudget.deadlineAt - agentBudget.finalizeReserveMs;
   // The turn signal stops model and tool work before the finalization reserve;
@@ -662,6 +811,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           ledger: toolLedger,
           budget: agentBudget,
           approvals: turnApprovals,
+          ...(progressSink !== null
+            ? { progressSink, progressElapsedMs }
+            : {}),
           internalToolContext: {
             userId,
             turnId: turnId ?? 'turn-without-id',
@@ -752,10 +904,12 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
 
   const citationStream = new ReadableStream<ChatChunk>({
     start(controller) {
+      goLiveProgress((chunk) => controller.enqueue(chunk));
       (async () => {
         let partialText = '';
         let generationCompletedCleanly = false;
         try {
+          emitProgress('drafting', 'started', 'draft_ready');
           const agentRun = await createSupportAgent().run({
             runId: turnId ?? randomUUID(),
             actor: { userId },
@@ -898,6 +1052,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             withholdCandidate = false;
             groundingDecision = { kind: 'verified', citations: [] };
           } else {
+            emitProgress('verifying', 'started', 'verify_running');
             const rawCandidateCitations: readonly unknown[] = releasedCitations.map((citation) => ({
               id: citation.id,
               ...(citation.chunkUid !== undefined ? { chunkUid: citation.chunkUid } : {}),
@@ -976,6 +1131,19 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }
           const verificationMs = Math.round(performance.now() - verificationStart);
           metrics.hallucinationMs = verificationMs;
+          // WP-8 F-29 terminal progress: exactly one of complete/degraded/
+          // cancelled closes every turn. Verified and casual releases
+          // complete; deadline/agent-stop fallbacks and fail-closed safe
+          // responses degrade; request cancellation cancels (see catch below).
+          if (timedOut || !generationCompletedCleanly) {
+            finishProgress('degraded');
+          } else if (groundingDecision?.kind === 'verified' || !documentationRequired) {
+            finishProgress('complete');
+          } else if (groundingDecision !== null) {
+            finishProgress('degraded');
+          } else {
+            finishProgress('degraded');
+          }
           if (groundingDecision !== null && !withholdCandidate) {
             releaseBufferedText(releasedText);
             for (const src of releasedCitations) {
@@ -1175,6 +1343,30 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const inputTokens = promptCacheUsage?.inputTokens ?? parsedUsage.inputTokens;
           const outputTokens = parsedUsage.outputTokens;
           const totalMs = Math.round(performance.now() - turnStart);
+          // WP-8 F-33: versioned cacheable-prefix identity on every turn.
+          // The digest covers the ordered tool set in catalog order (tool
+          // membership or order changes rotate it) while the tool-catalog
+          // version covers definition changes; any contract change rotates
+          // prefixVersion. The history shape version pins the compaction
+          // contract. Telemetry-only: a failure here never changes loop,
+          // release, or cache behavior.
+          let promptPrefixVersion: string | null = null;
+          let promptSchemaDigest: string | null = null;
+          try {
+            const versioned = buildPromptPrefixVersion({
+              systemPromptVersion: SYSTEM_PROMPT_PREFIX_VERSION,
+              toolCatalogVersion: catalogTools.catalogVersion,
+              schemaDigest: computeSchemaDigest(
+                Object.keys(catalogTools.executionTools).map((name) => ({ name, jsonSchema: null })),
+              ),
+              historyShapeVersion: HISTORY_SHAPE_VERSION,
+            });
+            promptPrefixVersion = versioned.prefixVersion;
+            promptSchemaDigest = versioned.schemaDigest;
+          } catch {
+            promptPrefixVersion = null;
+            promptSchemaDigest = null;
+          }
           deps.eventSink.record({
             turnId,
             userId,
@@ -1212,6 +1404,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                     cacheWriteTokens: promptCacheUsage.cacheWriteTokens,
                     cacheWriteStatus: promptCacheUsage.cacheWriteStatus,
                     cacheHitRatio: promptCacheUsage.cacheHitRatio,
+                    ...(promptPrefixVersion !== null && promptSchemaDigest !== null
+                      ? {
+                          promptPrefixVersion,
+                          toolCatalogVersion: catalogTools.catalogVersion,
+                          promptSchemaDigest,
+                          historyShapeVersion: HISTORY_SHAPE_VERSION,
+                        }
+                      : {}),
                   }
                 : undefined,
               prefetchStatus: metrics.prefetchStatus,
@@ -1241,6 +1441,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           // turns never reach this point (the catch path persists nothing
           // except the ticket sentinel).
           const persistedText = releasedText !== '' ? releasedText : partialText;
+          emitProgress('saving', 'started', 'save_done');
           const historyPersisted = await persistHistory(deps.historySink, cfg, userId, {
             conversationId: parsed.data.conversationId,
             turnId,
@@ -1317,6 +1518,14 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           }
         } catch (err) {
           logger.error('Chat stream error', { error: err });
+          // Stream failures still close progress exactly once: user
+          // cancellation cancels, everything else degrades. The sink is
+          // already settled on released turns, so this is a no-op there.
+          if (request.signal.aborted) {
+            finishProgress('cancelled');
+          } else {
+            finishProgress('degraded');
+          }
           try {
             if (metrics.ticketCreated) {
               logger.warn('chat.turn.ticket_created_but_stream_failed', { turnId, ticketId: metrics.ticketId });

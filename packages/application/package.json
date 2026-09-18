@@ -22,7 +22,10 @@
     "./prompt": "./src/prompt/index.ts",
     "./prompt/build-system-prompt": "./src/prompt/build-system-prompt.ts",
     "./chat": "./src/chat/index.ts",
-    "./agent/search": "./src/agent/search/index.ts"
+    "./agent/search": "./src/agent/search/index.ts",
+    "./capacity/background-queue": "./src/capacity/background-queue.ts",
+    "./runtime/route-envelope": "./src/runtime/route-envelope.ts",
+    "./runtime/wp8-flags": "./src/runtime/wp8-flags.ts"
   },
   "dependencies": {
     "@app/domain": "workspace:*",

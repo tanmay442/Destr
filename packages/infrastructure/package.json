@@ -16,7 +16,8 @@
     "./storage": "./src/storage/blob-storage-factory.ts",
     "./core": "./src/core.ts",
     "./config": "./src/config/env.ts",
-    "./config/dotenv-bootstrap": "./src/config/dotenv-bootstrap.ts"
+    "./config/dotenv-bootstrap": "./src/config/dotenv-bootstrap.ts",
+    "./capacity/background-job-queue": "./src/capacity/background-job-queue.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.90",

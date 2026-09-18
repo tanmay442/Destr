@@ -5,6 +5,7 @@ import type { RetrievedChunk } from '../../rag/search/search-types';
 import type { SearchDegradation, SearchFailure } from '../../rag/search';
 import { addGroundingEvidence, attachSearchProvenance, type GroundingEvidence } from '../../chat/grounding-evidence';
 import type { StructuredSearchOptions, TurnMetrics } from '../../chat/chat-turn/turn-types';
+import type { AgentProgressSink } from '../../chat/progress/progress-sink';
 import type { BuiltToolInstance, BuiltToolSet } from '../tool-catalog';
 
 export interface SearchUsage {
@@ -111,6 +112,14 @@ export interface CatalogCompatTurn {
   /** A request-owned context; never take approval credentials from model-visible arguments. */
   readonly internalToolContext?: CatalogCompatInternalToolContext | undefined;
   readonly approvals?: ToolApprovalPolicy | undefined;
+  /**
+   * Optional WP-8 progress reporting. When present, the search tool emits
+   * real `searching` phases (and `planning` when planner usage is observed)
+   * from this owning seam; the route serializes them as transient parts.
+   * `elapsedMs` must return turn-elapsed milliseconds on the turn clock.
+   */
+  readonly progressSink?: AgentProgressSink | undefined;
+  readonly progressElapsedMs?: (() => number) | undefined;
 }
 
 export interface CatalogCompatToolEnvelope {
@@ -603,6 +612,35 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
 
   const tools: Record<string, unknown> = {};
   const executionTools: Record<string, CatalogCompatToolEnvelope> = {};
+  // WP-8 F-29: real phase emission from the owning tool seam. A search
+  // attempt emits started/completed (or failed) around the real work,
+  // including budget-refused attempts, which complete with zero usage.
+  // Prefetch reuse runs no search and stays silent. `planning` emits only
+  // when planner usage is observed in the outcome (post-hoc but real);
+  // rerank/source phases have no observer at this seam and are never
+  // invented. All emission is measurement-only and can never break tool
+  // execution.
+  const emitSearchProgress = (
+    phase: 'searching' | 'planning',
+    status: 'started' | 'completed' | 'failed',
+    labelCode: 'search_running' | 'plan_ready',
+    callId: string,
+  ): void => {
+    const sink = turn.progressSink;
+    if (sink === undefined) return;
+    try {
+      sink.emit({
+        id: callId.slice(0, 100),
+        phase,
+        status,
+        labelCode,
+        elapsedMs: Math.max(0, Math.round(turn.progressElapsedMs?.() ?? 0)),
+        callId: callId.slice(0, 100),
+      });
+    } catch {
+      // Progress is measurement-only; it never breaks tool execution.
+    }
+  };
   if (searchBuilt) {
     const executeSearch = async (args: unknown, options: unknown): Promise<unknown> => {
       const execution = parseToolExecutionOptions(options, turn, SEARCH_TOOL_NAME);
@@ -732,12 +770,19 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
           metrics.reformulationCount += 1;
         }
         const started = Date.now();
+        emitSearchProgress('searching', 'started', 'search_running', callId);
         try {
           const runSearch = chain.then(() => {
             const remainingPhysical = budget.maxPhysicalRetrievals - sharedPhysicalUsed;
             const remainingTokens = budget.maxEvidenceTokens - sharedTokensUsed;
             const remainingUnique = budget.maxUniqueEvidenceChunks - sharedUniqueEvidenceUsed;
             const plannerExhausted = plannerFlags.plannerEnabled && sharedPlansUsed >= budget.maxSearchPlans;
+            // Reset before the budget check: an exhausted call must report
+            // zero usage, never inherit the previous call's counters (which
+            // would double-count shared budgets and misattribute planner
+            // usage to a call that planned nothing).
+            lastStructuredResult = null;
+            lastSearchExecutionUsage = null;
             if (remainingPhysical <= 0 || remainingTokens <= 0 || remainingUnique <= 0 || plannerExhausted) {
               return {
                 callId,
@@ -757,8 +802,6 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
                 truncatedBy: remainingTokens <= 0 ? ['turn_token_limit' as const] : [],
               };
             }
-            lastStructuredResult = null;
-            lastSearchExecutionUsage = null;
             return searchBuilt.execute(
               { query, ...(limit !== undefined ? { limit } : {}) },
               toToolExecuteCall(execution),
@@ -788,6 +831,10 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
           };
           const enrichedOutput = addSearchUsage(output, usage);
           recordSearchOutcome(enrichedOutput, usage, Math.max(0, Date.now() - started), callId, query);
+          if (usage.plansUsed > 0) {
+            emitSearchProgress('planning', 'completed', 'plan_ready', callId);
+          }
+          emitSearchProgress('searching', 'completed', 'search_running', callId);
           attachProvenanceFromOutput(turn.groundingEvidence, callId, enrichedOutput);
           sharedPlansUsed += usage.plansUsed;
           sharedPhysicalUsed += usage.physicalRetrievalsUsed;
@@ -813,6 +860,7 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
           metrics.hitCount = (metrics.hitCount ?? 0) + usage.uniqueEvidenceAdded;
           return enrichedOutput;
         } catch (error) {
+          emitSearchProgress('searching', 'failed', 'search_running', callId);
           recordSearchThrownOutcome(error, Math.max(0, Date.now() - started), callId, execution.signal);
           throw error;
         } finally {

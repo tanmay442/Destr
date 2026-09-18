@@ -162,7 +162,7 @@ describe('ChatInterface', () => {
     expect(screen.queryByTestId('chat-empty-fallback')).not.toBeInTheDocument();
   });
 
-  it('shows status stages while the assistant is generating with no text yet', () => {
+  it('shows a truthful static indicator while the assistant is generating with no text yet', () => {
     useChatMock.mockReturnValue({
       messages: [],
       sendMessage: vi.fn(),
@@ -172,7 +172,10 @@ describe('ChatInterface', () => {
     });
     render(<ChatInterface conversationId="conv-test" />);
     expect(screen.getByTestId('chat-thinking')).toBeInTheDocument();
-    expect(screen.getByText('Searching from the sources')).toBeInTheDocument();
+    // WP-8 F-29: no timer-invented phase claims. The static indicator must
+    // not assert search/compile/finalize activity.
+    expect(screen.getByText('Working on your request')).toBeInTheDocument();
+    expect(screen.queryByText('Searching from the sources')).not.toBeInTheDocument();
   });
 
   it('renders citation cards for data-citation parts', () => {

@@ -120,9 +120,12 @@ function createCachedAnswerStream(
   cachedAnswer: CachedAnswerPayload,
   historyPersisted: boolean,
   conversationId: string | undefined,
+  /** Transient progress prelude, drained from the turn sink (WP-8 F-29). */
+  prelude: readonly ChatChunk[] = [],
 ): ReadableStream<ChatChunk> {
   return factory.createStream({
     execute: (writer) => {
+      for (const chunk of prelude) writer.write(chunk);
       writer.write({ type: 'text-start', id: 'cached' });
       writer.write({ type: 'text-delta', id: 'cached', delta: cachedAnswer.text });
       writer.write({ type: 'text-end', id: 'cached' });

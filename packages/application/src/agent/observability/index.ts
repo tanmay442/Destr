@@ -90,3 +90,22 @@ export type {
   CostCompleteness,
   StepCost,
 } from './usage-normalizer';
+export {
+  WP8_EVENT_TYPES,
+  WP8_PROGRESS_PHASES,
+  WP8_PROGRESS_LABEL_CODES,
+  Wp8EventSchema,
+  createWp8Event,
+  validateWp8EventOrdering,
+  assertWp8ExactlyOneTerminal,
+  isWp8TerminalEvent,
+  redactWp8Event,
+  buildWp8Counters,
+  assertWp8CounterKeysBounded,
+  fingerprintWp8Context,
+  buildWp8StepCostTelemetry,
+  deriveProviderCacheStatus,
+  wp8StepCostLabels,
+  rollupWp8StepCosts,
+  describeWp8StoragePlacement,
+} from './wp8-events';

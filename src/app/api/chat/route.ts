@@ -2,10 +2,26 @@ import { assertSameOrigin } from '@/composition';
 import { isRequestCancellationError } from '@app/domain';
 import { logger } from '@/lib/logger';
 import { respond } from '@/lib/http';
-import { chatSlotOwners, releaseOwnedChatSlot } from './slots';
+import {
+  CHAT_ROUTE_MAX_DURATION_SECS,
+  ROUTE_ENVELOPE_CURRENT_60,
+  assertRouteEnvelopeValid,
+} from '@app/application/runtime/route-envelope';
+import { chatSlotOwners, releaseDistributedSlot, releaseOwnedChatSlot } from './slots';
 import { streamChatResponseUseCase } from './handler';
 
 export const maxDuration = 60;
+
+// Build-time consistency: the Vercel route envelope must match the
+// deployment-owned constant, and the application hard stop must stay
+// strictly below the platform limit with the mandatory reserve intact.
+// WP-8 decision: keep 60s (see docs/runtime/route-duration-decision.md).
+assertRouteEnvelopeValid(ROUTE_ENVELOPE_CURRENT_60);
+if (maxDuration !== CHAT_ROUTE_MAX_DURATION_SECS) {
+  throw new Error(
+    `chat route maxDuration (${maxDuration}s) must match CHAT_ROUTE_MAX_DURATION_SECS (${CHAT_ROUTE_MAX_DURATION_SECS}s)`,
+  );
+}
 
 export async function POST(req: Request) {
   try {
@@ -15,6 +31,7 @@ export async function POST(req: Request) {
   } catch (error) {
     const userId = chatSlotOwners.get(req);
     if (userId) releaseOwnedChatSlot(req, userId);
+    void releaseDistributedSlot(req).catch(() => undefined);
     if (req.signal.aborted && isRequestCancellationError(error)) return new Response(null, { status: 499 });
     logger.error('Chat request failed', { error: String(error) });
     return respond(error);

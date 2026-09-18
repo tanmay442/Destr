@@ -76,6 +76,13 @@ export interface ChatInputMessage {
 export const MAX_MODEL_HISTORY_MESSAGES = 24;
 export const MAX_MODEL_HISTORY_TEXT_CHARS = 50_000;
 
+/**
+ * Version of the compactModelHistory shape (message cap, char cap, newest-win
+ * selection). Bump when its semantics change: the prompt-prefix digest
+ * consumes this so cacheable-prefix comparisons rotate correctly.
+ */
+export const HISTORY_SHAPE_VERSION = 'history-v1' as const;
+
 function messageTextChars(message: ChatUIMessage): number {
   return message.parts.reduce(
     (total, part) => {

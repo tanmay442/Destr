@@ -36,7 +36,94 @@ import {
   type FeedbackVote,
 } from './utils';
 import { StatusStages } from './feedback';
+import { AgentProgress, type AgentProgressViewEvent } from './AgentProgress';
 import { MessageItem } from './MessageItem';
+
+/**
+ * Client-side collector for transient `data-agent-progress` stream parts
+ * (WP-8 Task E, F-29). The server emits these parts transport-only; this
+ * boundary parse validates every field with guards and treats
+ * unknown/malformed fields as absent, so malformed payloads can never crash
+ * rendering or leak raw text (labels render only through the fixed
+ * AgentProgress map). Output contains view fields only (`id`, `phase`,
+ * `labelCode`, `completed`, `total`); `status`, `elapsedMs`, `callId`, and
+ * `subquestionId` are stripped here and never reach persisted structures.
+ */
+export const AGENT_PROGRESS_MAX_EVENTS = 50 as const;
+
+const AGENT_PROGRESS_PHASES: ReadonlySet<string> = new Set([
+  'accepted',
+  'checking_cache',
+  'planning',
+  'searching',
+  'reranking',
+  'reading_sources',
+  'drafting',
+  'verifying',
+  'saving',
+  'complete',
+  'degraded',
+  'cancelled',
+]);
+
+const MAX_PROGRESS_ID_LENGTH = 100;
+const MAX_PROGRESS_COUNTER = 9999;
+
+function isDataRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toProgressCounter(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return undefined;
+  if (value < 0 || value > MAX_PROGRESS_COUNTER) return undefined;
+  return value;
+}
+
+/**
+ * Boundary parse for one transient progress payload. Returns null when the
+ * part must be skipped (unknown shape, missing id/phase/labelCode).
+ * Invalid counters drop the counters only, never the event.
+ */
+export function toAgentProgressViewEvent(data: unknown): AgentProgressViewEvent | null {
+  if (!isDataRecord(data)) return null;
+  const { id, phase, labelCode, completed: rawCompleted, total: rawTotal } = data;
+  if (typeof id !== 'string' || id.length < 1 || id.length > MAX_PROGRESS_ID_LENGTH) return null;
+  if (typeof phase !== 'string' || !AGENT_PROGRESS_PHASES.has(phase)) return null;
+  if (typeof labelCode !== 'string' || labelCode.length < 1) return null;
+  const completed = toProgressCounter(rawCompleted);
+  const total = toProgressCounter(rawTotal);
+  if (completed !== undefined && total !== undefined && completed > total) {
+    return { id, phase, labelCode };
+  }
+  return {
+    id,
+    phase,
+    labelCode,
+    ...(completed === undefined ? {} : { completed }),
+    ...(total === undefined ? {} : { total }),
+  };
+}
+
+/**
+ * Collects validated progress view events in arrival order across all
+ * messages, keeping only the latest AGENT_PROGRESS_MAX_EVENTS to bound
+ * render cost.
+ */
+export function collectAgentProgressEvents(
+  messages: readonly MyUIMessage[],
+): AgentProgressViewEvent[] {
+  const events: AgentProgressViewEvent[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== 'data-agent-progress') continue;
+      const raw: unknown = part.data;
+      const event = toAgentProgressViewEvent(raw);
+      if (event !== null) events.push(event);
+    }
+  }
+  if (events.length <= AGENT_PROGRESS_MAX_EVENTS) return events;
+  return events.slice(events.length - AGENT_PROGRESS_MAX_EVENTS);
+}
 
 export function ChatInterface({
   conversationId,
@@ -195,6 +282,10 @@ export function ChatInterface({
 
   const isStreaming = status === 'submitted' || status === 'streaming';
 
+  // WP-8 Task E (F-29): transient server progress, memoized so AgentProgress
+  // keeps a stable events identity across unrelated renders.
+  const progressEvents = useMemo(() => collectAgentProgressEvents(messages), [messages]);
+
   let lastUserMessage: MyUIMessage | undefined;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
@@ -344,7 +435,11 @@ export function ChatInterface({
                   className="flex items-center gap-3"
                   data-testid="chat-message-assistant"
                 >
-                  <StatusStages />
+                  {progressEvents.length > 0 ? (
+                    <AgentProgress events={progressEvents} />
+                  ) : (
+                    <StatusStages />
+                  )}
                 </div>
               );
             })()}

@@ -26,6 +26,12 @@ export default defineConfig({
             'src/__tests__/**/*.{test,test-d}.{ts,tsx}',
             'src/proxy.{test,test-d}.{ts,tsx}',
           ],
+          // WP-8 §13.6: synthetic capacity/load simulations live behind
+          // `pnpm test:capacity`, not the unit suite. They run real
+          // multi-thousand-turn simulations whose CPU would otherwise starve
+          // timing-sensitive suites on shared runners. `pnpm test:capacity`
+          // runs the CLI gate plus this directory, so nothing is skipped.
+          exclude: ['scripts/load/**'],
         },
       },
       {
