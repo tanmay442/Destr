@@ -63,7 +63,7 @@ describe('config/app.config env overrides', () => {
     stubAllTo(undefined);
     vi.resetModules();
     const { default: appConfig } = await import('../../config/app.config');
-    expect(appConfig.retrievalMode).toBe('agentic');
+    expect(appConfig.retrievalMode).toBe('normal');
     expect(appConfig.rerankerProvider).toBe('cosine');
     expect(appConfig.answerCacheEnabled).toBe(true);
     expect(appConfig.answerCacheTtlSec).toBe(3600);

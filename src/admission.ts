@@ -163,7 +163,11 @@ export async function admitInteractiveTurn(input: {
     turnId: input.turnId,
     provider: 'main',
     kind: 'interactive',
-    queueable: true,
+    // HTTP retries re-enter admission with a new turn ID. Do not enqueue a
+    // request whose connection has already received a rejection: the
+    // controller could otherwise promote this ownerless entry after another
+    // turn releases its permit.
+    queueable: false,
   });
   if (decision.kind === 'admitted') {
     if (gate.kind === 'acquired') distributedHandles.set(decision.leaseId, gate.handle);

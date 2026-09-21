@@ -1471,6 +1471,44 @@ describe('/api/chat admission (WP-9 workstream C)', () => {
     expect(getRequestAdmissionController().stats().active).toBe(0);
   });
 
+  it('rejects saturation without queueing a ghost turn before retry', async () => {
+    const userId = 'user_adm_retry';
+    const first = await admitInteractiveTurn({
+      req: new Request('http://localhost/api/chat', { method: 'POST' }),
+      userId,
+      turnId: 'turn-adm-retry-1',
+    });
+    const second = await admitInteractiveTurn({
+      req: new Request('http://localhost/api/chat', { method: 'POST' }),
+      userId,
+      turnId: 'turn-adm-retry-2',
+    });
+    expect(first.admitted).toBe(true);
+    expect(second.admitted).toBe(true);
+    if (!first.admitted || !second.admitted) return;
+
+    const rejected = await admitInteractiveTurn({
+      req: new Request('http://localhost/api/chat', { method: 'POST' }),
+      userId,
+      turnId: 'turn-adm-retry-rejected',
+    });
+    expect(rejected).toMatchObject({ admitted: false, status: 429, reason: 'per_user_limit' });
+    expect(getRequestAdmissionController().stats()).toMatchObject({ active: 2, queueDepth: 0 });
+
+    expect(releaseAdmission(first.lease, 'completed')).toMatchObject({ kind: 'released' });
+    const retry = await admitInteractiveTurn({
+      req: new Request('http://localhost/api/chat', { method: 'POST' }),
+      userId,
+      turnId: 'turn-adm-retry-new-id',
+    });
+    expect(retry.admitted).toBe(true);
+    expect(getRequestAdmissionController().stats()).toMatchObject({ active: 2, queueDepth: 0 });
+
+    expect(releaseAdmission(second.lease, 'completed')).toMatchObject({ kind: 'released' });
+    if (retry.admitted) expect(releaseAdmission(retry.lease, 'completed')).toMatchObject({ kind: 'released' });
+    expect(getRequestAdmissionController().stats()).toMatchObject({ active: 0, queueDepth: 0 });
+  });
+
   it('releases exactly once across direct and request-keyed paths', async () => {
     const req = new Request('http://localhost/api/chat', { method: 'POST' });
     const decision = await admitInteractiveTurn({ req, userId: 'user_adm_once', turnId: 'turn-adm-once-1' });

@@ -92,6 +92,41 @@ describe('deepMerge correctness', () => {
 });
 
 describe('override validation', () => {
+  it('preserves removed WP-8 overrides only as fingerprint compatibility metadata', async () => {
+    const repo = makeRepo({
+      agenticRetrieveLimit: 17,
+      agenticMaxRetries: 2,
+      agenticQueryRewriteEnabled: false,
+    });
+    const { getRuntimeConfig } = await loadRuntime(repo);
+    const cfg = await getRuntimeConfig();
+
+    expect(cfg.wp8FingerprintCompatibility).toEqual({
+      retrieveLimit: 17,
+      maxRetries: 2,
+      queryRewriteEnabled: false,
+    });
+    expect('agenticRetrieveLimit' in cfg).toBe(false);
+    expect('agenticMaxRetries' in cfg).toBe(false);
+    expect('agenticQueryRewriteEnabled' in cfg).toBe(false);
+  });
+
+  it('preserves only persisted WP-8 values so missing fields can fall back to deployment env', async () => {
+    const repo = makeRepo({ agenticRetrieveLimit: 17 });
+    const { getRuntimeConfig } = await loadRuntime(repo);
+    const cfg = await getRuntimeConfig();
+
+    expect(cfg.wp8FingerprintCompatibility).toEqual({ retrieveLimit: 17 });
+  });
+
+  it('preserves a persisted retrieval mode separately from the WP-9 default', async () => {
+    const repo = makeRepo({ retrievalMode: 'agentic' });
+    const { getRuntimeConfig } = await loadRuntime(repo);
+    const cfg = await getRuntimeConfig();
+
+    expect(cfg.wp8FingerprintCompatibility).toEqual({ retrievalMode: 'agentic' });
+  });
+
   it('rejects an invalid enum via partialAppConfigSchema', () => {
     const result = partialAppConfigSchema.safeParse({ retrievalMode: 'bogus' as string });
     expect(result.success).toBe(false);

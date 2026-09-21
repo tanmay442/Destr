@@ -226,7 +226,10 @@ export function rehydrateCandidates(
     if (bucket === undefined || bucket.length === 0) return null;
     let row: RetrievedChunkRow | undefined;
     if (candidate.chunkUid !== undefined) {
-      row = bucket.find((candidate2) => candidate2.chunkUid === candidate.chunkUid) ?? bucket[0];
+      // A cached UID is a content identity, not a hint. Falling back to the
+      // first row with the same numeric coordinates can replay a replacement
+      // chunk after re-ingest, so a UID mismatch must force a fresh retrieval.
+      row = bucket.find((candidate2) => candidate2.chunkUid === candidate.chunkUid);
     } else {
       row = bucket[0];
     }

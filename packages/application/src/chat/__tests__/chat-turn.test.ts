@@ -17,7 +17,11 @@ import {
 import { buildCatalogToolsForTurn } from '../../agent/turn-tools';
 import { TurnToolLedger } from '../../agent/run-state';
 import { createGroundingEvidence } from '../grounding-evidence';
-import { legacySearchResultCacheFingerprint } from '../cache-key';
+import {
+  legacySearchResultCacheFingerprint,
+  wp8CacheFingerprint,
+  wp8SearchResultCacheFingerprint,
+} from '../cache-key';
 import { TURN_FINGERPRINT_VERSION, turnRequestFingerprint } from '../turn-fingerprint';
 import type { ChatInputMessage } from '../message-types';
 import type { ChatChunk } from '../chat-chunks';
@@ -493,7 +497,16 @@ describe('chatTurn', () => {
   });
 
   it('replays a completed turn by turn ID without calling the model again', async () => {
-    const cfg = makeCfg({ prefetchFirstTurn: true });
+    const cfg: AppConfig = {
+      ...makeCfg({ prefetchFirstTurn: true }),
+      // Non-default values from the WP-8 deployment that wrote the record.
+      wp8FingerprintCompatibility: {
+        retrievalMode: 'normal',
+        retrieveLimit: 17,
+        maxRetries: 2,
+        queryRewriteEnabled: false,
+      },
+    };
     const values = new Map<string, string>();
     const turnResultCache = {
       get: vi.fn(async (key: string) => values.get(key) ?? null),
@@ -534,7 +547,7 @@ describe('chatTurn', () => {
       grounding: { kind: 'verified' },
     });
     expect(compatibilityPayload.requestFingerprint).toBe(turnRequestFingerprint({
-      semanticContext: legacySearchResultCacheFingerprint(cfg, 'normal'),
+      semanticContext: wp8SearchResultCacheFingerprint(cfg),
       messages: BASIC_BODY.messages,
     }));
     expect(versionedPayload).toMatchObject({
@@ -543,10 +556,104 @@ describe('chatTurn', () => {
       text: 'once',
       grounding: { kind: 'verified' },
     });
+    expect(versionedPayload.requestFingerprint).toBe(turnRequestFingerprint({
+      semanticContext: wp8CacheFingerprint(cfg),
+      messages: BASIC_BODY.messages,
+    }));
     expect(versionedPayload.citations).toEqual(expect.arrayContaining([
       expect.objectContaining({ scores: expect.objectContaining({ finalRank: 1 }) }),
     ]));
     expect(fakes.record.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ cacheHit: true }));
+  });
+
+  it('replays a verified WP-8 v2 record after the WP-9 fingerprint field removal', async () => {
+    const cfg: AppConfig = {
+      ...makeCfg(),
+      // These are the values that the WP-8 writer included in its v2 hash.
+      wp8FingerprintCompatibility: {
+        retrievalMode: 'normal',
+        retrieveLimit: 17,
+        maxRetries: 2,
+        queryRewriteEnabled: false,
+      },
+    };
+    const versionedKey = `rag:turn-result:v2:user_test:${BASIC_BODY.turnId}`;
+    const priorFingerprint = turnRequestFingerprint({
+      semanticContext: wp8CacheFingerprint(cfg),
+      messages: BASIC_BODY.messages,
+    });
+    const turnResultCache = {
+      get: vi.fn(async (key: string) => key === versionedKey
+        ? JSON.stringify({
+            v: 2,
+            kind: 'turn-result',
+            requestFingerprint: priorFingerprint,
+            fingerprintVersion: TURN_FINGERPRINT_VERSION,
+            text: 'completed by WP-8',
+            citations: [],
+            grounding: { kind: 'verified' },
+          })
+        : null),
+      set: vi.fn(async () => undefined),
+    };
+    const { deps, fakes } = makeDeps({ cfg, turnResultCache });
+
+    const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+
+    expect(result.kind).toBe('stream');
+    if (result.kind !== 'stream') return;
+    expect(fakes.backends).toHaveLength(0);
+    expect(await readParts(result.stream)).toContainEqual({
+      type: 'text-delta',
+      id: 'cached',
+      delta: 'completed by WP-8',
+    });
+    expect(turnResultCache.get).toHaveBeenCalledWith(versionedKey);
+  });
+
+  it('replays a WP-8 default-agentic record while WP-9 defaults to normal', async () => {
+    vi.stubEnv('AGENTIC_ENABLED', 'true');
+    try {
+      const cfg = makeCfg({ retrievalMode: 'normal' });
+      expect(cfg.wp8FingerprintCompatibility).toBeUndefined();
+      const versionedKey = `rag:turn-result:v2:user_test:${BASIC_BODY.turnId}`;
+      const priorFingerprint = turnRequestFingerprint({
+        semanticContext: wp8CacheFingerprint(cfg),
+        messages: BASIC_BODY.messages,
+      });
+      expect(JSON.parse(wp8CacheFingerprint(cfg))).toMatchObject({
+        mode: 'agentic',
+        retrievalMode: 'agentic',
+      });
+      const turnResultCache = {
+        get: vi.fn(async (key: string) => key === versionedKey
+          ? JSON.stringify({
+              v: 2,
+              kind: 'turn-result',
+              requestFingerprint: priorFingerprint,
+              fingerprintVersion: TURN_FINGERPRINT_VERSION,
+              text: 'completed by WP-8 default',
+              citations: [],
+              grounding: { kind: 'verified' },
+            })
+          : null),
+        set: vi.fn(async () => undefined),
+      };
+      const { deps, fakes } = makeDeps({ cfg, turnResultCache });
+
+      const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
+
+      expect(result.kind).toBe('stream');
+      if (result.kind !== 'stream') return;
+      expect(fakes.backends).toHaveLength(0);
+      expect(await readParts(result.stream)).toContainEqual({
+        type: 'text-delta',
+        id: 'cached',
+        delta: 'completed by WP-8 default',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('does not replay an unmarked legacy turn-result record: recompute instead', async () => {

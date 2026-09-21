@@ -86,7 +86,10 @@ export const appConfigSchema = z.object({
   rseMaxSegmentChunks: z.coerce.number().int().min(1).max(20).default(10),
   rseOverallMaxChunks: z.coerce.number().int().min(1).max(30).default(15),
   rseMinSegmentValue: z.coerce.number().min(0).max(2).default(0.3),
-  retrievalMode: z.enum(['agentic', 'normal']).default('agentic'),
+  // WP-4's gated decision was planner_rejected_keep_normal: hybrid direct
+  // retrieval remains the safe default. The structured orchestrator is still
+  // the only path for an explicit agentic-mode opt-in.
+  retrievalMode: z.enum(['agentic', 'normal']).default('normal'),
   agentStepBudget: z.coerce.number().int().positive().default(8),
   similarityThreshold: z.coerce.number().min(0).max(1).default(0.5),
   rerankerThreshold: z.coerce.number().min(0).max(1).default(0.5),
@@ -105,7 +108,22 @@ export const appConfigSchema = z.object({
   retrievalModeRolloutPercent: z.coerce.number().min(0).max(100).default(100),
 }).strip();
 
-export type AppConfig = z.infer<typeof appConfigSchema>;
+/**
+ * Values removed from the live WP-9 configuration surface but retained for
+ * the bounded WP-8 turn-result fingerprint compatibility window. They never
+ * control retrieval behavior and are intentionally absent from both config
+ * schemas and the admin settings API.
+ */
+export interface Wp8FingerprintCompatibility {
+  readonly retrievalMode?: 'agentic' | 'normal';
+  readonly retrieveLimit?: number;
+  readonly maxRetries?: number;
+  readonly queryRewriteEnabled?: boolean;
+}
+
+export type AppConfig = z.infer<typeof appConfigSchema> & {
+  readonly wp8FingerprintCompatibility?: Wp8FingerprintCompatibility;
+};
 
 type DeepPartial<T> = T extends readonly (infer Element)[]
   ? Array<DeepPartial<Element>>

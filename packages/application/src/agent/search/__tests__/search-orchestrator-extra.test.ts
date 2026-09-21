@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStructuredSearch } from '../search-orchestrator';
 import type { SearchDeps } from '../../../rag/search/search-types';
 import type { RetrievedChunkRow } from '@app/domain';
+import type {
+  CandidateCacheEntry,
+  CandidateCacheKeyInput,
+  CandidateCacheLookup,
+  CandidateCachePort,
+} from '../candidate-cache-port';
 
 function row(overrides: Partial<RetrievedChunkRow> & { id: number; documentId: number }): RetrievedChunkRow {
   return {
@@ -43,7 +49,80 @@ function makeDeps(overrides?: Partial<SearchDeps>): SearchDeps {
   } as unknown as SearchDeps;
 }
 
+function candidateCache(): CandidateCachePort {
+  const entries = new Map<string, CandidateCacheEntry[]>();
+  return {
+    buildKey: (input: CandidateCacheKeyInput) => JSON.stringify(input),
+    get: async (key: string): Promise<CandidateCacheLookup> => {
+      const found = entries.get(key);
+      return found === undefined
+        ? { outcome: 'miss' }
+        : { outcome: 'hit', candidates: found };
+    },
+    set: async (key: string, _input: CandidateCacheKeyInput, candidates: readonly CandidateCacheEntry[]) => {
+      entries.set(key, [...candidates]);
+    },
+    stats: () => ({ hits: 0, misses: 0, sets: entries.size, staleVersions: 0, errors: 0 }),
+  };
+}
+
 describe('search orchestrator extras (WP-4 budgets, backfill, follow-up)', () => {
+  it('keeps candidate-cache wiring on the structured path and skips repeated modality SQL', async () => {
+    const cachedRow = row({ id: 1, documentId: 1, content: 'Password reset steps are documented here.' });
+    const searchByVector = vi.fn().mockResolvedValue([cachedRow]);
+    const searchByLexical = vi.fn().mockResolvedValue([cachedRow]);
+    const searchDeps = makeDeps({
+      chunks: {
+        insertMany: vi.fn(),
+        deleteByDocumentId: vi.fn(),
+        searchByVector,
+        searchByLexical,
+        getByIds: vi.fn().mockResolvedValue([]),
+        getByDocAndRange: vi.fn().mockResolvedValue([]),
+        getByDocAndRanges: vi.fn().mockResolvedValue(new Map([['1:0:0', [cachedRow]]])),
+        countForDocuments: vi.fn(),
+        countForAll: vi.fn(),
+        countForDocument: vi.fn(),
+        recountAll: vi.fn(),
+      } as never,
+      candidateCache: candidateCache(),
+      candidateCacheVersions: {
+        tenantId: 'test-tenant',
+        corpusVersion: 'corpus-v1',
+        indexVersion: 'index-v1',
+        retrievalConfigVersion: 'retrieval-v1',
+      },
+    });
+    const planner = async () => ({
+      intent: 'documentation',
+      subquestions: [{
+        subquestionId: 'sq-1',
+        question: 'password reset procedure steps',
+        queries: [{ queryId: 'q-1', text: 'password reset procedure', strategy: 'original', rationaleCode: 'normalized' }],
+      }],
+    });
+
+    const run = (callId: string) => runStructuredSearch({
+      search: searchDeps,
+      hybridEnabled: true,
+      similarityThreshold: 0.5,
+    }, {
+      originalQuery: 'password reset procedure steps',
+      callId,
+      requestedLimit: 1,
+      signal: new AbortController().signal,
+      planner: planner as never,
+    });
+    const first = await run('structured-cache-first');
+    const second = await run('structured-cache-second');
+    expect(first.sets[0]?.kind).toBe('results');
+    expect(second.sets[0]?.kind).toBe('results');
+    // Cache hits still rehydrate fresh text, but must not repeat the expensive
+    // vector/lexical candidate SQL that the orchestrator previously dropped.
+    expect(searchByVector).toHaveBeenCalledTimes(1);
+    expect(searchByLexical).toHaveBeenCalledTimes(1);
+  });
+
   it('cross-call overlap triggers over-fetch/backfill with unseen candidates', async () => {
     const allRows = [1, 2, 3, 4, 5].map((doc) => row({ id: doc, documentId: doc, content: `Doc ${doc} evidence.` }));
     const searchDeps = makeDeps({

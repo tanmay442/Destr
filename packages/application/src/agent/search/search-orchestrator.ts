@@ -1005,9 +1005,22 @@ async function executePlanOnce(
                 signal: backendInput.signal,
                 ...(backendInput.embedding ? { precomputedEmbedding: backendInput.embedding } : {}),
               },
-              // Behavior preservation: orchestrator never uses the inline
+              // Behavior preservation: the orchestrator never uses the inline
               // reranker here; per-subquestion rerank happens downstream.
-              { chunks: ctx.deps.search.chunks, embeddings: ctx.deps.search.embeddings, reranker: undefined },
+              // Preserve the complete cache wiring, however: candidate pools
+              // are still safe to reuse because searchChunks rehydrates fresh
+              // rows and reapplies fusion, exclusions, and resolution.
+              {
+                chunks: ctx.deps.search.chunks,
+                embeddings: ctx.deps.search.embeddings,
+                reranker: undefined,
+                ...(ctx.deps.search.candidateCache
+                  ? { candidateCache: ctx.deps.search.candidateCache }
+                  : {}),
+                ...(ctx.deps.search.candidateCacheVersions
+                  ? { candidateCacheVersions: ctx.deps.search.candidateCacheVersions }
+                  : {}),
+              },
             );
           } catch (cause) {
             if (isCancellation(cause, backendInput.signal) || (cause instanceof Error && cause.name === 'TimeoutError')) {

@@ -17,7 +17,6 @@ import {
   AUX_MODEL,
   ANSWER_CACHE_ENABLED,
   ANSWER_CACHE_TTL_SEC,
-  AGENTIC_ENABLED,
   CHUNKING_STRATEGY,
 } from '@app/infrastructure/config';
 
@@ -82,7 +81,9 @@ const config: AppConfig = {
   rseMaxSegmentChunks: RSE_MAX_SEGMENT_CHUNKS,
   rseOverallMaxChunks: RSE_OVERALL_MAX_CHUNKS,
   rseMinSegmentValue: RSE_MIN_SEGMENT_VALUE,
-  retrievalMode: AGENTIC_ENABLED ? 'agentic' : 'normal',
+  // WP-4 decision: planner_rejected_keep_normal. Agentic mode remains an
+  // explicit runtime/admin opt-in; AGENTIC_ENABLED is its kill switch.
+  retrievalMode: 'normal',
   agentStepBudget: AGENT_STEP_BUDGET,
   similarityThreshold: SIMILARITY_THRESHOLD,
   rerankerThreshold: RERANKER_THRESHOLD,

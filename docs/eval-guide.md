@@ -30,10 +30,10 @@ conflict the runner headers win.
 - Report: `eval/golden-report.json` (`golden-report.v1`). Every per-question
   line prints faithfulness / correctness / context-relevancy, doc-hit state,
   and retrieval/generation/total latency.
-- WP-9 single retrieval path: every golden question runs the direct
+- WP-9 default retrieval path: every golden question runs the direct
   single-query hybrid retrieval (the old rewrite/retry wrapper was removed);
-  the structured-orchestrator comparison lives in `wp4-retrieval.ts` (see
-  §4).
+  the structured orchestrator remains the only explicit agentic-mode path,
+  and its offline comparison lives in `wp4-retrieval.ts` (see §4).
 
 ### `pnpm eval:retrieval` — retrieval-only gate (`scripts/eval/retrieval-run.ts`)
 

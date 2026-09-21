@@ -141,7 +141,7 @@ export const CACHE_MATRIX: Record<CacheLayerId, CacheLayerPolicy> = Object.freez
     invalidationTriggers: ['TTL expiry', 'corpus/index/config version change', 'filter change'],
     eligibility: 'Independent retrievalCacheEnabled flag; cached entries retain score and query provenance.',
     failureMode: 'fail_open',
-    stampedeControl: 'Bounded single-flight per key; dedup/backfill stay turn-local after load.',
+    stampedeControl: 'No cross-request single-flight in the storage adapter; the orchestrator deduplicates variants within a turn and dedup/backfill stay turn-local after load.',
     telemetry: ['hit', 'miss', 'stale_version', 'fail_open_degraded'],
     costNote: 'Saves vector/lexical DB work; entries are ids and scores, not document text.',
     rollback: 'Independent flag off; retrieval executes uncached.',

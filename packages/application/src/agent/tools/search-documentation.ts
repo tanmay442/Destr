@@ -181,12 +181,11 @@ export function createSearchDocumentationTool(
         const subquestionId = 'sq-1';
         const requestedLimit = input.limit ?? DEFAULT_SEARCH_TOOL_LIMIT;
         const attempts = [input.query];
-        // WP-9 single production path: agentic mode runs the structured
-        // search orchestrator whenever it is wired (production composition
-        // always wires it). The direct single-query hybrid path serves only
-        // normal mode (the AGENTIC_ENABLED=false rollback) and compositions
-        // without an orchestrator. The old rewrite/retry wrapper and the
-        // planner experiment flags were removed; see docs/wp9-migration-notes.md.
+        // WP-9 keeps one structured orchestrator for explicit agentic mode;
+        // normal hybrid retrieval remains the default and the direct path is
+        // the rollback path (including AGENTIC_ENABLED=false) or a composition
+        // without an orchestrator. The old rewrite/retry wrapper and planner
+        // experiment flags were removed; see docs/wp9-migration-notes.md.
         if (deps.effectiveMode === 'agentic' && deps.structuredSearch) {
           return runPlannerPath(deps.structuredSearch, context, call, input, callId, requestedLimit);
         }

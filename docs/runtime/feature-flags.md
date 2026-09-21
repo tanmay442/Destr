@@ -8,7 +8,10 @@ enable, `0`/`false`/`off`/`no` disable (case-insensitive, whitespace allowed);
 unset uses the default; unrecognized values fail safe to the default.
 
 WP-9 deletes the seven rollout/experiment flags below and keeps exactly one
-agentic search path: the structured orchestrator
+agentic search path: the structured orchestrator. Normal hybrid retrieval is
+the default (`retrievalMode: 'normal'`); the orchestrator is selected only by
+an explicit agentic-mode configuration and remains rollback-safe through the
+`AGENTIC_ENABLED=false` kill switch
 (`packages/application/src/agent/search/search-orchestrator.ts`), wired
 unconditionally in `src/composition.ts` and selected in agentic mode in
 `packages/application/src/agent/turn-tools.ts` (see
@@ -22,7 +25,7 @@ unconditionally in `src/composition.ts` and selected in agentic mode in
 | `SEARCH_STRUCTURED_PLANNER_ENABLED` | Orchestrator is the agentic search path; `search-flags.ts` deleted | Agentic mode uses the orchestrator when `structuredSearch` is wired; `AGENTIC_ENABLED=false` selects normal-direct retrieval |
 | `SEARCH_PLANNER_SHADOW` | No shadow comparison in the request path | Removed; comparison lives in offline eval (`scripts/eval/wp4-retrieval.ts`) |
 | `SEARCH_QUERY2DOC_ENABLED` | Experimental expansion never wired (read-and-ignored by design since WP-4) | Removed outright; no replacement path |
-| `SUPPORT_AGENT_ENABLED` | `agent-flags.ts` deleted; `SupportAgent` loop is the only agent path, one-step no-tools fallback removed (`turn.ts:848-850`) | None — rollback is a revertible commit (pinned by `support-agent-wp5-gaps.test.ts`) |
+| `SUPPORT_AGENT_ENABLED` | `agent-flags.ts` deleted; `SupportAgent` loop is the only agent path, one-step no-tools fallback removed (`turn.ts:860-862`) | None — rollback is a revertible commit (pinned by `support-agent-wp5-gaps.test.ts`) |
 | `GROUNDED_RELEASE_ENABLED` | `grounding-flags.ts` deleted; the release policy always runs with fail-closed release (`grounding-check.test.ts:334-340`) | None — the disabled path's fail-closed behavior (deterministic validation, no grader call, safe response, no cache write of unverified answers) is now the only behavior |
 | `WP8_ROUTE_DURATION_INCREASE_ENABLED` | `routeDurationIncrease` removed from `wp8-flags.ts` (now four flags, `wp8-flags.ts:1-27,157-167`); the definition was unread by production — no caller of `readWp8Flag`/`readWp8Flags` consumed it — and unsafe to wire without load evidence | None — the route stays pinned at `maxDuration = 60` with a build assertion against `CHAT_ROUTE_MAX_DURATION_SECS` (`src/app/api/chat/route.ts:13-26`); any future increase requires a decision-record update in `docs/runtime/route-duration-decision.md` first |
 
@@ -36,11 +39,11 @@ was updated to match (route-duration rows removed, wiring statuses current).
 ### `AGENTIC_ENABLED` (effectively the global retrieval kill-switch)
 
 - Owner: not declared in a flag module (acting: chat agent on-call).
-- Default: on (`packages/domain/src/constants.ts:52`; `env.ts:148` parses
+- Default: on (`packages/domain/src/constants.ts:52`; `env.ts:146` parses
   `!== 'false'`).
-- Effect: `retrievalMode: AGENTIC_ENABLED ? 'agentic' : 'normal'`
-  (`config/app.config.ts:85`); `turn.ts:331` forces `effectiveMode = 'normal'`;
-  `src/lib/config/runtime.ts:100,182-183` forces `normal` over DB overrides
+- Effect: normal hybrid retrieval remains the static/runtime default;
+  `turn.ts:337-343` forces `effectiveMode = 'normal'` when the switch is false;
+  `src/lib/config/runtime.ts:142-153,219-234` forces `normal` over DB overrides
   with a warning; aux models resolve to `undefined` so graders/rewriters are
   absent (`packages/infrastructure/src/llm/index.ts:159`).
 - Rollout/removal: not declared in code — TBD (this is the supported
@@ -48,7 +51,7 @@ was updated to match (route-duration rows removed, wiring statuses current).
 - Rollback: `AGENTIC_ENABLED=false` selects normal-direct search; never
   restores fail-open grounding, unauthorized writes, or unbounded overload
   (see invariants below).
-- Metrics: turn `mode` (`vector` vs `agentic`, `turn.ts:333`), retrieval
+- Metrics: turn `mode` (`vector` vs `agentic`, `turn.ts:345`), retrieval
   diagnostics per call.
 
 ### `WP8_SERVER_PROGRESS_ENABLED`

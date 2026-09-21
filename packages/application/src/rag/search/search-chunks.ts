@@ -83,18 +83,26 @@ interface PoolCacheScope {
  * disabled, versions are absent, or the call was already cancelled.
  *
  * The retrievalConfigVersion carries a per-call pool signature
- * (candidateLimit, vector threshold, lexical mode): pools are fetched with
- * those parameters, so different shapes must never share a key. Fusion,
+ * (actual fetched candidateLimit, vector threshold, lexical mode): pools are
+ * fetched with those parameters, so different shapes must never share a key.
+ * Fusion,
  * rerank, resolve, limits, and turn-local exclusion re-run per call and stay
  * out of the key.
  */
-function poolCacheScope(deps: SearchDeps, opts: SearchOpts, candidateLimit: number): PoolCacheScope | null {
+function poolCacheScope(
+  deps: SearchDeps,
+  opts: SearchOpts,
+  candidateLimit: number,
+  vectorFetchThreshold: number,
+): PoolCacheScope | null {
   const port = deps.candidateCache;
   const versions = deps.candidateCacheVersions;
   if (!port || !versions) return null;
   if (opts.signal?.aborted) return null;
-  const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
-  const poolSignature = `c${candidateLimit}t${threshold}l${opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE}`;
+  // v3 also records the threshold used for the vector SQL fetch. Reranked
+  // retrieval fetches at zero while cosine retrieval applies the configured
+  // threshold, so those raw pools are not interchangeable.
+  const poolSignature = `v3:c${candidateLimit}vt${vectorFetchThreshold}l${opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE}`;
   return {
     versions: {
       tenantId: versions.tenantId,
@@ -265,7 +273,11 @@ export async function searchChunks(
   // Each modality pool is served from the candidate cache when the scope is
   // configured and the pool is a hit; otherwise it is fetched from the chunk
   // store and the fresh pool is stored best-effort.
-  const poolScope = poolCacheScope(deps, opts, configuredCandidateLimit);
+  // Scope pools by the limit actually fetched for this call. A no-exclusion
+  // request may legitimately fetch only `topN`, while an exclusion/backfill
+  // request needs the broader configured pool. Reusing the broader key for
+  // both shapes would let the latter treat a short cached pool as complete.
+  const poolScope = poolCacheScope(deps, opts, candidateLimit, preThreshold);
   const vectorPromise = abortable(
     (async (): Promise<ScoredRow[]> => {
       if (poolScope) {

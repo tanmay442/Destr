@@ -126,10 +126,11 @@ describe('hallucination check toggle', () => {
 });
 
 describe('WP-2 retrieval controls', () => {
-  it('defaults to the synthetic reranker calibration and weighted lexical path', () => {
+  it('keeps normal hybrid retrieval as the default after the planner rejection', () => {
     const result = appConfigSchema.safeParse({});
     expect(result.success).toBe(true);
     if (!result.success) return;
+    expect(result.data.retrievalMode).toBe('normal');
     expect(result.data.rerankerThreshold).toBe(0.5);
     expect(result.data.lexicalSearchMode).toBe('weighted_websearch');
   });

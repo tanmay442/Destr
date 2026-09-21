@@ -32,9 +32,12 @@ gates passed, decision `planner_rejected_keep_normal`
 
 The planner was therefore rejected-as-default on that synthetic ceiling
 corpus and stayed behind its (now deleted) disabled-by-default flag. WP-9
-promotes the structured orchestrator to the single agentic search path for
-its structural guarantees (`docs/agentic-modernization-agent-logs/wp4.md:236-244`;
-`packages/application/src/agent/search/search-orchestrator.ts`): F-05
+retains the structured orchestrator as the single agentic search path for
+its structural guarantees (`docs/agentic-modernization-agent-logs/wp4.md:236-244`).
+It does not promote it to the default: normal hybrid retrieval remains the
+safe static/runtime default, and an explicit `retrievalMode: 'agentic'`
+override is required to select the orchestrator. The orchestrator
+(`packages/application/src/agent/search/search-orchestrator.ts`) provides F-05
 (separate model-step vs search-attempt vs physical vs token budgets with a
 hard total-call ceiling), F-21 (prior normalized-text dedup — one physical
 retrieval serves all subquestions sharing that text), F-22
@@ -44,7 +47,7 @@ cross-intent rerank; per-subquestion quotas), F-27 (stable-identity dedup;
 scores never used as identity), F-28 (all seven budget dimensions
 independently enforced) — plus typed stop/partial/exhaustion reasons and
 typed infrastructure errors that can never authorize a write tool. That
-promotion rests on the same synthetic evidence, not on new measurements: a
+opt-in rests on the same synthetic evidence, not on new measurements: a
 real-model planner-vs-normal comparison on a production corpus is still
 pending, and the WP-4 numbers above stand unrevisited.
 

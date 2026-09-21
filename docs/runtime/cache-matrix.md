@@ -69,8 +69,12 @@ runs, not release promises.
 - Eligibility: independent `retrievalCacheEnabled` flag. Cached entries retain
   score and query provenance (`queryId`, `subquestionId`, per-signal scores).
 - Failure mode: fail open; storage errors count and return a miss.
-- Stampede control: bounded single-flight per key. Dedup/backfill stay
-  turn-local after cached candidates are loaded.
+- Stampede control: no cross-request single-flight is currently wired in the
+  candidate-cache adapter. The structured orchestrator deduplicates identical
+  variants within one turn; dedup/backfill stay turn-local after cached
+  candidates are loaded. The generic bounded-single-flight policy utility is
+  tested separately and must be explicitly integrated before this row can
+  claim cross-request coalescing.
 - Telemetry: hit / miss / stale_version / fail_open_degraded.
 - Cost: saves vector/lexical DB work at the price of Redis ops and staleness risk.
 - Rollback: independent flag off; retrieval executes uncached.

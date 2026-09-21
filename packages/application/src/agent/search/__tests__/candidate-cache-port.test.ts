@@ -176,6 +176,23 @@ describe('rehydrateCandidates', () => {
     ];
     expect(rehydrateCandidates(broken, rows)).toBeNull();
   });
+
+  it('treats a replacement UID at the cached coordinates as a miss', () => {
+    const entries = candidatesFromSearchResult([
+      chunk({ id: 11, documentId: 7, chunkIndex: 2, chunkUid: 'old-uid' }),
+    ], {
+      queryId: 'q-1',
+      subquestionId: 'sq-1',
+    });
+    const replacement = row({
+      id: 22,
+      documentId: 7,
+      chunkIndex: 2,
+      chunkUid: 'new-uid',
+      content: 'Replacement content.',
+    });
+    expect(rehydrateCandidates(entries, [replacement])).toBeNull();
+  });
 });
 
 describe('fetchCandidateRows', () => {

@@ -102,20 +102,33 @@ export { parseCachedAnswer };
 
 function parseTurnResult(
   value: string,
-  requestFingerprint: { current: string; preResultContract: string },
+  requestFingerprint: {
+    current: string;
+    preResultContract: string;
+    wp8Current?: string;
+    wp8PreResultContract?: string;
+  },
 ): { answer: CachedAnswerPayload } | { conflict: true } | null {
   const answer = parseCachedAnswer(value, 'turn-result');
   if (!answer) return null;
-  // All live writers stamp fingerprintVersion 2 with either the current or
-  // the pre-result-contract hash (turn.ts writes both payloads). Anything
-  // else predates the v2 canonical request and is a miss, never a replay:
-  // the downstream verified-grounding check would reject it anyway, and a
-  // miss lets the turn recompute transparently instead of forcing the client
-  // onto a new turn id.
+  // All live writers stamp fingerprintVersion 2. Anything older predates the
+  // v2 canonical request and is a miss, never a replay or conflict: the
+  // downstream verified-grounding check would reject it anyway, and a miss
+  // lets the turn recompute transparently instead of forcing a new turn id.
   if (answer.fingerprintVersion !== TURN_FINGERPRINT_VERSION) return null;
-  const expected = [requestFingerprint.current, requestFingerprint.preResultContract];
-  if (!expected.includes(answer.requestFingerprint ?? '')) return { conflict: true };
-  return { answer };
+  const fingerprint = answer.requestFingerprint ?? '';
+  if ([requestFingerprint.current, requestFingerprint.preResultContract].includes(fingerprint)) {
+    return { answer };
+  }
+  // WP-8 used the same v2 key and fingerprint version, but included three
+  // controls removed by WP-9. Treat the exact historical hashes as an
+  // idempotency match so verified answers remain replayable and a rollback can
+  // read records written during this TTL window. Other v2 hashes are genuine
+  // same-turn/different-request conflicts and remain 409s.
+  if ([requestFingerprint.wp8Current, requestFingerprint.wp8PreResultContract].includes(fingerprint)) {
+    return { answer };
+  }
+  return { conflict: true };
 }
 
 export { parseTurnResult };

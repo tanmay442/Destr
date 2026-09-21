@@ -117,10 +117,19 @@ describe('searchChunks candidate pools (WP-9 F-34 wiring)', () => {
   it('re-applies turn-local exclusions on a cache hit', async () => {
     const port = fakePort();
     const { deps, searchByVector } = makeDeps(
-      [row(1, 10, 0, 'First evidence.'), row(2, 10, 1, 'Second evidence.')],
+      Array.from({ length: 30 }, (_, index) => row(
+        index + 1,
+        10,
+        index,
+        index === 0 ? 'First evidence.' : index === 1 ? 'Second evidence.' : `Additional evidence ${index}.`,
+      )),
       port,
     );
-    const first = await searchChunks('refund policy', { limit: 5 }, deps);
+    const first = await searchChunks(
+      'refund policy',
+      { limit: 5, excludeChunkIdentities: new Set(['chunk_uid:uid-10-99']) },
+      deps,
+    );
     expect(first.ok).toBe(true);
     const second = await searchChunks(
       'refund policy',
@@ -134,6 +143,64 @@ describe('searchChunks candidate pools (WP-9 F-34 wiring)', () => {
       expect(second.value.chunks.map((c) => c.content)).not.toContain('First evidence.');
       expect(second.value.chunks.map((c) => c.content)).toContain('Second evidence.');
     }
+  });
+
+  it('does not reuse a short no-exclusion pool for exclusion backfill', async () => {
+    const port = fakePort();
+    const live = [
+      row(1, 10, 0, 'First evidence.'),
+      row(2, 10, 1, 'Second evidence.'),
+      row(3, 10, 2, 'Third evidence.'),
+      row(4, 10, 3, 'Fresh backfill evidence.'),
+      row(5, 10, 4, 'More backfill evidence.'),
+    ];
+    const { deps, searchByVector, searchByLexical } = makeDeps(live, port);
+    searchByVector.mockImplementation(async (_embedding: readonly number[], opts?: { limit?: number }) =>
+      live.slice(0, opts?.limit ?? live.length));
+    const first = await searchChunks('refund policy', { limit: 3 }, deps);
+    expect(first.ok).toBe(true);
+    const second = await searchChunks(
+      'refund policy',
+      {
+        limit: 3,
+        excludeChunkIdentities: new Set([
+          'chunk_uid:uid-10-0',
+          'chunk_uid:uid-10-1',
+          'chunk_uid:uid-10-2',
+        ]),
+      },
+      deps,
+    );
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value.chunks.map((item) => item.content)).toEqual([
+        'Fresh backfill evidence.',
+        'More backfill evidence.',
+      ]);
+    }
+    // The first pool is keyed as c3; the exclusion/backfill pool is keyed as
+    // c30 and therefore performs a fresh broad retrieval instead of serving
+    // an undersized cache hit.
+    expect(searchByVector).toHaveBeenCalledTimes(2);
+    expect(searchByLexical).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses a complete short broad pool on a small corpus', async () => {
+    const port = fakePort();
+    const live = [
+      row(1, 10, 0, 'First evidence.'),
+      row(2, 10, 1, 'Second evidence.'),
+    ];
+    const { deps, searchByVector, searchByLexical } = makeDeps(live, port);
+    const exclusions = new Set(['chunk_uid:uid-10-99']);
+
+    const first = await searchChunks('refund policy', { limit: 3, excludeChunkIdentities: exclusions }, deps);
+    const second = await searchChunks('refund policy', { limit: 3, excludeChunkIdentities: exclusions }, deps);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(searchByVector).toHaveBeenCalledTimes(1);
+    expect(searchByLexical).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to uncached retrieval on stale or degraded lookups', async () => {
@@ -170,12 +237,37 @@ describe('searchChunks candidate pools (WP-9 F-34 wiring)', () => {
 
   it('keys pools by candidate limit and threshold', async () => {
     const port = fakePort();
-    const { deps, searchByVector } = makeDeps([row(1, 10, 0, 'Only evidence.')], port);
-    await searchChunks('refund policy', { limit: 5, candidateLimit: 10 }, deps);
-    await searchChunks('refund policy', { limit: 5, candidateLimit: 20 }, deps);
+    const { deps, searchByVector } = makeDeps(
+      Array.from({ length: 20 }, (_, index) => row(index + 1, 10, index, `Evidence ${index}.`)),
+      port,
+    );
+    const exclusions = new Set(['chunk_uid:uid-10-99']);
+    await searchChunks('refund policy', { limit: 5, candidateLimit: 10, excludeChunkIdentities: exclusions }, deps);
+    await searchChunks('refund policy', { limit: 5, candidateLimit: 20, excludeChunkIdentities: exclusions }, deps);
     expect(searchByVector).toHaveBeenCalledTimes(2);
-    await searchChunks('refund policy', { limit: 5, candidateLimit: 10 }, deps);
+    await searchChunks('refund policy', { limit: 5, candidateLimit: 10, excludeChunkIdentities: exclusions }, deps);
     expect(searchByVector).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share vector pools across reranked and thresholded retrieval', async () => {
+    const port = fakePort();
+    const reranker = {
+      rank: vi.fn(async (_query: string, documents: string[]) =>
+        documents.map((_document, index) => ({ index, relevanceScore: 1 - index * 0.01 }))),
+    };
+    const { deps: rerankedDeps, searchByVector } = makeDeps(
+      Array.from({ length: 30 }, (_, index) => row(index + 1, 10, index, `Evidence ${index}.`)),
+      port,
+      { reranker },
+    );
+
+    await searchChunks('refund policy', { limit: 30, threshold: 0.8 }, rerankedDeps);
+    const cosineDeps = { ...rerankedDeps, reranker: undefined };
+    await searchChunks('refund policy', { limit: 30, threshold: 0.8 }, cosineDeps);
+
+    expect(searchByVector).toHaveBeenCalledTimes(2);
+    expect(searchByVector.mock.calls[0]?.[1]).toMatchObject({ threshold: 0 });
+    expect(searchByVector.mock.calls[1]?.[1]).toMatchObject({ threshold: 0.8 });
   });
 
   it('skips the cache entirely when no port is configured', async () => {

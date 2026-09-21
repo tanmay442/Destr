@@ -37,7 +37,7 @@ The app never imports a vendor SDK. It consumes one neutral seam:
 The seam functions are re-exported through
 `packages/infrastructure/src/llm/index.ts:41-60` and surfaced to composition
 as `Llm` (`packages/infrastructure/src/index.ts:2-18`); composition consumes
-them at `src/composition.ts:572-599` (`getChatModelRequestOptions`,
+them at `src/composition.ts:675-690` (`getChatModelRequestOptions`,
 `getModelToolCapabilities`) and the catalog consumes capabilities in
 `packages/application/src/agent/tool-catalog.ts`.
 
@@ -119,7 +119,7 @@ to `0`. Absent cache metadata parses to `null` + `unsupported` — never a
 zero. A reported zero is preserved as a real zero (pinned in
 `prompt-cache.test.ts:71-90`).
 
-The composition seam (`src/composition.ts:572-585`) attaches
+The composition seam (`src/composition.ts:675-690`) attaches
 `buildProviderOptions` output, `{ provider, model, promptPrefixVersion,
 promptCache: capabilities }` telemetry, and the adapter `parseUsage` to every
 turn; per-step tokens flow back through `toBackendStep`
@@ -218,7 +218,7 @@ contract tests, retrieval quality through the eval harness:
    `parseChatModelUsage` (`model.ts:92-131`, re-exported from
    `packages/infrastructure/src/llm/index.ts:41-60` and surfaced as `Llm` from
    `packages/infrastructure/src/index.ts:2-18`), consumed in
-   `src/composition.ts:572-599` and
+   `src/composition.ts:675-690` and
    `packages/application/src/agent/tool-catalog.ts`.
 7. Run the gates: `pnpm typecheck`, `pnpm lint`, `pnpm arch` (no new vendor
    import may appear outside infrastructure — see

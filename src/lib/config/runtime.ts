@@ -1,5 +1,9 @@
 import { appConfig } from '@/lib/config';
-import { appConfigSchema, type AppConfig } from '@app/domain/app-config';
+import {
+  appConfigSchema,
+  type AppConfig,
+  type Wp8FingerprintCompatibility,
+} from '@app/domain/app-config';
 import type { SettingsRepo } from '@app/domain';
 import { logger } from '@/lib/logger';
 
@@ -95,6 +99,46 @@ function deepMerge(base: AppConfig, override: Partial<AppConfig>): AppConfig {
   return result as unknown as AppConfig;
 }
 
+function positiveInteger(value: unknown): number | null {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonnegativeInteger(value: unknown): number | null {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Capture removed WP-8 settings before appConfigSchema strips unknown keys.
+ * This metadata is read only by the turn-result fingerprint bridge; it is not
+ * exposed through the admin schema and cannot change WP-9 runtime behavior.
+ */
+function wp8FingerprintCompatibility(raw: unknown): Wp8FingerprintCompatibility | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const retrievalMode = record.retrievalMode === 'agentic' || record.retrievalMode === 'normal'
+    ? record.retrievalMode
+    : null;
+  const retrieveLimit = positiveInteger(record.agenticRetrieveLimit);
+  const maxRetries = nonnegativeInteger(record.agenticMaxRetries);
+  const queryRewriteEnabled = typeof record.agenticQueryRewriteEnabled === 'boolean'
+    ? record.agenticQueryRewriteEnabled
+    : null;
+  if (
+    retrievalMode === null &&
+    retrieveLimit === null &&
+    maxRetries === null &&
+    queryRewriteEnabled === null
+  ) return undefined;
+  return {
+    ...(retrievalMode !== null ? { retrievalMode } : {}),
+    ...(retrieveLimit !== null ? { retrieveLimit } : {}),
+    ...(maxRetries !== null ? { maxRetries } : {}),
+    ...(queryRewriteEnabled !== null ? { queryRewriteEnabled } : {}),
+  };
+}
+
 function enforceEnvironmentKillSwitches(cfg: AppConfig): AppConfig {
   let enforced = cfg;
   if (process.env.AGENTIC_ENABLED === 'false' && cfg.retrievalMode === 'agentic') {
@@ -177,7 +221,11 @@ async function refreshCache(): Promise<AppConfig> {
   try {
     const { overrides, version } = await readOverridesWithRetry();
     const merged = deepMerge(appConfig, overrides);
-    let validated = appConfigSchema.parse(merged);
+    let validated: AppConfig = appConfigSchema.parse(merged);
+    const fingerprintCompatibility = wp8FingerprintCompatibility(overrides);
+    if (fingerprintCompatibility !== undefined) {
+      validated = { ...validated, wp8FingerprintCompatibility: fingerprintCompatibility };
+    }
     validated = enforceEnvironmentKillSwitches(validated);
     if (process.env.AGENTIC_ENABLED === 'false' && (merged as Record<string, unknown>).retrievalMode === 'agentic') {
       logger.warn('[runtime-config] AGENTIC_ENABLED=false forces retrievalMode=normal despite DB override — agentic retrieval disabled');

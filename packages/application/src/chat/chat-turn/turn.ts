@@ -19,6 +19,8 @@ import {
   cacheFingerprint,
   legacySearchResultCacheFingerprint,
   SEARCH_RESULT_CONTRACT_VERSION,
+  wp8CacheFingerprint,
+  wp8SearchResultCacheFingerprint,
 } from '../cache-key';
 import { buildEventMeta } from '../build-event-meta';
 import { shouldCache } from '../should-cache';
@@ -311,6 +313,21 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       conversationId: parsed.data.conversationId,
       retry: parsed.data.retry,
       semanticContext: legacySearchResultCacheFingerprint(cfg, cfg.retrievalMode),
+      messages: inputMessages,
+    }),
+    // WP-8 used the same v2 key namespace and fingerprint version while its
+    // semantic context still included three controls removed in WP-9. Keep
+    // those exact hashes for the bounded mixed-version/rollback window.
+    wp8Current: turnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      retry: parsed.data.retry,
+      semanticContext: wp8CacheFingerprint(cfg),
+      messages: inputMessages,
+    }),
+    wp8PreResultContract: turnRequestFingerprint({
+      conversationId: parsed.data.conversationId,
+      retry: parsed.data.retry,
+      semanticContext: wp8SearchResultCacheFingerprint(cfg),
       messages: inputMessages,
     }),
   };
@@ -1313,7 +1330,9 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 const versionedPayload = JSON.stringify({
                   v: SEARCH_RESULT_CONTRACT_VERSION,
                   kind: 'turn-result',
-                  requestFingerprint: turnRequestHash.current,
+                  // Keep the v2 record readable by a WP-8 rollback. WP-9
+                  // accepts this exact bridge hash as the same request.
+                  requestFingerprint: turnRequestHash.wp8Current,
                   fingerprintVersion: TURN_FINGERPRINT_VERSION,
                   text: finalAnswer,
                   citations: releasedCitations,
@@ -1327,7 +1346,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
                 const compatibilityPayload = JSON.stringify({
                   v: 1,
                   kind: 'turn-result',
-                  requestFingerprint: turnRequestHash.preResultContract,
+                  // Keep the stable coordination record readable by WP-8.
+                  requestFingerprint: turnRequestHash.wp8PreResultContract,
                   fingerprintVersion: TURN_FINGERPRINT_VERSION,
                   text: finalAnswer,
                   citations: [],
