@@ -55,6 +55,16 @@ measures orphaned work after caller cancellation until it ends (`completed` /
 `cancelled_by_db`) or its timeout elapses (`timeout_reached`), so cancellation
 storms are observable instead of silent.
 
+WP-9 activation: `executeDatabaseCancelable` accepts an optional `queryClass`
+and, for clients that support transactions, issues the class `SET LOCAL
+statement_timeout` inside the transaction before running the operation.
+Applied at the retrieval call sites (`searchChunksByVector`,
+`searchChunksByLexical`, chunk-store point reads). Follow-ups with an owner
+and condition (not started): history/telemetry/persistence repositories
+(builder-based, need transaction wrapping plus write-timeout failure
+semantics), and `DetachedQueryTracker` hookup (needs query-id generation and
+a shared instance lifecycle).
+
 ## 3. Pool and wait metrics
 
 `collectPoolStats` reads total/idle/busy/waiting/maxSize from pg-style pools and

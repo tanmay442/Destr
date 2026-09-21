@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AppConfig } from '@app/domain/app-config';
-import type { Result } from '@app/domain';
 import {
   searchToolResultSchema,
   SearchFailure,
@@ -15,7 +14,6 @@ import type {
   RetrievalDiagnostics,
   SearchChunksResult,
 } from '../../rag/search/search-types';
-import type { AgenticResult } from '../../rag/agentic-search';
 import type {
   AgentToolContext,
   AgentToolDefinition,
@@ -32,7 +30,6 @@ export const SEARCH_TOOL_NAME = 'searchDocumentation' as const;
 export const DEFAULT_SEARCH_TOOL_LIMIT = 3;
 export const SEARCH_TOOL_TIMEOUT_MS = 20_000;
 export const SEARCH_TOOL_MAX_CALLS = 4;
-export const SEARCH_PLANNER_SHADOW_TIMEOUT_MS = 5_000;
 
 export const searchDocumentationInputSchema = z.object({
   query: z
@@ -98,32 +95,17 @@ export type StructuredSearchFn = (
     limit?: number | undefined;
     signal?: AbortSignal | undefined;
     excludeChunkIdentities?: ReadonlySet<string> | undefined;
-    shadow?: boolean | undefined;
     trace?: {
       write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
     } | undefined;
   },
 ) => Promise<OrchestratorResult>;
 
-export type AgenticSearchFn = (
-  cfg: AppConfig,
-  query: string,
-  opts?: {
-    limit?: number | undefined;
-    signal?: AbortSignal | undefined;
-    excludeChunkIdentities?: ReadonlySet<string> | undefined;
-  },
-) => Promise<Result<AgenticResult, SearchFailure>>;
-
 export interface SearchDocumentationToolDeps {
   readonly searchChunks: SearchChunksFn;
-  readonly agenticSearch: AgenticSearchFn;
   readonly cfg: AppConfig;
   readonly effectiveMode: 'agentic' | 'normal';
   readonly structuredSearch?: StructuredSearchFn | undefined;
-  readonly plannerEnabled?: boolean | undefined;
-  readonly shadowEnabled?: boolean | undefined;
-  readonly query2docEnabled?: boolean | undefined;
 }
 
 function executedQueries(queries: readonly string[]): Array<{ queryId: string; query: string }> {
@@ -199,101 +181,17 @@ export function createSearchDocumentationTool(
         const subquestionId = 'sq-1';
         const requestedLimit = input.limit ?? DEFAULT_SEARCH_TOOL_LIMIT;
         const attempts = [input.query];
-        if (deps.plannerEnabled === true && deps.structuredSearch) {
+        // WP-9 single production path: agentic mode runs the structured
+        // search orchestrator whenever it is wired (production composition
+        // always wires it). The direct single-query hybrid path serves only
+        // normal mode (the AGENTIC_ENABLED=false rollback) and compositions
+        // without an orchestrator. The old rewrite/retry wrapper and the
+        // planner experiment flags were removed; see docs/wp9-migration-notes.md.
+        if (deps.effectiveMode === 'agentic' && deps.structuredSearch) {
           return runPlannerPath(deps.structuredSearch, context, call, input, callId, requestedLimit);
         }
-        const normalResult = await runLegacyPath();
-        if (deps.shadowEnabled === true && deps.structuredSearch) {
-          void runShadowComparison(deps.structuredSearch, context, call, input, requestedLimit);
-        }
-        return normalResult;
-        async function runLegacyPath(): Promise<SearchDocumentationOutput> {
-        if (deps.effectiveMode === 'agentic') {
-          const result = await deps.agenticSearch(deps.cfg, input.query, {
-            limit: requestedLimit,
-            signal: call.signal,
-            excludeChunkIdentities: context.evidence.seenChunkKeys,
-          });
-          if (!result.ok) {
-            return searchToolResultSchema.parse({
-              callId,
-              sets: [errorSet(subquestionId, input.query, attemptsFromFailure(input.query, result.error.attemptedQueries), result.error)],
-              uniqueEvidenceAdded: 0,
-              evidenceTokensAdded: 0,
-              truncatedBy: [],
-            } satisfies SearchToolResult);
-          }
-          const queries = result.value.attemptedQueries.length > 0 ? [...result.value.attemptedQueries] : [...attempts];
-          const resultQuery = result.value.resultQuery ?? queries.at(-1) ?? input.query;
-          const degradation: readonly SearchDegradation[] = result.value.degradedBy;
-          const diagnostics: RetrievalDiagnostics | undefined = result.value.retrievalDiagnostics.at(-1);
-          const sliced = result.value.chunks.slice(0, requestedLimit);
-          if (sliced.length === 0 && degradation.length > 0) {
-            const code = degradation.every((item) => item === 'reranker_unavailable')
-              ? 'reranker_unavailable'
-              : 'retrieval_unavailable';
-            const failure = new SearchFailure(code, true, 'The documentation search is temporarily unavailable. Please try again.');
-            return searchToolResultSchema.parse({
-              callId,
-              sets: [errorSet(subquestionId, input.query, queries, failure)],
-              uniqueEvidenceAdded: 0,
-              evidenceTokensAdded: 0,
-              truncatedBy: [],
-            } satisfies SearchToolResult);
-          }
-          if (sliced.length === 0) {
-            return searchToolResultSchema.parse({
-              callId,
-              sets: [{
-                kind: 'no_match',
-                subquestionId,
-                requestedQuery: input.query,
-                attemptedQueries: queries,
-                reason: 'no_relevant_evidence',
-                ticketEligible: true,
-              }],
-              uniqueEvidenceAdded: 0,
-              evidenceTokensAdded: 0,
-              truncatedBy: [],
-            } satisfies SearchToolResult);
-          }
-          const unique = context.evidence.addEvidence(sliced) as readonly RetrievedChunk[];
-          if (unique.length === 0) {
-            return searchToolResultSchema.parse({
-              callId,
-              sets: [{
-                kind: 'no_match',
-                subquestionId,
-                requestedQuery: input.query,
-                attemptedQueries: queries,
-                reason: 'filtered_duplicates',
-                ticketEligible: false,
-              }],
-              uniqueEvidenceAdded: 0,
-              evidenceTokensAdded: 0,
-              truncatedBy: [],
-            } satisfies SearchToolResult);
-          }
-          const executed = executedQueries(queries);
-          const resultQueryIndex = Math.max(0, queries.lastIndexOf(resultQuery));
-          const items = toToolItems(unique, subquestionId, executed[resultQueryIndex]?.queryId ?? executed[0]?.queryId ?? 'q-1');
-          return searchToolResultSchema.parse({
-            callId,
-            sets: [{
-              kind: 'results',
-              subquestionId,
-              requestedQuery: input.query,
-              executedQueries: executed,
-              results: items,
-              coverage: degradation.length > 0 ? 'partial' : 'sufficient',
-              hasMore: diagnostics?.hasMore ?? false,
-              degradedBy: [...degradation],
-            }],
-            uniqueEvidenceAdded: unique.length,
-            evidenceTokensAdded: estimatedTokens(items),
-            truncatedBy: diagnostics?.hasMore ? ['call_result_limit'] : [],
-          } satisfies SearchToolResult);
-        }
+        return runDirectPath();
+        async function runDirectPath(): Promise<SearchDocumentationOutput> {
         const result = await deps.searchChunks(deps.cfg, input.query, {
           limit: requestedLimit,
           signal: call.signal,
@@ -522,47 +420,6 @@ async function runPlannerPath(
     evidenceTokensAdded: estimatedTokens(allItems),
     truncatedBy: [...truncatedBy],
   } satisfies SearchToolResult);
-}
-
-async function runShadowComparison(
-  structuredSearch: StructuredSearchFn,
-  context: AgentToolContext,
-  call: ToolExecuteCall,
-  input: SearchDocumentationInput,
-  requestedLimit: number,
-): Promise<void> {
-  const startedAt = Date.now();
-  const shadowSignal = AbortSignal.any([
-    call.signal,
-    AbortSignal.timeout(SEARCH_PLANNER_SHADOW_TIMEOUT_MS),
-  ]);
-  try {
-    await structuredSearch(input.query, {
-      limit: requestedLimit,
-      signal: shadowSignal,
-      excludeChunkIdentities: context.evidence.seenChunkKeys,
-      shadow: true,
-      trace: {
-        write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void {
-          context.trace.write({ ...event, sanitized: true });
-        },
-      },
-    });
-    context.trace.write({
-      toolName: 'searchDocumentation',
-      callId: call.callId,
-      phase: 'success',
-      durationMs: Math.max(0, Date.now() - startedAt),
-      sanitized: true,
-    });
-  } catch {
-    // Shadow comparison must never change user-visible results.
-  }
-}
-
-function attemptsFromFailure(requested: string, attempted: readonly string[] | undefined): string[] {
-  if (attempted && attempted.length > 0) return [...attempted];
-  return [requested];
 }
 
 function subquestionFallbackId(): string {

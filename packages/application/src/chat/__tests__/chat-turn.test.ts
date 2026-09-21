@@ -2,7 +2,7 @@ import { describe, it, expect, vi, type Mock } from 'vitest';
 import { err, ok, ExternalServiceError } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import { SearchFailure, type RetrievalDiagnostics, type RetrievedChunk } from '../../rag/search';
-import type { AgenticResult } from '../../rag/agentic-search';
+import type { OrchestratorResult } from '../../agent/search/search-orchestrator';
 import { chatTurn, type ChatTurnDeps, type ChatTurnRequest, type ChatTurnResult } from '../chat-turn';
 import {
   searchDocumentationInputSchema,
@@ -14,7 +14,7 @@ import {
   type ScriptedBackendCall,
   type ScriptedStep,
 } from '../../agent/scripted-model';
-import { buildCatalogToolsForTurn } from '../../agent/compat/chat-tools-compat';
+import { buildCatalogToolsForTurn } from '../../agent/turn-tools';
 import { TurnToolLedger } from '../../agent/run-state';
 import { createGroundingEvidence } from '../grounding-evidence';
 import { legacySearchResultCacheFingerprint } from '../cache-key';
@@ -23,19 +23,88 @@ import type { ChatInputMessage } from '../message-types';
 import type { ChatChunk } from '../chat-chunks';
 import type { TurnMetrics } from '../chat-turn/turn-types';
 
-function agenticOk(overrides: Partial<AgenticResult> = {}): AgenticResult {
+/**
+ * WP-9 single production path: agentic mode runs the structured orchestrator.
+ * These factories build orchestrator results the way production composition
+ * does, so agentic-mode turn tests exercise the planner path without the
+ * removed rewrite/retry wrapper.
+ */
+function structuredOk(
+  query: string,
+  chunks: RetrievedChunk[] = [CHUNK],
+  executedQuery = query,
+): OrchestratorResult {
+  const items = chunks.map((chunk) => ({
+    id: chunk.id,
+    ...(chunk.chunkUid ? { chunkUid: chunk.chunkUid } : {}),
+    documentId: chunk.documentId,
+    chunkIndex: chunk.chunkIndex,
+    subquestionId: 'sq-1',
+    executedQueryIds: ['q-1'],
+    content: chunk.content,
+    source: chunk.source,
+    ...(chunk.title ? { documentTitle: chunk.title } : {}),
+    ...(chunk.sectionTitle ? { section: chunk.sectionTitle } : {}),
+    scores: chunk.scores,
+  }));
   return {
-    chunks: [CHUNK],
-    rewrittenQuery: 'rewritten',
-    attemptedQueries: ['rewritten'],
-    resultQuery: 'rewritten',
-    degradedBy: [],
-    outOfDomain: false,
-    isEmpty: false,
+    sets: chunks.length > 0 ? [{
+      kind: 'results',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      executedQueries: [{ queryId: 'q-1', query: executedQuery }],
+      results: items,
+      coverage: 'sufficient',
+      hasMore: false,
+      degradedBy: [],
+    }] : [{
+      kind: 'no_match',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      attemptedQueries: [query],
+      reason: 'no_relevant_evidence',
+      ticketEligible: true,
+    }],
+    stopReason: 'sufficient_evidence',
+    plansUsed: 1,
+    physicalRetrievalsUsed: 2,
+    isFallback: false,
     fallbackReason: null,
-    resultState: 'results',
-    retrievalDiagnostics: [],
-    ...overrides,
+    budgets: {},
+    uniqueEvidenceCount: chunks.length,
+    evidenceTokens: 10,
+    truncatedBy: [],
+    rawPackedBySubquestion: new Map([['sq-1', chunks]]),
+    chunkProvenance: new Map(),
+  };
+}
+
+function structuredError(
+  query: string,
+  attemptedQueries: string[],
+  code: 'retrieval_unavailable' | 'timeout' | 'cancelled' | 'embedding_unavailable' | 'reranker_unavailable' = 'retrieval_unavailable',
+): OrchestratorResult {
+  return {
+    sets: [{
+      kind: 'error',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      attemptedQueries,
+      code,
+      retryable: true,
+      userSafeMessage: 'The documentation search is temporarily unavailable. Please try again.',
+    }],
+    stopReason: 'candidate_exhausted',
+    plansUsed: 1,
+    physicalRetrievalsUsed: 2,
+    isFallback: false,
+    fallbackReason: null,
+    budgets: {},
+    uniqueEvidenceCount: 0,
+    evidenceTokens: 0,
+    truncatedBy: [],
+    rawPackedBySubquestion: new Map(),
+    chunkProvenance: new Map(),
   };
 }
 
@@ -94,7 +163,6 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
     agentStepBudget: 8,
     similarityThreshold: 0.5,
     hybridEnabled: true,
-    agenticQueryRewriteEnabled: true,
     hallucinationCheckEnabled: true,
     judgeSampleRate: 0.02,
     rerankerProvider: 'cosine',
@@ -156,7 +224,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
   const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(
     async () => ok({ chunks: [CHUNK, CHUNK2], degradedBy: [], diagnostics: testDiagnostics(2) }),
   );
-  const agenticSearch = vi.fn(async () => ok(agenticOk()));
+  const structuredSearch = vi.fn<NonNullable<ChatTurnDeps['structuredSearch']>>(async (_cfg, query, opts) => structuredOk(query, [CHUNK, CHUNK2].slice(0, opts?.limit ?? 3)));
   const answerCache = {
     get: vi.fn(async () => null as string | null),
     set: vi.fn<(key: string, value: string, ttlSec: number) => Promise<void>>(async () => undefined),
@@ -196,7 +264,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
   const {
     cfg: _cfgOverride,
     searchChunks: searchChunksOverride,
-    agenticSearch: agenticSearchOverride,
+    structuredSearch: structuredSearchOverride,
     hallucinationGrader: hallucinationGraderOverride,
     answerCache: answerCacheOverride,
     turnResultCache,
@@ -227,7 +295,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
       approvalHooks: 'application',
     }),
     searchChunks: searchChunksOverride ?? searchChunks,
-    agenticSearch: agenticSearchOverride ?? agenticSearch,
+    structuredSearch: structuredSearchOverride ?? structuredSearch,
     hallucinationGrader: hallucinationGraderOverride ?? (() => null),
     answerCache: answerCacheOverride ?? answerCache,
     ...(turnResultCache ? { turnResultCache } : {}),
@@ -247,7 +315,7 @@ function makeDeps(overrides: DepsOverrides = {}) {
     fakes: {
       cfg,
       searchChunks,
-      agenticSearch,
+      structuredSearch,
       answerCache,
       answerCacheKey,
       rateLimit,
@@ -700,11 +768,11 @@ describe('chatTurn', () => {
 
   it('does not cache an out-of-domain answer', async () => {
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
-      searchChunks: vi.fn(async () => ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) })),
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      structuredSearch: vi.fn(async (_cfg: AppConfig, query: string) => structuredOk(query, [])),
       hallucinationGrader: () => async () => 'yes' as const,
     });
-    fakes.setScript(textStep('Hello world'));
+    fakes.setScript(searchStep('policy'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
@@ -719,23 +787,24 @@ describe('chatTurn', () => {
   it('does not turn a later empty search into an out-of-domain wall after evidence was found', async () => {
     const longChunk = { ...CHUNK, content: `${'x'.repeat(300)} supported detail` };
     const grader = vi.fn(async () => 'yes' as const);
-    const agenticSearch = vi.fn(async () =>
-      ok(agenticOk({ chunks: [], resultQuery: null, outOfDomain: true, isEmpty: true, resultState: 'no_match' })),
-    );
-    const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(async () =>
-      ok({ chunks: [longChunk], degradedBy: [], diagnostics: testDiagnostics(1) }),
-    );
+    let searchCalls = 0;
+    const searchChunks = vi.fn<ChatTurnDeps['searchChunks']>(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        return ok({ chunks: [longChunk], degradedBy: [], diagnostics: testDiagnostics(1) });
+      }
+      return ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) });
+    });
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
+      cfg: makeCfg({ retrievalMode: 'normal', prefetchFirstTurn: true }),
       searchChunks,
-      agenticSearch,
       hallucinationGrader: () => grader,
     });
     fakes.setScript(searchStep('follow-up detail query'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
     const parts = await readParts(result.stream);
-    expect(agenticSearch).toHaveBeenCalledTimes(1);
+    expect(searchChunks).toHaveBeenCalledTimes(2);
     expect(parts.some((p) => (p as { type: string }).type === 'data-guardrail')).toBe(false);
     expect(grader).toHaveBeenCalledWith(expect.stringContaining('supported detail'), 'Hello world');
     const event = fakes.record.mock.calls.at(-1)?.[0] as Record<string, unknown>;
@@ -860,17 +929,14 @@ describe('chatTurn', () => {
   });
 
   it('uses the agentic retrieval path with a rewritten query flag when effective mode is agentic', async () => {
-    const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic' }) });
+    const structuredSearch = vi.fn(async () => structuredOk('vague', [CHUNK], 'rewritten'));
+    const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic' }), structuredSearch });
     fakes.setScript(searchStep('vague'), textStep('Hello world'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     expect(result.kind).toBe('stream');
     if (result.kind !== 'stream') return;
     await readParts(result.stream);
-    expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', {
-      excludeChunkIdentities: expect.any(Set),
-      limit: 3,
-      signal: expect.any(AbortSignal),
-    });
+    expect(structuredSearch).toHaveBeenCalledWith(fakes.cfg, 'vague', expect.objectContaining({ limit: 3 }));
     expect(fakes.searchChunks).not.toHaveBeenCalled();
     const body = transcript(fakes.lastBackend());
     expect(body).toContain('"requestedQuery":"vague"');
@@ -891,7 +957,7 @@ describe('chatTurn', () => {
       limit: 3,
       signal: expect.any(AbortSignal),
     });
-    expect(fakes.agenticSearch).not.toHaveBeenCalled();
+    expect(fakes.structuredSearch).not.toHaveBeenCalled();
   });
 
   it.each(['normal', 'agentic'] as const)('honors the requested result limit in %s mode', async (mode) => {
@@ -905,11 +971,11 @@ describe('chatTurn', () => {
     if (result.kind !== 'stream') return;
     const parts = await readParts(result.stream);
     if (mode === 'agentic') {
-      expect(fakes.agenticSearch).toHaveBeenCalledWith(fakes.cfg, 'policy', {
-        excludeChunkIdentities: expect.any(Set),
-        limit: 1,
-        signal: expect.any(AbortSignal),
-      });
+      expect(fakes.structuredSearch).toHaveBeenCalledWith(
+        fakes.cfg,
+        'policy',
+        expect.objectContaining({ limit: 1 }),
+      );
     } else {
       expect(fakes.searchChunks).toHaveBeenCalledWith(fakes.cfg, 'policy', {
         excludeChunkIdentities: expect.any(Set),
@@ -998,16 +1064,9 @@ describe('chatTurn', () => {
   });
 
   it('uses agentic executed-query provenance in an error result', async () => {
-    const failure = new SearchFailure(
-      'retrieval_unavailable',
-      true,
-      'Safe search failure message.',
-      undefined,
-      ['rewritten policy query'],
-    );
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () => err(failure)),
+      structuredSearch: vi.fn(async () => structuredError('policy', ['rewritten policy query'])),
     });
     fakes.setScript(searchStep('policy'), textStep('done'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
@@ -1018,13 +1077,6 @@ describe('chatTurn', () => {
 
   it('bounds a perpetual search script within the agentic step budget', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic', agentStepBudget: 8 }) });
-    fakes.agenticSearch.mockResolvedValue(ok(agenticOk({
-      chunks: [],
-      resultQuery: null,
-      outOfDomain: false,
-      isEmpty: true,
-      resultState: 'no_match',
-    })));
     fakes.setScript(
       ...Array.from({ length: 12 }, (_, index) => searchStep(`budget-probe-${index + 1}`)),
     );
@@ -1058,13 +1110,6 @@ describe('chatTurn', () => {
 
   it('enforces the configured max model steps before tool ceilings bind', async () => {
     const { deps, fakes } = makeDeps({ cfg: makeCfg({ retrievalMode: 'agentic', agentStepBudget: 2 }) });
-    fakes.agenticSearch.mockResolvedValue(ok(agenticOk({
-      chunks: [],
-      resultQuery: null,
-      outOfDomain: false,
-      isEmpty: true,
-      resultState: 'no_match',
-    })));
     fakes.setScript(
       ...Array.from({ length: 6 }, (_, index) => searchStep(`ceiling-probe-${index + 1}`)),
     );
@@ -1502,11 +1547,11 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
 
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
-      searchChunks: vi.fn(async () => ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) })),
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      structuredSearch: vi.fn(async (_cfg: AppConfig, query: string) => structuredOk(query, [])),
       hallucinationGrader: () => async () => 'yes' as const,
     });
-    fakes.setScript(textStep('Hello world'));
+    fakes.setScript(searchStep('policy'), textStep('Hello world'));
     const result = await run({ request: makeRequest(agenticBody()), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
     const parts = await readParts(result.stream);
@@ -1529,7 +1574,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
     };
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', hallucinationCheckEnabled: false }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => grader,
       turnResultCache,
     });
@@ -1559,7 +1603,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
     };
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () =>
         vi.fn(async () => {
           throw new Error('grade model down');
@@ -1589,7 +1632,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
   it('still offers a ticket on an explicit grounded:no', async () => {
     const fixtures = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic' }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => async () => 'no' as const,
     });
     fixtures.fakes.setScript(searchStep('q'), textStep('Hello world'));
@@ -1612,7 +1654,7 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
     const judgeScheduler = vi.fn((task: () => Promise<void>) => void task());
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1 }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
+      structuredSearch: vi.fn(async (_cfg: AppConfig, query: string) => structuredOk(query, [CHUNK])),
       hallucinationGrader: () => async () => 'yes' as const,
       judgeScheduler,
       qualityJudge,
@@ -1638,7 +1680,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
     const judgeScheduler = vi.fn();
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 0 }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       hallucinationGrader: () => async () => 'yes' as const,
       judgeScheduler,
       qualityJudge,
@@ -1651,7 +1692,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
 
     const fixtures = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1 }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       judgeScheduler,
       qualityJudge,
     });
@@ -1667,7 +1707,6 @@ describe('chatTurn guardrail toggle and judge sampling (P4)', () => {
     const judgeScheduler = vi.fn();
     const { deps, fakes } = makeDeps({
       cfg: makeCfg({ retrievalMode: 'agentic', judgeSampleRate: 1, captureQueryText: false }),
-      agenticSearch: vi.fn(async () => ok(agenticOk())),
       judgeScheduler,
       qualityJudge,
     });
@@ -1889,7 +1928,6 @@ describe('chatTurn single catalog path (WP-3 intent, formerly rollback)', () => 
     const ticketEnvelope = buildCatalogToolsForTurn(
       {
         searchChunks: fakes.searchChunks,
-        agenticSearch: fakes.agenticSearch,
         createTicket: fakes.createTicket,
         userResolver: (async () => ({ name: 'Real Person', email: 'real@example.com' })) as unknown as never,
         rateLimit: fakes.rateLimit,
@@ -2025,7 +2063,6 @@ describe('single-path cancellation classification (P1-5)', () => {
       const searchEnvelope = buildCatalogToolsForTurn(
         {
           searchChunks: throwingSearch,
-          agenticSearch: fakes.agenticSearch,
           createTicket: fakes.createTicket,
           userResolver: (async () => ({ name: 'Real Person', email: 'real@example.com' })) as unknown as never,
           rateLimit: fakes.rateLimit,
@@ -2167,27 +2204,6 @@ describe('WP-6 grounded release and injection safety', () => {
       decisionKind: 'unverified',
       decisionReason: 'malformed',
     });
-  });
-
-  it('fails closed without calling the grader when the release flag is rolled back', async () => {
-    const grader = vi.fn(async () => 'yes' as const);
-    const previous = process.env.GROUNDED_RELEASE_ENABLED;
-    process.env.GROUNDED_RELEASE_ENABLED = '0';
-    try {
-      const { deps, fakes } = makeDeps({ hallucinationGrader: () => grader });
-      fakes.setScript(searchStep('q'), textStep('candidate answer'));
-      const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
-      if (result.kind !== 'stream') throw new Error('expected stream');
-      const parts = await readParts(result.stream);
-      expect(grader).not.toHaveBeenCalled();
-      expect(textDeltas(parts).some((delta) => delta.includes('candidate answer'))).toBe(false);
-      expect(parts.some((p) => (p as { type: string }).type === 'data-citation')).toBe(false);
-      expect(fakes.answerCache.set).not.toHaveBeenCalled();
-      expect(groundingMeta(fakes.record)).toMatchObject({ decisionKind: 'unverified' });
-    } finally {
-      if (previous === undefined) delete process.env.GROUNDED_RELEASE_ENABLED;
-      else process.env.GROUNDED_RELEASE_ENABLED = previous;
-    }
   });
 
   it('fails closed when the work deadline expires during verification', async () => {
@@ -2458,11 +2474,11 @@ describe('WP-6 grounded release follow-ups (review)', () => {
   it('rejects without calling the grader when required citations are missing', async () => {
     const grader = vi.fn(async () => 'yes' as const);
     const { deps, fakes } = makeDeps({
-      cfg: makeCfg({ retrievalMode: 'agentic', prefetchFirstTurn: true }),
-      searchChunks: vi.fn(async () => ok({ chunks: [], degradedBy: [], diagnostics: testDiagnostics(0) })),
+      cfg: makeCfg({ retrievalMode: 'agentic' }),
+      structuredSearch: vi.fn(async (_cfg: AppConfig, query: string) => structuredOk(query, [])),
       hallucinationGrader: () => grader,
     });
-    fakes.setScript(textStep('unsupported answer'));
+    fakes.setScript(searchStep('policy'), textStep('unsupported answer'));
     const result = await run({ request: makeRequest(BASIC_BODY), userId: 'user_test' }, deps);
     if (result.kind !== 'stream') throw new Error('expected stream');
     const parts = await readParts(result.stream);
@@ -2494,9 +2510,6 @@ describe('WP-6 grounded release follow-ups (review)', () => {
   });
 
   it('attributes released citations to distinct subquestions on the planner path', async () => {
-    const previous = process.env.SEARCH_STRUCTURED_PLANNER_ENABLED;
-    process.env.SEARCH_STRUCTURED_PLANNER_ENABLED = '1';
-    try {
       const alphaChunk = { ...CHUNK, id: 21, chunkUid: 'chunk-alpha', chunkIndex: 0, content: 'Alpha procedure details here.' };
       const betaChunk = { ...CHUNK, id: 22, chunkUid: 'chunk-beta', chunkIndex: 1, content: 'Beta refund details here.' };
       const orchestratedItem = (
@@ -2554,6 +2567,7 @@ describe('WP-6 grounded release follow-ups (review)', () => {
         chunkProvenance: new Map(),
       })) as never;
       const { deps, fakes } = makeDeps({
+        cfg: makeCfg({ retrievalMode: 'agentic' }),
         structuredSearch,
         hallucinationGrader: () => async () => 'yes' as const,
       });
@@ -2572,9 +2586,5 @@ describe('WP-6 grounded release follow-ups (review)', () => {
       const bySubquestion = new Map(citations.map((c) => [c.data.subquestionId, c.data.queryIds]));
       expect(bySubquestion.get('sq-alpha')).toContain('q-a1');
       expect(bySubquestion.get('sq-beta')).toContain('q-b1');
-    } finally {
-      if (previous === undefined) delete process.env.SEARCH_STRUCTURED_PLANNER_ENABLED;
-      else process.env.SEARCH_STRUCTURED_PLANNER_ENABLED = previous;
-    }
   });
 });

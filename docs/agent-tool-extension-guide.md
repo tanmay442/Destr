@@ -12,7 +12,7 @@ How to add a local tool to the Destr chat agent through one cohesive module and 
 | `packages/application/src/agent/tool-catalog.ts` | `ToolCatalog`, unique-name validation, enabled-tool filtering, capability adaptation, validation, timeout, cancellation, approval interception, call-count enforcement, tracing, sanitized errors, guidance generation |
 | `packages/application/src/agent/tool-policy-pipeline.ts` | Shared policy decorators consumed only by the catalog |
 | `packages/application/src/agent/tools/*` | Deep tool modules; each closes only its own dependencies |
-| `packages/application/src/agent/compat/chat-tools-compat.ts` | Compatibility assembly binding the catalog to the current `streamText` chat path |
+| `packages/application/src/agent/turn-tools.ts` | Turn-scoped tool assembly: binds the catalog to the chat turn (prefetch reuse, turn budget chaining, ticket safety latches, ledger recording, progress emission) |
 | `packages/infrastructure/src/llm/*` | Provider-neutral `ProviderToolCapabilities` facts; provider option keys never enter application tool modules |
 
 Dependency direction is enforced by `pnpm arch`:
@@ -25,19 +25,24 @@ Dependency direction is enforced by `pnpm arch`:
 
 ---
 
-## 2. Catalog cutover and rollback
+## 2. Catalog cutover (completed)
+
+Historical record — the flag and the legacy assembly below were deleted (no
+`TOOL_CATALOG_ENABLED` or `buildChatTools` references remain in code). The
+`DefaultToolCatalog` path built in
+`packages/application/src/agent/turn-tools.ts` is the only
+production path; there is no runtime disable or rollback switch.
 
 | Item | Value |
 |---|---|
-| Flag | `TOOL_CATALOG_ENABLED` |
-| Default | Enabled when unset; set to `0`, `false`, `off`, or `no` to disable |
-| Owner | Chat agent on-call; remove after the catalog path is the only production path (WP-9) |
+| Flag | `TOOL_CATALOG_ENABLED` (deleted) |
+| Default | Was enabled when unset; `0`, `false`, `off`, or `no` disabled it |
+| Owner | Chat agent on-call; the catalog path is the only production path (cutover complete) |
 | Effect when enabled | `chatTurn` builds `searchDocumentation` and `createKnowledgeTicket` through `DefaultToolCatalog` with full policy decorators and capability adaptation |
-| Effect when disabled | `chatTurn` uses the legacy `buildChatTools` assembly with an explicit-intent approval guard on ticket creation |
-| Rollback procedure | Set `TOOL_CATALOG_ENABLED=0`, restart the runtime, verify `pnpm gate` and ticket-approval denial without explicit intent |
-| Safety preserved during rollback | WP-1 result contracts, WP-2 retrieval identity/dedup/backfill/filtering/rerank/diagnostics/timeout behavior, safe untrusted-data escaping, and ticket approval enforcement |
+| Effect when disabled (historical) | `chatTurn` used the legacy `buildChatTools` assembly with an explicit-intent approval guard on ticket creation (assembly deleted) |
+| Safety preserved | WP-1 result contracts, WP-2 retrieval identity/dedup/backfill/filtering/rerank/diagnostics/timeout behavior, safe untrusted-data escaping, and ticket approval enforcement |
 
-Rollback never restores WP-1/WP-2 correctness defects and never bypasses ticket approval. The legacy fallback still denies ticket writes without explicit user intent or a scoped approval.
+Rollback never restores WP-1/WP-2 correctness defects and never bypasses ticket approval. The legacy fallback was deleted with the flag; ticket approval enforcement now lives entirely in the catalog policy pipeline.
 
 ---
 
@@ -97,9 +102,9 @@ const catalog = createToolCatalog([
 ]);
 ```
 
-For this catalog-level extension proof, no edit to `chat-turn/turn.ts`, the system prompt, or unrelated tool modules is required. The catalog validates the unique name, filters by `enabledTools`, adapts examples per provider capabilities, and composes the compact guidance block automatically.
+For this catalog-level extension proof, no edit to `chat-turn/turn.ts`, the system prompt, or unrelated tool modules is required. The catalog validates the unique name, filters by `enabledTools`, adapts examples per provider capabilities, and composes the compact guidance block automatically. (Proven by `packages/application/src/agent/tool-catalog.ts` `DefaultToolCatalog` plus one tool module such as `packages/application/src/agent/tools/search-documentation.ts` `createSearchDocumentationTool`, registered once in `packages/application/src/agent/turn-tools.ts` `buildCatalogToolsForTurn`; `packages/application/src/chat/chat-turn/turn.ts` only calls `buildCatalogToolsForTurn`.)
 
-Note: production `chatTurn` currently builds its catalog from the two built-in definitions inside `agent/compat/chat-tools-compat.ts`. The snippet above is intentionally a test/future composition shape; wiring a production-wide third-tool registry (beyond per-test `createToolCatalog` composition) is tracked for WP-5/WP-9. The catalog-level proof — a test-only tool composing, executing, and appearing in `guidanceBlock` with no prompt-file edit — is covered by `tool-catalog.test.ts` and the `compat.test.ts` guidance test.
+Note: production `chatTurn` builds its catalog from the two built-in definitions inside `agent/turn-tools.ts`. The snippet above is the composition shape for a third tool: add one tool module, register its definition alongside the two built-ins in `buildCatalogToolsForTurn`, and cover it with tool-level tests — no `chat-turn/turn.ts`, prompt, or unrelated-module edits. The catalog-level proof — a test-only tool composing, executing, and appearing in `guidanceBlock` with no prompt-file edit — is covered by `tool-catalog.test.ts` and the `turn-tools.test.ts` guidance test.
 
 ---
 

@@ -26,8 +26,6 @@ import {
   AUX_MODEL as DEFAULT_AUX_MODEL,
   OUT_OF_DOMAIN_THRESHOLD as DEFAULT_OUT_OF_DOMAIN_THRESHOLD,
   AGENT_STEP_BUDGET as DEFAULT_AGENT_STEP_BUDGET,
-  AGENTIC_RETRIEVE_LIMIT as DEFAULT_AGENTIC_RETRIEVE_LIMIT,
-  AGENTIC_MAX_RETRIES as DEFAULT_AGENTIC_MAX_RETRIES,
   ANSWER_CACHE_TTL_SEC as DEFAULT_ANSWER_CACHE_TTL_SEC,
   EVAL_FAITHFULNESS_THRESHOLD as DEFAULT_EVAL_FAITHFULNESS_THRESHOLD,
 } from '@app/domain';
@@ -149,8 +147,6 @@ function resolveRuntimeConfig(env: EnvSource) {
   const AUX_MODEL = env.get('AUX_MODEL') ?? DEFAULT_AUX_MODEL;
   const OUT_OF_DOMAIN_THRESHOLD = probabilityOrDefault(env.get('OUT_OF_DOMAIN_THRESHOLD'), DEFAULT_OUT_OF_DOMAIN_THRESHOLD, 'OUT_OF_DOMAIN_THRESHOLD');
   const AGENT_STEP_BUDGET = positiveIntegerOrDefault(env.get('AGENT_STEP_BUDGET'), DEFAULT_AGENT_STEP_BUDGET, 'AGENT_STEP_BUDGET');
-  const AGENTIC_RETRIEVE_LIMIT = positiveIntegerOrDefault(env.get('AGENTIC_RETRIEVE_LIMIT'), DEFAULT_AGENTIC_RETRIEVE_LIMIT, 'AGENTIC_RETRIEVE_LIMIT');
-  const AGENTIC_MAX_RETRIES = nonnegativeIntegerOrDefault(env.get('AGENTIC_MAX_RETRIES'), DEFAULT_AGENTIC_MAX_RETRIES, 'AGENTIC_MAX_RETRIES');
   const ANSWER_CACHE_ENABLED = env.get('ANSWER_CACHE_ENABLED') !== 'false';
   const ANSWER_CACHE_TTL_SEC = positiveIntegerOrDefault(env.get('ANSWER_CACHE_TTL_SEC'), DEFAULT_ANSWER_CACHE_TTL_SEC, 'ANSWER_CACHE_TTL_SEC');
   const TRACE_ENABLED = env.get('TRACE_ENABLED') === 'true';
@@ -190,8 +186,6 @@ function resolveRuntimeConfig(env: EnvSource) {
     AUX_MODEL,
     OUT_OF_DOMAIN_THRESHOLD,
     AGENT_STEP_BUDGET,
-    AGENTIC_RETRIEVE_LIMIT,
-    AGENTIC_MAX_RETRIES,
     ANSWER_CACHE_ENABLED,
     ANSWER_CACHE_TTL_SEC,
     TRACE_ENABLED,
@@ -258,8 +252,6 @@ export const AGENTIC_ENABLED: boolean = defaultConfig.AGENTIC_ENABLED as boolean
 export const AUX_MODEL: string = defaultConfig.AUX_MODEL as string;
 export const OUT_OF_DOMAIN_THRESHOLD: number = defaultConfig.OUT_OF_DOMAIN_THRESHOLD as number;
 export const AGENT_STEP_BUDGET: number = defaultConfig.AGENT_STEP_BUDGET as number;
-export const AGENTIC_RETRIEVE_LIMIT: number = defaultConfig.AGENTIC_RETRIEVE_LIMIT as number;
-export const AGENTIC_MAX_RETRIES: number = defaultConfig.AGENTIC_MAX_RETRIES as number;
 export const ANSWER_CACHE_ENABLED: boolean = defaultConfig.ANSWER_CACHE_ENABLED as boolean;
 export const ANSWER_CACHE_TTL_SEC: number = defaultConfig.ANSWER_CACHE_TTL_SEC as number;
 export const TRACE_ENABLED: boolean = defaultConfig.TRACE_ENABLED as boolean;

@@ -22,7 +22,12 @@ configuration from this work package; flags are parsed only.
 | embeddingRetrievalCache / `WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED` | retrieval on-call | off | Query embeddings and retrieval candidates cached under tenant/corpus/version-aware keys with bounded TTLs. Off: every search performs fresh embedding and retrieval work. |
 | distributedAdmission / `WP8_DISTRIBUTED_ADMISSION_ENABLED` | capacity on-call | off | Distributed per-user active-turn leases plus global/per-provider admission with bounded queues and load shedding. Off: only existing process-local guards apply. |
 | durableJudgeQueue / `WP8_DURABLE_JUDGE_QUEUE_ENABLED` | evaluation on-call | off | Sampled judges and non-critical analytics go to a bounded durable isolated queue with retries and dead-letter handling. Off: existing best-effort scheduling remains. |
-| routeDurationIncrease / `WP8_ROUTE_DURATION_INCREASE_ENABLED` | platform on-call | off | Route uses the WP-8-evidenced extended platform envelope with application hard stop and mandatory finalization reserve. Enabling never increases any agent, token, evidence, retry, or cost budget. Off: current 60-second envelope. |
+
+WP-9 removed `routeDurationIncrease` / `WP8_ROUTE_DURATION_INCREASE_ENABLED`
+(the flag was defined but never read by production; wiring an unvalidated
+envelope would have been unsafe). A route-duration increase now requires a
+`docs/runtime/route-duration-decision.md` update plus load/deadline/cost
+gates; see `docs/runtime/feature-flags.md` and `docs/wp9-migration-notes.md`.
 
 Parsing: `1`/`true`/`on`/`yes` (any case, surrounding whitespace allowed)
 enable; `0`/`false`/`off`/`no` disable; unset uses the default above (all
@@ -53,9 +58,6 @@ Per flag (each rollback is one env change plus restart):
 - Admission: set `WP8_DISTRIBUTED_ADMISSION_ENABLED=0` and restart.
 - Judges: set `WP8_DURABLE_JUDGE_QUEUE_ENABLED=0` and restart; judges can
   additionally be paused independently without affecting interactive turns.
-- Route duration: set `WP8_ROUTE_DURATION_INCREASE_ENABLED=0` and restart;
-  incompatible higher deadline settings are rejected at startup, and the
-  finalization reserve is preserved.
 
 Rollback preserves grounding policy, approval policy, idempotency, error
 classification, score provenance, budgets, and overload safety for every flag
@@ -72,7 +74,6 @@ Background judging can be paused without affecting interactive turns.
 | embeddingRetrievalCache | Any stale-version prevention failure; retrieval quality regression beyond 2 percentage points; Redis error rate at or above 0.1% outside fault injection. |
 | distributedAdmission | Provider throttle/error rate at or above 0.5% after admission; DB pool wait p95 above 100ms; application deadline outcomes above 0.5% outside injected slow scenarios; capacity-admissible acceptance below 99.5%. |
 | durableJudgeQueue | Background work increases interactive p95 latency by more than 5%; judge backlog age exceeds its alert threshold without recovery in 5 minutes. |
-| routeDurationIncrease | Any unexplained platform hard-timeout kill; post-generation work completes inside the finalization reserve in fewer than 99.9% of evaluated turns; longer duration improves completion only via queue collapse, p99 occupancy, or cost. |
 
 ## WP-7 reviewer follow-up dispositions affecting WP-8
 
@@ -104,20 +105,21 @@ Background judging can be paused without affecting interactive turns.
   fall back inline. Remote QStash publish attaches when QSTASH_TOKEN + worker
   URL resolve; the judge-worker consumer route verifies signatures. Default
   off = pre-WP-8 `after()` behavior.
-- `distributedAdmission`: PARTIAL. Distributed per-user slot leases guard the
-  route (local map is fast-path only); the full admission-controller cutover
-  (global/provider ceilings, bounded queue in the request path) is deferred
-  to WP-9 activation (modules + flags + capacity-gate coverage land here).
-- `embeddingRetrievalCache`: NOT WIRED (deferred). Policy matrix, versioned
-  adapters, flags, and capacity-gate coverage land here; search-path
-  activation is deferred to WP-9 to avoid retrieval-correctness risk without
-  a shadow period.
-- `routeDurationIncrease`: NOT WIRED (deferred). 60 s kept; increase requires
-  the route-duration decision record + load/deadline gates + cost approval.
+- `distributedAdmission`: CUT OVER in WP-9. `src/admission.ts` consults the
+  admission controller in the request path (per-user, global, and provider
+  ceilings with typed 429/503 + Retry-After); `src/app/api/chat/slots.ts`
+  was deleted. The distributed per-user lease reuses the same Redis keys.
+- `embeddingRetrievalCache`: WIRED in WP-9. `src/composition.ts` wraps the
+  search embedding service with the versioned cache and provides the
+  candidate-cache port to `searchChunks` (per-modality pools, fresh-content
+  rehydration, turn-local exclusion preserved). Default off = uncached path.
+- `routeDurationIncrease`: REMOVED in WP-9 (was defined-only). 60 s kept;
+  increase requires the route-duration decision record + load/deadline gates
+  + cost approval.
 
 Deferred activations preserve all rollback invariants (grounding, approval,
 idempotency, error classification, score provenance, budgets, overload
-safety) because every deferred path defaults to the pre-WP-8 behavior.
+safety) because every activated path defaults to the pre-WP-8 behavior.
 
 ## Residual risks
 

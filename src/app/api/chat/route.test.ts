@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ok, err } from '@app/domain';
 import type { Composition } from '@/composition';
 import {
+  __resetRequestAdmissionControllerForTests,
+  admitInteractiveTurn,
+  admissionRejectionResponse,
+  getRequestAdmissionController,
+  httpStatusForAdmissionRejection,
+  releaseAdmission,
+  releaseAdmissionForRequest,
+} from '@/admission';
+import {
   createScriptedBackend,
   type ScriptedStep,
 } from '../../../../packages/application/src/agent/scripted-model';
@@ -107,13 +116,10 @@ const { retrievalConfig } = vi.hoisted(() => ({
     retrievalMode: 'normal' as 'agentic' | 'normal',
     retrievalModeRolloutPercent: 100,
     agentStepBudget: 8,
-    agenticRetrieveLimit: 10,
-    agenticMaxRetries: 1,
     similarityThreshold: 0.5,
     rerankerThreshold: 0.5,
     hybridEnabled: true,
     lexicalSearchMode: 'weighted_websearch' as const,
-    agenticQueryRewriteEnabled: true,
     hallucinationCheckEnabled: true,
     judgeSampleRate: 0.02,
     rerankerProvider: 'cosine' as const,
@@ -165,7 +171,7 @@ type MockComposition = {
   appendChatTurn: ReturnType<typeof vi.fn>;
   cacheLeasePolicy: string;
   logTicketEvent: ReturnType<typeof vi.fn>;
-  agenticSearch: (cfg: unknown, query: string) => Promise<{ ok: boolean; value: { chunks: unknown[]; rewrittenQuery: string; outOfDomain: boolean } }>;
+  structuredSearch: (cfg: unknown, query: string, opts?: unknown) => Promise<unknown>;
   getHallucinationGrader: (cfg: unknown) => ((documents: string, generation: string) => Promise<'yes' | 'no'>) | null;
   chatEventBatcher: {
     record: ReturnType<typeof vi.fn>;
@@ -232,7 +238,7 @@ const { compositionMock } = vi.hoisted<{ compositionMock: MockComposition }>(() 
     appendChatTurn: vi.fn(async () => ({ ok: true as const, value: null })),
     cacheLeasePolicy: 'degraded',
     logTicketEvent: vi.fn(),
-    agenticSearch: vi.fn(async () => ok(agenticResult()) as never),
+    structuredSearch: vi.fn(async (_cfg: unknown, query: string) => structuredResult(query)),
     getHallucinationGrader: vi.fn(() => graderHolder.fn),
     chatEventBatcher: {
       record: vi.fn(),
@@ -347,19 +353,56 @@ function createAbortHangingBackend(): InspectableBackend {
   };
 }
 
-function agenticResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+type RouteTestChunk = {
+  id: number;
+  documentId: number;
+  chunkIndex: number;
+  content: string;
+  source: string | null;
+  scores: { dense: number; finalRank: number; finalSignal: 'dense' };
+};
+
+/** WP-9 single production path: agentic mode runs the structured orchestrator. */
+function structuredResult(query: string, chunks: RouteTestChunk[] = []) {
+  const items = chunks.map((chunk) => ({
+    id: chunk.id,
+    documentId: chunk.documentId,
+    chunkIndex: chunk.chunkIndex,
+    subquestionId: 'sq-1',
+    executedQueryIds: ['q-1'],
+    content: chunk.content,
+    source: chunk.source,
+    scores: chunk.scores,
+  }));
   return {
-    chunks: [],
-    rewrittenQuery: 'rewritten',
-    attemptedQueries: ['rewritten'],
-    resultQuery: 'rewritten',
-    degradedBy: [],
-    outOfDomain: false,
-    isEmpty: false,
+    sets: chunks.length > 0 ? [{
+      kind: 'results',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      executedQueries: [{ queryId: 'q-1', query }],
+      results: items,
+      coverage: 'sufficient',
+      hasMore: false,
+      degradedBy: [],
+    }] : [{
+      kind: 'no_match',
+      subquestionId: 'sq-1',
+      requestedQuery: query,
+      attemptedQueries: [query],
+      reason: 'no_relevant_evidence',
+      ticketEligible: true,
+    }],
+    stopReason: 'sufficient_evidence',
+    plansUsed: 1,
+    physicalRetrievalsUsed: 2,
+    isFallback: false,
     fallbackReason: null,
-    resultState: 'results',
-    retrievalDiagnostics: [],
-    ...overrides,
+    budgets: {},
+    uniqueEvidenceCount: chunks.length,
+    evidenceTokens: 10,
+    truncatedBy: [],
+    rawPackedBySubquestion: new Map([['sq-1', chunks as never]]),
+    chunkProvenance: new Map(),
   };
 }
 
@@ -428,6 +471,12 @@ function searchThenText(query: string, finalText: string, limit?: number): Scrip
 }
 
 beforeEach(() => {
+  // WP-9 workstream C: the admission controller is a process-wide singleton.
+  // Reset between tests so per-user/global ceilings never leak across cases,
+  // and force distributed-off so the suite exercises the local path (the
+  // mocked composition provides no coordination client).
+  __resetRequestAdmissionControllerForTests();
+  delete process.env.WP8_DISTRIBUTED_ADMISSION_ENABLED;
   resetModelBackend();
   authMock.mockReset();
   currentUserMock.mockReset();
@@ -447,7 +496,7 @@ beforeEach(() => {
   appConfigMock.prefetchFirstTurn = false;
   retrievalConfig.retrievalMode = 'normal';
   retrievalConfig.retrievalModeRolloutPercent = 100;
-  compositionMock.agenticSearch = vi.fn(async () => ok(agenticResult()) as never);
+  compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) => structuredResult(query));
   graderHolder.fn = null;
   compositionMock.chatEventBatcher.record.mockClear();
   compositionMock.chatEventBatcher.flush.mockClear();
@@ -457,6 +506,13 @@ beforeEach(() => {
   judgeFaithfulnessMock.mockClear();
   afterMock.mockClear();
   afterCallbacks.length = 0;
+});
+
+afterEach(() => {
+  // Belt-and-braces: a test that fails mid-stream must not leak admission
+  // permits into the next case.
+  __resetRequestAdmissionControllerForTests();
+  delete process.env.WP8_DISTRIBUTED_ADMISSION_ENABLED;
 });
 
 describe('/api/chat', () => {
@@ -844,24 +900,24 @@ describe('/api/chat agentic loop (Session 8)', () => {
     graderHolder.fn = null;
   });
 
-  it('uses agenticSearch when effectiveMode is agentic, dropping graded-irrelevant chunks before the model sees them', async () => {
+  it('uses the structured orchestrator when effectiveMode is agentic, dropping graded-irrelevant chunks before the model sees them', async () => {
     const allChunks = [
       testChunk('keep this', 0.9, 1),
       testChunk('drop this', 0.2, 2),
     ];
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [allChunks[0]] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [allChunks[0] as RouteTestChunk]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     setDefaultScript(searchThenText('vague', 'final answer'));
     const res = await postChat(chatBody('Can you explain the vague policy?'));
     expect(res.status).toBe(200);
     const body = await readBodyText(res);
-    expect(compositionMock.agenticSearch).toHaveBeenCalledWith(expect.anything(), 'vague', {
+    expect(compositionMock.structuredSearch).toHaveBeenCalledWith(expect.anything(), 'vague', expect.objectContaining({
       excludeChunkIdentities: expect.any(Set),
       limit: 3,
       signal: expect.any(AbortSignal),
-    });
+    }));
     expect(body).toContain('keep this');
     expect(body).not.toContain('drop this');
     const visible = modelVisibleText(latestBackend());
@@ -870,12 +926,12 @@ describe('/api/chat agentic loop (Session 8)', () => {
     expect(visible).toContain('~~~ END UNTRUSTED EVIDENCE ~~~');
   });
 
-  it('gates on effectiveMode, not agenticFn truthiness: normal mode uses plain search even though agenticSearch is defined', async () => {
+  it('gates on effectiveMode, not orchestrator truthiness: normal mode uses plain search even though structuredSearch is defined', async () => {
     retrievalConfig.retrievalMode = 'normal';
     const searchSpy = vi
       .spyOn(compositionMock, 'searchChunks')
       .mockResolvedValue(ok({ chunks: [], degradedBy: [] }) as never);
-    const agenticSpy = compositionMock.agenticSearch as ReturnType<typeof vi.fn>;
+    const orchestratorSpy = compositionMock.structuredSearch as ReturnType<typeof vi.fn>;
     setDefaultScript(searchThenText('plain', 'final answer'));
     const res = await postChat(chatBody('Can you explain the plain policy?'));
     expect(res.status).toBe(200);
@@ -885,13 +941,13 @@ describe('/api/chat agentic loop (Session 8)', () => {
       limit: 3,
       signal: expect.any(AbortSignal),
     });
-    expect(agenticSpy).not.toHaveBeenCalled();
+    expect(orchestratorSpy).not.toHaveBeenCalled();
     searchSpy.mockRestore();
   });
 
   it('surfaces a guardrail (offerTicket) when the loop reports out-of-domain', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, []),
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
@@ -900,8 +956,8 @@ describe('/api/chat agentic loop (Session 8)', () => {
   });
 
   it('surfaces a guardrail when the hallucination grader flags the answer ungrounded', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [testChunk('doc', 0.9)] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [testChunk('doc', 0.9)]),
     );
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
@@ -910,8 +966,8 @@ describe('/api/chat agentic loop (Session 8)', () => {
   });
 
   it('does not surface a guardrail when the answer is grounded', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [testChunk('doc', 0.9)] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [testChunk('doc', 0.9)]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     const body = await runAgenticStreamAndRead('what is the policy?');
@@ -1104,8 +1160,8 @@ describe('/api/chat answer cache (Session 10)', () => {
     compositionMock.answerCache.get.mockResolvedValue(null);
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = vi.fn(async () => 'no' as const);
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, []),
     );
     const body = await runAgenticStreamAndRead('where is my refund?');
     expect(body).toMatch(/data-guardrail/);
@@ -1117,8 +1173,8 @@ describe('/api/chat answer cache (Session 10)', () => {
     retrievalConfig.retrievalMode = 'agentic';
     graderHolder.fn = vi.fn(async () => 'no' as const);
     const chunk = testChunk('doc', 0.9);
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [chunk] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [chunk]),
     );
     const body = await runAgenticStreamAndRead('what is the policy?');
     expect(body).toMatch(/data-guardrail/);
@@ -1222,8 +1278,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('keeps the blocking wall with ticket offer for a true empty retrieval', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, []),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     const body = await runAgenticStreamAndRead('where is my refund?');
@@ -1235,8 +1291,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   it('fails closed without calling the grader when hallucinationCheckEnabled is off', async () => {
     retrievalConfig.hallucinationCheckEnabled = false;
     try {
-      compositionMock.agenticSearch = vi.fn(async () =>
-        ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+      compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+        structuredResult(query, [CHUNK_A]),
       );
       graderHolder.fn = vi.fn(async () => 'no' as const);
       const body = await runAgenticStreamAndRead('what is the policy?');
@@ -1254,8 +1310,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('treats a hallucination grader infra failure as unverified (fail-closed): safe response, nothing cached', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [CHUNK_A]),
     );
     graderHolder.fn = vi.fn(async () => {
       throw new Error('grade model down');
@@ -1270,8 +1326,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('enqueues the quality judge via after when sampled (rate honored), persisting judgeScores', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [CHUNK_A]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
@@ -1293,8 +1349,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('persists judge scores buffered-first; SQL only when the buffer missed (F4)', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [CHUNK_A]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
@@ -1307,8 +1363,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('keeps partial judge verdicts when one dimension returns null (F3)', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [CHUNK_A]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
@@ -1327,8 +1383,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   });
 
   it('never samples the judge above the rate, on cache hits or empty retrievals', async () => {
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, [CHUNK_A]),
     );
     graderHolder.fn = vi.fn(async () => 'yes' as const);
     await runAgenticStreamAndRead('what is the policy?');
@@ -1336,8 +1392,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     expect(compositionMock.chatEventBatcher.updateEventMeta).not.toHaveBeenCalled();
 
     (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
-    compositionMock.agenticSearch = vi.fn(async () =>
-      ok(agenticResult({ outOfDomain: true, isEmpty: true, resultQuery: null, resultState: 'no_match' })) as never,
+    compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+      structuredResult(query, []),
     );
     await runAgenticStreamAndRead('where is my refund?');
     await runPendingAfterCallbacks();
@@ -1347,8 +1403,8 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
   it('skips the judge entirely when captureQueryText is disabled (privacy)', async () => {
     retrievalConfig.captureQueryText = false;
     try {
-      compositionMock.agenticSearch = vi.fn(async () =>
-        ok(agenticResult({ chunks: [CHUNK_A] })) as never,
+      compositionMock.structuredSearch = vi.fn(async (_cfg: unknown, query: string) =>
+        structuredResult(query, [CHUNK_A]),
       );
       graderHolder.fn = vi.fn(async () => 'yes' as const);
       (Math.random as unknown as { mockReturnValue: (v: number) => void }).mockReturnValue(0);
@@ -1359,5 +1415,90 @@ describe('/api/chat guardrail toggle and judge sampling (P4)', () => {
     } finally {
       retrievalConfig.captureQueryText = true;
     }
+  });
+});
+
+describe('/api/chat admission (WP-9 workstream C)', () => {
+  it('maps per-user/queue/rate rejections and queued turns to 429 with Retry-After', async () => {
+    for (const reason of ['per_user_limit', 'queue_full', 'queue_timeout', 'rate_limited', 'queued'] as const) {
+      expect(httpStatusForAdmissionRejection(reason)).toBe(429);
+    }
+    // Queued turns answer 429 immediately instead of holding the connection:
+    // serverless cannot cheaply hold a request open for a queue wait, so the
+    // client retries after the indicated delay and re-enters admission.
+    const queued = admissionRejectionResponse({
+      admitted: false,
+      status: 429,
+      retryAfterMs: 500,
+      reason: 'queued',
+      message: 'queued',
+    });
+    expect(queued.status).toBe(429);
+    expect(await queued.text()).toBe('Too Many Requests');
+    expect(queued.headers.get('Retry-After')).toBe('1');
+  });
+
+  it('maps global/provider/circuit/shedding/deadline rejections to 503 with Retry-After', async () => {
+    for (const reason of [
+      'global_limit',
+      'provider_limit',
+      'circuit_open',
+      'dependency_shedding',
+      'deadline_exceeded',
+    ] as const) {
+      expect(httpStatusForAdmissionRejection(reason)).toBe(503);
+    }
+    const shed = admissionRejectionResponse({
+      admitted: false,
+      status: 503,
+      retryAfterMs: 2_500,
+      reason: 'circuit_open',
+      message: 'open',
+    });
+    expect(shed.status).toBe(503);
+    expect(await shed.text()).toBe('Service Unavailable');
+    expect(shed.headers.get('Retry-After')).toBe('3');
+  });
+
+  it('admits locally when the distributed flag is off (no coordinator in this suite)', async () => {
+    delete process.env.WP8_DISTRIBUTED_ADMISSION_ENABLED;
+    const req = new Request('http://localhost/api/chat', { method: 'POST' });
+    const decision = await admitInteractiveTurn({ req, userId: 'user_adm_local', turnId: 'turn-adm-local-1' });
+    expect(decision.admitted).toBe(true);
+    if (decision.admitted) {
+      expect(releaseAdmission(decision.lease, 'completed')).toMatchObject({ kind: 'released' });
+    }
+    expect(getRequestAdmissionController().stats().active).toBe(0);
+  });
+
+  it('releases exactly once across direct and request-keyed paths', async () => {
+    const req = new Request('http://localhost/api/chat', { method: 'POST' });
+    const decision = await admitInteractiveTurn({ req, userId: 'user_adm_once', turnId: 'turn-adm-once-1' });
+    expect(decision.admitted).toBe(true);
+    if (!decision.admitted) return;
+    expect(releaseAdmissionForRequest(req, 'completed')).toMatchObject({ kind: 'released' });
+    // Request key is consumed: second keyed release finds nothing.
+    expect(releaseAdmissionForRequest(req, 'completed')).toBeNull();
+    // Controller lease is already released: direct release is idempotent.
+    expect(releaseAdmission(decision.lease, 'completed')).toMatchObject({ kind: 'already_released' });
+    expect(getRequestAdmissionController().stats().active).toBe(0);
+  });
+
+  it('route catch path releases the admission lease instead of leaking it', async () => {
+    authMock.mockResolvedValue({ userId: 'user_adm_catch' });
+    const req = new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(chatBody('hi')),
+    });
+    const res = await appHandler.POST(req);
+    // Drain whatever came back (stream on success, error body otherwise) so
+    // the stream-end wrapper has a chance to release before asserting.
+    try {
+      await drainResponse(res);
+    } catch {
+      // Error bodies may already be consumed; release state is what matters.
+    }
+    expect(getRequestAdmissionController().stats().active).toBe(0);
   });
 });

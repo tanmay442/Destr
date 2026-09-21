@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
   DatabaseQueryCancelledError,
@@ -62,6 +63,98 @@ describe('executeCancelable', () => {
 
     await expect(result).rejects.toBe(failure);
     controller.abort();
+  });
+});
+
+describe('executeDatabaseCancelable queryClass timeouts', () => {
+  const dialect = new PgDialect();
+  function makeTransactionCapableClient() {
+    const executed: SQL[] = [];
+    const tx = {
+      execute: (query: SQL) => {
+        executed.push(query);
+        return Promise.resolve({ rows: [] });
+      },
+    };
+    const client = {
+      execute: (query: SQL) => {
+        executed.push(query);
+        return Promise.resolve({ rows: [] });
+      },
+      transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
+    };
+    return { client: client as never, executed, tx };
+  }
+  function statementsOf(executed: SQL[]): string[] {
+    return executed.map((query) => dialect.sqlToQuery(query).sql);
+  }
+
+  it('issues SET LOCAL statement_timeout inside a transaction for retrieval_vector', async () => {
+    const { client, executed } = makeTransactionCapableClient();
+    const seen: unknown[] = [];
+    const result = await executeDatabaseCancelable({
+      client,
+      queryClass: 'retrieval_vector',
+      operation: (queryClient) => {
+        seen.push(queryClient);
+        return Promise.resolve('ok');
+      },
+    });
+    expect(result).toBe('ok');
+    expect(seen).toHaveLength(1);
+    const statements = statementsOf(executed);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('SET LOCAL statement_timeout');
+    expect(statements[0]).toContain('4000ms');
+  });
+
+  it('issues the lexical ceiling for retrieval_lexical and honors overrides', async () => {
+    const { client, executed } = makeTransactionCapableClient();
+    await executeDatabaseCancelable({
+      client,
+      queryClass: 'retrieval_lexical',
+      timeoutOverrides: { retrieval_lexical: 1_500 },
+      operation: () => Promise.resolve('ok'),
+    });
+    const statements = statementsOf(executed);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('1500ms');
+  });
+
+  it('runs without a per-class ceiling when the client exposes only execute', async () => {
+    const executed: unknown[] = [];
+    const client = {
+      execute: (query: unknown) => {
+        executed.push(query);
+        return Promise.resolve({ rows: [] });
+      },
+    };
+    const result = await executeDatabaseCancelable({
+      client: client as never,
+      queryClass: 'retrieval_vector',
+      operation: () => Promise.resolve('fallback-ok'),
+    });
+    expect(result).toBe('fallback-ok');
+    expect(executed).toHaveLength(0);
+  });
+
+  it('issues no SET LOCAL when queryClass is absent (existing behavior preserved)', async () => {
+    const { client, executed } = makeTransactionCapableClient();
+    const result = await executeDatabaseCancelable({
+      client,
+      operation: () => Promise.resolve('plain-ok'),
+    });
+    expect(result).toBe('plain-ok');
+    expect(executed).toHaveLength(0);
+  });
+
+  it('rejects an unknown query class instead of running without a timeout', async () => {
+    const { client } = makeTransactionCapableClient();
+    await expect(executeDatabaseCancelable({
+      client,
+      queryClass: 'history_telemetry_nope' as never,
+      operation: () => Promise.resolve('unreachable'),
+    })).rejects.toThrow();
   });
 });
 

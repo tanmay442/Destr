@@ -49,7 +49,7 @@ export function RetrievalTab({
           <CardContent className="flex flex-col gap-6">
             <div className="flex flex-col gap-4">
               <h4 className="text-sm font-medium text-foreground">Agentic budget limits</h4>
-              {['agentStepBudget', 'agenticRetrieveLimit', 'agenticMaxRetries'].map((key) => {
+              {['agentStepBudget'].map((key) => {
                 const field = fieldMap.get(key);
                 if (!field) return null;
                 return (
@@ -66,7 +66,7 @@ export function RetrievalTab({
             <Separator />
             <div className="flex flex-col gap-4">
               <h4 className="text-sm font-medium text-foreground">Agentic pipeline steps</h4>
-              {['agenticQueryRewriteEnabled', 'hallucinationCheckEnabled'].map((key) => {
+              {['hallucinationCheckEnabled'].map((key) => {
                 const field = fieldMap.get(key);
                 if (!field) return null;
                 return (

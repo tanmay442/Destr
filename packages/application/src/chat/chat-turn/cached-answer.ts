@@ -102,13 +102,18 @@ export { parseCachedAnswer };
 
 function parseTurnResult(
   value: string,
-  requestFingerprint: { current: string; preResultContract: string; legacy: string },
+  requestFingerprint: { current: string; preResultContract: string },
 ): { answer: CachedAnswerPayload } | { conflict: true } | null {
   const answer = parseCachedAnswer(value, 'turn-result');
   if (!answer) return null;
-  const expected = answer.fingerprintVersion === TURN_FINGERPRINT_VERSION
-    ? [requestFingerprint.current, requestFingerprint.preResultContract]
-    : [requestFingerprint.legacy];
+  // All live writers stamp fingerprintVersion 2 with either the current or
+  // the pre-result-contract hash (turn.ts writes both payloads). Anything
+  // else predates the v2 canonical request and is a miss, never a replay:
+  // the downstream verified-grounding check would reject it anyway, and a
+  // miss lets the turn recompute transparently instead of forcing the client
+  // onto a new turn id.
+  if (answer.fingerprintVersion !== TURN_FINGERPRINT_VERSION) return null;
+  const expected = [requestFingerprint.current, requestFingerprint.preResultContract];
   if (!expected.includes(answer.requestFingerprint ?? '')) return { conflict: true };
   return { answer };
 }

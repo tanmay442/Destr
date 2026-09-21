@@ -28,8 +28,6 @@ export interface EvalDeps {
   
   judgeRelevance?: (question: string, snippets: string[]) => Promise<number | null>;
   judgeFaithfulness?: (documents: string, answer: string) => Promise<number | null>;
-  
-  agenticSearch?: (query: string) => Promise<EvalRetrievedChunk[]>;
 }
 
 /**
@@ -216,14 +214,10 @@ export async function evaluateOne(
   const clock = deps.clock ?? monotonicClock;
   const totalStartedAt = clock.now();
   const retrievalStartedAt = totalStartedAt;
-  const agenticSearch = deps.agenticSearch;
-  const useAgentic = q.mode === 'agentic' && typeof agenticSearch === 'function';
-  if (q.mode === 'agentic' && !useAgentic) {
-    console.warn(`[eval] agentic question "${q.id}" degraded to plain searchChunks: agenticSearch unavailable`);
-  }
-  const retrieved = useAgentic
-    ? await agenticSearch(q.question)
-    : await deps.searchChunks(q.question);
+  // WP-9 single retrieval path: the old rewrite/retry wrapper was removed, so
+  // every golden question runs the direct single-query hybrid retrieval. The
+  // structured orchestrator comparison lives in wp4-retrieval.ts.
+  const retrieved = await deps.searchChunks(q.question);
   const retrievalFinishedAt = clock.now();
   const context = retrieved.map((r) => r.content).join('\n\n');
   const generationStartedAt = retrievalFinishedAt;
@@ -735,10 +729,6 @@ export function mockEvalDeps(): EvalDeps & { cache: AnswerCache } {
     },
     async searchChunks(query: string) {
       return search(query);
-    },
-    async agenticSearch(query: string) {
-      const base = await search(query);
-      return base.map((r) => ({ ...r, content: `[agentic] ${r.content}` }));
     },
     async generate(_query: string, context: string) {
       return context

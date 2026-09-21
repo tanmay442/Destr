@@ -17,7 +17,12 @@
     "./core": "./src/core.ts",
     "./config": "./src/config/env.ts",
     "./config/dotenv-bootstrap": "./src/config/dotenv-bootstrap.ts",
-    "./capacity/background-job-queue": "./src/capacity/background-job-queue.ts"
+    "./capacity/background-job-queue": "./src/capacity/background-job-queue.ts",
+    "./cache/cached-embedding-service": "./src/cache/cached-embedding-service.ts",
+    "./cache/embedding-cache": "./src/cache/embedding-cache.ts",
+    "./cache/retrieval-candidate-cache": "./src/cache/retrieval-candidate-cache.ts",
+    "./cache/candidate-cache-port-adapter": "./src/cache/candidate-cache-port-adapter.ts",
+    "./cache/redis-client": "./src/cache/redis-client.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.90",

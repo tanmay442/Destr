@@ -383,9 +383,6 @@ export async function executeCase(input: {
       };
       return ok(result);
     }),
-    agenticSearch: (async () => {
-      throw new Error('agenticSearch unused in eval normal mode');
-    }),
     cfg: {} as AppConfig,
     effectiveMode: 'normal',
   });

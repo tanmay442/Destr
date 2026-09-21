@@ -25,7 +25,16 @@ export async function getChunksByIds(
   }>
 > {
   if (ids.length === 0) return [];
-  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
+  // Chunk point-reads share the lexical retrieval ceiling: both retrieval
+  // classes currently carry the same 4s budget, and the lexical class keeps
+  // the ANN-only retrieval_vector telemetry pure. Chunk reads are key/range
+  // lookups rather than tsquery matches, so this classing is a measurement
+  // starting value — retune from p99 data if point-read latency diverges
+  // from lexical search.
+  const result = await executeDatabaseCancelable({
+    client,
+    queryClass: 'retrieval_lexical',
+    operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -102,7 +111,10 @@ export async function getChunksByDocAndRange(
     chunkIndex: number;
   }>
 > {
-  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
+  const result = await executeDatabaseCancelable({
+    client,
+    queryClass: 'retrieval_lexical',
+    operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",
@@ -196,7 +208,10 @@ export async function getChunksByDocAndRanges(
   const conditions = ranges.map((r) =>
     and(sql`c.document_id = ${r.documentId}`, sql`c.chunk_index >= ${r.start}`, sql`c.chunk_index <= ${r.end}`),
   );
-  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
+  const result = await executeDatabaseCancelable({
+    client,
+    queryClass: 'retrieval_lexical',
+    operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",

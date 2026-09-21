@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ok } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import type { RetrievedChunk } from '../../../rag/search/search-types';
 import {
@@ -102,20 +101,16 @@ function orchestratorResultShared(entries: { chunk: RetrievedChunk; queryIds: st
   };
 }
 
-describe('searchDocumentation planner path (WP-4 tool integration)', () => {
-  it('uses structured planner results with provenance when enabled', async () => {
+describe('searchDocumentation planner path (WP-4 tool integration, WP-9 single production path)', () => {
+  it('uses structured planner results with provenance in agentic mode', async () => {
     const structuredSearch = vi.fn(async () => orchestratorResult([chunk()]));
     const tool = createSearchDocumentationTool({
       searchChunks: (async () => {
         throw new Error('legacy path must not run when planner is enabled');
       }) as never,
-      agenticSearch: (async () => {
-        throw new Error('legacy agentic path must not run when planner is enabled');
-      }) as never,
       cfg: {} as AppConfig,
-      effectiveMode: 'normal',
+      effectiveMode: 'agentic',
       structuredSearch: structuredSearch as never,
-      plannerEnabled: true,
     });
     const output = await tool.create(makeContext())({ query: 'password reset' }, { callId: 'call-planner', signal: new AbortController().signal });
     expect(structuredSearch).toHaveBeenCalledTimes(1);
@@ -124,55 +119,6 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
     expect(output.sets[0].subquestionId).toBe('sq-1');
     expect(output.callId).toBe('call-planner');
     expect(output.uniqueEvidenceAdded).toBe(1);
-  });
-
-  it('shadow comparison returns normal results unchanged', async () => {
-    const searchChunks = vi.fn(async () => ok({ chunks: [chunk({ content: 'Normal path.' })], degradedBy: [], diagnostics: { hasMore: false } as never }) as never);
-    const structuredSearch = vi.fn(async () => orchestratorResult([chunk({ content: 'Shadow planner.' })]));
-    const tool = createSearchDocumentationTool({
-      searchChunks: searchChunks as never,
-      agenticSearch: (async () => {
-        throw new Error('unused');
-      }) as never,
-      cfg: {} as AppConfig,
-      effectiveMode: 'normal',
-      structuredSearch: structuredSearch as never,
-      plannerEnabled: false,
-      shadowEnabled: true,
-    });
-    const output = await tool.create(makeContext())({ query: 'password reset' }, { callId: 'call-shadow', signal: new AbortController().signal });
-    expect(searchChunks).toHaveBeenCalled();
-    expect(structuredSearch).toHaveBeenCalled();
-    if (output.sets[0]?.kind !== 'results') throw new Error('expected results');
-    expect(output.sets[0].results[0]?.content).toContain('Normal path');
-  });
-
-  it('returns normal results without waiting for a slow shadow comparison', async () => {
-    let releaseShadow: (() => void) | undefined;
-    const structuredSearch = vi.fn(() => new Promise<OrchestratorResult>((resolve) => {
-      releaseShadow = () => { resolve(orchestratorResult([chunk({ content: 'Late shadow.' })])); };
-    }));
-    const tool = createSearchDocumentationTool({
-      searchChunks: vi.fn(async () => ok({
-        chunks: [chunk({ content: 'Immediate normal result.' })],
-        degradedBy: [],
-        diagnostics: { hasMore: false } as never,
-      }) as never) as never,
-      agenticSearch: (async () => { throw new Error('unused'); }) as never,
-      cfg: {} as AppConfig,
-      effectiveMode: 'normal',
-      structuredSearch: structuredSearch as never,
-      plannerEnabled: false,
-      shadowEnabled: true,
-    });
-
-    const output = await tool.create(makeContext())(
-      { query: 'password reset' },
-      { callId: 'call-slow-shadow', signal: new AbortController().signal },
-    );
-    expect(output.sets[0]?.kind).toBe('results');
-    expect(structuredSearch).toHaveBeenCalledTimes(1);
-    releaseShadow?.();
   });
 
   it('preserves per-chunk multi-variant provenance through serialization', async () => {
@@ -184,11 +130,9 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
     ]));
     const tool = createSearchDocumentationTool({
       searchChunks: (async () => { throw new Error('unused'); }) as never,
-      agenticSearch: (async () => { throw new Error('unused'); }) as never,
       cfg: {} as AppConfig,
-      effectiveMode: 'normal',
+      effectiveMode: 'agentic',
       structuredSearch: structuredSearch as never,
-      plannerEnabled: true,
     });
     const output = await tool.create(makeContext())({ query: 'password reset' }, { callId: 'call-prov', signal: new AbortController().signal });
     expect(output.sets[0]?.kind).toBe('results');
@@ -238,11 +182,9 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
     }));
     const tool = createSearchDocumentationTool({
       searchChunks: (async () => { throw new Error('unused'); }) as never,
-      agenticSearch: (async () => { throw new Error('unused'); }) as never,
       cfg: {} as AppConfig,
-      effectiveMode: 'normal',
+      effectiveMode: 'agentic',
       structuredSearch: structuredSearch as never,
-      plannerEnabled: true,
     });
     const output = await tool.create(makeContext())(
       { query: 'account and refund policy' },
@@ -279,13 +221,9 @@ describe('searchDocumentation planner path (WP-4 tool integration)', () => {
       searchChunks: (async () => {
         throw new Error('unused');
       }) as never,
-      agenticSearch: (async () => {
-        throw new Error('unused');
-      }) as never,
       cfg: {} as AppConfig,
-      effectiveMode: 'normal',
+      effectiveMode: 'agentic',
       structuredSearch: failing as never,
-      plannerEnabled: true,
     });
     const output = await tool.create(makeContext())({ query: 'q' }, { callId: 'call-err', signal: new AbortController().signal });
     expect(output.sets[0]?.kind).toBe('error');

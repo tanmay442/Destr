@@ -68,8 +68,12 @@ Implementation: `packages/application/src/capacity/admission-control.ts`
 (provider/global ceilings + circuits).
 
 - Per-user active-turn lease: 2, tenant-scoped, ownership-token, 120 s TTL with
-  expiry recovery. The process-local map in `src/app/api/chat/slots.ts` remains
-  fast-path only.
+  expiry recovery. The request path (`src/admission.ts`, replacing the deleted
+  `src/app/api/chat/slots.ts`) consults the `AdmissionController` with the
+  distributed per-user lease as an async gate reusing the same Redis keys;
+  the controller's local maps are the fast path. Global/provider ceilings are
+  enforced process-locally (best-effort); true cross-instance global control
+  needs shared counters (known limitation).
 - Global and per-provider concurrency ceilings with a protected interactive
   reservation (background/judge work sheds first, never consumes it).
 - Bounded queue (512) with 5 s queue deadline and interactive priority.
@@ -79,8 +83,11 @@ Implementation: `packages/application/src/capacity/admission-control.ts`
 - Circuit breakers (closed/open/half-open) on provider 429/5xx/timeouts, DB pool
   wait, Redis errors, deadline-miss rate. All rejections happen **before**
   embeddings, model calls, or DB access.
-- Distributed store outage fails closed (never silently degrades to per-instance
-  state for correctness-critical admission).
+- Distributed store outage degrades to local admission with a warning
+  (`failClosedOnDistributedOutage: false`, matching the old slots behavior);
+  idempotency (not admission) remains the fail-closed correctness boundary.
+  True cross-instance global/provider ceilings need shared counters and are a
+  documented limitation.
 
 ## 4. Service quota inventory (fill before any real run)
 

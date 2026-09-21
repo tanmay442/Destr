@@ -1,10 +1,12 @@
 import { SearchFailure } from '../../rag/search/search-contract';
 import type {
   RetrievedChunk,
+  SearchChunksResult,
   SearchDeps,
   SearchExecutionResult,
 } from '../../rag/search/search-types';
 import { searchChunks } from '../../rag/search/search-chunks';
+import { scheduleRetrieval, type RetrievalWorkItem } from './retrieval-scheduler';
 import { stableChunkIdentities, stableChunkIdentity } from '../../rag/search/stable-chunk-identity';
 import type { SearchDegradation } from '../../rag/search/search-contract';
 import type { SearchSubquestionResult } from '../../rag/search/search-contract';
@@ -139,44 +141,6 @@ interface VariantOutcome {
   readonly duplicatesSkipped: number;
   readonly hasMore: boolean;
   readonly degradedBy: readonly SearchDegradation[];
-}
-
-async function runWithConcurrency<T>(
-  tasks: readonly (() => Promise<T>)[],
-  maxConcurrent: number,
-  signal: AbortSignal,
-  abortAll: (reason: unknown) => void,
-): Promise<T[]> {
-  const results: T[] = new Array<T>(tasks.length) as T[];
-  let next = 0;
-  const workers: Promise<void>[] = [];
-  const workerCount = Math.max(1, Math.min(maxConcurrent, tasks.length));
-  for (let worker = 0; worker < workerCount; worker += 1) {
-    workers.push(
-      (async () => {
-        while (next < tasks.length) {
-          if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Search orchestrator aborted');
-          const index = next;
-          next += 1;
-          const task = tasks[index];
-          if (!task) continue;
-          results[index] = await task();
-        }
-      })(),
-    );
-  }
-  const guarded = workers.map(async (worker) => {
-    try {
-      await worker;
-    } catch (cause) {
-      abortAll(cause);
-      throw cause;
-    }
-  });
-  const settled = await Promise.allSettled(guarded);
-  const rejected = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
-  if (rejected) throw rejected.reason;
-  return results;
 }
 
 const VARIANT_FUSION_RRF_K = 60;
@@ -899,99 +863,288 @@ async function executePlanOnce(
   }
 
   const uniqueKeys = [...executions.keys()].sort();
-  const modalitiesPerVariant = (ctx.deps.hybridEnabled ?? true) ? 2 : 1;
+  const variantLimit = Math.max(1, Math.min(ctx.limits.maxResultsPerSubquestion * 2, ctx.limits.maxCandidatesPerModality));
   const remainingBudget = ctx.limits.maxPhysicalRetrievals - ctx.getPhysicalUsed();
-  if (remainingBudget < modalitiesPerVariant) {
+  if (remainingBudget < 1) {
     return { subResults: [], physicalUsed: ctx.getPhysicalUsed(), cancelled: false, timedOut: false, physicalCeiling: true };
   }
-  const maxExecutableVariants = Math.max(1, Math.floor(remainingBudget / modalitiesPerVariant));
-  const executableKeys = uniqueKeys.slice(0, maxExecutableVariants);
-  const truncatedByCeiling = executableKeys.length < uniqueKeys.length;
 
-  const outcomeByKey = new Map<string, VariantOutcome>();
-  const variantLimit = Math.max(1, Math.min(ctx.limits.maxResultsPerSubquestion * 2, ctx.limits.maxCandidatesPerModality));
-  const executedKeySet = new Set(executableKeys);
-  const tasks = executableKeys.map((key) => async (): Promise<void> => {
+  // TWO scheduler items per variant (same queryText, modalities 'vector' +
+  // 'lexical'). Each hybrid searchChunks call performs one vector + one
+  // lexical retrieval internally, so paired items preserve the existing
+  // maxPhysicalRetrievals calibration (2 units per variant). The backend
+  // coalesces: the first item for a normalized text executes ONE searchChunks
+  // call and stashes the full result; the second item reads the stash and
+  // returns the per-modality candidate count from stashed diagnostics.
+  const items: RetrievalWorkItem[] = [];
+  const itemVariantKeys: string[] = [];
+  for (const key of uniqueKeys) {
     const execution = executions.get(key);
-    if (!execution) return;
-    throwIfAborted(ctx.input.signal);
-    if (ctx.input.deadlineAt !== undefined && Date.now() > ctx.input.deadlineAt) {
-      throw Object.assign(new Error('Search orchestrator deadline exceeded'), { name: 'TimeoutError' });
+    if (!execution) continue;
+    const queryId = execution.queryIds[0] ?? 'q-1';
+    for (const modality of ['vector', 'lexical'] as const) {
+      items.push({
+        callId: ctx.input.callId,
+        subquestionId: execution.subquestionId,
+        queryId,
+        queryText: execution.text,
+        modality,
+      });
+      itemVariantKeys.push(key);
     }
-    let result: SearchExecutionResult | null = null;
-    let failure: SearchFailure | null = null;
+  }
+  if (items.length === 0) {
+    return { subResults: [], physicalUsed: ctx.getPhysicalUsed(), cancelled: false, timedOut: false, physicalCeiling: false };
+  }
+
+  // Combine the turn signal with an explicit deadline abort so the scheduler
+  // observes both user cancellation and the turn deadline. Post-abort we
+  // classify as timedOut when Date.now() >= deadlineAt else cancelled,
+  // preserving the existing timeout-vs-cancel distinction.
+  void ctx.abortRun;
+  const schedulerController = new AbortController();
+  const forwardAbort = (): void => {
+    const reason = ctx.input.signal.reason instanceof Error
+      ? ctx.input.signal.reason
+      : new Error('Search orchestrator aborted');
     try {
-      const searchResult = await searchChunks(
-        execution.text,
-        {
-          limit: variantLimit,
-          threshold: ctx.deps.similarityThreshold ?? 0.5,
-          rerankerThreshold: ctx.deps.rerankerThreshold,
-          hybridEnabled: ctx.deps.hybridEnabled,
-          lexicalSearchMode: ctx.deps.lexicalSearchMode,
-          filter: ctx.deps.filter,
-          ...(ctx.deps.mode ? { mode: ctx.deps.mode } : {}),
-          ...(ctx.deps.parentChildWindow !== undefined ? { parentChildWindow: ctx.deps.parentChildWindow } : {}),
-          ...(ctx.deps.rrfK !== undefined ? { rrfK: ctx.deps.rrfK } : {}),
-          ...(ctx.deps.lexicalWeight !== undefined ? { lexicalWeight: ctx.deps.lexicalWeight } : {}),
-          ...(ctx.deps.rsePenalty !== undefined ? { rsePenalty: ctx.deps.rsePenalty } : {}),
-          ...(ctx.deps.rseMaxSegmentChunks !== undefined ? { rseMaxSegmentChunks: ctx.deps.rseMaxSegmentChunks } : {}),
-          ...(ctx.deps.rseOverallMaxChunks !== undefined ? { rseOverallMaxChunks: ctx.deps.rseOverallMaxChunks } : {}),
-          ...(ctx.deps.rseMinSegmentValue !== undefined ? { rseMinSegmentValue: ctx.deps.rseMinSegmentValue } : {}),
-          excludeChunkIdentities: ctx.input.excludeChunkIdentities,
-          candidateLimit: ctx.limits.maxCandidatesPerModality,
-          signal: ctx.input.signal,
-        },
-        { chunks: ctx.deps.search.chunks, embeddings: ctx.deps.search.embeddings, reranker: undefined },
-      );
-      if (!searchResult.ok) {
-        failure = searchResult.error;
-      } else {
-        result = searchResult.value;
+      schedulerController.abort(reason);
+    } catch {
+      // Ignore abort races; the signal state is authoritative.
+    }
+  };
+  if (ctx.input.signal.aborted) {
+    forwardAbort();
+  } else {
+    ctx.input.signal.addEventListener('abort', forwardAbort, { once: true });
+  }
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  if (ctx.input.deadlineAt !== undefined && !schedulerController.signal.aborted) {
+    const ms = ctx.input.deadlineAt - Date.now();
+    if (ms <= 0) {
+      try {
+        schedulerController.abort(Object.assign(new Error('Search orchestrator deadline exceeded'), { name: 'TimeoutError' }));
+      } catch {
+        // Ignore abort races.
       }
-    } catch (cause) {
-      if (isCancellation(cause, ctx.input.signal)) {
+    } else {
+      deadlineTimer = setTimeout(() => {
+        try {
+          schedulerController.abort(Object.assign(new Error('Search orchestrator deadline exceeded'), { name: 'TimeoutError' }));
+        } catch {
+          // Ignore abort races.
+        }
+      }, ms);
+      const asNodeTimer = deadlineTimer as unknown as { unref?: () => void };
+      if (typeof asNodeTimer.unref === 'function') asNodeTimer.unref();
+    }
+  }
+  const schedulerSignal = schedulerController.signal;
+
+  const stashed = new Map<string, SearchChunksResult>();
+  const inFlight = new Map<string, Promise<SearchChunksResult>>();
+  const executeRetrieval = {
+    execute: async (
+      item: RetrievalWorkItem,
+      backendInput: { readonly embedding: readonly number[] | null; readonly signal: AbortSignal },
+    ): Promise<{ readonly candidateCount: number }> => {
+      const stashKey = normalizeQueryForDedup(item.queryText);
+      const execution = executions.get(stashKey) ?? executions.get(item.queryText);
+      const text = execution?.text ?? item.queryText;
+      if (backendInput.signal.aborted) {
+        throw backendInput.signal.reason instanceof Error
+          ? backendInput.signal.reason
+          : new Error('Search orchestrator aborted');
+      }
+      if (ctx.input.deadlineAt !== undefined && Date.now() > ctx.input.deadlineAt) {
+        const timeout = Object.assign(new Error('Search orchestrator deadline exceeded'), { name: 'TimeoutError' });
+        try {
+          schedulerController.abort(timeout);
+        } catch {
+          // Ignore abort races.
+        }
+        throw timeout;
+      }
+      const completed = stashed.get(stashKey);
+      if (completed) {
+        if (!completed.ok) throw completed.error;
+        const count = item.modality === 'vector'
+          ? completed.value.diagnostics.dense.candidateCount
+          : completed.value.diagnostics.lexical.candidateCount;
+        return { candidateCount: count };
+      }
+      let promise = inFlight.get(stashKey);
+      if (!promise) {
+        promise = (async (): Promise<SearchChunksResult> => {
+          if (backendInput.signal.aborted) {
+            throw backendInput.signal.reason instanceof Error
+              ? backendInput.signal.reason
+              : new Error('Search orchestrator aborted');
+          }
+          let searchResult: SearchChunksResult;
+          try {
+            searchResult = await searchChunks(
+              text,
+              {
+                limit: variantLimit,
+                threshold: ctx.deps.similarityThreshold ?? 0.5,
+                rerankerThreshold: ctx.deps.rerankerThreshold,
+                hybridEnabled: ctx.deps.hybridEnabled,
+                lexicalSearchMode: ctx.deps.lexicalSearchMode,
+                filter: ctx.deps.filter,
+                ...(ctx.deps.mode ? { mode: ctx.deps.mode } : {}),
+                ...(ctx.deps.parentChildWindow !== undefined ? { parentChildWindow: ctx.deps.parentChildWindow } : {}),
+                ...(ctx.deps.rrfK !== undefined ? { rrfK: ctx.deps.rrfK } : {}),
+                ...(ctx.deps.lexicalWeight !== undefined ? { lexicalWeight: ctx.deps.lexicalWeight } : {}),
+                ...(ctx.deps.rsePenalty !== undefined ? { rsePenalty: ctx.deps.rsePenalty } : {}),
+                ...(ctx.deps.rseMaxSegmentChunks !== undefined ? { rseMaxSegmentChunks: ctx.deps.rseMaxSegmentChunks } : {}),
+                ...(ctx.deps.rseOverallMaxChunks !== undefined ? { rseOverallMaxChunks: ctx.deps.rseOverallMaxChunks } : {}),
+                ...(ctx.deps.rseMinSegmentValue !== undefined ? { rseMinSegmentValue: ctx.deps.rseMinSegmentValue } : {}),
+                excludeChunkIdentities: ctx.input.excludeChunkIdentities,
+                candidateLimit: ctx.limits.maxCandidatesPerModality,
+                signal: backendInput.signal,
+                ...(backendInput.embedding ? { precomputedEmbedding: backendInput.embedding } : {}),
+              },
+              // Behavior preservation: orchestrator never uses the inline
+              // reranker here; per-subquestion rerank happens downstream.
+              { chunks: ctx.deps.search.chunks, embeddings: ctx.deps.search.embeddings, reranker: undefined },
+            );
+          } catch (cause) {
+            if (isCancellation(cause, backendInput.signal) || (cause instanceof Error && cause.name === 'TimeoutError')) {
+              throw cause;
+            }
+            const failure = new SearchFailure(
+              toFailureCode(cause, backendInput.signal),
+              true,
+              'The documentation search is temporarily unavailable. Please try again.',
+              cause,
+            );
+            stashed.set(stashKey, { ok: false, error: failure });
+            throw failure;
+          }
+          stashed.set(stashKey, searchResult);
+          if (!searchResult.ok) throw searchResult.error;
+          return searchResult;
+        })();
+        inFlight.set(stashKey, promise);
+      }
+      let settled: SearchChunksResult;
+      try {
+        settled = await promise;
+      } catch (cause) {
         throw cause;
       }
-      failure = new SearchFailure(
-        toFailureCode(cause, ctx.input.signal),
+      if (!settled.ok) throw settled.error;
+      const count = item.modality === 'vector'
+        ? settled.value.diagnostics.dense.candidateCount
+        : settled.value.diagnostics.lexical.candidateCount;
+      return { candidateCount: count };
+    },
+  };
+
+  const clampedConcurrent = Math.max(1, Math.min(32, Math.floor(ctx.limits.maxConcurrentRetrievals)));
+  const clampedMaxOps = Math.max(1, Math.min(500, Math.floor(remainingBudget)));
+  let scheduleResult: Awaited<ReturnType<typeof scheduleRetrieval>>;
+  try {
+    scheduleResult = await scheduleRetrieval(
+      {
+        items,
+        config: {
+          maxConcurrentRetrievals: clampedConcurrent,
+          maxPhysicalOps: clampedMaxOps,
+          // Starting values for the bounded scheduler (WP-9); tune from observed turn shapes.
+          embeddingBatchSize: 12,
+          maxBatchSqlSize: 24,
+        },
+        capabilities: {
+          batchEmbeddings: true,
+          // Bulk-SQL batching was rejected in WP-8; retrieval stays per-variant, only embeddings batch.
+          batchedVectorSql: 'unsupported',
+          batchedLexicalSql: 'unsupported',
+        },
+      },
+      {
+        signal: schedulerSignal,
+        embedBatch: {
+          embedBatch: async (texts) => {
+            const vectors = await ctx.deps.search.embeddings.embedBatch([...texts], { signal: schedulerSignal });
+            return vectors.map((vector) => vector as readonly number[]);
+          },
+        },
+        executeRetrieval,
+      },
+    );
+  } finally {
+    ctx.input.signal.removeEventListener('abort', forwardAbort);
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  }
+
+  // Turn-level physical accounting mirrors the scheduler's own enforcement:
+  // scheduleResult.physicalOpsUsed covers embedding batches AND retrieval
+  // executions against the same remaining budget the scheduler was given, so
+  // charging its total keeps the turn ceiling complete (F-37, 7.9). The
+  // retrieval-only count is preserved in diagnostics, not in budgets.
+  const physicalOpsUsed = scheduleResult.physicalOpsUsed;
+  const hasCancelled = scheduleResult.outcome.outcome === 'cancelled'
+    || scheduleResult.items.some((outcome) => outcome.status === 'cancelled');
+  if (hasCancelled) {
+    const timedOut = ctx.input.deadlineAt !== undefined && Date.now() >= ctx.input.deadlineAt;
+    return {
+      subResults: [],
+      physicalUsed: ctx.getPhysicalUsed() + physicalOpsUsed,
+      cancelled: !timedOut,
+      timedOut,
+      physicalCeiling: false,
+    };
+  }
+
+  const outcomeByKey = new Map<string, VariantOutcome>();
+  for (const key of uniqueKeys) {
+    const stashedResult = stashed.get(key);
+    if (stashedResult) {
+      if (stashedResult.ok) {
+        const value: SearchExecutionResult = stashedResult.value;
+        outcomeByKey.set(key, {
+          key,
+          chunks: value.chunks,
+          failure: null,
+          duplicatesSkipped: value.diagnostics.stableDuplicatesSkipped,
+          hasMore: value.diagnostics.hasMore,
+          degradedBy: [...value.degradedBy],
+        });
+      } else {
+        outcomeByKey.set(key, {
+          key,
+          chunks: [],
+          failure: stashedResult.error,
+          duplicatesSkipped: 0,
+          hasMore: false,
+          degradedBy: [],
+        });
+      }
+      continue;
+    }
+    const related = scheduleResult.items.filter((_, index) => itemVariantKeys[index] === key);
+    if (related.length > 0 && related.every((outcome) => outcome.status === 'omitted_by_budget')) continue;
+    if (related.some((outcome) => outcome.status === 'error')) {
+      const fallback = new SearchFailure(
+        'retrieval_unavailable',
         true,
         'The documentation search is temporarily unavailable. Please try again.',
-        cause,
       );
+      outcomeByKey.set(key, {
+        key,
+        chunks: [],
+        failure: fallback,
+        duplicatesSkipped: 0,
+        hasMore: false,
+        degradedBy: [],
+      });
     }
-    outcomeByKey.set(key, {
-      key,
-      chunks: result?.chunks ?? [],
-      failure,
-      duplicatesSkipped: result?.diagnostics.stableDuplicatesSkipped ?? 0,
-      hasMore: result?.diagnostics.hasMore ?? false,
-      degradedBy: result ? [...result.degradedBy] : [],
-    });
-  });
-
-  let startedVariants = 0;
-  const countedTasks = tasks.map((task) => async (): Promise<void> => {
-    startedVariants += 1;
-    await task();
-  });
-  try {
-    await runWithConcurrency(
-      countedTasks,
-      ctx.limits.maxConcurrentRetrievals,
-      ctx.input.signal,
-      ctx.abortRun,
-    );
-  } catch (cause) {
-    if (isCancellation(cause, ctx.input.signal)) {
-      return { subResults: [], physicalUsed: ctx.getPhysicalUsed() + startedVariants * modalitiesPerVariant, cancelled: true, timedOut: false, physicalCeiling: false };
-    }
-    if (cause instanceof Error && cause.name === 'TimeoutError') {
-      return { subResults: [], physicalUsed: ctx.getPhysicalUsed() + startedVariants * modalitiesPerVariant, cancelled: false, timedOut: true, physicalCeiling: false };
-    }
-    throw cause;
   }
-  ctx.addPhysicalUsed(executableKeys.length * modalitiesPerVariant);
+  const truncatedByCeiling = scheduleResult.items.some((outcome) => outcome.status === 'omitted_by_budget');
+  const executedKeySet = new Set(outcomeByKey.keys());
+  ctx.addPhysicalUsed(physicalOpsUsed);
 
   const subResults: SubExecution[] = [];
   for (const sub of plan.subquestions) {

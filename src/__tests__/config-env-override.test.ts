@@ -6,8 +6,6 @@ const ENV_KEYS = [
   'PARENT_CHILD_MODE',
   'PARENT_CHILD_WINDOW',
   'AGENT_STEP_BUDGET',
-  'AGENTIC_RETRIEVE_LIMIT',
-  'AGENTIC_MAX_RETRIES',
   'HYBRID_ENABLED',
   'RERANKER_PROVIDER',
   'AUX_MODEL',
@@ -32,8 +30,6 @@ describe('config/app.config env overrides', () => {
     vi.stubEnv('ANSWER_CACHE_ENABLED', 'false');
     vi.stubEnv('ANSWER_CACHE_TTL_SEC', '7200');
     vi.stubEnv('AGENT_STEP_BUDGET', '12');
-    vi.stubEnv('AGENTIC_RETRIEVE_LIMIT', '25');
-    vi.stubEnv('AGENTIC_MAX_RETRIES', '3');
     vi.stubEnv('PARENT_CHUNK_SIZE', '2000');
     vi.stubEnv('CHILD_CHUNK_SIZE', '500');
     vi.stubEnv('PARENT_CHILD_MODE', 'window');
@@ -51,8 +47,6 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.answerCacheEnabled).toBe(false);
     expect(appConfig.answerCacheTtlSec).toBe(7200);
     expect(appConfig.agentStepBudget).toBe(12);
-    expect(appConfig.agenticRetrieveLimit).toBe(25);
-    expect(appConfig.agenticMaxRetries).toBe(3);
     expect(appConfig.parentChunkSize).toBe(2000);
     expect(appConfig.childChunkSize).toBe(500);
     expect(appConfig.parentChildMode).toBe('window');
@@ -74,8 +68,6 @@ describe('config/app.config env overrides', () => {
     expect(appConfig.answerCacheEnabled).toBe(true);
     expect(appConfig.answerCacheTtlSec).toBe(3600);
     expect(appConfig.agentStepBudget).toBe(8);
-    expect(appConfig.agenticRetrieveLimit).toBe(10);
-    expect(appConfig.agenticMaxRetries).toBe(1);
     expect(appConfig.parentChunkSize).toBe(1800);
     expect(appConfig.childChunkSize).toBe(500);
     expect(appConfig.parentChildMode).toBe('parent');

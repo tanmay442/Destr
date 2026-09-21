@@ -4,7 +4,7 @@ import type { RetrievedChunk } from '../../rag/search/search-types';
 import { createGroundingEvidence } from '../../chat/grounding-evidence';
 import type { TurnMetrics } from '../../chat/chat-turn/turn-types';
 import { TurnToolLedger } from '../run-state';
-import { buildCatalogToolsForTurn } from '../compat/chat-tools-compat';
+import { buildCatalogToolsForTurn } from '../turn-tools';
 import { SEARCH_TOOL_NAME } from '../tools/search-documentation';
 import type { OrchestratorResult } from '../search/search-orchestrator';
 
@@ -100,7 +100,6 @@ describe('turn-wide search budgets (WP-4)', () => {
     const built = buildCatalogToolsForTurn(
       {
         searchChunks: searchChunks as never,
-        agenticSearch: (async () => { throw new Error('unused'); }) as never,
         createTicket: (async () => { throw new Error('unused'); }) as never,
         userResolver: async () => ({ name: 'N', email: 'n@example.com' }),
         rateLimit: { check: async () => ({ ok: true as const, remaining: 1, resetMs: 60_000 }) } as never,
@@ -131,13 +130,13 @@ describe('turn-wide search budgets (WP-4)', () => {
   });
 
   it('does not charge policy rejections that run no retrieval', async () => {
-    process.env.SEARCH_STRUCTURED_PLANNER_ENABLED = '1';
+    // WP-9: the structured orchestrator is the agentic-mode path without a
+    // rollout flag; normal mode keeps the direct hybrid path.
     const structuredSearch = mockStructuredSearch(2);
     const groundingEvidence = createGroundingEvidence();
     const built = buildCatalogToolsForTurn(
       {
         searchChunks: (async () => { throw new Error('unused'); }) as never,
-        agenticSearch: (async () => { throw new Error('unused'); }) as never,
         structuredSearch: structuredSearch as never,
         createTicket: (async () => { throw new Error('unused'); }) as never,
         userResolver: async () => ({ name: 'N', email: 'n@example.com' }),
@@ -146,7 +145,7 @@ describe('turn-wide search budgets (WP-4)', () => {
       },
       {
         cfg: { hybridEnabled: true } as AppConfig,
-        effectiveMode: 'normal',
+        effectiveMode: 'agentic',
         userId: 'user_test',
         turnId: 'turn_nocharge',
         lastUserText: 'password reset procedure steps',
@@ -169,18 +168,15 @@ describe('turn-wide search budgets (WP-4)', () => {
   });
 
   afterEach(() => {
-    delete process.env.SEARCH_STRUCTURED_PLANNER_ENABLED;
     receivedBudgets.length = 0;
   });
 
   it('caps the second planner call to remaining turn physical budget', async () => {
-    process.env.SEARCH_STRUCTURED_PLANNER_ENABLED = '1';
     const structuredSearch = mockStructuredSearch(20);
     const groundingEvidence = createGroundingEvidence();
     const built = buildCatalogToolsForTurn(
       {
         searchChunks: (async () => { throw new Error('legacy must not run'); }) as never,
-        agenticSearch: (async () => { throw new Error('legacy must not run'); }) as never,
         structuredSearch: structuredSearch as never,
         createTicket: (async () => { throw new Error('unused'); }) as never,
         userResolver: async () => ({ name: 'N', email: 'n@example.com' }),
@@ -189,7 +185,7 @@ describe('turn-wide search budgets (WP-4)', () => {
       },
       {
         cfg: { hybridEnabled: true } as AppConfig,
-        effectiveMode: 'normal',
+        effectiveMode: 'agentic',
         userId: 'user_test',
         turnId: 'turn_budget',
         lastUserText: 'password reset procedure steps',

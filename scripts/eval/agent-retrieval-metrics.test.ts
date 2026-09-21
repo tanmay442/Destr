@@ -19,20 +19,20 @@ function reciprocalRank(ranked: readonly number[], expected: ReadonlySet<number>
 }
 
 describe('agent retrieval golden metrics on the fixed synthetic snapshot', () => {
-  it('reports recall, MRR, and no-match classification across normal/planner/diagnostic modes', async () => {
+  it('reports recall, MRR, and no-match classification on the single retrieval path', async () => {
     const deps = mockEvalDeps();
     const answerable = goldenQuestions.filter((q) => (q.expectedMockDocIds ?? []).length > 0);
     const noMatch = goldenQuestions.filter((q) => (q.expectedMockDocIds ?? []).length === 0);
     expect(answerable.length).toBeGreaterThan(0);
     expect(SYNTHETIC_MOCK_CORPUS_VERSION).toBe('synthetic-mock-corpus.v2');
-    for (const mode of ['normal', 'planner', 'diagnostic'] as const) {
+    // WP-9 single retrieval path: the old rewrite/retry wrapper was removed.
+    // The structured orchestrator comparison lives in wp4-retrieval.ts.
+    for (const mode of ['normal', 'diagnostic'] as const) {
       const recalls: number[] = [];
       const rrs: number[] = [];
       let noMatchCorrect = 0;
       for (const q of answerable) {
-        const retrieved = mode === 'normal'
-          ? await deps.searchChunks(q.question)
-          : await deps.agenticSearch?.(q.question) ?? [];
+        const retrieved = await deps.searchChunks(q.question);
         const ids = retrieved.map((r) => r.documentId ?? -1);
         const expected = new Set(q.expectedMockDocIds ?? []);
         recalls.push(recallAt(ids, expected, 5));

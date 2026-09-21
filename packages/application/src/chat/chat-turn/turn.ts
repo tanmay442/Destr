@@ -35,6 +35,7 @@ import {
   type ChatInputMessage,
   type ChatUIMessage,
 } from '../message-types';
+import { compactHistoryForModel } from '../history-compaction';
 import type { AgentModelMessage, AgentModelMessagePart } from '../../agent/model-backend';
 import {
   createCacheLease,
@@ -44,7 +45,6 @@ import {
   type CacheLeaseTelemetry,
 } from '../cache-lease';
 import {
-  legacyTurnRequestFingerprint,
   turnRequestFingerprint,
   TURN_FINGERPRINT_VERSION,
 } from '../turn-fingerprint';
@@ -78,7 +78,7 @@ import {
   buildCatalogToolsForTurn,
   type CatalogCompatToolEnvelope,
   type PrefetchedSearchOutcome,
-} from '../../agent/compat/chat-tools-compat';
+} from '../../agent/turn-tools';
 import { createDeadlineLedger } from '../../runtime/deadline-ledger';
 import { readWp8Flag } from '../../runtime/wp8-flags';
 import { createAgentProgressSink, type AgentProgressSink } from '../../chat/progress/progress-sink';
@@ -86,10 +86,8 @@ import type { AgentProgressEvent } from '../../chat/progress/progress-event';
 import { buildPromptPrefixVersion, computeSchemaDigest } from '../../agent/prompt/prefix-version';
 import { createSupportAgent, SEARCH_TOOL_NAME, TICKET_TOOL_NAME } from '../../agent/support-agent';
 import { DEFAULT_TOOL_CAPABILITIES } from '../../agent/model-tool-capabilities';
-import { readSupportAgentFlag } from '../../agent/agent-flags';
 import { createApprovalPolicyForTurn } from '../../agent/tool-approval';
 import type { BuiltToolInstance, ToolCatalog } from '../../agent/tool-catalog';
-import { readPlannerFlags } from '../../agent/search/search-flags';
 import { estimateChunkTokens } from '../../agent/search/evidence-packer';
 import { TurnToolLedger } from '../../agent/run-state';
 import { DEFAULT_TURN_SOFT_DEADLINE_MS, DEFAULT_JUDGE_MAX_WALL_MS } from './hallucination';
@@ -97,7 +95,6 @@ import type { ChatTurnDeps, ChatTurnRequest, ChatTurnResult, ChatModelUsageTelem
 import { validateCitations } from '../../agent/grounding/citation-validator';
 import { assembleGroundingInput } from '../../agent/grounding/grounding-evidence-input';
 import { runGroundingCheck } from '../../agent/grounding/grounding-check';
-import { readGroundedReleaseFlag } from '../../agent/grounding/grounding-flags';
 import { GROUNDING_TRACE_VERSION, toLogFields } from '../../agent/grounding/grounding-telemetry';
 import { safeResponseFor } from '../../agent/grounding/safe-response';
 import { serializeUntrustedChunk } from '../../agent/prompt/serialize-untrusted-result';
@@ -314,10 +311,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       conversationId: parsed.data.conversationId,
       retry: parsed.data.retry,
       semanticContext: legacySearchResultCacheFingerprint(cfg, cfg.retrievalMode),
-      messages: inputMessages,
-    }),
-    legacy: legacyTurnRequestFingerprint({
-      conversationId: parsed.data.conversationId,
       messages: inputMessages,
     }),
   };
@@ -643,7 +636,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
     softDeadlineMs = maxSoftDeadlineMs;
   }
   const judgeMaxWallMs = deps.judgeMaxWallMs ?? DEFAULT_JUDGE_MAX_WALL_MS;
-  const agentFlag = readSupportAgentFlag({ get: (key: string) => process.env[key] });
   const turnLedger = createDeadlineLedger(
     {
       acceptedAtMs: requestStartedAt,
@@ -655,7 +647,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   );
   const agentBudget = turnLedger.toAgentRunBudget({
     maxModelSteps: effectiveMode === 'agentic' ? cfg.agentStepBudget : 5,
-    ...(agentFlag.enabled ? {} : { maxModelSteps: 1 }),
   });
   const workDeadlineAt = agentBudget.deadlineAt - agentBudget.finalizeReserveMs;
   // The turn signal stops model and tool work before the finalization reserve;
@@ -668,8 +659,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   });
   const turnSignal = AbortSignal.any([request.signal, softDeadlineSignal]);
   let prefetch: PrefetchedSearchOutcome | null = null;
-  const plannerPrefetchBypass = deps.structuredSearch !== undefined &&
-    readPlannerFlags({ get: (key: string) => process.env[key] }).plannerEnabled;
+  // WP-9 single production path: the first-turn prefetch is bypassed whenever
+  // the structured orchestrator serves the turn (agentic mode with the
+  // orchestrator wired), so prefetch can never shadow orchestrated evidence.
+  const plannerPrefetchBypass = deps.structuredSearch !== undefined && effectiveMode === 'agentic';
   if (cfg.prefetchFirstTurn && !plannerPrefetchBypass && isFirstTurn && lastUserText.trim() !== '') {
     const prefetchStartedAt = performance.now();
     if (request.signal.aborted) throw new DOMException('Chat turn was cancelled.', 'AbortError');
@@ -769,8 +762,8 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   });
 
   // Single production path: module-owned tool guidance plus the project-owned
-  // SupportAgent loop. Rollback at the agent seam is configuration (see
-  // SUPPORT_AGENT_ENABLED), never a second policy implementation.
+  // SupportAgent loop. Rollback at the agent seam is a revertible commit (see
+  // docs/wp9-migration-notes.md), never a second policy implementation.
   const structuredSearch = deps.structuredSearch;
   const turnApprovals = createApprovalPolicyForTurn({
     lastUserText,
@@ -780,7 +773,6 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   const catalogTools = buildCatalogToolsForTurn(
         {
           searchChunks: (cfgValue, query, opts) => deps.searchChunks(cfgValue, query, opts),
-          agenticSearch: (cfgValue, query, opts) => deps.agenticSearch(cfgValue, query, opts),
           ...(structuredSearch
             ? { structuredSearch: (cfgValue, query, opts) => structuredSearch(cfgValue, query, opts) }
             : {}),
@@ -848,9 +840,10 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
   // carries the turn wall-clock deadline plus an explicit finalization
   // reserve into the agent loop and every tool. The full route/dependency
   // ledger remains WP-8 scope.
-  const agentEnabledTools = agentFlag.enabled
-    ? new Set([SEARCH_TOOL_NAME, TICKET_TOOL_NAME])
-    : new Set<string>();
+  // WP-9 single production path: the SupportAgent loop with the catalog
+  // tools is the only agent path. The one-step no-tools fallback was removed;
+  // see docs/wp9-migration-notes.md.
+  const agentEnabledTools = new Set([SEARCH_TOOL_NAME, TICKET_TOOL_NAME]);
   // The agent loop drives the compat-wrapped tool envelopes (prefetch
   // reuse, turn ceilings, ledger/metrics recording, ticket safety latches),
   // never the raw catalog instances. Policy lives once in compat; the agent
@@ -892,7 +885,51 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
       : {}),
     ...(agentBudget.maxOutputTokens !== undefined ? { maxOutputTokens: agentBudget.maxOutputTokens } : {}),
   });
-  const compactedHistory = compactModelHistory(messages);
+  // Stage 1 (UI shaping): compactModelHistory is a character/message-bounded
+  // newest-win selection (MAX_MODEL_HISTORY_MESSAGES / MAX_MODEL_HISTORY_TEXT_CHARS)
+  // that keeps the model-visible suffix small. It runs first and its output
+  // feeds the token-aware stage below.
+  const shapedHistory = compactModelHistory(messages);
+  // Stage 2 (token-aware): bound the shaped suffix to the model input budget.
+  // 12_000 is a measurement starting value, not a release promise; tune from
+  // p99 service-time/token data. recentMessagesToKeep=8 preserves the recent
+  // window; approval/constraint ids are empty here because the turn carries
+  // no pending write-tool approval context (empty today by design).
+  // currentRequestId is the last user message id (ChatUIMessage.id is always
+  // set; ChatInputMessage.id is optional and synthesized by toChatUIMessages),
+  // or null when no user message exists — resolveCurrentRequestId handles
+  // null by falling back to the last user message.
+  const lastUserMessageIdForCompaction =
+    [...shapedHistory].reverse().find((message) => message.role === 'user')?.id ?? null;
+  const historyTokenBudget = agentBudget.maxInputTokens ?? 12_000;
+  const { messages: tokenCompactedHistory, result: historyCompactionResult } = compactHistoryForModel(
+    shapedHistory,
+    {
+      maxInputTokens: historyTokenBudget,
+      recentMessagesToKeep: 8,
+      currentRequestId: lastUserMessageIdForCompaction,
+      approvalContextIds: [],
+      constraintMessageIds: [],
+    },
+  );
+  if (historyCompactionResult.outcome === 'over_budget') {
+    // Surfacing choice: the compaction module already logs
+    // history.compaction_over_budget and guarantees the current request is
+    // kept; the turn surfaces once more at the turn seam (turnId plus
+    // user-safe counts only) and proceeds with the returned protected set
+    // instead of failing closed, so an over-budget history still answers
+    // the current request.
+    logger.warn('chat.turn.history_over_budget', {
+      turnId,
+      beforeTokens: historyCompactionResult.beforeTokens,
+      afterTokens: historyCompactionResult.afterTokens,
+      maxInputTokens: historyTokenBudget,
+      keptCount: historyCompactionResult.keptMessageIds.length,
+      droppedCount: historyCompactionResult.droppedMessageIds.length,
+      preservedCurrentRequestId: historyCompactionResult.preservedCurrentRequestId,
+    });
+  }
+  const compactedHistory: readonly ChatUIMessage[] = tokenCompactedHistory;
   const currentMessageIndex = [...compactedHistory]
     .map((message, index) => ({ message, index }))
     .reverse()
@@ -975,7 +1012,7 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
             evidenceTokens: agentRun.summary.evidenceTokens,
             inputTokensUsed: agentRun.summary.inputTokensUsed,
             outputTokensUsed: agentRun.summary.outputTokensUsed,
-            supportAgentEnabled: agentFlag.enabled,
+            supportAgentEnabled: true,
           });
           if (timedOut) {
             controller.enqueue({
@@ -1005,7 +1042,11 @@ export async function chatTurn(input: ChatTurnRequest, deps: ChatTurnDeps): Prom
           const documentationRequired =
             hasGroundingEvidence || derivedToolState.outOfDomain || derivedToolState.isEmpty;
           const ticketEligible = !hasGroundingEvidence && derivedToolState.outOfDomain;
-          const releaseEnabled = readGroundedReleaseFlag({ get: (key: string) => process.env[key] }).enabled;
+          // WP-9 single production path: grounded release is always enabled.
+          // Deterministic validation runs first, then the LLM grader; the
+          // fail-closed behavior without a grader is preserved via the
+          // hallucinationCheckEnabled setting, not a release flag.
+          const releaseEnabled = true;
 
           const releaseBufferedText = (text: string): void => {
             if (text === '') return;

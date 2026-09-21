@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ok } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import { SearchFailure, type RetrievalDiagnostics, type RetrievedChunk } from '../../../rag/search';
+import { type RetrievalDiagnostics, type RetrievedChunk } from '../../../rag/search';
 import { chatTurn } from '../turn';
 import type { ChatTurnDeps, ChatTurnResult } from '../turn-types';
 import { SEARCH_TOOL_NAME } from '../../../agent/tools/search-documentation';
@@ -71,7 +71,6 @@ function makeCfg(overrides: Partial<AppConfig> = {}): AppConfig {
     agentStepBudget: 8,
     similarityThreshold: 0.5,
     hybridEnabled: true,
-    agenticQueryRewriteEnabled: true,
     hallucinationCheckEnabled: true,
     judgeSampleRate: 0,
     rerankerProvider: 'cosine',
@@ -151,9 +150,6 @@ function makeDeps(overrides: {
       approvalHooks: 'application',
     }),
     searchChunks: (async () => ok({ chunks: [CHUNK], degradedBy: [], diagnostics: testDiagnostics(1) })) as ChatTurnDeps['searchChunks'],
-    agenticSearch: (async () => {
-      throw new SearchFailure('retrieval_unavailable', true, 'unused');
-    }) as unknown as ChatTurnDeps['agenticSearch'],
     hallucinationGrader: () => overrides.grader ?? null,
     answerCache: answerCache as unknown as ChatTurnDeps['answerCache'],
     ...(overrides.turnResultCache ? { turnResultCache: overrides.turnResultCache } : {}),
@@ -420,11 +416,14 @@ describe('chatTurn WP-8 progress wiring', () => {
 
   it('settles safely on non-stream rejections with the flag on (idempotency conflict)', async () => {
     vi.stubEnv('WP8_SERVER_PROGRESS_ENABLED', '1');
+    // Genuine conflict: same scheme version (v2) but a different request holds
+    // this turn id. Pre-v2 entries are a transparent miss (recomputed), never
+    // a conflict; see cached-answer.ts parseTurnResult.
     const conflict = JSON.stringify({
       v: 2,
       kind: 'turn-result',
       requestFingerprint: 'mismatched-fingerprint',
-      fingerprintVersion: 999,
+      fingerprintVersion: 2,
       text: 'stale',
       citations: [],
     });

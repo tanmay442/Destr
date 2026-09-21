@@ -16,11 +16,8 @@ import {
   replaceDocumentChunks,
   uploadPrechunkedMarkdown,
   reingestAll,
-  agenticSearch,
   type IngestDeps, type SearchDeps, type RateLimitDeps,
   type CacheLeasePolicy, type CacheLeaseTelemetry,
-  type AgenticDeps,
-  SearchFailure,
 } from '@app/application';
 import { runStructuredSearch } from '@app/application/agent/search';
 import { Db, Llm, Auth, Pdf, Queue, Markdown, Chunking, answerCacheKey, buildCoreDeps } from '@app/infrastructure';
@@ -31,7 +28,7 @@ import {
 } from '@app/infrastructure/config';
 import type { RerankerStatus } from '@app/infrastructure/llm';
 import type { MyUIMessage } from '@/chat/types';
-import type { DocumentRow, LogLevel, AgenticResultState } from '@app/domain';
+import type { DocumentRow, LogLevel } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
 import { configureLogger, ForbiddenError, UnauthorizedError, unwrap, err, ok, NotFoundError, ExternalServiceError, type Result, type IngestQueue, type Reranker } from '@app/domain';
 const authAdapter = Auth.createAuthAdapter();
@@ -51,6 +48,23 @@ import {
   DurableBackgroundJobQueue,
   createQstashPublish,
 } from '@app/infrastructure/capacity/background-job-queue';
+import {
+  DEPLOYMENT_TENANT_ID,
+  createCachedEmbeddingService,
+  resolveEmbeddingModelVersion,
+} from '@app/infrastructure/cache/cached-embedding-service';
+import {
+  createInMemoryEmbeddingCache,
+  createRedisEmbeddingCache,
+} from '@app/infrastructure/cache/embedding-cache';
+import {
+  createInMemoryRetrievalCandidateCache,
+  createRedisRetrievalCandidateCache,
+} from '@app/infrastructure/cache/retrieval-candidate-cache';
+import { createCandidateCachePort } from '@app/infrastructure/cache/candidate-cache-port-adapter';
+import { createCacheRedisClient } from '@app/infrastructure/cache/redis-client';
+import { readWp8Flag } from '@app/application/runtime/wp8-flags';
+import type { CandidateCachePort } from '@app/application/agent/search/candidate-cache-port';
 
 /**
  * Neutral model-invocation seam for the application chat turn. Provider
@@ -306,38 +320,93 @@ export function resolveReranker(cfg: AppConfig): Reranker | undefined {
 }
 
 function getSearchDeps(cfg: AppConfig): SearchDeps {
-  return { chunks: chunkRepo, embeddings: embeddingService, reranker: resolveReranker(cfg) };
-}
-
-function getAgenticDeps(
-  cfg: AppConfig,
-  opts: {
-    signal?: AbortSignal;
-    retrieveLimit?: number;
-    filter?: { documentId?: number };
-    excludeChunkIdentities?: ReadonlySet<string>;
-  } = {},
-): AgenticDeps {
-  const aux = Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env);
-  if (cfg.agenticQueryRewriteEnabled && !aux.queryRewriter) {
-    throw new ExternalServiceError('Agentic retrieval is disabled (AGENTIC_ENABLED=false) but retrievalMode is agentic.');
-  }
   return {
-    search: getSearchDeps(cfg),
-    queryRewriter: aux.queryRewriter!,
-    retrieveLimit: opts.retrieveLimit ?? cfg.agenticRetrieveLimit,
-    maxRetries: cfg.agenticMaxRetries,
-    stepBudget: cfg.agentStepBudget,
-    rewriteEnabled: cfg.agenticQueryRewriteEnabled,
-    similarityThreshold: cfg.similarityThreshold,
-    rerankerThreshold: cfg.rerankerThreshold,
-    hybridEnabled: cfg.hybridEnabled,
-    lexicalSearchMode: cfg.lexicalSearchMode,
-    ...(opts.filter ? { filter: opts.filter } : {}),
-    ...(opts.excludeChunkIdentities ? { excludeChunkIdentities: opts.excludeChunkIdentities } : {}),
-    ...(opts.signal ? { signal: opts.signal } : {}),
+    chunks: chunkRepo,
+    embeddings: searchEmbeddings,
+    reranker: resolveReranker(cfg),
+    ...(candidateCachePort && candidateCacheVersions(cfg)
+      ? { candidateCache: candidateCachePort, candidateCacheVersions: candidateCacheVersions(cfg) }
+      : {}),
   };
 }
+
+/**
+ * WP-9 F-34 activation: embedding + retrieval-candidate caches in the real
+ * search path, gated by WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED (default off).
+ *
+ * - Offline (flag off): SearchDeps carry the raw embedding service and no
+ *   candidate port — byte-identical behavior to before.
+ * - Online (flag on): embeddings are served through the versioned
+ *   tenant/model/dimension cache (Redis when credentials exist, else bounded
+ *   in-memory), and per-modality candidate pools consult the versioned
+ *   tenant/corpus/index/config cache with fresh-content rehydration.
+ * - Store construction never throws: any failure resolves to the same
+ *   posture as flag-off. All cache lookups degrade to misses; verified-only
+ *   answer caching is unchanged and lives in the turn, not here.
+ */
+const retrievalCacheEnabled = readWp8Flag(
+  { get: (key: string) => process.env[key] },
+  'embeddingRetrievalCache',
+).enabled;
+const sharedCacheRedis = retrievalCacheEnabled ? createCacheRedisClient() : null;
+if (retrievalCacheEnabled && !sharedCacheRedis) {
+  logger.warn('WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED=1 without Upstash credentials: using bounded in-memory caches.');
+}
+const searchEmbeddings = (() => {
+  if (!retrievalCacheEnabled) return embeddingService;
+  try {
+    const store = sharedCacheRedis
+      ? createRedisEmbeddingCache(sharedCacheRedis)
+      : createInMemoryEmbeddingCache();
+    return createCachedEmbeddingService(embeddingService, store, {
+      tenantId: DEPLOYMENT_TENANT_ID,
+      modelId: core.embeddingModelId,
+      modelVersion: resolveEmbeddingModelVersion(core.env),
+      dimensions: core.vectorDim,
+    });
+  } catch (error) {
+    logger.warn('embedding cache init failed; using uncached embeddings', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return embeddingService;
+  }
+})();
+/** Corpus cohort for candidate-cache keys. Bump when the chunking or ingestion pipeline changes. */
+const CANDIDATE_CORPUS_VERSION = 'corpus-v1';
+function candidateCacheVersions(cfg: AppConfig) {
+  return {
+    tenantId: DEPLOYMENT_TENANT_ID,
+    corpusVersion: CANDIDATE_CORPUS_VERSION,
+    indexVersion: `${core.embeddingModelId}:d${core.vectorDim}`,
+    retrievalConfigVersion: [
+      `hybrid:${cfg.hybridEnabled}`,
+      `rrf:${RRF_K}`,
+      `lw:${LEXICAL_WEIGHT}`,
+      `mode:${cfg.parentChildMode}`,
+      `t:${cfg.similarityThreshold}`,
+      `rt:${cfg.rerankerThreshold}`,
+      `lex:${cfg.lexicalSearchMode}`,
+      `top:${RERANK_TOP_N}`,
+      `cand:${CANDIDATE_POOL}`,
+    ].join('|'),
+  };
+}
+const candidateCachePort: CandidateCachePort | null = (() => {
+  if (!retrievalCacheEnabled) return null;
+  try {
+    const store = sharedCacheRedis
+      ? createRedisRetrievalCandidateCache(sharedCacheRedis)
+      : createInMemoryRetrievalCandidateCache();
+    const port = createCandidateCachePort(store);
+    const typed: CandidateCachePort = port;
+    return typed;
+  } catch (error) {
+    logger.warn('candidate cache init failed; using uncached retrieval', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+})();
 
 const rateLimitDeps: RateLimitDeps = { limiter: rateLimiter };
 
@@ -431,76 +500,6 @@ function createComposition() {
         },
         getSearchDeps(cfg),
       ),
-    agenticSearch: async (
-      cfg: AppConfig,
-      query: string,
-      opts: {
-        limit?: number | undefined;
-        signal?: AbortSignal | undefined;
-        filter?: { documentId?: number } | undefined;
-        excludeChunkIdentities?: ReadonlySet<string> | undefined;
-      } = {},
-    ) => {
-      if (process.env.AGENTIC_ENABLED === 'false') {
-        const fallback = await bind(
-          searchChunks,
-          query,
-          {
-            threshold: cfg.similarityThreshold,
-            rerankerThreshold: cfg.rerankerThreshold,
-            hybridEnabled: cfg.hybridEnabled,
-            lexicalSearchMode: cfg.lexicalSearchMode,
-            mode: cfg.parentChildMode,
-            parentChildWindow: cfg.parentChildWindow,
-            rrfK: RRF_K,
-            lexicalWeight: LEXICAL_WEIGHT,
-            rerankTopN: RERANK_TOP_N,
-            candidateLimit: CANDIDATE_POOL,
-            limit: opts.limit,
-            filter: opts.filter,
-            excludeChunkIdentities: opts.excludeChunkIdentities,
-            signal: opts.signal,
-          },
-          getSearchDeps(cfg),
-        );
-        if (!fallback.ok) return fallback;
-        const chunks = fallback.value.chunks;
-        const isEmpty = chunks.length === 0;
-        return ok({
-          chunks,
-          rewrittenQuery: query,
-          attemptedQueries: [query],
-          resultQuery: isEmpty ? null : query,
-          degradedBy: fallback.value.degradedBy,
-          outOfDomain: isEmpty,
-          isEmpty,
-          fallbackReason: null,
-          resultState: (
-            isEmpty
-              ? 'no_match'
-              : fallback.value.degradedBy.length > 0
-                ? 'degraded'
-                : 'results'
-          ) as AgenticResultState,
-          retrievalDiagnostics: [fallback.value.diagnostics],
-        });
-      }
-      try {
-        return await agenticSearch(query, getAgenticDeps(cfg, {
-          ...(opts.signal ? { signal: opts.signal } : {}),
-          ...(opts.limit !== undefined ? { retrieveLimit: opts.limit } : {}),
-          ...(opts.filter ? { filter: opts.filter } : {}),
-          ...(opts.excludeChunkIdentities ? { excludeChunkIdentities: opts.excludeChunkIdentities } : {}),
-        }));
-      } catch (e) {
-        return err(new SearchFailure(
-          'retrieval_unavailable',
-          true,
-          'The documentation search is temporarily unavailable. Please try again.',
-          e,
-        ));
-      }
-    },
     structuredSearch: async (
       cfg: AppConfig,
       query: string,
@@ -538,7 +537,6 @@ function createComposition() {
     },
     getHallucinationGrader: (cfg: AppConfig) => Llm.getAuxModels(undefined, cfg.auxModel, core.chatModelProvider, core.env).hallucinationGrader?.grade ?? null,
     getSearchDeps,
-    getAgenticDeps,
     resolveReranker,
     availableRerankers,
     listUsers: (input: Parameters<typeof listUsers>[0]) => bind(listUsers, input, { ...userDeps, cursorCodec }),

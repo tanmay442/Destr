@@ -237,7 +237,9 @@ export function createRedisRetrievalCandidateCache(
       }
       let parsed: StoredCandidateSet;
       try {
-        parsed = StoredCandidateSetSchema.parse(JSON.parse(raw));
+        // Upstash auto-deserializes stored JSON on read (see upstash-answer-cache),
+        // so a live client may hand back the envelope object instead of a string.
+        parsed = StoredCandidateSetSchema.parse(typeof raw === 'string' ? JSON.parse(raw) : raw);
       } catch {
         counters.staleVersions += 1;
         return Object.freeze({ outcome: 'stale_version' });

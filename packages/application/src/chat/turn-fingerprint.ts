@@ -59,13 +59,3 @@ export function turnRequestFingerprint(input: Parameters<typeof canonicalTurnReq
     .update(JSON.stringify(canonicalTurnRequest(input)))
     .digest('hex');
 }
-
-/** Compatibility-only hash for turn-result records written before fingerprint v2. */
-export function legacyTurnRequestFingerprint(input: {
-  conversationId?: string | undefined;
-  messages: ChatInputMessage[];
-}): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ conversationId: input.conversationId ?? null, messages: input.messages }))
-    .digest('hex');
-}

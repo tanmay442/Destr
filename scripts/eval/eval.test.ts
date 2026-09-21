@@ -604,9 +604,8 @@ describe('synthetic mock corpus integrity', () => {
   });
 });
 
-describe('§C2 agentic mode + expectedDocIds hits', () => {
-  it('routes mode=agentic questions through the agenticSearch dep', async () => {
-    let agenticCalls = 0;
+describe('§C2 retrieval mode + expectedDocIds hits', () => {
+  it('routes every question through the single searchChunks dep (WP-9: wrapper removed)', async () => {
     let normalCalls = 0;
     const r = await evaluateOne(
       { id: 'ag1', category: 'semantic_paraphrase', question: 'What is the claim deadline?', mustMention: ['claim'], mode: 'agentic' },
@@ -615,34 +614,7 @@ describe('§C2 agentic mode + expectedDocIds hits', () => {
           normalCalls += 1;
           return [{ content: 'claim deadline text', documentId: 4 }];
         },
-        agenticSearch: async () => {
-          agenticCalls += 1;
-          return [{ content: 'claim deadline text', documentId: 7 }];
-        },
         generate: async () => 'the claim deadline is Friday',
-      }),
-    );
-    expect(agenticCalls).toBe(1);
-    expect(normalCalls).toBe(0);
-    expect(r.passed).toBe(true);
-  });
-
-  it('falls back to normal retrieval when the deps do not wire agenticSearch', async () => {
-    let normalCalls = 0;
-    const r = await evaluateOne(
-      {
-        id: 'ag2',
-        category: 'semantic_paraphrase',
-        question: 'q?',
-        mustMention: [],
-        refusalExpected: false,
-        mode: 'agentic',
-      },
-      deps({
-        searchChunks: async () => {
-          normalCalls += 1;
-          return [{ content: 'ctx', documentId: 1 }];
-        },
       }),
     );
     expect(normalCalls).toBe(1);

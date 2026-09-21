@@ -156,30 +156,6 @@ describe('wp8 event families', () => {
       ),
       createWp8Event(
         envelope({
-          eventType: 'progress.emitted',
-          phase: 'searching',
-          labelCode: 'progress_searching_docs',
-          completed: 1,
-          total: 2,
-          payloadBytes: 200,
-          cacheLayer: undefined,
-          outcome: undefined,
-          reason: undefined,
-          latencyMs: undefined,
-        }),
-      ),
-      createWp8Event(
-        envelope({
-          eventType: 'stream.heartbeat',
-          reason: 'silence_keepalive',
-          intervalMs: 10_000,
-          cacheLayer: undefined,
-          outcome: undefined,
-          latencyMs: undefined,
-        }),
-      ),
-      createWp8Event(
-        envelope({
           eventType: 'deadline.phase',
           phase: 'model_loop',
           outcome: 'completed',
@@ -377,27 +353,6 @@ describe('wp8 redaction and low-cardinality labels', () => {
     expect(JSON.stringify(redacted)).not.toContain('must not survive');
   });
 
-  it('drops unknown free-text fields from progress events instead of storing them', () => {
-    const parsed = createWp8Event(
-      envelope({
-        eventType: 'progress.emitted',
-        phase: 'searching',
-        labelCode: 'progress_searching_docs',
-        completed: 1,
-        total: 2,
-        payloadBytes: 200,
-        cacheLayer: undefined,
-        outcome: undefined,
-        reason: undefined,
-        latencyMs: undefined,
-        queryText: 'raw user query must not persist',
-        toolArgs: '{"limit":5}',
-      }),
-    );
-    expect('queryText' in parsed).toBe(false);
-    expect('toolArgs' in parsed).toBe(false);
-  });
-
   it('asserts step-cost labels are low-cardinality and rejects content values', () => {
     const labels = wp8StepCostLabels({
       provider: 'openai_compatible',
@@ -449,22 +404,6 @@ describe('wp8 numeric hardening (N2)', () => {
         envelope({ eventType: 'pool.wait', poolKind: 'redis', outcome: 'acquired', waitMs: 1, waitingCount: WP8_NUMERIC_BOUNDS.maxQueueDepth + 1, cacheLayer: undefined, reason: undefined, latencyMs: undefined }),
       ),
     ).toThrow();
-    expect(() =>
-      createWp8Event(
-        envelope({
-          eventType: 'progress.emitted',
-          phase: 'searching',
-          labelCode: 'progress_searching_docs',
-          completed: 0,
-          total: 1,
-          payloadBytes: WP8_NUMERIC_BOUNDS.maxPayloadBytes + 1,
-          cacheLayer: undefined,
-          outcome: undefined,
-          reason: undefined,
-          latencyMs: undefined,
-        }),
-      ),
-    ).toThrow();
   });
 });
 
@@ -483,22 +422,6 @@ describe('wp8 reason codes are enum-bounded (N3)', () => {
           reason: 'something unexpected happened upstream',
           cacheLayer: undefined,
           outcome: undefined,
-          latencyMs: undefined,
-        }),
-      ),
-    ).toThrow();
-    expect(() =>
-      createWp8Event(
-        envelope({
-          eventType: 'progress.emitted',
-          phase: 'searching',
-          labelCode: 'Searching documentation for reset password flow',
-          completed: 1,
-          total: 2,
-          payloadBytes: 100,
-          cacheLayer: undefined,
-          outcome: undefined,
-          reason: undefined,
           latencyMs: undefined,
         }),
       ),

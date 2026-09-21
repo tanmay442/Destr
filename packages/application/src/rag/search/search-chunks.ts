@@ -1,4 +1,5 @@
 import { err, ok, isRequestCancellationError, logger } from '@app/domain';
+import type { RetrievedChunkRow } from '@app/domain';
 import {
   SIMILARITY_THRESHOLD,
   PARENT_CHILD_MODE,
@@ -23,16 +24,26 @@ import {
   boundedPositiveInteger,
   boundedNonnegativeNumber,
   denseScoredRows,
+  finiteNonnegative,
   lexicalScoredRows,
+  toRetrievedChunk,
   type RetrievedChunk,
   type ScoredRow,
   type SearchChunksResult,
-  type SearchExecutionResult,
   type SearchDeps,
+  type SearchExecutionResult,
   type SearchOpts,
   type RetrievalDiagnostics,
 } from './search-types';
 import { SearchFailure, type SearchDegradation, type SearchFailureCode } from './search-contract';
+import {
+  buildCandidateCacheContext,
+  candidatesFromSearchResult,
+  fetchCandidateRows,
+  rehydrateCandidates,
+  type CandidateCacheKeyInput,
+  type CandidateCacheModality,
+} from '../../agent/search/candidate-cache-port';
 import { resolveParents } from './resolve-parents';
 import { resolveWindow } from './resolve-window';
 import { resolveSegments } from './resolve-segments';
@@ -46,6 +57,157 @@ interface RetrievalStages {
 }
 
 export type { RetrievedChunk, SearchDeps, SearchOpts };
+
+/**
+ * Pool-scope synthetic provenance for cached candidate entries.
+ *
+ * Pool entries are keyed by query + modality + filter + versions, not by
+ * subquestion: the same pool can serve any subquestion whose query matches.
+ * Provenance stored here never surfaces — the orchestrator and the tool
+ * recompute executedQueryIds/subquestionIds from the live plan on every
+ * call — so these constants only satisfy the entry schema.
+ */
+const POOL_CACHE_PROVENANCE = { queryId: 'q-pool', subquestionId: 'sq-pool' } as const;
+
+interface PoolCacheScope {
+  readonly versions: {
+    readonly tenantId: string;
+    readonly corpusVersion: string;
+    readonly indexVersion: string;
+    readonly retrievalConfigVersion: string;
+  };
+}
+
+/**
+ * Resolve the candidate-cache scope for this call, or null when caching is
+ * disabled, versions are absent, or the call was already cancelled.
+ *
+ * The retrievalConfigVersion carries a per-call pool signature
+ * (candidateLimit, vector threshold, lexical mode): pools are fetched with
+ * those parameters, so different shapes must never share a key. Fusion,
+ * rerank, resolve, limits, and turn-local exclusion re-run per call and stay
+ * out of the key.
+ */
+function poolCacheScope(deps: SearchDeps, opts: SearchOpts, candidateLimit: number): PoolCacheScope | null {
+  const port = deps.candidateCache;
+  const versions = deps.candidateCacheVersions;
+  if (!port || !versions) return null;
+  if (opts.signal?.aborted) return null;
+  const threshold = Math.min(Math.max(boundedNonnegativeNumber(opts.threshold, SIMILARITY_THRESHOLD), 0), 1);
+  const poolSignature = `c${candidateLimit}t${threshold}l${opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE}`;
+  return {
+    versions: {
+      tenantId: versions.tenantId,
+      corpusVersion: versions.corpusVersion,
+      indexVersion: versions.indexVersion,
+      retrievalConfigVersion: `${versions.retrievalConfigVersion}|pool:${poolSignature}`,
+    },
+  };
+}
+
+function poolKeyInput(
+  scope: PoolCacheScope,
+  query: string,
+  modality: CandidateCacheModality,
+  opts: SearchOpts,
+): CandidateCacheKeyInput | null {
+  try {
+    return buildCandidateCacheContext({
+      tenantId: scope.versions.tenantId,
+      corpusVersion: scope.versions.corpusVersion,
+      indexVersion: scope.versions.indexVersion,
+      query,
+      modality,
+      filter: opts.filter,
+      retrievalConfigVersion: scope.versions.retrievalConfigVersion,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function rowIdentityKey(documentId: number, chunkIndex: number, chunkUid: string | undefined): string {
+  return `${documentId}:${chunkIndex}:${chunkUid ?? ''}`;
+}
+
+/**
+ * Load one modality pool from the candidate cache. Returns null on any miss,
+ * version skew, rehydration gap, or failure — the caller runs uncached
+ * retrieval. Content always comes fresh from the chunk store; only the
+ * candidate identity set is cached.
+ */
+async function loadCachedPool(
+  deps: SearchDeps,
+  scope: PoolCacheScope,
+  query: string,
+  modality: CandidateCacheModality,
+  opts: SearchOpts,
+): Promise<ScoredRow[] | null> {
+  const port = deps.candidateCache;
+  if (!port) return null;
+  if (opts.signal?.aborted) return null;
+  const keyInput = poolKeyInput(scope, query, modality, opts);
+  if (!keyInput) return null;
+  let lookup;
+  try {
+    lookup = await port.get(port.buildKey(keyInput), keyInput);
+  } catch {
+    return null;
+  }
+  if (opts.signal?.aborted) return null;
+  if (lookup.outcome !== 'hit') return null;
+  let rows: RetrievedChunkRow[];
+  try {
+    rows = await fetchCandidateRows(
+      lookup.candidates,
+      deps.chunks,
+      ...(opts.signal ? [{ signal: opts.signal }] : []),
+    );
+  } catch {
+    return null;
+  }
+  const hydrated = rehydrateCandidates(lookup.candidates, rows);
+  if (!hydrated) return null;
+  const rowByIdentity = new Map<string, RetrievedChunkRow>();
+  for (const row of rows) {
+    const key = rowIdentityKey(row.documentId, row.chunkIndex, row.chunkUid);
+    if (!rowByIdentity.has(key)) rowByIdentity.set(key, row);
+  }
+  const pool: ScoredRow[] = [];
+  for (const chunk of hydrated) {
+    const row = rowByIdentity.get(rowIdentityKey(chunk.documentId, chunk.chunkIndex, chunk.chunkUid));
+    if (!row) return null;
+    pool.push(modality === 'vector'
+      ? { ...row, denseScore: chunk.scores.dense ?? finiteNonnegative(Number(row.similarity)) }
+      : { ...row, lexicalScore: chunk.scores.lexical ?? finiteNonnegative(Number(row.similarity)) });
+  }
+  return pool;
+}
+
+/**
+ * Store one modality pool. Best-effort and fail-open: any error is swallowed
+ * so caching can never break retrieval.
+ */
+async function storePool(
+  deps: SearchDeps,
+  scope: PoolCacheScope,
+  query: string,
+  modality: CandidateCacheModality,
+  opts: SearchOpts,
+  scored: ScoredRow[],
+): Promise<void> {
+  const port = deps.candidateCache;
+  if (!port) return;
+  try {
+    const chunks = scored.map((row, index) => toRetrievedChunk(row, index + 1));
+    const entries = candidatesFromSearchResult(chunks, POOL_CACHE_PROVENANCE);
+    const keyInput = poolKeyInput(scope, query, modality, opts);
+    if (!keyInput) return;
+    await port.set(port.buildKey(keyInput), keyInput, entries);
+  } catch {
+    // Fail-open: a lost pool write only costs a future cache miss.
+  }
+}
 
 export async function searchChunks(
   query: string,
@@ -77,13 +239,22 @@ export async function searchChunks(
     : topN;
 
   let embedding: number[];
-  try {
-    embedding = await abortable(
-      opts.signal ? deps.embeddings.embed(query, { signal: opts.signal }) : deps.embeddings.embed(query),
-      opts.signal,
-    );
-  } catch (cause) {
-    return err(toSearchFailure('embedding_unavailable', cause, opts.signal));
+  const precomputed = opts.precomputedEmbedding;
+  if (
+    precomputed !== undefined &&
+    precomputed.length > 0 &&
+    precomputed.every((value) => Number.isFinite(value))
+  ) {
+    embedding = [...precomputed];
+  } else {
+    try {
+      embedding = await abortable(
+        opts.signal ? deps.embeddings.embed(query, { signal: opts.signal }) : deps.embeddings.embed(query),
+        opts.signal,
+      );
+    } catch (cause) {
+      return err(toSearchFailure('embedding_unavailable', cause, opts.signal));
+    }
   }
 
   const hybridEnabled = opts.hybridEnabled ?? HYBRID_ENABLED;
@@ -91,38 +262,60 @@ export async function searchChunks(
   const runHybrid = hybridEnabled && searchByLexical != null;
 
   // Run vector + lexical concurrently; lexical failure falls back to vector-only.
+  // Each modality pool is served from the candidate cache when the scope is
+  // configured and the pool is a hit; otherwise it is fetched from the chunk
+  // store and the fresh pool is stored best-effort.
+  const poolScope = poolCacheScope(deps, opts, configuredCandidateLimit);
   const vectorPromise = abortable(
-    opts.signal
-      ? deps.chunks.searchByVector(embedding, {
-          threshold: preThreshold,
-          limit: candidateLimit,
-          ...(opts.filter ? { filter: opts.filter } : {}),
-          signal: opts.signal,
-        })
-      : deps.chunks.searchByVector(embedding, {
-          threshold: preThreshold,
-          limit: candidateLimit,
-          ...(opts.filter ? { filter: opts.filter } : {}),
-        }),
+    (async (): Promise<ScoredRow[]> => {
+      if (poolScope) {
+        const cached = await loadCachedPool(deps, poolScope, query, 'vector', opts);
+        if (cached) return cached;
+      }
+      const rows = await (opts.signal
+        ? deps.chunks.searchByVector(embedding, {
+            threshold: preThreshold,
+            limit: candidateLimit,
+            ...(opts.filter ? { filter: opts.filter } : {}),
+            signal: opts.signal,
+          })
+        : deps.chunks.searchByVector(embedding, {
+            threshold: preThreshold,
+            limit: candidateLimit,
+            ...(opts.filter ? { filter: opts.filter } : {}),
+          }));
+      const scored = denseScoredRows(rows);
+      if (poolScope) await storePool(deps, poolScope, query, 'vector', opts, scored);
+      return scored;
+    })(),
     opts.signal,
   );
   const lexicalPromise = runHybrid
     ? abortable(
-        opts.signal
-          ? searchByLexical(query, {
-              limit: candidateLimit,
-              ...(opts.filter ? { filter: opts.filter } : {}),
-              mode: opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE,
-              signal: opts.signal,
-            })
-          : searchByLexical(query, {
-              limit: candidateLimit,
-              ...(opts.filter ? { filter: opts.filter } : {}),
-              mode: opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE,
-            }),
+        (async () => {
+          if (poolScope) {
+            const cached = await loadCachedPool(deps, poolScope, query, 'lexical', opts);
+            if (cached) return { ok: true as const, rows: cached };
+          }
+          const rows = await (opts.signal
+            ? searchByLexical(query, {
+                limit: candidateLimit,
+                ...(opts.filter ? { filter: opts.filter } : {}),
+                mode: opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE,
+                signal: opts.signal,
+              })
+            : searchByLexical(query, {
+                limit: candidateLimit,
+                ...(opts.filter ? { filter: opts.filter } : {}),
+                mode: opts.lexicalSearchMode ?? LEXICAL_SEARCH_MODE,
+              }));
+          const scored = lexicalScoredRows(rows);
+          if (poolScope) await storePool(deps, poolScope, query, 'lexical', opts, scored);
+          return { ok: true as const, rows: scored };
+        })(),
         opts.signal,
       ).then(
-        (rows) => ({ ok: true as const, rows }),
+        (result) => result,
         (cause: unknown) => ({ ok: false as const, cause }),
       )
     : Promise.resolve(null);
@@ -130,7 +323,7 @@ export async function searchChunks(
   let vectorRows: ScoredRow[] = [];
   let vectorError: unknown;
   try {
-    vectorRows = denseScoredRows(await vectorPromise);
+    vectorRows = await vectorPromise;
   } catch (cause) {
     if (opts.signal?.aborted || isRequestCancellationError(cause)) {
       return err(toSearchFailure('retrieval_unavailable', cause, opts.signal));
@@ -183,7 +376,7 @@ export async function searchChunks(
       fusion: { applied: false, inputCount: vectorRows.length, outputCount: vectorRows.length },
     });
   }
-  const lexicalRows = lexicalScoredRows(lexicalResult.rows);
+  const lexicalRows = lexicalResult.rows;
   if (vectorRows.length === 0) {
     return capAndResolve(lexicalRows, query, topN, opts, deps, [], {
       dense: { status: 'ok', candidateCount: 0 },

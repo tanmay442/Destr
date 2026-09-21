@@ -7,7 +7,7 @@ import {
   ROUTE_ENVELOPE_CURRENT_60,
   assertRouteEnvelopeValid,
 } from '@app/application/runtime/route-envelope';
-import { chatSlotOwners, releaseDistributedSlot, releaseOwnedChatSlot } from './slots';
+import { releaseAdmissionForRequest } from '@/admission';
 import { streamChatResponseUseCase } from './handler';
 
 export const maxDuration = 60;
@@ -27,11 +27,17 @@ export async function POST(req: Request) {
   try {
     const csrf = assertSameOrigin(req);
     if (csrf) return csrf;
-    return streamChatResponseUseCase(req);
+    // Await (not bare return) so async failures inside the use case land in
+    // this catch: the admission lease is released instead of leaking until
+    // the controller TTL, and the error becomes a shaped response.
+    return await streamChatResponseUseCase(req);
   } catch (error) {
-    const userId = chatSlotOwners.get(req);
-    if (userId) releaseOwnedChatSlot(req, userId);
-    void releaseDistributedSlot(req).catch(() => undefined);
+    // WP-9 workstream C: the admission lease is request-keyed. Release it
+    // exactly-once on the unhandled-error path (null when admission never
+    // completed, e.g. CSRF rejections). The controller release is
+    // idempotent; a held Redis slot handle is handed back best-effort with
+    // TTL expiry as the recovery net.
+    releaseAdmissionForRequest(req, 'error');
     if (req.signal.aborted && isRequestCancellationError(error)) return new Response(null, { status: 499 });
     logger.error('Chat request failed', { error: String(error) });
     return respond(error);

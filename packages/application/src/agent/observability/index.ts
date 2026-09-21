@@ -92,8 +92,6 @@ export type {
 } from './usage-normalizer';
 export {
   WP8_EVENT_TYPES,
-  WP8_PROGRESS_PHASES,
-  WP8_PROGRESS_LABEL_CODES,
   Wp8EventSchema,
   createWp8Event,
   validateWp8EventOrdering,

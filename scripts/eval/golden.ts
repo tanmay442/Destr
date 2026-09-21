@@ -14,7 +14,9 @@ export interface GoldenQuestion {
   forbidden?: string[];
   /** When true, a faithful answer is expected to refuse rather than answer. */
   refusalExpected?: boolean;
-  /** 'agentic' routes through agenticSearch; omit for normal-mode searchChunks. */
+  /** Retrieval-mode label for reporting. WP-9: every mode runs the single
+   * direct hybrid path in this harness; the orchestrator comparison lives in
+   * wp4-retrieval.ts. */
   mode?: 'agentic' | 'normal';
   /** Eval hits when any retrieved document id overlaps this list; omit = no doc check. */
   expectedDocIds?: readonly number[];

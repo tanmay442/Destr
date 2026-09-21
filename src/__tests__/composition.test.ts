@@ -134,7 +134,7 @@ describe('getComposition wiring', () => {
     const comp = getComposition();
     expect(typeof comp.ingestFile).toBe('function');
     expect(typeof comp.searchChunks).toBe('function');
-    expect(typeof comp.agenticSearch).toBe('function');
+    expect(typeof comp.structuredSearch).toBe('function');
     expect(typeof comp.uploadPdf).toBe('function');
     expect(typeof comp.replacePdf).toBe('function');
     expect(typeof comp.ingestQueuedDocument).toBe('function');

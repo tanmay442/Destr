@@ -13,7 +13,15 @@ import { readBoundedText } from '@/lib/http';
 import { CHAT_MAX_BODY_BYTES } from '@app/domain';
 import { getRuntimeConfig } from '@/lib/config/runtime';
 import { normalizeRateLimitDecision } from './rate-limit';
-import { acquireChatSlot, chatSlotOwners, positiveIntEnv, releaseOwnedChatSlot, releaseSlotWhenStreamEnds, acquireDistributedChatSlot, isDistributedAdmissionEnabled, releaseDistributedSlot, trackDistributedSlot } from './slots';
+import type { ReleaseOutcome } from '@app/application/capacity/admission-control';
+import { randomUUID } from 'node:crypto';
+import {
+  admitInteractiveTurn,
+  admissionRejectionResponse,
+  positiveIntEnv,
+  releaseAdmission,
+  releaseAdmissionWhenStreamEnds,
+} from '@/admission';
 import { getMetaPatchers, runJudge, scheduleAfter, scheduleFlush } from './judge';
 
 /**
@@ -64,45 +72,31 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
   if (!userId) {
     return new Response('Unauthorized', { status: 401 });
   }
-  if (!acquireChatSlot(userId)) {
-    return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+  // WP-9 workstream C: the application AdmissionController is the single
+  // admission path (local ceilings plus the flag-gated Redis-backed per-user
+  // lease). Rejection happens before body parsing/model work with an explicit
+  // Retry-After.
+  const turnId = randomUUID();
+  const admission = await admitInteractiveTurn({ req, userId, turnId });
+  if (!admission.admitted) {
+    return admissionRejectionResponse(admission);
   }
-  chatSlotOwners.set(req, userId);
+  const { lease } = admission;
   let released = false;
-  const release = () => {
+  const release = (outcome: ReleaseOutcome) => {
     if (released) return;
     released = true;
-    releaseOwnedChatSlot(req, userId);
-    // Exactly-once distributed release; TTL expiry recovers missed paths.
-    void releaseDistributedSlot(req).catch(() => undefined);
+    // Exactly-once release; TTL expiry recovers missed paths.
+    releaseAdmission(lease, outcome);
   };
-  // WP-8 F-35: distributed per-user lease behind an independent flag. The
-  // local map above stays as a fast-path; correctness across instances comes
-  // from this lease. Rejection happens before body parsing/model work with
-  // an explicit Retry-After. Degradation falls back to the local decision.
-  if (isDistributedAdmissionEnabled()) {
-    const distributed = await acquireDistributedChatSlot(getComposition().answerCache, userId);
-    if (distributed.kind === 'held') {
-      release();
-      return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
-    }
-    if (distributed.kind === 'acquired') {
-      trackDistributedSlot(req, distributed.handle);
-    } else {
-      logger.warn('chat.admission.distributed_unavailable', {
-        reason: distributed.reason,
-        turnId: 'admission',
-      });
-    }
-  }
   const contentType = req.headers.get('content-type');
   if (!contentType?.includes('application/json')) {
-    release();
+    release('cancelled');
     return new Response('Content-Type must be application/json', { status: 415 });
   }
   const bounded = await readBoundedText(req, CHAT_MAX_BODY_BYTES);
   if (!bounded.ok) {
-    release();
+    release('cancelled');
     if (bounded.reason === 'too-large') return new Response('Payload too large', { status: 413 });
     if (bounded.reason === 'aborted') return new Response(null, { status: 499 });
     return new Response('Bad Request', { status: 400 });
@@ -157,23 +151,7 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
       getEmbeddingModelId: () => comp.getEmbeddingModelId(),
       getRuntimeConfig,
       searchChunks: (cfg, query, opts) => comp.searchChunks(cfg, query, opts),
-      agenticSearch: (cfg, query, opts) => comp.agenticSearch(cfg, query, opts),
-      ...('structuredSearch' in comp && typeof (comp as { structuredSearch?: unknown }).structuredSearch === 'function'
-        ? {
-            structuredSearch: (
-              cfg: Parameters<typeof comp.searchChunks>[0],
-              query: string,
-              opts?: Parameters<typeof comp.searchChunks>[2],
-            ) =>
-              (comp as unknown as {
-                structuredSearch: (
-                  cfg: Parameters<typeof comp.searchChunks>[0],
-                  query: string,
-                  opts?: Parameters<typeof comp.searchChunks>[2],
-                ) => Promise<never>;
-              }).structuredSearch(cfg, query, opts),
-          }
-        : {}),
+      structuredSearch: (cfg, query, opts) => comp.structuredSearch(cfg, query, opts),
       hallucinationGrader: (cfg) => comp.getHallucinationGrader(cfg),
       answerCache: comp.answerCache,
       turnResultCache: comp.turnResultCache,
@@ -250,34 +228,34 @@ export async function streamChatResponseUseCase(req: Request): Promise<Response>
   );
   switch (result.kind) {
     case 'rate-limited':
-      release();
+      release('cancelled');
       return new Response('Too Many Requests', {
         status: 429,
         ...(result.retryAfterSec ? { headers: { 'Retry-After': result.retryAfterSec } } : {}),
       });
     case 'cache-wait-timeout':
-      release();
+      release('cancelled');
       return new Response('The answer is still being generated. Please retry shortly.', {
         status: 503,
         headers: { 'Retry-After': '1' },
       });
     case 'cache-unavailable':
-      release();
+      release('cancelled');
       return new Response('Chat coordination is temporarily unavailable. Please retry shortly.', {
         status: 503,
         headers: { 'Retry-After': '1' },
       });
     case 'idempotency-conflict':
-      release();
+      release('cancelled');
       return new Response('The turn ID is already associated with a different request.', { status: 409 });
     case 'payload-too-large':
-      release();
+      release('cancelled');
       return new Response('Payload too large', { status: 413 });
     case 'invalid-request':
-      release();
+      release('cancelled');
       return NextResponse.json({ error: 'invalid_request', issues: result.issues }, { status: 400 });
     case 'stream':
       scheduleFlush(comp);
-      return releaseSlotWhenStreamEnds(createUIMessageStreamResponse({ stream: result.stream as never }), release);
+      return releaseAdmissionWhenStreamEnds(createUIMessageStreamResponse({ stream: result.stream as never }), lease);
   }
 }

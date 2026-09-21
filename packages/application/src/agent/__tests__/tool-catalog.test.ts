@@ -75,9 +75,6 @@ function makeSearchDefinition() {
     searchChunks: async () => {
       throw new Error('searchChunks unused in catalog test');
     },
-    agenticSearch: async () => {
-      throw new Error('agenticSearch unused in catalog test');
-    },
     cfg: {} as AppConfig,
     effectiveMode: 'normal',
   });

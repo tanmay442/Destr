@@ -39,6 +39,7 @@ export async function searchChunksByVector(
   const candidatePool = Math.max(opts.limit * 10, 50);
   const result = await executeDatabaseCancelable({
     client,
+    queryClass: 'retrieval_vector',
     operation: async (queryClient) => {
       const runSearch = async (tx: Client) => {
         await tx.execute(sql`SELECT set_config('hnsw.ef_search', ${String(candidatePool * 2)}, true)`);

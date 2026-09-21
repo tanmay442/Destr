@@ -171,6 +171,86 @@ describe('searchChunksByLexical', () => {
   });
 });
 
+describe('retrieval query-class timeouts (E1)', () => {
+  function makeQueryClassClient(rows: unknown[] = []) {
+    const executed: SQL[] = [];
+    const tx = {
+      execute(query: SQL) {
+        executed.push(query);
+        return Promise.resolve({ rows });
+      },
+    };
+    const client = {
+      execute(query: SQL) {
+        executed.push(query);
+        return Promise.resolve({ rows });
+      },
+      transaction(fn: (tx: unknown) => Promise<unknown>) {
+        return fn(tx);
+      },
+    };
+    return { client: client as never, executed };
+  }
+
+  function statementsOf(executed: SQL[]): string[] {
+    return executed.map((query) => dialect.sqlToQuery(query).sql);
+  }
+
+  it('scopes vector search with SET LOCAL retrieval_vector before the ANN query', async () => {
+    const { client, executed } = makeQueryClassClient([]);
+    await searchChunksByVector(
+      Array.from({ length: VECTOR_DIM }, () => 0.1),
+      { threshold: 0.55, limit: 10 },
+      client,
+    );
+    const statements = statementsOf(executed);
+    expect(statements.length).toBeGreaterThanOrEqual(2);
+    expect(statements[0]).toContain('SET LOCAL statement_timeout');
+    expect(statements[0]).toContain('4000ms');
+    expect(statements[statements.length - 1]!.toLowerCase()).toContain('with candidates as');
+  });
+
+  it('scopes lexical search with SET LOCAL retrieval_lexical before the tsquery', async () => {
+    const { client, executed } = makeQueryClassClient([]);
+    await searchChunksByLexical('broken vector', { limit: 5 }, client);
+    const statements = statementsOf(executed);
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain('SET LOCAL statement_timeout');
+    expect(statements[0]).toContain('4000ms');
+    expect(statements[1]).toContain("plainto_tsquery('english',");
+  });
+
+  it('scopes chunk point-reads with the shared lexical retrieval ceiling', async () => {
+    const ROW = {
+      id: 1, documentId: 7, fileName: 'a.pdf', page: null, sectionTitle: null,
+      source: null, title: null, content: 'alpha', parentChunkId: null, chunkIndex: 0, similarity: 0,
+    };
+    const byIds = makeQueryClassClient([]);
+    await getChunksByIds([1, 2, 3], byIds.client);
+    expect(statementsOf(byIds.executed)[0]).toContain("SET LOCAL statement_timeout = '4000ms'");
+
+    const byRange = makeQueryClassClient([ROW]);
+    await getChunksByDocAndRange(7, 0, 4, byRange.client);
+    const rangeStatements = statementsOf(byRange.executed);
+    expect(rangeStatements[0]).toContain("SET LOCAL statement_timeout = '4000ms'");
+    expect(rangeStatements[rangeStatements.length - 1]).toContain('c.document_id = $1');
+
+    const byRanges = makeQueryClassClient([]);
+    await getChunksByDocAndRanges(
+      [{ documentId: 7, start: 0, end: 5 }],
+      byRanges.client,
+    );
+    expect(statementsOf(byRanges.executed)[0]).toContain("SET LOCAL statement_timeout = '4000ms'");
+  });
+
+  it('keeps execute-only clients working without a per-class ceiling (no weakening)', async () => {
+    const { client, executed } = makeExecuteClient([]);
+    await searchChunksByLexical('broken vector', { limit: 5 }, client);
+    expect(executed).toHaveLength(1);
+    expect(dialect.sqlToQuery(executed[0]!).sql).toContain("plainto_tsquery('english',");
+  });
+});
+
 describe('insertDocument', () => {
   type DocRow = { id: number; fileName: string; fileHash: string; uploadedBy: string; deletedAt: Date | null };
 

@@ -157,4 +157,21 @@ describe('redis retrieval-candidate cache', () => {
     await cache.set('any-key', input, [candidateFixture()]);
     expect(cache.stats().errors).toBe(2);
   });
+
+  it('hits when the client auto-deserializes JSON (Upstash behavior)', async () => {
+    const store = new Map<string, unknown>();
+    const client: RetrievalCandidateRedisClient = {
+      get: async (key: string) => (store.get(key) as string | null) ?? null,
+      set: async (key: string, value: string) => {
+        store.set(key, JSON.parse(value) as unknown);
+        return 'OK';
+      },
+    };
+    const cache = createRedisRetrievalCandidateCache(client);
+    const input = inputFixture();
+    const key = buildRetrievalCandidateCacheKey(input);
+    await cache.set(key, input, [candidateFixture()]);
+    const lookup = await cache.get(key, input);
+    expect(lookup.outcome).toBe('hit');
+  });
 });

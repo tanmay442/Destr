@@ -1,4 +1,5 @@
 import type { ChunkRepository, EmbeddingService, Reranker, RetrievedChunkRow } from '@app/domain';
+import type { CandidateCachePort } from '../../agent/search/candidate-cache-port';
 import type {
   RetrievalScores,
   RetrievalSignal,
@@ -52,7 +53,7 @@ export function scoreOf(row: ScoredRow): number {
   return row.rerankerScore ?? row.fusedScore ?? row.denseScore ?? row.lexicalScore ?? 0;
 }
 
-function finiteNonnegative(value: number): number {
+export function finiteNonnegative(value: number): number {
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
@@ -88,6 +89,22 @@ export interface SearchDeps {
   /** Optional second-stage reranker. Retrieves a broad pool then reorders by
    *  relevance. Falls back to cosine ordering when absent. */
   reranker?: Reranker | undefined;
+  /**
+   * Optional retrieval-candidate cache (WP-9 F-34 wiring). When present with
+   * `candidateCacheVersions`, searchChunks consults it per modality pool and
+   * re-runs fusion/rerank/resolve plus turn-local exclusion on hits, so a hit
+   * skips only the SQL fetch. Absent by default (flag off) and in tests.
+   */
+  candidateCache?: CandidateCachePort | undefined;
+  /** Version scope for candidate-cache keys; required when candidateCache is set. */
+  candidateCacheVersions?: CandidateCacheVersions | undefined;
+}
+
+export interface CandidateCacheVersions {
+  readonly tenantId: string;
+  readonly corpusVersion: string;
+  readonly indexVersion: string;
+  readonly retrievalConfigVersion: string;
 }
 
 export interface SearchOpts {
@@ -124,6 +141,9 @@ export interface SearchOpts {
   lexicalSearchMode?: 'content_plain' | 'weighted_websearch' | undefined;
   /** Override RERANK_TOP_N (default search limit). */
   rerankTopN?: number | undefined;
+  /** Scheduler-supplied embedding; when present, non-empty, and all finite,
+   *  searchChunks skips its own embed() call (WP-9 retrieval scheduler). */
+  precomputedEmbedding?: readonly number[] | undefined;
 }
 
 export interface SearchExecutionResult {

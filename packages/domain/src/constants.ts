@@ -53,8 +53,6 @@ export const AGENTIC_ENABLED = true;
 export const AUX_MODEL = '';
 export const OUT_OF_DOMAIN_THRESHOLD = 0.3;
 export const AGENT_STEP_BUDGET = 8;
-export const AGENTIC_RETRIEVE_LIMIT = 10;
-export const AGENTIC_MAX_RETRIES = 1;
 
 export const TURN_DEADLINE_BANNER_MESSAGE = 'This one took too long to verify.';
 export const TURN_DEADLINE_TEXT =

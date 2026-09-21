@@ -81,20 +81,15 @@ function makeContext(overrides: Partial<AgentToolContext> = {}): AgentToolContex
 
 function makeTool(deps: {
   searchChunks?: (cfg: AppConfig, query: string, opts: { signal?: AbortSignal }) => Promise<never>;
-  agenticSearch?: (cfg: AppConfig, query: string) => Promise<never>;
   mode?: 'agentic' | 'normal';
 } = {}) {
   const searchChunks = vi.fn(deps.searchChunks ?? (async () => ok({ chunks: [chunk()], degradedBy: [], diagnostics: diagnostics(1) }) as never));
-  const agenticSearch = vi.fn(deps.agenticSearch ?? (async () => {
-    throw new Error('agenticSearch unused');
-  }) as never);
   const tool = createSearchDocumentationTool({
     searchChunks: searchChunks as never,
-    agenticSearch: agenticSearch as never,
     cfg: {} as AppConfig,
     effectiveMode: deps.mode ?? 'normal',
   });
-  return { tool, searchChunks, agenticSearch };
+  return { tool, searchChunks };
 }
 
 describe('searchDocumentation tool module (WP-3 F-01/F-09/F-20)', () => {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GroundingCitation, StructuredEvidenceItem } from '../grounding-decision';
 import { runGroundingCheck, type GraderFn, type GroundingCheckInput } from '../grounding-check';
-import { GROUNDED_RELEASE_FLAG, readGroundedReleaseFlag } from '../grounding-flags';
 import { GROUNDING_TRACE_VERSION, toLogFields } from '../grounding-telemetry';
 import { SAFE_NEXT_ACTIONS, SAFE_RESPONSE_VERSION, safeResponseFor } from '../safe-response';
 
@@ -331,25 +330,11 @@ describe('safe responses', () => {
   });
 });
 
-describe('grounded release flag', () => {
-  function envWith(values: Record<string, string>): { get(key: string): string | undefined } {
-    return {
-      get: (key: string): string | undefined => values[key],
-    };
-  }
-
-  it('uses the documented flag name and defaults to enabled', () => {
-    expect(GROUNDED_RELEASE_FLAG).toBe('GROUNDED_RELEASE_ENABLED');
-    expect(readGroundedReleaseFlag(envWith({}))).toEqual({ enabled: true, source: 'default' });
-  });
-
-  it('parses explicit on and off values', () => {
-    expect(readGroundedReleaseFlag(envWith({ [GROUNDED_RELEASE_FLAG]: '1' }))).toEqual({ enabled: true, source: 'env' });
-    expect(readGroundedReleaseFlag(envWith({ [GROUNDED_RELEASE_FLAG]: '0' }))).toEqual({ enabled: false, source: 'env' });
-    expect(readGroundedReleaseFlag(envWith({ [GROUNDED_RELEASE_FLAG]: 'off' }))).toEqual({ enabled: false, source: 'env' });
-  });
-
-  it('fails open to the default on unrecognized values', () => {
-    expect(readGroundedReleaseFlag(envWith({ [GROUNDED_RELEASE_FLAG]: 'sometimes' }))).toEqual({ enabled: true, source: 'env' });
+describe('grounded release single production path (WP-9)', () => {
+  it('always runs the release policy (no GROUNDED_RELEASE_ENABLED flag)', () => {
+    // WP-9 removed the flag: the turn always invokes runGroundingCheck with
+    // releaseEnabled=true. Fail-closed behavior without a grader is covered
+    // by the runner tests via grader:null; see docs/wp9-migration-notes.md.
+    expect(baseInput({ releaseEnabled: true }).releaseEnabled).toBe(true);
   });
 });

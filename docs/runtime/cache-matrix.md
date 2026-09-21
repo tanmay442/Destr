@@ -53,6 +53,11 @@ runs, not release promises.
 - Telemetry: hit / miss / stale_version / fail_open_degraded.
 - Cost: saves embedding provider calls; Redis payload is small dense vectors.
 - Rollback: independent flag off; callers recompute embeddings.
+- WP-9 activation: `src/composition.ts` wraps the search `EmbeddingService`
+  with `createCachedEmbeddingService` when `WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED=1`
+  (default off); tenant is the single-deployment constant, model version comes
+  from `EMBEDDING_MODEL_VERSION` (must rotate on silent provider weight changes).
+  Redis adapters tolerate Upstash JSON auto-deserialization.
 
 ## 4. Retrieval-candidate cache
 
@@ -69,6 +74,15 @@ runs, not release promises.
 - Telemetry: hit / miss / stale_version / fail_open_degraded.
 - Cost: saves vector/lexical DB work at the price of Redis ops and staleness risk.
 - Rollback: independent flag off; retrieval executes uncached.
+- WP-9 activation: `searchChunks` consults the port per modality pool when
+  `candidateCache`/`candidateCacheVersions` are provided (composition provides
+  them when `WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED=1`, default off).
+  Fusion, rerank, resolve, and turn-local exclusion/backfill always re-run on
+  loaded pools; rehydration is all-or-nothing (any deleted chunk is a miss).
+  Pool entries carry pool-scope synthetic provenance that downstream
+  orchestration overwrites from the live plan. Corpus version starts at
+  `corpus-v1` (bump on pipeline change); index version derives from the
+  embedding model + dimensions.
 
 ## 5. Provider prompt cache
 

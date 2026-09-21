@@ -1,7 +1,7 @@
 /**
  * WP-8 runtime feature flags.
  *
- * Five independently controlled flags (plan sections 14.1-14.3). There is no
+ * Four independently controlled flags (plan sections 14.1-14.3). There is no
  * global flag: each flag has its own environment key, owner, default, effect,
  * rollout, removal, rollback, metrics, and automatic rollback thresholds.
  * Rollback of any flag preserves grounding, approval, idempotency, error
@@ -24,8 +24,7 @@ export type Wp8FlagName =
   | 'serverProgress'
   | 'embeddingRetrievalCache'
   | 'distributedAdmission'
-  | 'durableJudgeQueue'
-  | 'routeDurationIncrease';
+  | 'durableJudgeQueue';
 
 export interface Wp8FlagDef {
   readonly key: string;
@@ -153,41 +152,18 @@ export const WP8_FLAGS: Readonly<Record<Wp8FlagName, Wp8FlagDef>> = Object.freez
     ]),
     rollbackPreserves: WP8_ROLLBACK_PRESERVED_INVARIANTS,
   }),
-  routeDurationIncrease: def({
-    key: 'WP8_ROUTE_DURATION_INCREASE_ENABLED',
-    owner: 'platform on-call',
-    defaultEnabled: false,
-    effect:
-      'When enabled, the route uses the WP-8-evidenced extended platform envelope ' +
-      'with an application hard stop and mandatory finalization reserve; when ' +
-      'disabled, the current 60-second envelope applies. Enabling never increases ' +
-      'any agent, token, evidence, retry, or cost budget.',
-    rollout:
-      'Raise only with interactive SLO, load, cancellation, and tail-reserve evidence, independently from any agent budget change.',
-    removal:
-      'Remove after the deadline-ledger decision record freezes one envelope; a route-duration rollback must keep the finalization reserve.',
-    rollback:
-      'Set WP8_ROUTE_DURATION_INCREASE_ENABLED=0 and restart; incompatible higher deadline settings are rejected at startup.',
-    metrics: Object.freeze([
-      'platform_hard_kills',
-      'finalization_reserve_completion_rate',
-      'verified_answer_release_p95',
-    ]),
-    rollbackThresholds: Object.freeze([
-      'any unexplained platform hard-timeout kill',
-      'post-generation work completes inside the finalization reserve in fewer than 99.9% of evaluated turns',
-      'raising maxDuration improves completion only by increasing queue collapse, p99 occupancy, or cost',
-    ]),
-    rollbackPreserves: WP8_ROLLBACK_PRESERVED_INVARIANTS,
-  }),
 });
+
+// NOTE (WP-9): routeDurationIncrease removed. It was unread by production (no
+// caller of readWp8Flag/readWp8Flags consumed it) and unsafe to wire without
+// load evidence; any increase requires a decision-record update in
+// docs/runtime/route-duration-decision.md first.
 
 export const WP8_FLAG_NAMES: readonly Wp8FlagName[] = Object.freeze([
   'serverProgress',
   'embeddingRetrievalCache',
   'distributedAdmission',
   'durableJudgeQueue',
-  'routeDurationIncrease',
 ]);
 
 export interface Wp8FlagEnv {
@@ -237,6 +213,5 @@ export function readWp8Flags(env: Wp8FlagEnv): Readonly<Record<Wp8FlagName, Wp8F
     embeddingRetrievalCache: readWp8Flag(env, 'embeddingRetrievalCache'),
     distributedAdmission: readWp8Flag(env, 'distributedAdmission'),
     durableJudgeQueue: readWp8Flag(env, 'durableJudgeQueue'),
-    routeDurationIncrease: readWp8Flag(env, 'routeDurationIncrease'),
   });
 }

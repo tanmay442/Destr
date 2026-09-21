@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { AppConfig } from '@app/domain/app-config';
 import type { AgenticResultState } from '@app/domain';
-import type { RetrievedChunk } from '../../rag/search/search-types';
-import type { SearchDegradation, SearchFailure } from '../../rag/search';
-import { addGroundingEvidence, attachSearchProvenance, type GroundingEvidence } from '../../chat/grounding-evidence';
-import type { StructuredSearchOptions, TurnMetrics } from '../../chat/chat-turn/turn-types';
-import type { AgentProgressSink } from '../../chat/progress/progress-sink';
-import type { BuiltToolInstance, BuiltToolSet } from '../tool-catalog';
+import type { RetrievedChunk } from '../rag/search/search-types';
+import type { SearchDegradation, SearchFailure } from '../rag/search';
+import { addGroundingEvidence, attachSearchProvenance, type GroundingEvidence } from '../chat/grounding-evidence';
+import type { StructuredSearchOptions, TurnMetrics } from '../chat/chat-turn/turn-types';
+import type { AgentProgressSink } from '../chat/progress/progress-sink';
+import type { BuiltToolInstance, BuiltToolSet } from './tool-catalog';
 
 export interface SearchUsage {
   readonly plansUsed: number;
@@ -31,21 +31,20 @@ import type {
   GroundingEvidenceCollector,
   ToolExecuteCall,
   ToolApprovalPolicy,
-} from '../tool-contract';
-import { createAgentRunBudget, type AgentRunBudget } from '../agent-budget';
+} from './tool-contract';
+import { createAgentRunBudget, type AgentRunBudget } from './agent-budget';
 import {
   DEFAULT_TOOL_CAPABILITIES,
   type ModelToolCapabilities,
-} from '../model-tool-capabilities';
-import { createApprovalPolicyForTurn } from '../tool-approval';
-import { createInMemoryTraceWriter } from '../tool-contract';
-import { asUntypedTool, DefaultToolCatalog, TOOL_CATALOG_VERSION } from '../tool-catalog';
+} from './model-tool-capabilities';
+import { createApprovalPolicyForTurn } from './tool-approval';
+import { createInMemoryTraceWriter } from './tool-contract';
+import { asUntypedTool, DefaultToolCatalog, TOOL_CATALOG_VERSION } from './tool-catalog';
 import {
   createSearchDocumentationTool,
   SEARCH_TOOL_NAME,
-  type AgenticSearchFn,
   type SearchChunksFn,
-} from '../tools/search-documentation';
+} from './tools/search-documentation';
 import {
   createKnowledgeTicketTool,
   TICKET_TOOL_NAME,
@@ -53,16 +52,14 @@ import {
   type TicketRateLimiter,
   type TicketUserResolver,
   type TicketWriter,
-} from '../tools/create-knowledge-ticket';
-import { TurnToolLedger, type ToolCallOutcomeKind } from '../run-state';
-import { sanitizeUntrustedMetadata, serializeUntrustedChunk } from '../prompt/serialize-untrusted-result';
-import { ToolPolicyError } from '../tool-policy-pipeline';
-import { readPlannerFlags } from '../search/search-flags';
-import type { OrchestratorResult } from '../search/search-orchestrator';
+} from './tools/create-knowledge-ticket';
+import { TurnToolLedger, type ToolCallOutcomeKind } from './run-state';
+import { sanitizeUntrustedMetadata, serializeUntrustedChunk } from './prompt/serialize-untrusted-result';
+import { ToolPolicyError } from './tool-policy-pipeline';
+import type { OrchestratorResult } from './search/search-orchestrator';
 
 export interface CatalogCompatDeps {
   readonly searchChunks: SearchChunksFn;
-  readonly agenticSearch: AgenticSearchFn;
   readonly structuredSearch?: (
     cfg: AppConfig,
     query: string,
@@ -256,18 +253,6 @@ function toEvidenceCollector(groundingEvidence: GroundingEvidence): GroundingEvi
   };
 }
 
-/**
- * @deprecated The chat path always uses SupportAgent. This legacy probe no
- * longer selects an execution path.
- */
-export function isCatalogEnabled(env: { get(key: string): string | undefined }): boolean {
-  const raw = env.get('TOOL_CATALOG_ENABLED');
-  if (raw === undefined) return true;
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'no') return false;
-  return true;
-}
-
 function readNonNegativeInt(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
 }
@@ -368,7 +353,12 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
     trace,
     approvals,
   };
-  const plannerFlags = readPlannerFlags({ get: (key: string) => process.env[key] });
+  // WP-9 single production path: the structured orchestrator serves agentic
+  // mode whenever it is wired. There is no planner experiment flag, no
+  // shadow comparison, and no rewrite/retry wrapper; see
+  // docs/wp9-migration-notes.md.
+  const structuredSearch = deps.structuredSearch;
+  const plannerActive = turn.effectiveMode === 'agentic' && structuredSearch !== undefined;
   let sharedPlansUsed = Math.max(0, turn.initialPlansUsed ?? 0);
   let sharedPhysicalUsed = Math.max(0, turn.initialPhysicalUsed ?? 0);
   let sharedUniqueEvidenceUsed = Math.max(0, turn.initialUniqueEvidenceUsed ?? 0);
@@ -377,7 +367,6 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
   const workDeadlineAt = budget.deadlineAt - budget.finalizeReserveMs;
   let lastStructuredResult: OrchestratorResult | null = null;
   let lastSearchExecutionUsage: SearchUsage | null = null;
-  const structuredSearch = deps.structuredSearch;
   const searchDefinition = createSearchDocumentationTool({
     searchChunks: async (cfg, query, opts) => {
       const result = await deps.searchChunks(cfg, query, opts);
@@ -390,30 +379,16 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
       };
       return result;
     },
-    agenticSearch: async (cfg, query, opts) => {
-      const result = await deps.agenticSearch(cfg, query, opts);
-      lastStructuredResult = null;
-      lastSearchExecutionUsage = {
-        plansUsed: 0,
-        physicalRetrievalsUsed: result.ok
-          ? result.value.retrievalDiagnostics.reduce((total, diagnostics) => total + physicalRetrievalsFromDiagnostics(diagnostics), 0)
-          : 0,
-        uniqueEvidenceAdded: 0,
-        evidenceTokensAdded: 0,
-      };
-      return result;
-    },
     cfg: turn.cfg,
     effectiveMode: turn.effectiveMode,
     ...(structuredSearch
       ? {
           structuredSearch: async (query: string, opts?: StructuredSearchOptions): Promise<OrchestratorResult> => {
-            const isShadow = opts?.shadow === true;
             const remainingPhysical = budget.maxPhysicalRetrievals - sharedPhysicalUsed;
             const remainingTokens = budget.maxEvidenceTokens - sharedTokensUsed;
             const remainingPlans = budget.maxSearchPlans - sharedPlansUsed;
             const remainingUnique = budget.maxUniqueEvidenceChunks - sharedUniqueEvidenceUsed;
-            if (!isShadow && (remainingPhysical <= 0 || remainingTokens <= 0 || remainingPlans <= 0 || remainingUnique <= 0)) {
+            if (remainingPhysical <= 0 || remainingTokens <= 0 || remainingPlans <= 0 || remainingUnique <= 0) {
               return exhaustedOrchestratorResult(query, {
                 plansUsed: sharedPlansUsed,
                 physicalRetrievalsUsed: sharedPhysicalUsed,
@@ -429,26 +404,21 @@ export function buildCatalogToolsForTurn(deps: CatalogCompatDeps, turn: CatalogC
             const result = await structuredSearch(turn.cfg, query, {
               ...(opts ?? {}),
               deadlineAt: Math.min(opts?.deadlineAt ?? workDeadlineAt, workDeadlineAt),
-              ...(isShadow ? {} : {
-                budgets: {
-                  maxSearchPlans: remainingPlans,
-                  maxPhysicalRetrievals: remainingPhysical,
-                  maxUniqueEvidenceChunks: remainingUnique,
-                  maxEvidenceTokens: remainingTokens,
-                  maxResultsPerSearchCall: budget.maxResultsPerSearchCall,
-                  maxCandidatesPerModality: budget.maxCandidatesPerModality,
-                  maxResultsPerSubquestion: budget.maxResultsPerSubquestion,
-                  maxConcurrentRetrievals: budget.maxConcurrentRetrievals,
-                  minQuotaPerSubquestion: 1,
-                },
-              }),
+              budgets: {
+                maxSearchPlans: remainingPlans,
+                maxPhysicalRetrievals: remainingPhysical,
+                maxUniqueEvidenceChunks: remainingUnique,
+                maxEvidenceTokens: remainingTokens,
+                maxResultsPerSearchCall: budget.maxResultsPerSearchCall,
+                maxCandidatesPerModality: budget.maxCandidatesPerModality,
+                maxResultsPerSubquestion: budget.maxResultsPerSubquestion,
+                maxConcurrentRetrievals: budget.maxConcurrentRetrievals,
+                minQuotaPerSubquestion: 1,
+              },
             });
-            if (!isShadow) lastStructuredResult = result;
+            lastStructuredResult = result;
             return result;
           },
-          plannerEnabled: plannerFlags.plannerEnabled,
-          shadowEnabled: plannerFlags.shadowEnabled,
-          query2docEnabled: plannerFlags.query2docEnabled,
         }
       : {}),
   });
@@ -651,7 +621,7 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
         const limit = typeof parsed.limit === 'number' ? parsed.limit : undefined;
         const canReusePrefetch =
           !prefetchedConsumed &&
-          !plannerFlags.plannerEnabled &&
+          !plannerActive &&
           turn.prefetched !== undefined &&
           turn.prefetched.query.trim().toLocaleLowerCase() === query.trim().toLocaleLowerCase();
         if (canReusePrefetch) {
@@ -776,7 +746,7 @@ function recordSearchOutcome(output: unknown, usage: SearchUsage, durationMs: nu
             const remainingPhysical = budget.maxPhysicalRetrievals - sharedPhysicalUsed;
             const remainingTokens = budget.maxEvidenceTokens - sharedTokensUsed;
             const remainingUnique = budget.maxUniqueEvidenceChunks - sharedUniqueEvidenceUsed;
-            const plannerExhausted = plannerFlags.plannerEnabled && sharedPlansUsed >= budget.maxSearchPlans;
+            const plannerExhausted = plannerActive && sharedPlansUsed >= budget.maxSearchPlans;
             // Reset before the budget check: an exhausted call must report
             // zero usage, never inherit the previous call's counters (which
             // would double-count shared budgets and misattribute planner

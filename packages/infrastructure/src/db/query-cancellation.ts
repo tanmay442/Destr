@@ -1,3 +1,16 @@
+import pg from 'pg';
+import { sql } from 'drizzle-orm';
+import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
+import { databaseConfigForClient, type Client } from './client';
+import { getPool } from './pool';
+import * as schema from './schema';
+import {
+  resolveQueryTimeoutMs,
+  statementTimeoutStatement,
+  type QueryClass,
+  type QueryTimeoutOverrides,
+} from './query-timeouts';
+
 export class DatabaseQueryCancelledError extends Error {
   readonly code = 'database_query_cancelled';
 
@@ -32,6 +45,15 @@ export interface ExecuteDatabaseCancelableInput<T> {
   client: Client;
   operation(client: Client): PromiseLike<T>;
   signal?: AbortSignal | undefined;
+  /**
+   * Optional retrieval query class. When present, the operation runs inside
+   * a transaction that first issues `SET LOCAL statement_timeout` for that
+   * class (see query-timeouts.ts). History/telemetry/persistence classes are
+   * intentionally not wired here; they remain a follow-up.
+   */
+  queryClass?: QueryClass | undefined;
+  /** Per-class timeout overrides forwarded to resolveQueryTimeoutMs. */
+  timeoutOverrides?: QueryTimeoutOverrides | undefined;
 }
 
 /**
@@ -104,6 +126,38 @@ async function cancelBackend(databaseUrl: string, processId: number): Promise<vo
 }
 
 /**
+ * Run the operation with a per-class `SET LOCAL statement_timeout` when
+ * `queryClass` is present. The timeout is transaction-local by construction:
+ * when the client supports `transaction`, the operation runs inside one
+ * transaction that first issues the class ceiling. Minimal contract-test
+ * clients that expose only `execute` cannot scope `SET LOCAL` (it requires
+ * a transaction), so they proceed without a per-class ceiling rather than
+ * failing. Nested drizzle transactions use savepoints, so a retrieval
+ * implementation that opens its own transaction (e.g. vector-search for the
+ * LOCAL HNSW setting) inherits the outer ceiling.
+ */
+async function runWithQueryClassTimeout<T>(
+  client: Client,
+  queryClass: QueryClass,
+  timeoutOverrides: QueryTimeoutOverrides | undefined,
+  operation: (client: Client) => PromiseLike<T>,
+): Promise<T> {
+  const timeoutMs = resolveQueryTimeoutMs(queryClass, timeoutOverrides);
+  const statement = statementTimeoutStatement(timeoutMs);
+  const maybeTransactional = client as unknown as {
+    transaction?: ((fn: (tx: unknown) => Promise<T>) => Promise<T>) | undefined;
+  };
+  if (typeof maybeTransactional.transaction !== 'function') {
+    return operation(client);
+  }
+  return maybeTransactional.transaction(async (tx: unknown) => {
+    const executor = tx as unknown as { execute: (query: unknown) => Promise<unknown> };
+    await executor.execute(sql.raw(statement));
+    return operation(tx as unknown as Client);
+  });
+}
+
+/**
  * Run a signal-bearing operation on one owned node-postgres connection and
  * send a real PostgreSQL cancellation request on abort. The checked-out
  * connection is not returned to the pool until both the original query and
@@ -114,6 +168,10 @@ async function cancelBackend(databaseUrl: string, processId: number): Promise<vo
 export async function executeDatabaseCancelable<T>(
   input: ExecuteDatabaseCancelableInput<T>,
 ): Promise<T> {
+  const scopedOperation = (client: Client): PromiseLike<T> =>
+    input.queryClass === undefined
+      ? input.operation(client)
+      : runWithQueryClassTimeout(client, input.queryClass, input.timeoutOverrides, input.operation);
   const config = databaseConfigForClient(input.client as object);
   if (
     !input.signal
@@ -121,7 +179,7 @@ export async function executeDatabaseCancelable<T>(
     || config.isNeon
   ) {
     return executeCancelable({
-      operation: () => input.operation(input.client),
+      operation: () => scopedOperation(input.client),
       signal: input.signal,
     });
   }
@@ -129,7 +187,7 @@ export async function executeDatabaseCancelable<T>(
 
   const pool = getPool(config);
   if (!(pool instanceof pg.Pool)) {
-    return executeCancelable({ operation: () => input.operation(input.client), signal: input.signal });
+    return executeCancelable({ operation: () => scopedOperation(input.client), signal: input.signal });
   }
 
   const rawClient = await pool.connect();
@@ -156,7 +214,7 @@ export async function executeDatabaseCancelable<T>(
     rejectAbort?.(cancellationError(input.signal!));
   };
   input.signal.addEventListener('abort', onAbort, { once: true });
-  const operation = Promise.resolve().then(() => input.operation(scopedClient));
+  const operation = Promise.resolve().then(() => scopedOperation(scopedClient));
   try {
     return await Promise.race([operation, abortResult]);
   } finally {
@@ -167,8 +225,3 @@ export async function executeDatabaseCancelable<T>(
     rawClient.release();
   }
 }
-import pg from 'pg';
-import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
-import { databaseConfigForClient, type Client } from './client';
-import { getPool } from './pool';
-import * as schema from './schema';

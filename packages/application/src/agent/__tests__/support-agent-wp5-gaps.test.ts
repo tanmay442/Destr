@@ -23,13 +23,6 @@ import { InMemoryToolApprovalPolicy, normalizeToolArgs } from '../tool-approval'
 import { createSupportAgent, type SupportAgentInput } from '../support-agent';
 import type { AgentModelMessage } from '../model-backend';
 import { createScriptedBackend, type ScriptedStep } from '../scripted-model';
-import {
-  readSupportAgentFlag,
-  SUPPORT_AGENT_DEFAULT,
-  SUPPORT_AGENT_FLAG_OWNER,
-  SUPPORT_AGENT_REMOVAL,
-  SUPPORT_AGENT_ROLLBACK,
-} from '../agent-flags';
 
 const USER_ID = 'user-wp5';
 const TURN_ID = 'turn-wp5';
@@ -337,29 +330,18 @@ describe('support-agent wp5 gaps', () => {
     }
   });
 
-  it('3: flag reader defaults and constants stay honest', () => {
-    expect(readSupportAgentFlag({ get: () => undefined })).toEqual({
-      enabled: true,
-      source: 'default',
+  it('3: the SupportAgent loop is the single production path (WP-9, flag removed)', async () => {
+    // WP-9 removed SUPPORT_AGENT_ENABLED: rollback is a revertible commit,
+    // documented in docs/wp9-migration-notes.md. The loop below runs the
+    // full multi-step path with tools enabled.
+    const { agentInput } = setup({
+      steps: searchThenAnswer(),
+      userText: 'Where is the password policy?',
+      searchResults: [resultsOutput()],
     });
-    for (const raw of ['0', 'false']) {
-      expect(readSupportAgentFlag({ get: () => raw })).toEqual({
-        enabled: false,
-        source: 'env',
-      });
-    }
-    for (const raw of ['1', 'true']) {
-      expect(readSupportAgentFlag({ get: () => raw })).toEqual({
-        enabled: true,
-        source: 'env',
-      });
-    }
-    expect(SUPPORT_AGENT_FLAG_OWNER.length).toBeGreaterThan(0);
-    expect(SUPPORT_AGENT_DEFAULT.length).toBeGreaterThan(0);
-    expect(SUPPORT_AGENT_ROLLBACK.length).toBeGreaterThan(0);
-    expect(SUPPORT_AGENT_REMOVAL.length).toBeGreaterThan(0);
-    expect(SUPPORT_AGENT_ROLLBACK).toContain('SUPPORT_AGENT_ENABLED=0');
-    expect(SUPPORT_AGENT_REMOVAL.toLowerCase()).toContain('remov');
+    const run = await createSupportAgent().run(agentInput);
+    expect(run.stopReason).toEqual({ kind: 'completed' });
+    expect(run.summary.searchCalls).toBe(1);
   });
 
   it('4: evidence counters read top-level production shape and hide search next step', async () => {

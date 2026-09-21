@@ -40,7 +40,10 @@ export async function searchChunksByLexical(
   const relevance = weighted
     ? sql`ts_rank_cd(${searchVector}, ${lexQuery})`
     : sql`ts_rank(${searchVector}, ${lexQuery})`;
-  const result = await executeDatabaseCancelable({ client, operation: (queryClient) => queryClient.execute(sql`
+  const result = await executeDatabaseCancelable({
+    client,
+    queryClass: 'retrieval_lexical',
+    operation: (queryClient) => queryClient.execute(sql`
     SELECT
       c.id AS id,
       c.chunk_uid AS "chunkUid",

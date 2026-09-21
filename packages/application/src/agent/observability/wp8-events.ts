@@ -202,55 +202,6 @@ const CapacityRejectedSchema = AgentEventEnvelopeSchema.extend({
 });
 
 // ---------------------------------------------------------------------------
-// Progress / stream family (server-driven, sanitized)
-// ---------------------------------------------------------------------------
-
-export const WP8_PROGRESS_PHASES = [
-  'accepted',
-  'checking_cache',
-  'planning',
-  'searching',
-  'reranking',
-  'reading_sources',
-  'drafting',
-  'verifying',
-  'saving',
-  'complete',
-  'degraded',
-] as const;
-export const Wp8ProgressPhaseSchema = z.enum(WP8_PROGRESS_PHASES);
-
-export const WP8_PROGRESS_LABEL_CODES = [
-  'progress_searching_docs',
-  'progress_checking_sources',
-  'progress_planning',
-  'progress_drafting',
-  'progress_verifying',
-  'progress_saving',
-  'progress_degraded_fallback',
-  'progress_complete',
-] as const;
-export const Wp8ProgressLabelCodeSchema = z.enum(WP8_PROGRESS_LABEL_CODES);
-
-const ProgressEmittedSchema = AgentEventEnvelopeSchema.extend({
-  eventType: z.literal('progress.emitted'),
-  phase: Wp8ProgressPhaseSchema,
-  labelCode: Wp8ProgressLabelCodeSchema,
-  completed: boundedCount().nullable(),
-  total: boundedCount().nullable(),
-  payloadBytes: boundedCount(WP8_NUMERIC_BOUNDS.maxPayloadBytes),
-});
-
-export const WP8_HEARTBEAT_REASONS = ['silence_keepalive', 'backlog_notice'] as const;
-export const Wp8HeartbeatReasonSchema = z.enum(WP8_HEARTBEAT_REASONS);
-
-const StreamHeartbeatSchema = AgentEventEnvelopeSchema.extend({
-  eventType: z.literal('stream.heartbeat'),
-  reason: Wp8HeartbeatReasonSchema,
-  intervalMs: boundedLatency(),
-});
-
-// ---------------------------------------------------------------------------
 // Deadline / budget family
 // ---------------------------------------------------------------------------
 
@@ -466,8 +417,6 @@ export const Wp8EventSchema = z.discriminatedUnion('eventType', [
   AdmissionLeaseSchema,
   AdmissionQueueSchema,
   CapacityRejectedSchema,
-  ProgressEmittedSchema,
-  StreamHeartbeatSchema,
   DeadlinePhaseSchema,
   BudgetExhaustedSchema,
   DependencyCallSchema,
@@ -487,8 +436,6 @@ export const WP8_EVENT_TYPES: readonly Wp8EventType[] = Object.freeze([
   'admission.lease',
   'admission.queue',
   'capacity.rejected',
-  'progress.emitted',
-  'stream.heartbeat',
   'deadline.phase',
   'budget.exhausted',
   'dependency.call',
@@ -618,14 +565,11 @@ function wp8OutcomeLabel(event: Wp8Event): string {
       return event.outcome;
     case 'cache.evicted':
     case 'capacity.rejected':
-    case 'stream.heartbeat':
       return event.reason;
     case 'admission.lease':
     case 'admission.queue':
     case 'background.job':
       return event.action;
-    case 'progress.emitted':
-      return event.phase;
     case 'persistence.result':
       return event.persistenceStatus;
     case 'breaker.transition':
@@ -698,9 +642,6 @@ export function describeWp8StoragePlacement(eventType: Wp8EventType): string {
     case 'pool.query':
     case 'breaker.transition':
       return WP8_STORAGE_PLACEMENT.counters;
-    case 'progress.emitted':
-    case 'stream.heartbeat':
-      return WP8_STORAGE_PLACEMENT.sampledTraces;
   }
 }
 

@@ -205,7 +205,7 @@ pnpm eval          # local mock evaluation (deterministic deps)
 EVAL_REAL=1 pnpm eval   # live model evaluation against keyed providers (scheduled weekly in CI)
 ```
 
-- **Golden dataset (`golden.ts`)**: phrase-based — `{id, question, mustMention, forbidden?, refusalExpected?}`, plus agentic-mode entries (`mode: 'agentic'`) with optional `expectedDocIds` reference chunk ids; runs lacking `expectedDocIds` are flagged via a doc-hit gate warning.
+- **Golden dataset (`golden.ts`)**: phrase-based — `{id, question, mustMention, forbidden?, refusalExpected?}`, plus reporting-only retrieval-mode labels (`mode: 'agentic' | 'normal'` — WP-9 runs every golden question through the same direct single-query hybrid retrieval; the structured-orchestrator comparison lives in `scripts/eval/wp4-retrieval.ts`) with live-corpus `expectedDocIds` and synthetic-corpus `expectedMockDocIds` / `expectedMockChunkUids` labels; runs lacking an expected-document label fail closed via the doc-hit gate (exit 1), never a warning.
 - **Metrics (0–1)**:
   - **Faithfulness**: hallucination-checker verdict per response.
   - **Correctness**: lexical `mustMention` match ratio (not model-judged).

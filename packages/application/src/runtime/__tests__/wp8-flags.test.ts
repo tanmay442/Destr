@@ -48,35 +48,33 @@ describe('wp8 flags parse independently', () => {
 
   it('fails safe to the default on unrecognized values', () => {
     for (const raw of ['maybe', '2', '', 'enabled-ish']) {
-      expect(readWp8Flag(env({ WP8_ROUTE_DURATION_INCREASE_ENABLED: raw }), 'routeDurationIncrease')).toEqual(
+      expect(readWp8Flag(env({ WP8_SERVER_PROGRESS_ENABLED: raw }), 'serverProgress')).toEqual(
         { enabled: false, source: 'env' },
       );
     }
   });
 
-  it('reads all five flags in one frozen snapshot', () => {
+  it('reads all four flags in one frozen snapshot', () => {
     const flags = readWp8Flags(
       env({
         WP8_SERVER_PROGRESS_ENABLED: '1',
         WP8_EMBEDDING_RETRIEVAL_CACHE_ENABLED: 'yes',
         WP8_DISTRIBUTED_ADMISSION_ENABLED: '0',
         WP8_DURABLE_JUDGE_QUEUE_ENABLED: 'off',
-        WP8_ROUTE_DURATION_INCREASE_ENABLED: 'no',
       }),
     );
     expect(flags.serverProgress.enabled).toBe(true);
     expect(flags.embeddingRetrievalCache.enabled).toBe(true);
     expect(flags.distributedAdmission.enabled).toBe(false);
     expect(flags.durableJudgeQueue.enabled).toBe(false);
-    expect(flags.routeDurationIncrease.enabled).toBe(false);
     expect(Object.isFrozen(flags)).toBe(true);
   });
 });
 
 describe('wp8 flags have no global switch', () => {
-  it('exposes exactly the five independent flags', () => {
-    expect(WP8_FLAG_NAMES).toHaveLength(5);
-    expect(Object.keys(WP8_FLAGS)).toHaveLength(5);
+  it('exposes exactly the four independent flags', () => {
+    expect(WP8_FLAG_NAMES).toHaveLength(4);
+    expect(Object.keys(WP8_FLAGS)).toHaveLength(4);
     for (const name of WP8_FLAG_NAMES) {
       const flag = WP8_FLAGS[name];
       expect(flag).toBeDefined();
@@ -135,12 +133,5 @@ describe('wp8 flag metadata and rollback', () => {
         [...WP8_ROLLBACK_PRESERVED_INVARIANTS].sort(),
       );
     }
-  });
-
-  it('keeps route-duration rollback independent of agent budgets', () => {
-    const flag = WP8_FLAGS.routeDurationIncrease;
-    if (flag === undefined) throw new Error('missing routeDurationIncrease flag');
-    expect(flag.effect).toMatch(/never increases/);
-    expect(flag.rollback).toMatch(/rejected at startup/);
   });
 });

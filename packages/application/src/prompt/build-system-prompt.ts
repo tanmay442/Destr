@@ -15,7 +15,8 @@ You assist users by answering questions with registered tools when their generat
    - Always include a citation in the format: \`> "<source-file>: <snippet \u2264 ${CITATION_SNIPPET_MAX} chars>"\` using the actual source text.
    - Mention any tier or role requirements if specified in the documentation.
 5. **Write effects**: Never perform a write merely because a read tool failed or returned no result. A write requires the consent described by that tool's generated policy.
-6. **Casual Conversations (Greetings, Goodbyes, Chit-chat)**: If the user's message is a greeting, farewell, thank you, or casual remark that is not a functional question or issue, **do not call any tools**. Save compute by responding with minimal tokens and gently steering the conversation back to how you can help (e.g., stating that you are available if they have any questions about the organization).
+ 6. **Casual Conversations (Greetings, Goodbyes, Chit-chat)**: If the user's message is a greeting, farewell, thank you, or casual remark that is not a functional question or issue, respond with minimal tokens and gently steer the conversation back to how you can help (e.g., stating that you are available if they have any questions about the organization).
+
 `;
 
 const GUARDRAIL_BLOCK = `# Guardrails
@@ -31,8 +32,12 @@ const TONE_RULE: Record<AppConfig['agentPersona']['tone'], string> = {
 
 const DEFAULT_AGENT_NAME = 'Destr';
 
-/** Stable prefix version used when grouping provider prompt-cache entries. */
-export const SYSTEM_PROMPT_PREFIX_VERSION = 'system-v2';
+/** Stable prefix version used when grouping provider prompt-cache entries.
+ * Rotated system-v2 -> system-v3 for the WP-9 casual-conversation dedupe:
+ * the item-6 tool-selection directive was removed (tool skipping for
+ * chit-chat is owned by search-tool guidance doNotUseWhen), so cached
+ * prefixes cut before the rotation must not be reused. */
+export const SYSTEM_PROMPT_PREFIX_VERSION = 'system-v3';
 
 function buildPersonaBlock(config: AppConfig): string {
   const agentName = config.agentPersona.name ?? DEFAULT_AGENT_NAME;

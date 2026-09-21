@@ -14,11 +14,6 @@ import { detectDuplicateCall, normalizeArgsHash, pickEarliestStop } from '../age
 import type { AgentStopReason } from '../agent-stop';
 import { redactTelemetry, summarizeRun } from '../agent-telemetry';
 import type { AgentStepTelemetry } from '../agent-telemetry';
-import { readSupportAgentFlag } from '../agent-flags';
-
-function envWith(value: string | undefined): { get(key: string): string | undefined } {
-  return { get: (key: string) => (key === 'SUPPORT_AGENT_ENABLED' ? value : undefined) };
-}
 
 describe('agent budget', () => {
   it('applies documented defaults', () => {
@@ -270,12 +265,13 @@ describe('agent telemetry', () => {
   });
 });
 
-describe('support agent flag', () => {
-  it('defaults to enabled and parses explicit values', () => {
-    expect(readSupportAgentFlag(envWith(undefined))).toEqual({ enabled: true, source: 'default' });
-    expect(readSupportAgentFlag(envWith('1'))).toEqual({ enabled: true, source: 'env' });
-    expect(readSupportAgentFlag(envWith('YES'))).toEqual({ enabled: true, source: 'env' });
-    expect(readSupportAgentFlag(envWith('0'))).toEqual({ enabled: false, source: 'env' });
-    expect(readSupportAgentFlag(envWith('off'))).toEqual({ enabled: false, source: 'env' });
+describe('support agent single production path (WP-9)', () => {
+  it('always runs the full agent budget (no one-step fallback)', () => {
+    // WP-9 removed SUPPORT_AGENT_ENABLED: the SupportAgent loop with catalog
+    // tools is the only path. The budget below is the production default.
+    const budget = createAgentRunBudget({ nowMs: 1000 });
+    expect(budget.maxModelSteps).toBe(8);
+    expect(remainingModelSteps(budget, 0)).toBe(8);
+    expect(canStartNewModelStep(budget, 0, 1000)).toBe(true);
   });
 });

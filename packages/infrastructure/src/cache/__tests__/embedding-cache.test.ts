@@ -132,6 +132,24 @@ describe('redis embedding cache', () => {
     expect(cache.stats().errors).toBe(2);
   });
 
+  it('hits when the client auto-deserializes JSON (Upstash behavior)', async () => {
+    // Upstash returns parsed objects for stored JSON strings; the adapter
+    // must not mistake them for corrupt envelopes.
+    const store = new Map<string, unknown>();
+    const client: EmbeddingCacheRedisClient = {
+      get: async (key: string) => (store.get(key) as string | null) ?? null,
+      set: async (key: string, value: string) => {
+        store.set(key, JSON.parse(value) as unknown);
+        return 'OK';
+      },
+    };
+    const cache = createRedisEmbeddingCache(client);
+    const input = inputFixture();
+    const key = buildEmbeddingCacheKey(input);
+    await cache.set(key, input, [0.4, 0.5, 0.6]);
+    expect(await cache.get(key, input)).toEqual({ outcome: 'hit', vector: [0.4, 0.5, 0.6] });
+  });
+
   it('treats malformed envelopes as stale versions', async () => {
     const client = fakeRedisClient();
     client.entries.set('bad-key', '{not json');

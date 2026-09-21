@@ -4,14 +4,13 @@ import type { AppConfig } from '@app/domain/app-config';
 import { SearchFailure } from '../../rag/search/search-contract';
 import type { RetrievedChunk } from '../../rag/search/search-types';
 import { createGroundingEvidence } from '../../chat/grounding-evidence';
-import type { PrefetchedSearchOutcome } from '../compat/chat-tools-compat';
+import type { PrefetchedSearchOutcome } from '../turn-tools';
 import type { TurnMetrics } from '../../chat/chat-turn/turn-types';
 import { TurnToolLedger } from '../run-state';
 import {
   buildCatalogToolsForTurn,
-  isCatalogEnabled,
   type CatalogCompatInternalToolContext,
-} from '../compat/chat-tools-compat';
+} from '../turn-tools';
 import {
   DEFAULT_TOOL_CAPABILITIES,
   EMULATED_EXAMPLE_CAPABILITIES,
@@ -107,9 +106,6 @@ function buildTurn(overrides: {
     overrides.searchChunks ??
       (async () => ok({ chunks: [testChunk('How to install.')], degradedBy: [], diagnostics: testDiagnostics(1) }) as never),
   );
-  const agenticSearch = vi.fn(async () => {
-    throw new Error('agentic unused');
-  }) as never;
   const createTicket = vi.fn(
     overrides.createTicket ?? (async () => ok({ ticketId: 'TKT-compat1', status: 'created' as const }) as never),
   );
@@ -122,7 +118,6 @@ function buildTurn(overrides: {
   const built = buildCatalogToolsForTurn(
     {
       searchChunks: searchChunks as never,
-      agenticSearch,
       createTicket: createTicket as never,
       userResolver: async () => ({ name: 'Real Person', email: 'real@example.com' }),
       rateLimit: rateLimit as never,
@@ -147,12 +142,12 @@ function buildTurn(overrides: {
   return { built, ledger, searchChunks, createTicket, groundingEvidence, metrics: turnMetrics };
 }
 
-describe('catalog compatibility assembly (WP-3)', () => {
-  it('enables the catalog by default and disables on explicit 0/false', () => {
-    expect(isCatalogEnabled({ get: () => undefined })).toBe(true);
-    expect(isCatalogEnabled({ get: () => '0' })).toBe(false);
-    expect(isCatalogEnabled({ get: () => 'false' })).toBe(false);
-    expect(isCatalogEnabled({ get: () => '1' })).toBe(true);
+describe('catalog compatibility assembly (WP-3, WP-9 single production path)', () => {
+  it('builds the production assembly without any rollout flag', () => {
+    const { built } = buildTurn();
+    expect(built.tools[SEARCH_TOOL_NAME]).toBeDefined();
+    expect(built.tools[TICKET_TOOL_NAME]).toBeDefined();
+    expect(built.catalogVersion).toBe('tool-catalog-v1');
   });
 
   it('returns structured success with safe fenced content', async () => {
@@ -231,9 +226,6 @@ describe('catalog compatibility assembly (WP-3)', () => {
     const built = buildCatalogToolsForTurn(
       {
         searchChunks: failing as never,
-        agenticSearch: (async () => {
-          throw new Error('unused');
-        }) as never,
         createTicket: createTicket as never,
         userResolver: async () => ({}),
         rateLimit: { check: vi.fn(async () => ({ ok: true as const, remaining: 1, resetMs: 60_000 })) } as never,
@@ -316,9 +308,6 @@ describe('catalog compatibility assembly (WP-3)', () => {
     const built = buildCatalogToolsForTurn(
       {
         searchChunks: (async () => ok({ chunks: [testChunk('x')], degradedBy: [], diagnostics: testDiagnostics(1) }) as never) as never,
-        agenticSearch: (async () => {
-          throw new Error('unused');
-        }) as never,
         createTicket: (async () => ok({ ticketId: 'TKT-x', status: 'created' as const }) as never) as never,
         userResolver: async () => ({}),
         rateLimit: { check: vi.fn(async () => ({ ok: true as const, remaining: 1, resetMs: 60_000 })) } as never,

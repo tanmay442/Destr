@@ -7,11 +7,9 @@ import type {
   Result,
 } from '@app/domain';
 import type { AppConfig } from '@app/domain/app-config';
-import type { AgenticResult } from '../../rag/agentic-search';
 import type {
   RetrievalSignal,
   SearchChunksResult,
-  SearchFailure,
 } from '../../rag/search';
 import type { OrchestratorResult } from '../../agent/search/search-orchestrator';
 import type { SearchBudgetLimits } from '../../agent/search/search-budget';
@@ -75,7 +73,6 @@ export interface StructuredSearchOptions {
   excludeChunkIdentities?: ReadonlySet<string> | undefined;
   budgets?: Partial<SearchBudgetLimits> | undefined;
   deadlineAt?: number | undefined;
-  shadow?: boolean | undefined;
   trace?: {
     write(event: { toolName: string; callId: string; phase: 'error'; durationMs: number | null }): void;
   } | undefined;
@@ -113,15 +110,6 @@ export interface ChatTurnDeps {
       excludeChunkIdentities?: ReadonlySet<string> | undefined;
     },
   ): Promise<SearchChunksResult>;
-  agenticSearch(
-    cfg: AppConfig,
-    query: string,
-    opts?: {
-      limit?: number | undefined;
-      signal?: AbortSignal | undefined;
-      excludeChunkIdentities?: ReadonlySet<string> | undefined;
-    },
-  ): Promise<Result<AgenticResult, SearchFailure>>;
   structuredSearch?: (
     cfg: AppConfig,
     query: string,

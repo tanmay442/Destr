@@ -90,40 +90,37 @@ describe('configuration schema parity', () => {
   });
 });
 
-describe('agentic pipeline toggles', () => {
-  it('defaults both toggles to true in a full parse', () => {
+describe('hallucination check toggle', () => {
+  it('defaults to true in a full parse', () => {
     const result = appConfigSchema.safeParse({});
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.agenticQueryRewriteEnabled).toBe(true);
       expect(result.data.hallucinationCheckEnabled).toBe(true);
     }
   });
 
   it('round-trips explicit false values', () => {
     const result = appConfigSchema.safeParse({
-      agenticQueryRewriteEnabled: false,
       hallucinationCheckEnabled: false,
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.agenticQueryRewriteEnabled).toBe(false);
       expect(result.data.hallucinationCheckEnabled).toBe(false);
     }
   });
 
   it('booleans are strict — no coercion of strings', () => {
-    for (const key of ['agenticQueryRewriteEnabled', 'hallucinationCheckEnabled']) {
+    for (const key of ['hallucinationCheckEnabled']) {
       expect(appConfigSchema.safeParse({ [key]: 'true' }).success).toBe(false);
       expect(appConfigSchema.safeParse({ [key]: 1 }).success).toBe(false);
     }
   });
 
-  it('accepts a deepPartial override for each toggle', () => {
-    const result = parse({ agenticQueryRewriteEnabled: false });
+  it('accepts a deepPartial override for the toggle', () => {
+    const result = parse({ hallucinationCheckEnabled: false });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toEqual({ agenticQueryRewriteEnabled: false });
+      expect(result.data).toEqual({ hallucinationCheckEnabled: false });
     }
   });
 });

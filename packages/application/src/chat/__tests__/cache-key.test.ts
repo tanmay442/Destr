@@ -12,9 +12,6 @@ function fingerprintConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     rerankerProvider: 'cosine',
     prefetchFirstTurn: false,
     agentStepBudget: 5,
-    agenticRetrieveLimit: 3,
-    agenticMaxRetries: 1,
-    agenticQueryRewriteEnabled: true,
     auxModel: 'aux-v1',
     orgName: 'Example Org',
     audience: 'employees',
@@ -25,7 +22,7 @@ function fingerprintConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   } as AppConfig;
 }
 
-const WP1_LEGACY_NORMAL = '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":5,"agenticRetrieveLimit":3,"agenticMaxRetries":1,"agenticQueryRewriteEnabled":true,"auxModel":"aux-v1","orgName":"Example Org","audience":"employees","agentPersona":{"tone":"professional","verbosity":"concise"},"customInstructions":"Use policy evidence.","outOfScopeTopics":["medical advice"]}';
+const WP1_LEGACY_NORMAL = '{"promptVersion":4,"mode":"normal","retrievalMode":"normal","similarityThreshold":0.7,"hybridEnabled":true,"rerankerProvider":"cosine","prefetchFirstTurn":false,"agentStepBudget":5,"auxModel":"aux-v1","orgName":"Example Org","audience":"employees","agentPersona":{"tone":"professional","verbosity":"concise"},"customInstructions":"Use policy evidence.","outOfScopeTopics":["medical advice"]}';
 
 describe('retrieval cache fingerprints', () => {
   it('preserves the literal WP-1 compatibility fingerprint across a WP-2 upgrade', () => {

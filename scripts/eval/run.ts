@@ -174,53 +174,20 @@ async function buildRealModelDeps(
 }
 
 async function buildLiveRealDeps(model: Awaited<ReturnType<typeof buildRealModelDeps>>): Promise<EvalDeps> {
-  const [{ db, createChunkRepo }, { searchChunks }, { agenticSearch }] = await Promise.all([
+  const [{ db, createChunkRepo }, { searchChunks }] = await Promise.all([
     import('@app/infrastructure/db'),
     import('@app/application/rag/search'),
-    import('@app/application/rag/agentic-search'),
   ]);
   const Llm = await import('@app/infrastructure/llm');
   const embeddingService = Llm.getEmbeddingService();
   const reranker = Llm.getReranker(process.env.RERANKER_PROVIDER ?? 'cosine');
   const searchDeps = { chunks: createChunkRepo(db), embeddings: embeddingService, reranker };
-  {
-    const agenticCount = goldenQuestions.filter((q) => q.mode === 'agentic').length;
-    if (agenticCount > 0 && !model.aux.queryRewriter) {
-      console.warn(`[eval] agentic coverage degraded at startup: ${agenticCount} agentic question(s) will run as plain searchChunks (AGENTIC_ENABLED=false or aux models unavailable) (EVAL-M4)`);
-    }
-  }
 
   return {
     searchChunks: async (query: string) => {
       const r = await searchChunks(query, {}, searchDeps);
       return r.ok
         ? r.value.chunks.map((c) => ({
-            content: c.content,
-            documentId: c.documentId,
-            ...(c.documentUid ? { documentUid: c.documentUid } : {}),
-            ...(c.chunkUid ? { chunkUid: c.chunkUid } : {}),
-          }))
-        : [];
-    },
-    agenticSearch: async (query: string) => {
-      if (!model.aux.queryRewriter) {
-        console.warn('[eval] agenticSearch degraded to plain searchChunks: aux models unavailable (AGENTIC_ENABLED=false)');
-        const r = await searchChunks(query, {}, searchDeps);
-        return r.ok
-          ? r.value.chunks.map((c) => ({
-              content: c.content,
-              documentId: c.documentId,
-              ...(c.documentUid ? { documentUid: c.documentUid } : {}),
-              ...(c.chunkUid ? { chunkUid: c.chunkUid } : {}),
-            }))
-          : [];
-      }
-      const result = await agenticSearch(query, {
-        search: searchDeps,
-        queryRewriter: model.aux.queryRewriter,
-      });
-      return result.ok
-        ? result.value.chunks.map((c) => ({
             content: c.content,
             documentId: c.documentId,
             ...(c.documentUid ? { documentUid: c.documentUid } : {}),
@@ -248,13 +215,9 @@ async function buildDeps(mode: EvalMode, candidateModelId: string): Promise<{
   const model = await buildRealModelDeps(candidateModelId, mode);
   if (mode === 'real_synthetic') {
     const synthetic = mockEvalDeps();
-    if (synthetic.agenticSearch === undefined) {
-      throw new Error('[eval] synthetic corpus adapter is missing agentic search');
-    }
     return {
       deps: {
         searchChunks: synthetic.searchChunks,
-        agenticSearch: synthetic.agenticSearch,
         generate: model.modelDeps.generate,
         gradeFaithfulness: model.modelDeps.gradeFaithfulness,
       },
