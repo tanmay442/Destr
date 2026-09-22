@@ -6,6 +6,7 @@ import {
   OPENAI_PROMPT_CACHE_CAPABILITIES,
   buildGooglePromptCacheOptions,
   buildOpenAIPromptCacheOptions,
+  getOpenAIPromptCacheCapabilities,
   parsePromptCacheUsage,
 } from './prompt-cache';
 
@@ -13,6 +14,12 @@ const context = {
   stablePromptPrefix: 'You are a grounded assistant.',
   prefixVersion: 'system-v1',
 };
+
+function env(values: Readonly<Record<string, string>>): { get(key: string): string | undefined } {
+  return { get: (key) => values[key] };
+}
+
+const nativeOpenAIEnv = env({ CUSTOM_LLM_BASE_URL: 'https://api.openai.com/v1' });
 
 describe('provider prompt-cache capabilities', () => {
   it('advertises each provider strategy and supported controls', () => {
@@ -39,18 +46,60 @@ describe('provider prompt-cache capabilities', () => {
 
 describe('buildOpenAIPromptCacheOptions', () => {
   it('builds a deterministic key for the same stable prefix and version', () => {
-    const first = buildOpenAIPromptCacheOptions(context);
+    const first = buildOpenAIPromptCacheOptions(context, nativeOpenAIEnv);
 
     expect(first).toEqual({
       openai: {
         promptCacheKey: expect.stringMatching(/^destr:system-v1:[0-9a-f]{32}$/),
       },
     });
-    expect(first).toEqual(buildOpenAIPromptCacheOptions({ ...context }));
+    expect(first).toEqual(buildOpenAIPromptCacheOptions({ ...context }, nativeOpenAIEnv));
     expect(first).not.toEqual(
-      buildOpenAIPromptCacheOptions({ ...context, stablePromptPrefix: 'A different prefix.' }),
+      buildOpenAIPromptCacheOptions(
+        { ...context, stablePromptPrefix: 'A different prefix.' },
+        nativeOpenAIEnv,
+      ),
     );
-    expect(first).not.toEqual(buildOpenAIPromptCacheOptions({ ...context, prefixVersion: 'system-v2' }));
+    expect(first).not.toEqual(
+      buildOpenAIPromptCacheOptions(
+        { ...context, prefixVersion: 'system-v2' },
+        nativeOpenAIEnv,
+      ),
+    );
+  });
+
+  it('omits OpenAI-only options and capabilities for Groq by default', () => {
+    const groqEnv = env({ CUSTOM_LLM_BASE_URL: 'https://api.groq.com/openai/v1' });
+
+    expect(buildOpenAIPromptCacheOptions(context, groqEnv)).toBeUndefined();
+    expect(getOpenAIPromptCacheCapabilities(groqEnv)).toEqual({
+      strategy: 'none',
+      automatic: false,
+      explicit: false,
+      telemetry: false,
+    });
+  });
+
+  it('allows an explicit compatible-endpoint opt-in and native OpenAI opt-out', () => {
+    const optedIn = env({
+      CUSTOM_LLM_BASE_URL: 'https://compatible.example/v1',
+      OPENAI_PROMPT_CACHE_ENABLED: 'true',
+    });
+    const optedOut = env({
+      CUSTOM_LLM_BASE_URL: 'https://api.openai.com/v1',
+      OPENAI_PROMPT_CACHE_ENABLED: 'false',
+    });
+
+    expect(buildOpenAIPromptCacheOptions(context, optedIn)).toBeDefined();
+    expect(getOpenAIPromptCacheCapabilities(optedIn)).toBe(OPENAI_PROMPT_CACHE_CAPABILITIES);
+    expect(buildOpenAIPromptCacheOptions(context, optedOut)).toBeUndefined();
+    expect(getOpenAIPromptCacheCapabilities(optedOut).strategy).toBe('none');
+  });
+
+  it('fails closed for a missing or malformed base URL', () => {
+    expect(buildOpenAIPromptCacheOptions(context, env({}))).toBeUndefined();
+    expect(buildOpenAIPromptCacheOptions(context, env({ CUSTOM_LLM_BASE_URL: 'not a url' })))
+      .toBeUndefined();
   });
 });
 

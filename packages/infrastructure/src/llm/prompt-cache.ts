@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 
 export type PromptCacheStrategy = 'automatic' | 'explicit' | 'telemetry' | 'none';
@@ -32,6 +33,8 @@ export const OLLAMA_PROMPT_CACHE_CAPABILITIES: PromptCacheCapabilities = Object.
   explicit: false,
   telemetry: false,
 });
+
+const NO_PROMPT_CACHE_CAPABILITIES: PromptCacheCapabilities = OLLAMA_PROMPT_CACHE_CAPABILITIES;
 
 export interface PromptCacheRequestContext {
   readonly stablePromptPrefix: string;
@@ -201,10 +204,38 @@ function prefixCacheKey(context: PromptCacheRequestContext): string {
   return `destr:${context.prefixVersion}:${digest.slice(0, 32)}`;
 }
 
+function supportsOpenAIPromptCacheKey(env: EnvSource): boolean {
+  const override = env.get('OPENAI_PROMPT_CACHE_ENABLED')?.trim().toLowerCase();
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+
+  const baseURL = env.get('CUSTOM_LLM_BASE_URL')?.trim();
+  if (!baseURL) return false;
+  try {
+    return new URL(baseURL).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OpenAI-compatible APIs do not necessarily accept OpenAI-only request fields.
+ * Default to native OpenAI only; compatible endpoints must explicitly opt in.
+ */
+export function getOpenAIPromptCacheCapabilities(
+  env: EnvSource = defaultProcessEnv,
+): PromptCacheCapabilities {
+  return supportsOpenAIPromptCacheKey(env)
+    ? OPENAI_PROMPT_CACHE_CAPABILITIES
+    : NO_PROMPT_CACHE_CAPABILITIES;
+}
+
 /** OpenAI's manual key only groups otherwise automatic prefix caching. */
 export function buildOpenAIPromptCacheOptions(
   context: PromptCacheRequestContext,
-): SharedV4ProviderOptions {
+  env: EnvSource = defaultProcessEnv,
+): SharedV4ProviderOptions | undefined {
+  if (!supportsOpenAIPromptCacheKey(env)) return undefined;
   return {
     openai: {
       promptCacheKey: prefixCacheKey(context),

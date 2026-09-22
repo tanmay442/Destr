@@ -5,8 +5,8 @@ import { defaultProcessEnv } from '../config/env';
 import { getOpenAIOperationPath, normalizeOpenAIBaseURL } from './openai-base-url';
 import { registerChatProvider, registerChatProviderAdapter } from './registries';
 import {
-  OPENAI_PROMPT_CACHE_CAPABILITIES,
   buildOpenAIPromptCacheOptions,
+  getOpenAIPromptCacheCapabilities,
   parsePromptCacheUsage,
 } from './prompt-cache';
 
@@ -28,7 +28,7 @@ export function getOpenAIChatModel(modelId?: string, env: EnvSource = defaultPro
 
 registerChatProvider('openai', (deps) => getOpenAIChatModel(deps.modelId, deps.env));
 registerChatProviderAdapter('openai', {
-  capabilities: OPENAI_PROMPT_CACHE_CAPABILITIES,
+  capabilities: getOpenAIPromptCacheCapabilities,
   buildProviderOptions: buildOpenAIPromptCacheOptions,
   toolCapabilities: { strictSchemas: 'native', inputExamples: 'native', outputSchemas: 'validated_locally', parallelCalls: true, toolCallRepair: 'unsupported', approvalHooks: 'application' },
   parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('openai', usage, providerMetadata),

@@ -114,7 +114,9 @@ describe('wp8 openai-compatible capability and billing', () => {
   });
 
   it('never treats option syntax as cache proof: a key alone is not a hit', () => {
-    const options = buildOpenAIPromptCacheOptions(CONTEXT);
+    const options = buildOpenAIPromptCacheOptions(CONTEXT, {
+      get: (key) => key === 'CUSTOM_LLM_BASE_URL' ? 'https://api.openai.com/v1' : undefined,
+    });
     expect(options).toEqual({
       openai: { promptCacheKey: expect.stringMatching(/^destr:system-v3:[0-9a-f]{32}$/) },
     });

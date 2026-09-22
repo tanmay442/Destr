@@ -8,14 +8,18 @@ import {
   type ChatModelProvider,
   type ChatModelProviderAdapter,
 } from './registries';
-import type { PromptCacheRequestContext, PromptCacheUsage } from './prompt-cache';
+import type {
+  PromptCacheCapabilities,
+  PromptCacheRequestContext,
+  PromptCacheUsage,
+} from './prompt-cache';
 
 export interface ChatModelAdapter {
   readonly model: LanguageModelV4;
   /** Stable configured provider key, retained inside infrastructure. */
   readonly provider: string;
   readonly modelId: string;
-  readonly capabilities: ChatModelProviderAdapter['capabilities'];
+  readonly capabilities: PromptCacheCapabilities;
   readonly toolCapabilities: NonNullable<ChatModelProviderAdapter['toolCapabilities']>;
   readonly buildProviderOptions: (
     context: PromptCacheRequestContext,
@@ -63,18 +67,24 @@ export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultPr
   const resolved = resolveProvider(env);
   const model = resolved.factory({ env, ...(modelId !== undefined ? { modelId } : {}) });
   const adapter = resolved.adapter;
+  const buildProviderOptions = adapter?.buildProviderOptions;
+  const capabilities = typeof adapter?.capabilities === 'function'
+    ? adapter.capabilities(env)
+    : adapter?.capabilities;
   return {
     model,
     provider: resolved.name,
     modelId: model.modelId,
-    capabilities: adapter?.capabilities ?? {
+    capabilities: capabilities ?? {
       strategy: 'none',
       automatic: false,
       explicit: false,
       telemetry: false,
     },
     toolCapabilities: adapter?.toolCapabilities ?? { ...DEFAULT_TOOL_CAPABILITIES_FALLBACK },
-    buildProviderOptions: adapter?.buildProviderOptions ?? noProviderOptions,
+    buildProviderOptions: buildProviderOptions
+      ? (context) => buildProviderOptions(context, env)
+      : noProviderOptions,
     parseUsage: adapter?.parseUsage ?? (() => ({
       inputTokens: null,
       inputTokensStatus: 'unsupported' as const,

@@ -26,10 +26,13 @@ export function registerChatProvider(key: string, factory: ChatModelProvider): v
  * need to know which vendor options are supported.
  */
 export interface ChatModelProviderAdapter {
-  readonly capabilities: PromptCacheCapabilities;
+  readonly capabilities:
+    | PromptCacheCapabilities
+    | ((env: EnvSource) => PromptCacheCapabilities);
   readonly toolCapabilities?: import('@app/domain').ProviderToolCapabilities;
   readonly buildProviderOptions?: (
     context: PromptCacheRequestContext,
+    env: EnvSource,
   ) => SharedV4ProviderOptions | undefined;
   readonly parseUsage: (usage: unknown, providerMetadata?: unknown) => PromptCacheUsage;
 }

@@ -25,7 +25,8 @@ export function getGoogleChatModel(modelId?: string, env: EnvSource = defaultPro
 registerChatProvider('google', (deps) => getGoogleChatModel(deps.modelId, deps.env));
 registerChatProviderAdapter('google', {
   capabilities: GOOGLE_PROMPT_CACHE_CAPABILITIES,
-  buildProviderOptions: buildGooglePromptCacheOptions,
+  buildProviderOptions: (context, env) =>
+    buildGooglePromptCacheOptions(context, env.get('GOOGLE_CACHED_CONTENT')),
   toolCapabilities: { strictSchemas: 'native', inputExamples: 'description_middleware', outputSchemas: 'validated_locally', parallelCalls: true, toolCallRepair: 'unsupported', approvalHooks: 'application' },
   parseUsage: (usage, providerMetadata) => parsePromptCacheUsage('google', usage, providerMetadata),
 });

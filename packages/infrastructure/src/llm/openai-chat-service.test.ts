@@ -6,6 +6,7 @@ vi.mock('@ai-sdk/openai', () => ({ createOpenAI: (...args: unknown[]) => createO
 
 import { getOpenAIChatModel } from './openai-chat-service';
 import { getOpenAIOperationPath, normalizeOpenAIBaseURL } from './openai-base-url';
+import { getChatModelAdapter } from './model';
 
 describe('openai-chat-service', () => {
   const original = { key: process.env.CUSTOM_LLM_API_KEY, base: process.env.CUSTOM_LLM_BASE_URL, model: process.env.LLM_MODEL };
@@ -83,6 +84,22 @@ describe('openai-chat-service', () => {
     delete process.env.CUSTOM_LLM_BASE_URL;
     expect(() => getOpenAIChatModel()).toThrow('CUSTOM_LLM_API_KEY and CUSTOM_LLM_BASE_URL');
     expect(createOpenAIMock).not.toHaveBeenCalled();
+  });
+
+  it('does not send OpenAI-only prompt cache options to Groq-compatible endpoints', () => {
+    const values: Record<string, string> = {
+      CHAT_PROVIDER: 'openai',
+      CUSTOM_LLM_API_KEY: 'test-key',
+      CUSTOM_LLM_BASE_URL: 'https://api.groq.com/openai/v1',
+      LLM_MODEL: 'test-model',
+    };
+    const adapter = getChatModelAdapter(undefined, { get: (key) => values[key] });
+
+    expect(adapter.capabilities.strategy).toBe('none');
+    expect(adapter.buildProviderOptions({
+      stablePromptPrefix: 'stable',
+      prefixVersion: 'v1',
+    })).toBeUndefined();
   });
 });
 

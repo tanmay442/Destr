@@ -54,6 +54,7 @@ export {
   GOOGLE_PROMPT_CACHE_CAPABILITIES,
   OLLAMA_PROMPT_CACHE_CAPABILITIES,
   buildOpenAIPromptCacheOptions,
+  getOpenAIPromptCacheCapabilities,
   buildGooglePromptCacheOptions,
   parsePromptCacheUsage,
   type PromptCacheCapabilities,

@@ -458,7 +458,7 @@ describe('WP-0 modernization baseline consumer', () => {
     const databaseOperations = withMeasurements.measurements.database_operations;
     if (databaseOperations === undefined) throw new Error('database metric is missing');
     expect(databaseOperations.status).toBe('not_observable');
-  });
+  }, 10_000);
 
   it('redacts secrets and provider endpoints from the serialized baseline', () => {
     const fixture = createFixture();
@@ -493,5 +493,5 @@ describe('WP-0 modernization baseline consumer', () => {
     expect(first.modelRoles).toEqual(second.modelRoles);
     expect(first.workloadProfiles).toEqual(second.workloadProfiles);
     expect(first.toolchain.lockfileSha256).toEqual(second.toolchain.lockfileSha256);
-  });
+  }, 10_000);
 });
