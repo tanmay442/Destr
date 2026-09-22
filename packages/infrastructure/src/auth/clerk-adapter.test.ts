@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ForbiddenError } from '@app/domain';
+import { ForbiddenError, NotFoundError } from '@app/domain';
 
 const mocks = vi.hoisted(() => {
   process.env.ADMIN_EMAILS = 'admin@example.com';
@@ -232,6 +232,16 @@ describe('middleware role resolution', () => {
     const blocked = await middleware(makeReq('/api/admin/users'));
     expect(blocked.type).toBe('json');
     expect((blocked as { status?: number }).status).toBe(403);
+  });
+
+  it('classifies a Clerk user 404 as NotFoundError', async () => {
+    mocks.updateMetadataMock.mockRejectedValueOnce({
+      clerkError: true,
+      code: 'api_response_error',
+      status: 404,
+    });
+
+    await expect(syncClerkUserRole('user_missing', 'user')).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it('getAppSession promotion invalidates the cached role immediately', async () => {

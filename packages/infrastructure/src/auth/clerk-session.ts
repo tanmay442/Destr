@@ -2,7 +2,7 @@ import { auth, clerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users } from '../db/schema';
-import type { SessionStore } from '@app/domain';
+import { NotFoundError, type SessionStore } from '@app/domain';
 import { getClerkUserCached, isVerifiedAdminEmail, primaryEmailAddress } from './clerk-shared';
 import { invalidateRoleCache } from './role-cache';
 
@@ -31,8 +31,23 @@ export const clerkSessionStore: SessionStore = {
 
 export async function syncClerkUserRole(clerkUserId: string, role: 'admin' | 'user'): Promise<void> {
   const clerk = await clerkClient();
-  await clerk.users.updateUserMetadata(clerkUserId, { publicMetadata: { role } });
+  try {
+    await clerk.users.updateUserMetadata(clerkUserId, { publicMetadata: { role } });
+  } catch (error) {
+    if (isClerkUserNotFound(error)) {
+      throw new NotFoundError(`Clerk user not found: ${clerkUserId}`);
+    }
+    throw error;
+  }
   invalidateRoleCache(clerkUserId);
+}
+
+function isClerkUserNotFound(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  if (!('status' in error) || error.status !== 404) return false;
+  const hasClerkMarker = 'clerkError' in error && error.clerkError === true;
+  const hasApiResponseCode = 'code' in error && error.code === 'api_response_error';
+  return hasClerkMarker || hasApiResponseCode;
 }
 
 export { clerkClient };

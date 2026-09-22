@@ -82,6 +82,28 @@ export async function setUserRole(
     try {
       await deps.syncClerkRole(input.clerkUserId, input.role);
     } catch (e) {
+      if (e instanceof NotFoundError) {
+        logger.warn('setUserRole: Clerk user is absent; kept authoritative DB role', {
+          clerkUserId: input.clerkUserId,
+          requestedRole: input.role,
+          reason: 'clerk_user_not_found',
+        });
+        const event = {
+          clerkUserId: input.clerkUserId,
+          actorId: input.actorId,
+          fromRole: target.role,
+          toRole: input.role,
+        };
+        void safeAudit(
+          () => logUserRoleChange(event, { audit: deps.audit }).then((r) => {
+            if (!r.ok) throw r.error;
+          }),
+          (payload, error) => deps.audit.recordDeadLetter({ kind: 'user', payload, error }),
+          event,
+          'user',
+        );
+        return ok({ user: outcome.user });
+      }
       let rollbackOk = false;
       try {
         rollbackOk = deps.users.setRoleIfCurrent

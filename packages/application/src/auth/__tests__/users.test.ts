@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ForbiddenError, ExternalServiceError, logger } from '@app/domain';
+import { ForbiddenError, ExternalServiceError, NotFoundError, logger } from '@app/domain';
 import type { TransactionContext } from '@app/domain';
 import { setUserRole } from '../users';
 import type { UserRepository, AuditLog } from '@app/domain';
@@ -163,6 +163,41 @@ describe('setUserRole', () => {
     expect(result.ok).toBe(true);
     expect(countAdminsForUpdate).toHaveBeenCalled();
     expect(setRole).toHaveBeenCalledWith('admin_1', 'user');
+  });
+
+  it('keeps the DB role and audits when the Clerk identity no longer exists', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const logUserEvent = vi.fn().mockResolvedValue(undefined);
+    const setRole = vi.fn().mockResolvedValue({ clerkUserId: 'user_1', role: 'user' });
+    const syncClerkRole = vi.fn().mockRejectedValue(new NotFoundError('Clerk user not found'));
+    const deps = makeDeps({
+      users: {
+        setRole,
+        findByClerkId: vi.fn((id: string) =>
+          Promise.resolve({ clerkUserId: id, role: 'admin' } as never),
+        ),
+      },
+      syncClerkRole,
+      audit: { logUserEvent },
+    });
+
+    const result = await setUserRole(
+      { clerkUserId: 'user_1', role: 'user', actorId: 'actor_1' },
+      deps as Parameters<typeof setUserRole>[1],
+    );
+
+    expect(result).toEqual({ ok: true, value: { user: { clerkUserId: 'user_1', role: 'user' } } });
+    expect(setRole).toHaveBeenCalledTimes(1);
+    expect(logUserEvent).toHaveBeenCalledWith({
+      targetUserId: 'user_1',
+      actorId: 'actor_1',
+      fromRole: 'admin',
+      toRole: 'user',
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/kept authoritative DB role/i),
+      expect.objectContaining({ reason: 'clerk_user_not_found' }),
+    );
   });
 
   it('audits the rollback and logs when Clerk sync fails', async () => {
