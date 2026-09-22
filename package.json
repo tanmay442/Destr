@@ -2,6 +2,10 @@
   "name": "rag-knowledge-agent",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -47,10 +51,10 @@
     "dev:ollama": "docker compose --profile ollama up -d ollama"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.90",
-    "@ai-sdk/openai": "^3.0.82",
-    "@ai-sdk/provider": "^3.0.13",
-    "@ai-sdk/react": "^3.0.223",
+    "@ai-sdk/google": "^4.0.76",
+    "@ai-sdk/openai": "^4.0.71",
+    "@ai-sdk/provider": "^4.0.17",
+    "@ai-sdk/react": "^4.0.110",
     "@app/application": "workspace:*",
     "@app/domain": "workspace:*",
     "@app/infrastructure": "workspace:*",
@@ -59,7 +63,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@upstash/qstash": "^2.11.1",
     "@upstash/redis": "^1.38.0",
-    "ai": "^6.0.221",
+    "ai": "^7.0.107",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",

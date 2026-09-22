@@ -9,7 +9,7 @@ vi.mock('ai', async () => {
 });
 
 vi.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'test-embed' })) })),
+  createGoogle: vi.fn(() => ({ textEmbedding: vi.fn(() => ({ modelId: 'test-embed' })) })),
 }));
 
 import { createGoogleEmbeddingService } from '../../google-embedding-service';

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const createGoogleMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: (...args: unknown[]) => createGoogleMock(...args) }));
+vi.mock('@ai-sdk/google', () => ({ createGoogle: (...args: unknown[]) => createGoogleMock(...args) }));
 
 import { getEmbeddingModel, getGoogleEmbeddingModelId } from './google-embedding-service';
 

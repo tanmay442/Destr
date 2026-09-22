@@ -97,7 +97,7 @@ async function buildRealModelDeps(
       attempt,
       model: sanitizeIdentifier(adapter.modelId),
       provider: sanitizeIdentifier(adapter.provider),
-      system: REAL_SYNTHETIC_SYSTEM_PROMPT,
+      instructions: REAL_SYNTHETIC_SYSTEM_PROMPT,
       message: { role: 'user', content: `Context:\n${context}\n\nQuestion: ${query}` },
       expected: question === undefined ? null : {
         refusalExpected: question.refusalExpected ?? question.mustMention.length === 0,
@@ -110,7 +110,7 @@ async function buildRealModelDeps(
     try {
       const out = await generateText({
         model: adapter.model,
-        system: REAL_SYNTHETIC_SYSTEM_PROMPT,
+        instructions: REAL_SYNTHETIC_SYSTEM_PROMPT,
         prompt: `Context:\n${context}\n\nQuestion: ${query}`,
         abortSignal: AbortSignal.timeout(30_000),
       });

@@ -1,5 +1,5 @@
 import { embedMany } from 'ai';
-import type { EmbeddingModelV3 } from '@ai-sdk/provider';
+import type { EmbeddingModelV4 } from '@ai-sdk/provider';
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_CONCURRENCY } from '@app/domain';
 import {
   EMBEDDING_RETRY_BUDGET_MS,
@@ -23,7 +23,7 @@ export interface EmbeddingBatchOptions {
 
 async function embedManyWithRetry(
   batch: string[],
-  model: EmbeddingModelV3,
+  model: EmbeddingModelV4,
   offset: number,
   providerOptions: ProviderOptions | undefined,
   budget: RetryBudget,
@@ -61,7 +61,7 @@ async function embedManyWithRetry(
 
 export async function embedBatchWithModel(
   values: string[],
-  model: EmbeddingModelV3,
+  model: EmbeddingModelV4,
   providerOptions?: ProviderOptions,
   options: EmbeddingBatchOptions = {},
 ): Promise<number[][]> {

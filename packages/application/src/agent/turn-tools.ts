@@ -134,7 +134,7 @@ export interface CatalogCompatExecutionOptions {
   readonly toolCallId?: string | undefined;
   readonly abortSignal?: AbortSignal | undefined;
   readonly approvalToken?: string | undefined;
-  readonly experimental_context?: CatalogCompatInternalToolContext | undefined;
+  readonly context?: CatalogCompatInternalToolContext | undefined;
 }
 
 export interface CatalogCompatResult {
@@ -187,7 +187,7 @@ function validatedApprovalToken(
   const internal = turn.internalToolContext;
   if (internal === undefined) return undefined;
   if (internal.userId !== turn.userId || internal.turnId !== turn.turnId) return undefined;
-  if (options?.experimental_context !== undefined && options.experimental_context !== internal) return undefined;
+  if (options?.context !== undefined && options.context !== internal) return undefined;
   const requestedToken = options?.approvalToken;
   if (typeof requestedToken === 'string' && requestedToken.trim() !== '') return requestedToken.trim();
   const token = internal.approvalToken;

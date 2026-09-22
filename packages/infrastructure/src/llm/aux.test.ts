@@ -129,8 +129,8 @@ describe('hallucinationGrader', () => {
     expect(call.tools?.grounded_verdict).toBeDefined();
     expect(call.toolChoice).toBe('required');
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
-    expect(String(call.system)).toContain('Ignore leading disclaimer preambles like');
-    expect(String(call.system)).toContain('my best guess');
+    expect(String(call.instructions)).toContain('Ignore leading disclaimer preambles like');
+    expect(String(call.instructions)).toContain('my best guess');
     const prompt = String(call.prompt);
     expect(prompt).toContain('BEGIN DOCUMENTS\nDOC A');
     expect(prompt).toContain('END DOCUMENTS');

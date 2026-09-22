@@ -1,5 +1,5 @@
 import type { EmbeddingService, EnvSource, Reranker } from '@app/domain';
-import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModelV4, SharedV4ProviderOptions } from '@ai-sdk/provider';
 import { createProviderRegistry } from '../registry';
 import type {
   PromptCacheCapabilities,
@@ -12,7 +12,7 @@ export interface ChatModelDeps {
   modelId?: string | undefined;
 }
 
-export type ChatModelProvider = (deps: ChatModelDeps) => LanguageModelV3;
+export type ChatModelProvider = (deps: ChatModelDeps) => LanguageModelV4;
 
 export const chatProviderRegistry = createProviderRegistry<ChatModelProvider>();
 
@@ -30,7 +30,7 @@ export interface ChatModelProviderAdapter {
   readonly toolCapabilities?: import('@app/domain').ProviderToolCapabilities;
   readonly buildProviderOptions?: (
     context: PromptCacheRequestContext,
-  ) => SharedV3ProviderOptions | undefined;
+  ) => SharedV4ProviderOptions | undefined;
   readonly parseUsage: (usage: unknown, providerMetadata?: unknown) => PromptCacheUsage;
 }
 

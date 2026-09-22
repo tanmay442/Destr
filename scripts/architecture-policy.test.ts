@@ -95,7 +95,7 @@ describe('architecture source and manifest policy', () => {
     const violations = checkSourcePolicy({
       layer: 'application',
       file: 'packages/application/src/agent/illegal-fixture.ts',
-      sourceText: "import type { LanguageModelV3 } from '@ai-sdk/provider';",
+      sourceText: "import type { LanguageModelV4 } from '@ai-sdk/provider';",
     });
 
     expect(violations).toEqual([
@@ -203,7 +203,7 @@ describe('architecture source and manifest policy', () => {
       }
       writeFileSync(
         join(root, 'packages', 'application', 'src', 'illegal.ts'),
-        "import type { LanguageModelV3 } from '@ai-sdk/provider';\n",
+        "import type { LanguageModelV4 } from '@ai-sdk/provider';\n",
       );
       writeFileSync(
         join(root, 'packages', 'domain', 'src', 'illegal.ts'),

@@ -135,7 +135,7 @@ async function generateDocContext(
       async () => {
         const { text: raw } = await generateText({
           model,
-          system: SYSTEM_PROMPT,
+          instructions: SYSTEM_PROMPT,
           prompt: USER_PROMPT(excerpt),
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           abortSignal: AbortSignal.timeout(AUX_REQUEST_TIMEOUT_MS),

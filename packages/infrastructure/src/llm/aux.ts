@@ -100,7 +100,7 @@ export function createAuxModels(
             () =>
               generateText({
                 model: model(),
-                system: REWRITE_SYSTEM,
+                instructions: REWRITE_SYSTEM,
                 prompt: query,
                 maxOutputTokens: 200,
                 abortSignal: turnScopedAbortSignal(),
@@ -128,7 +128,7 @@ export function createAuxModels(
             () =>
               generateText({
                 model: model(),
-                system: HALLUCINATION_SYSTEM,
+                instructions: HALLUCINATION_SYSTEM,
                 prompt:
                   `BEGIN DOCUMENTS\n${documents}\nEND DOCUMENTS\n\nGENERATED ANSWER:\n${generation}\n\n` +
                   'Call the grounded_verdict tool with your verdict.',

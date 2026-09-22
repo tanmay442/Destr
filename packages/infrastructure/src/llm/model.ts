@@ -1,4 +1,4 @@
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 import {
@@ -11,7 +11,7 @@ import {
 import type { PromptCacheRequestContext, PromptCacheUsage } from './prompt-cache';
 
 export interface ChatModelAdapter {
-  readonly model: LanguageModelV3;
+  readonly model: LanguageModelV4;
   /** Stable configured provider key, retained inside infrastructure. */
   readonly provider: string;
   readonly modelId: string;
@@ -50,7 +50,7 @@ const DEFAULT_TOOL_CAPABILITIES_FALLBACK = {
   approvalHooks: 'application',
 } as const;
 
-export function getChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV3 {
+export function getChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV4 {
   return getChatModelAdapter(modelId, env).model;
 }
 

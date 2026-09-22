@@ -1,6 +1,6 @@
-import { generateText, stepCountIs, tool } from 'ai';
-import type { ModelMessage } from 'ai';
-import type { LanguageModelV3, SharedV3ProviderOptions } from '@ai-sdk/provider';
+import { generateText, isStepCount, tool } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
+import type { LanguageModelV4, SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { PromptCacheUsage } from './prompt-cache';
 
 /**
@@ -64,9 +64,9 @@ export interface AgentBackendToolMap {
 }
 
 export function createAgentModelBackend(input: {
-  readonly model: LanguageModelV3;
+  readonly model: LanguageModelV4;
   readonly tools: AgentBackendToolMap;
-  readonly providerOptions?: SharedV3ProviderOptions | undefined;
+  readonly providerOptions?: SharedV4ProviderOptions | undefined;
   readonly parseUsage?: ((usage: unknown, providerMetadata?: unknown) => PromptCacheUsage) | undefined;
   readonly maxOutputTokens?: number | undefined;
 }): {
@@ -96,19 +96,19 @@ export function createAgentModelBackend(input: {
       }, step.timeoutMs);
       if (typeof timeoutId.unref === 'function') timeoutId.unref();
       const activeNames = new Set(Object.keys(step.activeTools));
-      const tools: Record<string, unknown> = {};
+      const tools: ToolSet = {};
       for (const [name, bound] of Object.entries(input.tools)) {
-        if (activeNames.has(name)) tools[name] = bound;
+        if (activeNames.has(name)) tools[name] = bound as ToolSet[string];
       }
       try {
         const maxOutputTokens = step.maxOutputTokens ?? input.maxOutputTokens;
         const result = await generateText({
           model: input.model,
-          system: step.system,
+          instructions: step.system,
           messages: step.messages.map(toModelMessage),
-          tools: tools as never,
+          tools: tools as ToolSet,
           toolChoice: toToolChoice(step.toolChoice),
-          stopWhen: stepCountIs(1) as never,
+          stopWhen: isStepCount(1),
           abortSignal: timeoutController.signal,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
           ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -116,7 +116,10 @@ export function createAgentModelBackend(input: {
         if (step.signal.aborted) {
           throw new DOMException('Model step was cancelled.', 'AbortError');
         }
-        return toBackendStep(result, input.parseUsage);
+        // The application backend represents exactly one provider step. AI SDK 7
+        // aggregates several result fields at the top level, so read the explicit
+        // final-step view to preserve the pre-migration contract.
+        return toBackendStep(result.finalStep, input.parseUsage);
       } catch (error) {
         if (step.signal.aborted || isAbortError(error)) {
           throw new DOMException('Model step was cancelled.', 'AbortError');

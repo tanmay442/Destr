@@ -69,7 +69,7 @@ function toAgentToolInstance(name: string, envelope: CatalogCompatToolEnvelope):
       abortSignal: call.signal,
       ...(call.approvalToken !== undefined ? { approvalToken: call.approvalToken } : {}),
       ...(envelope.internalToolContext !== undefined
-        ? { experimental_context: envelope.internalToolContext }
+        ? { context: envelope.internalToolContext }
         : {}),
     }),
     policyEffect: name === TICKET_TOOL_NAME ? 'write' : 'read',

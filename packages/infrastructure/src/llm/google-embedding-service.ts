@@ -1,5 +1,5 @@
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import type { EmbeddingModelV3 } from '@ai-sdk/provider';
+import { createGoogle } from '@ai-sdk/google';
+import type { EmbeddingModelV4 } from '@ai-sdk/provider';
 import type { EmbeddingService, EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 import { resolveVectorDim } from '../db/schema-vector';
@@ -10,13 +10,13 @@ export function getGoogleEmbeddingModelId(env: EnvSource = defaultProcessEnv): s
   return env.get('GOOGLE_EMBEDDING_MODEL') ?? 'gemini-embedding-001';
 }
 
-export function getEmbeddingModel(env: EnvSource = defaultProcessEnv): EmbeddingModelV3 {
+export function getEmbeddingModel(env: EnvSource = defaultProcessEnv): EmbeddingModelV4 {
   const apiKey = env.get('AI_STUDIO_KEY');
   if (!apiKey) {
     throw new Error('AI_STUDIO_KEY is not set.');
   }
-  const google = createGoogleGenerativeAI({ apiKey });
-  return google.textEmbedding(getGoogleEmbeddingModelId(env)) as EmbeddingModelV3;
+  const google = createGoogle({ apiKey });
+  return google.textEmbedding(getGoogleEmbeddingModelId(env));
 }
 
 export function getGoogleEmbeddingOptions(vectorDim?: number, env: EnvSource = defaultProcessEnv) {

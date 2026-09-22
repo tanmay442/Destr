@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { SharedV3ProviderOptions } from '@ai-sdk/provider';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import { defaultProcessEnv } from '../config/env';
 
 export type PromptCacheStrategy = 'automatic' | 'explicit' | 'telemetry' | 'none';
@@ -204,7 +204,7 @@ function prefixCacheKey(context: PromptCacheRequestContext): string {
 /** OpenAI's manual key only groups otherwise automatic prefix caching. */
 export function buildOpenAIPromptCacheOptions(
   context: PromptCacheRequestContext,
-): SharedV3ProviderOptions {
+): SharedV4ProviderOptions {
   return {
     openai: {
       promptCacheKey: prefixCacheKey(context),
@@ -219,7 +219,7 @@ export function buildOpenAIPromptCacheOptions(
 export function buildGooglePromptCacheOptions(
   _context: PromptCacheRequestContext,
   cachedContent: string | undefined = defaultProcessEnv.get('GOOGLE_CACHED_CONTENT'),
-): SharedV3ProviderOptions | undefined {
+): SharedV4ProviderOptions | undefined {
   const value = cachedContent?.trim();
   if (!value) return undefined;
   return { google: { cachedContent: value } };

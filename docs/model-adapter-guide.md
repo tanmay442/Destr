@@ -172,7 +172,7 @@ Every `AgentModelBackend` implementation MUST honor both (`model-backend.ts:8-15
 Reference implementation: `createAgentModelBackend().generateStep`
 (`agent-backend.ts:66-130`) pre-checks `signal.aborted` and `timeoutMs > 0`,
 chains an `AbortController` with an `unref`'d timer, runs one step
-(`stopWhen: stepCountIs(1)` at `:111`), re-checks abortion after settle, and
+(`stopWhen: isStepCount(1)`), re-checks abortion after settle, and
 maps timeout-controller aborts to `TimeoutError`. Test both paths with
 `createScriptedBackend` (`packages/application/src/agent/scripted-model.ts`,
 which supports queued `abort` / `timeout` / `fail` steps).

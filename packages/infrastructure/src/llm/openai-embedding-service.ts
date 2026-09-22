@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import type { EmbeddingModelV3 } from '@ai-sdk/provider';
+import type { EmbeddingModelV4 } from '@ai-sdk/provider';
 import type { EmbeddingService, EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 import { resolveVectorDim } from '../db/schema-vector';
@@ -11,7 +11,7 @@ export function getOpenAIEmbeddingModelId(env: EnvSource = defaultProcessEnv): s
   return env.get('OPENAI_EMBEDDING_MODEL') || 'text-embedding-3-small';
 }
 
-function getOpenAIEmbeddingModel(env: EnvSource): EmbeddingModelV3 {
+function getOpenAIEmbeddingModel(env: EnvSource): EmbeddingModelV4 {
   const apiKey = env.get('OPENAI_EMBEDDING_API_KEY') ?? env.get('CUSTOM_LLM_API_KEY');
   const baseURL = env.get('OPENAI_EMBEDDING_BASE_URL') ?? env.get('CUSTOM_LLM_BASE_URL');
   if (!apiKey || !baseURL) {
@@ -20,7 +20,7 @@ function getOpenAIEmbeddingModel(env: EnvSource): EmbeddingModelV3 {
     );
   }
   const provider = createOpenAI({ apiKey, baseURL: normalizeOpenAIBaseURL(baseURL) });
-  return provider.textEmbedding(getOpenAIEmbeddingModelId(env)) as EmbeddingModelV3;
+  return provider.textEmbedding(getOpenAIEmbeddingModelId(env));
 }
 
 function getOpenAIEmbeddingOptions(vectorDim: number) {

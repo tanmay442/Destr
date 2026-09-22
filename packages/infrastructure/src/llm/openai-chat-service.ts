@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 import { getOpenAIOperationPath, normalizeOpenAIBaseURL } from './openai-base-url';
@@ -10,7 +10,7 @@ import {
   parsePromptCacheUsage,
 } from './prompt-cache';
 
-export function getOpenAIChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV3 {
+export function getOpenAIChatModel(modelId?: string, env: EnvSource = defaultProcessEnv): LanguageModelV4 {
   const apiKey = env.get('CUSTOM_LLM_API_KEY');
   const baseURL = env.get('CUSTOM_LLM_BASE_URL');
   if (!apiKey || !baseURL) {

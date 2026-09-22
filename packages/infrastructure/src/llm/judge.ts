@@ -48,7 +48,7 @@ async function askJudge(
     () =>
       generateText({
         model,
-        system,
+        instructions: system,
         prompt,
         maxOutputTokens: JUDGE_MAX_OUTPUT_TOKENS,
         abortSignal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
