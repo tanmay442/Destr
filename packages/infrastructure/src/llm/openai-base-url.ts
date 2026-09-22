@@ -12,6 +12,16 @@ export function normalizeOpenAIBaseURL(raw: string): string {
   return atV1 ? (atV1[1] ?? url) : `${url}/v1`;
 }
 
+/** Native-only request features must not be assumed for compatible APIs. */
+export function isNativeOpenAIBaseURL(raw: string | undefined): boolean {
+  if (!raw?.trim()) return false;
+  try {
+    return new URL(raw).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
 export type OpenAIOperationPath = '/responses' | '/chat/completions';
 
 const RESPONSES_OPERATION_PATH: OpenAIOperationPath = '/responses';

@@ -4,7 +4,7 @@ const createOpenAIMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@ai-sdk/openai', () => ({ createOpenAI: (...args: unknown[]) => createOpenAIMock(...args) }));
 
-import { getOpenAIChatModel } from './openai-chat-service';
+import { getOpenAIChatModel, getOpenAIToolCapabilities } from './openai-chat-service';
 import { getOpenAIOperationPath, normalizeOpenAIBaseURL } from './openai-base-url';
 import { getChatModelAdapter } from './model';
 
@@ -96,10 +96,25 @@ describe('openai-chat-service', () => {
     const adapter = getChatModelAdapter(undefined, { get: (key) => values[key] });
 
     expect(adapter.capabilities.strategy).toBe('none');
+    expect(adapter.toolCapabilities).toMatchObject({
+      strictSchemas: 'emulated',
+      inputExamples: 'description_middleware',
+    });
     expect(adapter.buildProviderOptions({
       stablePromptPrefix: 'stable',
       prefixVersion: 'v1',
     })).toBeUndefined();
+  });
+
+  it('retains native strict tool schemas only for the native OpenAI endpoint', () => {
+    expect(getOpenAIToolCapabilities({
+      get: (key) => key === 'CUSTOM_LLM_BASE_URL' ? 'https://api.openai.com/v1' : undefined,
+    }).strictSchemas).toBe('native');
+    expect(getOpenAIToolCapabilities({
+      get: (key) => key === 'CUSTOM_LLM_BASE_URL'
+        ? 'https://api.groq.com/openai/v1'
+        : undefined,
+    }).strictSchemas).toBe('emulated');
   });
 });
 

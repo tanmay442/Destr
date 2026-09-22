@@ -1,4 +1,9 @@
-import type { EmbeddingService, EnvSource, Reranker } from '@app/domain';
+import type {
+  EmbeddingService,
+  EnvSource,
+  ProviderToolCapabilities,
+  Reranker,
+} from '@app/domain';
 import type { LanguageModelV4, SharedV4ProviderOptions } from '@ai-sdk/provider';
 import { createProviderRegistry } from '../registry';
 import type {
@@ -29,7 +34,9 @@ export interface ChatModelProviderAdapter {
   readonly capabilities:
     | PromptCacheCapabilities
     | ((env: EnvSource) => PromptCacheCapabilities);
-  readonly toolCapabilities?: import('@app/domain').ProviderToolCapabilities;
+  readonly toolCapabilities?:
+    | ProviderToolCapabilities
+    | ((env: EnvSource) => ProviderToolCapabilities);
   readonly buildProviderOptions?: (
     context: PromptCacheRequestContext,
     env: EnvSource,

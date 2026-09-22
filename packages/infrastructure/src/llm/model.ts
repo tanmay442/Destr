@@ -1,5 +1,5 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import type { EnvSource } from '@app/domain';
+import type { EnvSource, ProviderToolCapabilities } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
 import {
   chatProviderAdapterRegistry,
@@ -20,7 +20,7 @@ export interface ChatModelAdapter {
   readonly provider: string;
   readonly modelId: string;
   readonly capabilities: PromptCacheCapabilities;
-  readonly toolCapabilities: NonNullable<ChatModelProviderAdapter['toolCapabilities']>;
+  readonly toolCapabilities: ProviderToolCapabilities;
   readonly buildProviderOptions: (
     context: PromptCacheRequestContext,
   ) => ReturnType<NonNullable<ChatModelProviderAdapter['buildProviderOptions']>>;
@@ -71,6 +71,9 @@ export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultPr
   const capabilities = typeof adapter?.capabilities === 'function'
     ? adapter.capabilities(env)
     : adapter?.capabilities;
+  const toolCapabilities = typeof adapter?.toolCapabilities === 'function'
+    ? adapter.toolCapabilities(env)
+    : adapter?.toolCapabilities;
   return {
     model,
     provider: resolved.name,
@@ -81,7 +84,7 @@ export function getChatModelAdapter(modelId?: string, env: EnvSource = defaultPr
       explicit: false,
       telemetry: false,
     },
-    toolCapabilities: adapter?.toolCapabilities ?? { ...DEFAULT_TOOL_CAPABILITIES_FALLBACK },
+    toolCapabilities: toolCapabilities ?? { ...DEFAULT_TOOL_CAPABILITIES_FALLBACK },
     buildProviderOptions: buildProviderOptions
       ? (context) => buildProviderOptions(context, env)
       : noProviderOptions,

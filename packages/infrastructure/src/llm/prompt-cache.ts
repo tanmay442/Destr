@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { EnvSource } from '@app/domain';
 import { defaultProcessEnv } from '../config/env';
+import { isNativeOpenAIBaseURL } from './openai-base-url';
 
 export type PromptCacheStrategy = 'automatic' | 'explicit' | 'telemetry' | 'none';
 
@@ -209,13 +210,7 @@ function supportsOpenAIPromptCacheKey(env: EnvSource): boolean {
   if (override === 'true') return true;
   if (override === 'false') return false;
 
-  const baseURL = env.get('CUSTOM_LLM_BASE_URL')?.trim();
-  if (!baseURL) return false;
-  try {
-    return new URL(baseURL).hostname.toLowerCase() === 'api.openai.com';
-  } catch {
-    return false;
-  }
+  return isNativeOpenAIBaseURL(env.get('CUSTOM_LLM_BASE_URL'));
 }
 
 /**
