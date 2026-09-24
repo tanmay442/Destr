@@ -1,8 +1,22 @@
+Abandoned this no more maintaining
 <p align="center">
   <img src="public/logo.svg" alt="Destr — RAG knowledge agent" width="96" height="96">
 </p>
 
 <h1 align="center">Destr</h1>
+
+<h2 align="center">Demo</h2>
+
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/78248bcd-e0d0-4c9d-850c-382adf20b869" width="720" controls muted loop playsinline preload="metadata">
+    Your browser does not support the video tag.
+    <a href="https://github.com/user-attachments/assets/78248bcd-e0d0-4c9d-850c-382adf20b869">Watch the demo video</a>
+  </video>
+</p>
+
+<p align="center">
+  <sub><a href="public/demo.mp4">Mirror: public/demo.mp4</a></sub>
+</p>
 
 <p align="center">
   Modular, production-ready AI knowledge agent built with Clean Architecture on Next.js 16, Vercel AI SDK v6, Drizzle ORM, and Neon Postgres with pgvector.
